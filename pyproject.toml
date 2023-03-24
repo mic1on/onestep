@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "onestep"
-version = "0.0.1"
+version = "0.0.2"
 description = ""
 authors = ["miclon <jcnd@163.com>"]
 readme = "README.md"
@@ -10,7 +10,6 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.8"
-jmespath = "^1.0.1"
 amqpstorm = { version = "^2.10.6", optional = true }
 asgiref = "^3.6.0"
 
