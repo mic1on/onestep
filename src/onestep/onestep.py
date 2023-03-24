@@ -9,6 +9,7 @@ from onestep.broker.base import BaseBroker
 from onestep.exception import StopMiddleware
 from onestep.message import Message
 from onestep.retry import NeverRetry, NackErrorCallBack
+from onestep.signal import message_sent, started, stopped
 from onestep.worker import WorkerThread
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class BaseOneStep:
         self.fn = fn
         self.workers = workers or DEFAULT_WORKERS
         self.middlewares = middlewares or []
+
         self.from_brokers = self._init_broker(from_broker)
         self.to_brokers = self._init_broker(to_broker)
         self.retry = retry
@@ -48,7 +50,8 @@ class BaseOneStep:
             return [broker]
         if isinstance(broker, (list, tuple)):
             return list(broker)
-        raise TypeError(f"broker must be BaseBroker or list or tuple, not {type(broker)}")
+        raise TypeError(
+            f"broker must be BaseBroker or list or tuple, not {type(broker)}")
 
     def _add_consumer(self, broker):
         for _ in range(self.workers):
@@ -94,22 +97,24 @@ class BaseOneStep:
             return
 
         # 如果是Message类型，就不再封装
-        message = result if isinstance(result, Message) else Message(message=result)
+        message = result if isinstance(
+            result, Message) else Message(message=result)
 
         self.before_emit("send", message)
         for broker in brokers:
+            message_sent.send(self, message=message, broker=broker)
             broker.send(message)
         self.after_emit("send", message)
 
     def before_emit(self, signal, *args, **kwargs):
         signal = "before_" + signal
-        self._emit(signal, *args, **kwargs)
+        self.emit(signal, *args, **kwargs)
 
     def after_emit(self, signal, *args, **kwargs):
         signal = "after_" + signal
-        self._emit(signal, *args, **kwargs)
+        self.emit(signal, *args, **kwargs)
 
-    def _emit(self, signal, *args, **kwargs):
+    def emit(self, signal, *args, **kwargs):
         for middleware in self.middlewares:
             if not hasattr(middleware, signal):
                 continue
@@ -169,17 +174,24 @@ class step:
     @staticmethod
     def start(group=None, block=None):
         BaseOneStep.start(group=group)
+        started.send()
         if block:
             import time
             while True:
                 time.sleep(1)
 
     @staticmethod
+    def stop(group=None):
+        BaseOneStep.stop(group=group)
+        stopped.send()
+
+    @staticmethod
     def set_debugging():
         if not step._debug:
             onestep_logger = logging.getLogger("onestep")
             handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
+            handler.setFormatter(logging.Formatter(
+                "[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
             onestep_logger.addHandler(handler)
             onestep_logger.setLevel(logging.DEBUG)
             step._debug = True

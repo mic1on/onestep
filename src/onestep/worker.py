@@ -10,6 +10,7 @@ from asgiref.sync import async_to_sync
 
 from onestep.broker import BaseBroker
 from onestep.message import Message
+from onestep.signal import message_received, message_consumed, message_error
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class WorkerThread(threading.Thread):
                 if message is None:
                     continue
                 logger.debug(f"receive message<{message}>")
+                message_received.send(self, message=message)
                 if isinstance(message, Message):
                     # 如果是Message类型，就不再封装，并且更新来源broker
                     message.replace(broker=self.broker)
@@ -70,14 +72,15 @@ class WorkerThread(threading.Thread):
                     if self.error_callback:
                         self.error_callback(message)
                     return
-
                 if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
                     async_to_sync(self.instance)(message, *self.args, **self.kwargs)
                 else:
                     self.instance(message, *self.args, **self.kwargs)
 
             except Exception as e:
+                message_error.send(self, message=message, error=e)
                 logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
                 message.set_exception(e)
             else:
+                message_consumed.send(self, message=message)
                 return message.ack()

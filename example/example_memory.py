@@ -1,5 +1,6 @@
 from onestep import step
 from onestep.broker import MemoryBroker
+from onestep.signal import message_received
 
 todo_broker = MemoryBroker()
 

@@ -12,6 +12,7 @@ packages = [
 python = "^3.8"
 amqpstorm = { version = "^2.10.6", optional = true }
 asgiref = "^3.6.0"
+blinker = "^1.5"
 
 [tool.poetry.extras]
 rabbitmq = ["amqpstorm"]
@@ -19,6 +20,7 @@ rabbitmq = ["amqpstorm"]
 [tool.poetry.group.dev.dependencies]
 nacos-sdk-python = "^0.1.12"
 redis = "^4.5.1"
+autopep8 = "^2.0.2"
 
 
 [tool.poetry.group.test.dependencies]
