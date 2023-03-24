@@ -1,0 +1,185 @@
+import functools
+import collections
+import logging
+
+from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
+from typing import Optional, List, Dict, Any, Callable, Union
+
+from onestep.broker.base import BaseBroker
+from onestep.exception import StopMiddleware
+from onestep.message import Message
+from onestep.retry import NeverRetry, NackErrorCallBack
+from onestep.worker import WorkerThread
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_WORKERS = 1
+
+
+class BaseOneStep:
+    consumers: Dict[str, List[WorkerThread]] = collections.defaultdict(list)
+
+    def __init__(self, fn,
+                 group: str = "OneStep",
+                 from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
+                 to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
+                 workers: Optional[int] = None,
+                 middlewares: Optional[List[Any]] = None,
+                 retry: Union[Callable, object] = NeverRetry(),
+                 error_callback: Union[Callable, object] = NackErrorCallBack()):
+        self.group = group
+        self.fn = fn
+        self.workers = workers or DEFAULT_WORKERS
+        self.middlewares = middlewares or []
+        self.from_brokers = self._init_broker(from_broker)
+        self.to_brokers = self._init_broker(to_broker)
+        self.retry = retry
+        self.error_callback = error_callback
+
+        for broker in self.from_brokers:
+            self._add_consumer(broker)
+
+    @staticmethod
+    def _init_broker(broker: Union[BaseBroker, List[BaseBroker], None] = None):
+        if not broker:
+            return []
+
+        if isinstance(broker, BaseBroker):
+            return [broker]
+        if isinstance(broker, (list, tuple)):
+            return list(broker)
+        raise TypeError(f"broker must be BaseBroker or list or tuple, not {type(broker)}")
+
+    def _add_consumer(self, broker):
+        for _ in range(self.workers):
+            self.consumers[self.group].append(
+                WorkerThread(fn=self, broker=broker)
+            )
+
+    @classmethod
+    def _find_consumers(cls, group: Optional[str] = None):
+        """按组查找消费者"""
+        if group is None:
+            consumers = [c for v in cls.consumers.values() for c in v]
+        else:
+            consumers = cls.consumers[group]
+        return consumers
+
+    @classmethod
+    def start(cls, group: Optional[str] = None):
+        for consumer in cls._find_consumers(group):
+            consumer.start()
+
+    @classmethod
+    def stop(cls, group: Optional[str] = None):
+        for consumer in cls._find_consumers(group):
+            consumer.shutdown()
+
+    def wraps(self, func):
+        @functools.wraps(func)
+        def wrapped_f(*args, **kwargs):
+            return self(*args, **kwargs)  # noqa
+
+        return wrapped_f
+
+    def send(self, result, broker=None):
+        """将返回的内容交给broker发送"""
+        if result is None:
+            logger.debug("message is empty")
+            return
+
+        brokers = self._init_broker(broker) or self.to_brokers
+        if brokers is None:
+            logger.debug("broker is empty")
+            return
+
+        # 如果是Message类型，就不再封装
+        message = result if isinstance(result, Message) else Message(message=result)
+
+        self.before_emit("send", message)
+        for broker in brokers:
+            broker.send(message)
+        self.after_emit("send", message)
+
+    def before_emit(self, signal, *args, **kwargs):
+        signal = "before_" + signal
+        self._emit(signal, *args, **kwargs)
+
+    def after_emit(self, signal, *args, **kwargs):
+        signal = "after_" + signal
+        self._emit(signal, *args, **kwargs)
+
+    def _emit(self, signal, *args, **kwargs):
+        for middleware in self.middlewares:
+            if not hasattr(middleware, signal):
+                continue
+            try:
+                getattr(middleware, signal)(*args, **kwargs)
+            except StopMiddleware:
+                break
+
+
+class SyncOneStep(BaseOneStep):
+
+    def __call__(self, *args, **kwargs):
+        """同步执行原函数"""
+        result = self.fn(*args, **kwargs)
+
+        if isgenerator(result):
+            for item in result:
+                self.send(item)
+        else:
+            self.send(result)
+        return result
+
+
+class AsyncOneStep(BaseOneStep):
+
+    async def __call__(self, *args, **kwargs):
+        """"异步执行原函数"""
+
+        if iscoroutinefunction(self.fn):
+            result = await self.fn(*args, **kwargs)
+        else:
+            result = self.fn(*args, **kwargs)
+
+        if isasyncgen(result):
+            async for item in result:
+                self.send(item)
+        else:
+            self.send(result)
+        return result
+
+
+class step:
+    _debug = False
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def __call__(self, func, *_args, **_kwargs):
+        if iscoroutinefunction(func) or isasyncgenfunction(func):
+            os = AsyncOneStep(fn=func, *self.args, **self.kwargs)
+        else:
+            os = SyncOneStep(fn=func, *self.args, **self.kwargs)
+
+        return os.wraps(func)
+
+    @staticmethod
+    def start(group=None, block=None):
+        BaseOneStep.start(group=group)
+        if block:
+            import time
+            while True:
+                time.sleep(1)
+
+    @staticmethod
+    def set_debugging():
+        if not step._debug:
+            onestep_logger = logging.getLogger("onestep")
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
+            onestep_logger.addHandler(handler)
+            onestep_logger.setLevel(logging.DEBUG)
+            step._debug = True

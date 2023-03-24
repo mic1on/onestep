@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "onestep"
+version = "0.0.1"
+description = ""
+authors = ["miclon <jcnd@163.com>"]
+readme = "README.md"
+packages = [
+    { include = 'onestep', from = 'src' }
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+jmespath = "^1.0.1"
+amqpstorm = { version = "^2.10.6", optional = true }
+asgiref = "^3.6.0"
+
+[tool.poetry.extras]
+rabbitmq = ["amqpstorm"]
+
+[tool.poetry.group.dev.dependencies]
+nacos-sdk-python = "^0.1.12"
+redis = "^4.5.1"
+
+
+[tool.poetry.group.test.dependencies]
+pytest = "^7.2.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
