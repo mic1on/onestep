@@ -13,16 +13,11 @@
 ## example
 
 ```python
-from onestep import step
-from onestep.broker import WebHookBroker
+from onestep import step, WebHookBroker
 
-step.set_debugging()
 
 # 对外提供一个webhook接口，接收外部的消息
-webhook_broker = WebHookBroker(path="/push")
-
-
-@step(from_broker=webhook_broker)
+@step(from_broker=WebHookBroker(path="/push"))
 def waiting_messages(message):
     print("收到消息：", message)
 
