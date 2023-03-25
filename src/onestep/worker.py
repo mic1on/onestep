@@ -15,13 +15,6 @@ from onestep.signal import message_received, message_consumed, message_error
 logger = logging.getLogger(__name__)
 
 
-class DoSuccess: ...
-
-
-class DoRetry:
-    pass
-
-
 class WorkerThread(threading.Thread):
 
     def __init__(self, fn, broker: BaseBroker, *args, **kwargs):
@@ -79,7 +72,7 @@ class WorkerThread(threading.Thread):
 
             except Exception as e:
                 message_error.send(self, message=message, error=e)
-                logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
+                logger.exception(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
                 message.set_exception(e)
             else:
                 message_consumed.send(self, message=message)
