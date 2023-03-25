@@ -14,12 +14,13 @@ def build_task():
 
 
 @step(from_broker=list_broker, to_broker=result_broker, workers=10)
-def crawl_list(message):
+async def crawl_list(message):
     """模拟访问"""
-    resp = httpx.get(f"https://httpbin.org/anything/{message.message}")
-    url = resp.json().get("url")
-    print("访问结果", url)
-    yield url
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://httpbin.org/anything/{message.message}")
+        url = resp.json().get("url")
+        print("访问结果", url)
+        return url
 
 
 if __name__ == '__main__':

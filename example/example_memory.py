@@ -1,6 +1,5 @@
 from onestep import step
 from onestep.broker import MemoryBroker
-from onestep.signal import message_received
 
 todo_broker = MemoryBroker()
 
@@ -28,11 +27,6 @@ def build_todo_list():
             "status": "todo",
         },
     ]
-
-
-def error_callback(todo):
-    print("次数多")
-    pass
 
 
 @step(from_broker=todo_broker,
