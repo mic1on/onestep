@@ -6,8 +6,8 @@ class BaseMiddleware:
     def after_send(self, message):
         """消息发送之后"""
 
-    def before_receive(self):
+    def before_receive(self, message):
         """消息接收之前"""
 
-    def after_receive(self):
+    def after_receive(self, message):
         """消息接收之后"""
