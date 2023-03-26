@@ -52,7 +52,7 @@ class WorkerThread(threading.Thread):
                     message = Message(message, self.broker)
                 self.instance.before_emit("receive", message)
                 self._run_instance(message)
-                self.instance.before_emit("receive", message)
+                self.instance.after_emit("receive", message)
 
     def shutdown(self):
         self.__shutdown = True
