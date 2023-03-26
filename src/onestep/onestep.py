@@ -92,7 +92,7 @@ class BaseOneStep:
             return
 
         brokers = self._init_broker(broker) or self.to_brokers
-        if brokers is None:
+        if not brokers:
             logger.debug("broker is empty")
             return
 
@@ -119,7 +119,7 @@ class BaseOneStep:
             if not hasattr(middleware, signal):
                 continue
             try:
-                getattr(middleware, signal)(*args, **kwargs)
+                getattr(middleware, signal)(self, *args, **kwargs)
             except StopMiddleware:
                 break
 
