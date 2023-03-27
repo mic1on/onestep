@@ -5,12 +5,12 @@ import logging
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
 from typing import Optional, List, Dict, Any, Callable, Union
 
-from onestep.broker.base import BaseBroker
-from onestep.exception import StopMiddleware
-from onestep.message import Message
-from onestep.retry import NeverRetry, NackErrorCallBack
-from onestep.signal import message_sent, started, stopped
-from onestep.worker import WorkerThread
+from .broker.base import BaseBroker
+from .exception import StopMiddleware
+from .message import Message
+from .retry import NeverRetry, NackErrorCallBack
+from .signal import message_sent, started, stopped
+from .worker import WorkerThread
 
 logger = logging.getLogger(__name__)
 

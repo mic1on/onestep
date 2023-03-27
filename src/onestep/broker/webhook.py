@@ -5,7 +5,7 @@ import collections
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Queue, Empty
 
-from onestep.broker import BaseBroker
+from .base import BaseBroker
 
 logger = logging.getLogger(__name__)
 

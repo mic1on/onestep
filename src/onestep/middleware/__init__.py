@@ -1,4 +1,4 @@
-from onestep.middleware.config import (
+from .config import (
     NacosConfigMiddleware, RedisConfigMiddleware, BaseConfigMiddleware
 )
-from onestep.middleware.base import BaseMiddleware
+from .base import BaseMiddleware

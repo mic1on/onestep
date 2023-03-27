@@ -1,6 +1,6 @@
 import redis
 
-from onestep.middleware.base import BaseMiddleware
+from .base import BaseMiddleware
 
 
 class BaseConfigMiddleware(BaseMiddleware):

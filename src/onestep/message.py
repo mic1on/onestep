@@ -1,6 +1,3 @@
-from copy import deepcopy
-
-
 class Message:
 
     def __init__(self, message, broker=None):

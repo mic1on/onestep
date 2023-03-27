@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from onestep.exception import StopMiddleware
+from ..exception import StopMiddleware
 
 
 class BaseBroker:

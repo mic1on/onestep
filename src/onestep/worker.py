@@ -8,9 +8,9 @@ from inspect import isasyncgenfunction
 
 from asgiref.sync import async_to_sync
 
-from onestep.broker import BaseBroker
-from onestep.message import Message
-from onestep.signal import message_received, message_consumed, message_error
+from .broker import BaseBroker
+from .message import Message
+from .signal import message_received, message_consumed, message_error
 
 logger = logging.getLogger(__name__)
 
