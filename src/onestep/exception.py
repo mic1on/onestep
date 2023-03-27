@@ -10,12 +10,16 @@ class RetryException(Exception):
 
 
 class RetryViaQueue(RetryException):
-    """消息重试-通过重试队列"""
+    """消息重试-通过重试队列
 
-    def __init__(self, message=None, times=None, failure_queue=None, **kwargs):
-        super().__init__(message=message, times=times, failure_queue=failure_queue, **kwargs)
+    抛出此异常，消息将被重新放入队列，等待下次消费。
+
+    具体实现是触发`broker`中`nack`方法，`requeue`参数为True，将消息重新放入队列
+    """
 
 
 class RetryViaLocal(RetryException):
-    """消息重试-本地"""
-    ...
+    """消息重试-本地
+
+    不经过队列，直接在本地重试，直到达到重试次数。
+    """

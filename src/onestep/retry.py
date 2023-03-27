@@ -41,9 +41,7 @@ class RetryIfException(BaseRetry):
         return isinstance(message.exception, self.exceptions)  # noqa
 
 
-class MyRetry(BaseRetry):
-    def __init__(self, times: int = 3):
-        self.times = times
+class MyRetry(TimesRetry):
 
     def __call__(self, message) -> Optional[bool]:
         """本地重试或队列重试"""
