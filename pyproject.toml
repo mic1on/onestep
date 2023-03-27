@@ -25,6 +25,8 @@ autopep8 = "^2.0.2"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^7.2.2"
+amqpstorm = "^2.10.6"
+redis = "^4.5.1"
 
 [build-system]
 requires = ["poetry-core"]
