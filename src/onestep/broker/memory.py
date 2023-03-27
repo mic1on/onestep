@@ -17,7 +17,7 @@ class MemoryBroker(BaseBroker):
 
     def nack(self, message, requeue=False):
         if requeue:
-            self.queue.put_nowait(message)
+            self.queue.put_nowait(message.dict())
 
 
 class MemoryConsumer:
