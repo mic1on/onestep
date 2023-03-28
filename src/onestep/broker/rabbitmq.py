@@ -1,9 +1,13 @@
+import json
 import threading
-from queue import Queue, Empty
+from queue import Queue
 from typing import Optional, Dict
 
-from .base import BaseBroker
+import amqpstorm
+
+from .base import BaseBroker, BaseConsumer
 from .store.rabbitmq import RabbitmqStore
+from ..message import Message
 
 
 class RabbitMQBroker(BaseBroker):
@@ -26,29 +30,19 @@ class RabbitMQBroker(BaseBroker):
         threading.Thread(target=self._consume).start()
         return RabbitMQConsumer(self.queue)
 
-    def send(self, message):
-        self.client.send(self.queue_name, message.message)
+    def publish(self, message):
+        self.client.send(self.queue_name, message)
 
     @staticmethod
     def ack(message):
-        message.message.ack()
+        message.msg.ack()
 
     @staticmethod
     def nack(message, requeue=False):
-        message.message.nack(requeue=requeue)
+        message.msg.nack(requeue=requeue)
 
 
-class RabbitMQConsumer:
-
-    def __init__(self, queue, *args, **kwargs):
-        self.queue = queue
-        self.timeout = kwargs.pop("timeout", 1000)
-
-    def __next__(self):
-        try:
-            return self.queue.get(timeout=self.timeout / 1000)
-        except Empty:
-            return None
-
-    def __iter__(self):  # pragma: no cover
-        return self
+class RabbitMQConsumer(BaseConsumer):
+    def _to_message(self, data: amqpstorm.Message):
+        message = json.loads(data.body)
+        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)

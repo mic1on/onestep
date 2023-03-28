@@ -9,6 +9,7 @@ from inspect import isasyncgenfunction
 from asgiref.sync import async_to_sync
 
 from .broker import BaseBroker
+from .exception import DropMessage
 from .message import Message
 from .signal import message_received, message_consumed, message_error
 
@@ -45,11 +46,6 @@ class WorkerThread(threading.Thread):
                     continue
                 logger.debug(f"receive message<{message}>")
                 message_received.send(self, message=message)
-                if isinstance(message, Message):
-                    # 如果是Message类型，就不再封装，并且更新来源broker
-                    message.replace(broker=self.broker)
-                else:
-                    message = Message(message, self.broker)
                 self.instance.before_emit("receive", message)
                 self._run_instance(message)
                 self.instance.after_emit("receive", message)
@@ -61,14 +57,20 @@ class WorkerThread(threading.Thread):
     def _run_instance(self, message):
         while True:
             try:
-                if message.fail and not self.retry(message):
-                    if self.error_callback:
-                        self.error_callback(message)
-                    return
+                if message.fail:
+                    retry_state = self.retry(message)  # True=继续（执行重试）
+                    if not retry_state:  # False=结束（执行回调），None=结束（忽略回调）
+                        if retry_state is False and self.error_callback:
+                            self.error_callback(message)
+                        return message.nack(requeue=False)  # 返回前 nack 消息
                 if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
                     async_to_sync(self.instance)(message, *self.args, **self.kwargs)
                 else:
                     self.instance(message, *self.args, **self.kwargs)
+
+            except DropMessage as e:
+                logger.warning(f"{self.instance.fn.__name__} droped <{type(e).__name__}: {str(e)}>")
+                return message.nack()
 
             except Exception as e:
                 message_error.send(self, message=message, error=e)
@@ -77,6 +79,7 @@ class WorkerThread(threading.Thread):
                 else:
                     logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
                 message.set_exception(e)
+
             else:
                 message_consumed.send(self, message=message)
                 return message.ack()

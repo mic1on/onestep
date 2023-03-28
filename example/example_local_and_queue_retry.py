@@ -3,7 +3,7 @@ import logging
 from onestep import step
 from onestep.broker import MemoryBroker, RabbitMQBroker
 from onestep.exception import RetryViaLocal, RetryViaQueue
-from onestep.retry import MyRetry
+from onestep.retry import LocalAndQueueRetry
 
 from logging import getLogger
 
@@ -11,6 +11,15 @@ logger = getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 todo_broker = MemoryBroker()
+
+
+# todo_broker = RabbitMQBroker(
+#     "test",
+#     {
+#         "username": "admin",
+#         "password": "admin",
+#     }
+# )
 
 @step(to_broker=todo_broker)
 def build_todo_list():
@@ -37,32 +46,27 @@ def build_todo_list():
     ]
 
 
-# def retry_via_queue_manual(message):
-#     print("error_callback", message)
-#     extra = message.body.get("extra", {})
-#     extra['retry_times'] = extra.get("retry_times", 0) + 1
-#     if extra['retry_times'] < 3:
-#         message.body['extra'] = extra
-#         todo_broker.send(message)
-
-
 def callback_on_failure(message):
+    # 这里可以按需记录到日志或者发送到失败队列
     logger.warning(f"failure_callback: will send to failure queue: {message}")
     pass
 
 
-@step(from_broker=todo_broker,
-      retry=MyRetry(times=3),
-      error_callback=callback_on_failure)
+@step(
+    from_broker=todo_broker,
+    retry=LocalAndQueueRetry(times=3),
+    error_callback=callback_on_failure
+)
 def do_something(message):
     print(f"todo: {message.body}")
+    # return
     if message.body.get("id") % 2 == 0:
         raise RetryViaLocal("Invalid id")
     if message.body.get("id") % 3 == 0:
         raise RetryViaQueue("Invalid id", times=2)
     else:
         message.body["status"] = "done"
-        return message
+        return None
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ def build_todo_list():
 @step(from_broker=todo_broker,
       workers=3)
 def do_something(todo):
-    todo.message["status"] = "done"
+    todo.body["status"] = "done"
     return todo
 
 

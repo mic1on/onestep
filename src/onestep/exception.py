@@ -23,3 +23,7 @@ class RetryViaLocal(RetryException):
 
     不经过队列，直接在本地重试，直到达到重试次数。
     """
+
+
+class DropMessage(Exception):
+    """从 Brokers 中 丢弃该消息"""

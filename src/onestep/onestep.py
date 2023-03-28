@@ -99,8 +99,7 @@ class BaseOneStep:
             return
 
         # 如果是Message类型，就不再封装
-        message = result if isinstance(
-            result, Message) else Message(message=result)
+        message = result if isinstance(result, Message) else Message(body=result)
 
         self.before_emit("send", message)
         for broker in brokers:
@@ -126,10 +125,24 @@ class BaseOneStep:
                 break
 
 
+def decorator_func_proxy(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    return wrapper
+
 class SyncOneStep(BaseOneStep):
 
     def __call__(self, *args, **kwargs):
         """同步执行原函数"""
+
+        # fn = decorator_func_proxy(self.fn)
+        #
+        # message = kwargs.pop("message", None)
+        # if message:
+        #     body = message.get("body", {})
+
         result = self.fn(*args, **kwargs)
 
         if isgenerator(result):

@@ -5,7 +5,8 @@ import collections
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Queue, Empty
 
-from .base import BaseBroker
+from .base import BaseBroker, BaseConsumer
+from ..message import Message
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,11 @@ class WebHookServer(BaseHTTPRequestHandler):
         content_len = int(self.headers.get('content-length', 0))
         post_body = self.rfile.read(content_len).decode("utf-8")
         try:
-            post_json = json.loads(post_body).get("message")
+            post_json = json.loads(post_body).get("body")
         except json.JSONDecodeError:
             self.send_error(400, message="Invalid JSON format")
             return
-        queue.put_nowait(post_json)
+        queue.put_nowait(json.dumps(post_body))
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
@@ -77,17 +78,7 @@ class WebHookBroker(BaseBroker):
         return WebHookConsumer(self.queue, *args, **kwargs)
 
 
-class WebHookConsumer:
-
-    def __init__(self, queue, *args, **kwargs):
-        self.queue = queue
-        self.timeout = kwargs.pop("timeout", 1000)
-
-    def __next__(self):
-        try:
-            return self.queue.get(timeout=self.timeout / 1000)
-        except Empty:
-            return None
-
-    def __iter__(self):  # pragma: no cover
-        return self
+class WebHookConsumer(BaseConsumer):
+    def _to_message(self, data: str):
+        message = json.loads(data)
+        return Message(body=message.get("body"), extra=message.get("extra"), msg=None)

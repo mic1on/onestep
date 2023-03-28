@@ -1,21 +1,27 @@
-import json
+from typing import Optional, Any, Union
+
+from onestep import BaseBroker
 
 
 class Message:
 
-    def __init__(self, message: dict, broker=None):
-        """
-        :param message: 接收到的消息体
-        :param broker: 接收的broker
-        """
-        self.extra = message.pop("extra", {})
-        self.body = message.copy()
+    def __init__(
+            self,
+            body: Optional[Union[dict, Any]] = None,
+            extra: Optional[dict] = None,
+            msg: Optional[Any] = None,
+            broker: Optional[BaseBroker] = None
+    ):
+        self.body = body
+        self.extra = extra or {}
+        self.msg = msg
 
         self.broker = broker
         self._exception = None
 
     def set_exception(self, exception):
         self.exception = exception
+        self.failure_count = self.failure_count + 1
 
     @property
     def exception(self):
@@ -23,7 +29,7 @@ class Message:
 
     @exception.setter
     def exception(self, value):
-        self.extra['failure_count'] = self.extra.get('failure_count', 0) + 1
+        # self.extra['failure_count'] = self.extra.get('failure_count', 0) + 1
         self._exception = value
 
     @property
@@ -46,11 +52,8 @@ class Message:
             setattr(self, key, value)
         return self
 
-    def json(self):
-        return json.dumps(self.dict())
-
-    def dict(self):
-        return {**self.body, 'extra': {**self.extra}}
+    def to_dict(self):
+        return {'body': self.body, 'extra': {**self.extra}}
 
     def ack(self):
         """确认消息"""
@@ -58,9 +61,17 @@ class Message:
             self.broker.ack(self)
 
     def nack(self, requeue=False):
-        """拒绝消息"""
+        """拒绝消息 （原始状态重入）"""
         if self.broker and hasattr(self.broker, "nack"):
             self.broker.nack(self, requeue)
 
+    def requeue(self):
+        """重发消息 （最新状态重入）"""
+        if self.broker and hasattr(self.broker, "requeue"):
+            self.broker.requeue(self)
+
+    def __str__(self):
+        return str(self.to_dict())
+
     def __repr__(self):
-        return f"<{self.__class__.__name__} {self.dict()}>"
+        return f"<{self.__class__.__name__} {self.body}>"
