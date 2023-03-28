@@ -18,9 +18,14 @@ logger = logging.getLogger(__name__)
 
 class WorkerThread(threading.Thread):
 
-    def __init__(self, fn, broker: BaseBroker, *args, **kwargs):
+    def __init__(self, onestep, broker: BaseBroker, *args, **kwargs):
+        """
+        线程执行包装过的`onestep`函数
+        :param onestep: OneStep实例
+        :param broker: 监听的from broker
+        """
         super().__init__(daemon=True)
-        self.instance = fn
+        self.instance = onestep
         self.retry = self.instance.retry
         self.error_callback = self.instance.error_callback
         self.broker = broker

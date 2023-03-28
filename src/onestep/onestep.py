@@ -58,7 +58,7 @@ class BaseOneStep:
     def _add_consumer(self, broker):
         for _ in range(self.workers):
             self.consumers[self.group].append(
-                WorkerThread(fn=self, broker=broker)
+                WorkerThread(onestep=self, broker=broker)
             )
 
     @classmethod
@@ -131,6 +131,7 @@ def decorator_func_proxy(func):
         return func(*args, **kwargs)
 
     return wrapper
+
 
 class SyncOneStep(BaseOneStep):
 
