@@ -76,7 +76,6 @@ class WorkerThread(threading.Thread):
                     logger.exception(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
                 else:
                     logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
-                logger.error(f"{self.instance.fn.__name__} run error <{type(e).__name__}: {str(e)}>")
                 message.set_exception(e)
             else:
                 message_consumed.send(self, message=message)
