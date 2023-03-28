@@ -10,6 +10,7 @@ from .exception import StopMiddleware
 from .message import Message
 from .retry import NeverRetry, NackErrorCallBack
 from .signal import message_sent, started, stopped
+from .state import State
 from .worker import WorkerThread
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ DEFAULT_WORKERS = 1
 
 class BaseOneStep:
     consumers: Dict[str, List[WorkerThread]] = collections.defaultdict(list)
+    state = State()  # 全局状态
 
     def __init__(self, fn,
                  group: str = "OneStep",
@@ -157,7 +159,6 @@ class AsyncOneStep(BaseOneStep):
 
 
 class step:
-    _debug = False
 
     def __init__(self, *args, **kwargs):
         self.args = args
@@ -187,11 +188,12 @@ class step:
 
     @staticmethod
     def set_debugging():
-        if not step._debug:
+
+        if not BaseOneStep.state.debug:
             onestep_logger = logging.getLogger("onestep")
             handler = logging.StreamHandler()
             handler.setFormatter(logging.Formatter(
                 "[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
             onestep_logger.addHandler(handler)
             onestep_logger.setLevel(logging.DEBUG)
-            step._debug = True
+            BaseOneStep.state.debug = True
