@@ -72,11 +72,10 @@ class WorkerThread(threading.Thread):
 
             except Exception as e:
                 message_error.send(self, message=message, error=e)
-                # 这里读取不了 step._debug ， 如果可以，按 _debug 状态显示不同的日志比较好
-                # if step._debug:
-                #     logger.exception(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
-                # else:
-                #     logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
+                if self.instance.state.debug:
+                    logger.exception(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
+                else:
+                    logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
                 logger.error(f"{self.instance.fn.__name__} run error <{type(e).__name__}: {str(e)}>")
                 message.set_exception(e)
             else:
