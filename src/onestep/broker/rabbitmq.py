@@ -44,5 +44,11 @@ class RabbitMQBroker(BaseBroker):
 
 class RabbitMQConsumer(BaseConsumer):
     def _to_message(self, data: amqpstorm.Message):
-        message = json.loads(data.body)
+        try:
+            message = json.loads(data.body)
+        except json.JSONDecodeError:
+            message = {"body": data.body}
+        if not isinstance(message, dict):
+            message = {"body": message}
+
         return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
