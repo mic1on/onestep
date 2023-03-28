@@ -49,6 +49,7 @@ class WorkerThread(threading.Thread):
             for message in self.broker.consume():
                 if message is None:
                     continue
+                message.broker = message.broker or self.broker
                 logger.debug(f"receive message<{message}>")
                 message_received.send(self, message=message)
                 self.instance.before_emit("receive", message)
