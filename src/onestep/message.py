@@ -1,6 +1,7 @@
+import json
+import time
+import uuid
 from typing import Optional, Any, Union
-
-from onestep import BaseBroker
 
 
 class Message:
@@ -10,7 +11,7 @@ class Message:
             body: Optional[Union[dict, Any]] = None,
             extra: Optional[dict] = None,
             msg: Optional[Any] = None,
-            broker: Optional[BaseBroker] = None
+            broker=None
     ):
         self.body = body
         self.extra = extra or {}
@@ -18,6 +19,10 @@ class Message:
 
         self.broker = broker
         self._exception = None
+
+    def init_extra(self):
+        self.extra.setdefault("task_id", f"{uuid.uuid4()}")
+        self.extra.setdefault("publish_time", round(time.time(), 3))
 
     def set_exception(self, exception):
         self.exception = exception
@@ -52,8 +57,11 @@ class Message:
             setattr(self, key, value)
         return self
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {'body': self.body, 'extra': {**self.extra}}
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict())
 
     def ack(self):
         """确认消息"""

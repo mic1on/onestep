@@ -27,12 +27,9 @@ class BaseBroker:
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
             message = Message(body=message)
-        if message.extra.get('task_id') is None:
-            message.extra['task_id'] = str(uuid.uuid4())
-        if message.extra.get('publish_time') is None:
-            message.extra['publish_time'] = round(time.time(), 3)
+        message.init_extra()
         # TODO: 对消息发送进行N次重试，确保消息发送成功。
-        return self.publish(json.dumps(message.to_dict()))
+        return self.publish(message.to_json())
 
     def publish(self, message):
         """

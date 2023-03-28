@@ -10,7 +10,6 @@ from asgiref.sync import async_to_sync
 
 from .broker import BaseBroker
 from .exception import DropMessage
-from .message import Message
 from .signal import message_received, message_consumed, message_error
 
 logger = logging.getLogger(__name__)
