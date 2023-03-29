@@ -87,19 +87,19 @@ class Message:
     def to_json(self) -> str:
         return json.dumps(self.to_dict())
 
-    def ack(self):
+    def confirm(self):
         """确认消息"""
-        if self.broker and hasattr(self.broker, "ack"):
-            self.broker.ack(self)
+        if self.broker:
+            self.broker.confirm(self)
 
-    def nack(self, requeue=False):
+    def reject(self):
         """拒绝消息 （原始状态重入）"""
-        if self.broker and hasattr(self.broker, "nack"):
-            self.broker.nack(self, requeue)
+        if self.broker:
+            self.broker.reject(self)
 
     def requeue(self):
         """重发消息 （最新状态重入）"""
-        if self.broker and hasattr(self.broker, "requeue"):
+        if self.broker:
             self.broker.requeue(self)
 
     def __str__(self):

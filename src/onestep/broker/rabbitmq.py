@@ -35,13 +35,21 @@ class RabbitMQBroker(BaseBroker):
     def publish(self, message):
         self.client.send(self.queue_name, message)
 
-    @staticmethod
-    def ack(message):
+    def confirm(self, message):
+        """确认消息"""
         message.msg.ack()
 
-    @staticmethod
-    def nack(message, requeue=False):
-        message.msg.nack(requeue=requeue)
+    def reject(self, message):
+        """拒绝消息"""
+        message.msg.nack(requeue=False)
+
+    def requeue(self, message, is_source=False):
+        """重发消息：先拒绝 再 重入"""
+        if is_source:
+            message.msg.nack(requeue=True)
+        else:
+            message.msg.nack(requeue=False)
+            self.send(message)
 
 
 class RabbitMQConsumer(BaseConsumer):
