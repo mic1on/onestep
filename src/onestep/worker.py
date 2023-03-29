@@ -62,29 +62,30 @@ class WorkerThread(threading.Thread):
     def _run_instance(self, message):
         while True:
             try:
-                if message.fail:
-                    retry_state = self.retry(message)  # True=继续（执行重试）
-                    if not retry_state:  # False=结束（执行回调），None=结束（忽略回调）
-                        if retry_state is False and self.error_callback:
-                            self.error_callback(message)
-                        return message.nack(requeue=False)  # 返回前 nack 消息
                 if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
                     async_to_sync(self.instance)(message, *self.args, **self.kwargs)
                 else:
                     self.instance(message, *self.args, **self.kwargs)
-
+                message_consumed.send(self, message=message)
+                return message.confirm()
             except DropMessage as e:
-                logger.warning(f"{self.instance.fn.__name__} droped <{type(e).__name__}: {str(e)}>")
-                return message.nack()
-
+                # TODO: 加个事件，消息被抛弃
+                logger.warning(f"{self.instance.fn.__name__} dropped <{type(e).__name__}: {str(e)}>")
+                return message.reject()
             except Exception as e:
                 message_error.send(self, message=message, error=e)
                 if self.instance.state.debug:
-                    logger.exception(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
+                    logger.exception(f"{self.instance.fn.__name__} run error <{type(e).__name__}: {str(e)}>")
                 else:
-                    logger.error(f"{self.instance.fn.__name__} run error<{type(e).__name__}: {str(e)}>")
+                    logger.error(f"{self.instance.fn.__name__} run error <{type(e).__name__}: {str(e)}>")
                 message.set_exception(e)
 
-            else:
-                message_consumed.send(self, message=message)
-                return message.ack()
+                retry_state = self.retry(message)
+                if retry_state:  # True=继续（执行重试）
+                    continue
+                elif retry_state is False:  # False=结束（执行回调）
+                    if self.error_callback:
+                        self.error_callback(message)
+                    return message.reject()
+                else:  # None=结束（忽略回调）
+                    return message.requeue()
