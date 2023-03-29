@@ -5,7 +5,8 @@ import collections
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Queue, Empty
 
-from .base import BaseBroker
+from .base import BaseBroker, BaseConsumer
+from ..message import Message
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,7 @@ class WebHookServer(BaseHTTPRequestHandler):
 
         content_len = int(self.headers.get('content-length', 0))
         post_body = self.rfile.read(content_len).decode("utf-8")
-        try:
-            post_json = json.loads(post_body).get("message")
-        except json.JSONDecodeError:
-            self.send_error(400, message="Invalid JSON format")
-            return
-        queue.put_nowait(post_json)
+        queue.put_nowait(post_body)
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
@@ -76,18 +72,29 @@ class WebHookBroker(BaseBroker):
     def consume(self, *args, **kwargs):
         return WebHookConsumer(self.queue, *args, **kwargs)
 
+    def publish(self, message):
+        self.queue.put_nowait(message)
 
-class WebHookConsumer:
+    def confirm(self, message):
+        pass
 
-    def __init__(self, queue, *args, **kwargs):
-        self.queue = queue
-        self.timeout = kwargs.pop("timeout", 1000)
+    def reject(self, message):
+        pass
 
-    def __next__(self):
+    def requeue(self, message, is_source=False):
+        """重发消息：先拒绝 再 重入"""
+        if is_source:
+            self.publish(message.msg)
+        else:
+            self.send(message)
+
+
+class WebHookConsumer(BaseConsumer):
+    def _to_message(self, data: str):
+        message = Message(msg=data)
         try:
-            return self.queue.get(timeout=self.timeout / 1000)
-        except Empty:
-            return None
-
-    def __iter__(self):  # pragma: no cover
-        return self
+            body = json.loads(data)
+            message.replace(**body)
+        except json.JSONDecodeError:
+            message.body = data
+        return message

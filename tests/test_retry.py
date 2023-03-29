@@ -21,7 +21,7 @@ def test_always_retry(message):
 def test_times_retry(message):
     retry_class = TimesRetry(3)
     assert True is retry_class(message)
-    message.fail_number = 3
+    message.failure_count = 3
     assert False is retry_class(message)
 
 

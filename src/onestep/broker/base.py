@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+import abc
+from queue import Queue, Empty
+
 from ..exception import StopMiddleware
+from ..message import Message
 
 
 class BaseBroker:
@@ -17,14 +21,42 @@ class BaseBroker:
         self.middlewares.append(middleware)
 
     def send(self, message):
+        """对消息进行预处理，然后再发送"""
+        if not isinstance(message, Message):
+            message = Message(body=message)
+        # TODO: 对消息发送进行N次重试，确保消息发送成功。
+        return self.publish(message.to_json())
+
+    @abc.abstractmethod
+    def publish(self, message):
         """
         如果当前Broker是Job的to_broker, 则必须实现此方法
         """
         raise NotImplementedError('Please implement in subclasses.')
 
+    @abc.abstractmethod
     def consume(self, *args, **kwargs):
         """
         如果当前Broker是Job的from_broker, 则必须实现此方法
+        """
+        raise NotImplementedError('Please implement in subclasses.')
+
+    @abc.abstractmethod
+    def confirm(self, message):
+        """确认消息"""
+        raise NotImplementedError('Please implement in subclasses.')
+
+    @abc.abstractmethod
+    def reject(self, message):
+        """拒绝消息"""
+        raise NotImplementedError('Please implement in subclasses.')
+
+    @abc.abstractmethod
+    def requeue(self, message, is_source=False):
+        """
+        重发消息：先拒绝 再 重入
+        is_source = False 重入使用消息的当前状态
+        is_source = True 重入使用消息的初始状态
         """
         raise NotImplementedError('Please implement in subclasses.')
 
@@ -50,3 +82,26 @@ class BaseBroker:
 
     def __str__(self):
         return self.name
+
+
+class BaseConsumer:
+
+    def __init__(self, queue: Queue, *args, **kwargs):
+        self.queue = queue
+        self.timeout = kwargs.pop("timeout", 1000)
+
+    @abc.abstractmethod
+    def _to_message(self, data):
+        """
+        转换消息内容到 Message , 则必须实现此方法
+        """
+        raise NotImplementedError('Please implement in subclasses.')
+
+    def __next__(self):
+        try:
+            return self._to_message(self.queue.get(timeout=self.timeout / 1000))
+        except Empty:
+            return None
+
+    def __iter__(self):
+        return self
