@@ -17,13 +17,24 @@ class MemoryBroker(BaseBroker):
     def publish(self, message):
         self.queue.put_nowait(message)
 
-    def nack(self, message, requeue=False):
-        if requeue:
-            self.queue.put_nowait(message.dict())
+    def confirm(self, message):
+        """确认消息"""
+        pass
+
+    def reject(self, message):
+        """拒绝消息"""
+        pass
+
+    def requeue(self, message, is_source=False):
+        """重发消息：先拒绝 再 重入"""
+        if is_source:
+            self.send(message.msg)
+        else:
+            self.send(message)
 
 
 class MemoryConsumer(BaseConsumer):
 
     def _to_message(self, data: str):
         message = json.loads(data)
-        return Message(body=message.get("body"), extra=message.get("extra"), msg=None)
+        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
