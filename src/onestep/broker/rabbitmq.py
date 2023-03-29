@@ -6,7 +6,7 @@ from typing import Optional, Dict
 import amqpstorm
 
 from .base import BaseBroker, BaseConsumer
-from .store.rabbitmq import RabbitmqStore
+from ..store.rabbitmq import RabbitmqStore
 from ..message import Message
 
 
