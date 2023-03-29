@@ -29,7 +29,7 @@ class BaseOneStep:
                  workers: Optional[int] = None,
                  middlewares: Optional[List[Any]] = None,
                  retry: Union[Callable, object] = NeverRetry(),
-                 error_callback: Union[Callable, object] = NackErrorCallBack()):
+                 error_callback: Optional[Union[Callable, object]] = None):
         self.group = group
         self.fn = fn
         self.workers = workers or DEFAULT_WORKERS
@@ -137,12 +137,6 @@ class SyncOneStep(BaseOneStep):
 
     def __call__(self, *args, **kwargs):
         """同步执行原函数"""
-
-        # fn = decorator_func_proxy(self.fn)
-        #
-        # message = kwargs.pop("message", None)
-        # if message:
-        #     body = message.get("body", {})
 
         result = self.fn(*args, **kwargs)
 
