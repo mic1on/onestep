@@ -12,34 +12,44 @@ from ..message import Message
 
 class RabbitMQBroker(BaseBroker):
 
-    def __init__(self, queue_name, params: Optional[Dict] = None, *args, **kwargs):
+    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
         self.queue = Queue()
         params = params or {}
         self.client = RabbitmqStore(**params)
         self.client.declare_queue(self.queue_name)
+        self.prefetch = prefetch
 
-    def _consume(self):
+    def _consume(self, *args, **kwargs):
         def callback(message):
             self.queue.put(message)
 
-        self.client.start_consuming(self.queue_name, callback)
+        prefetch = kwargs.pop("prefetch", self.prefetch)
+        self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)
 
     def consume(self, *args, **kwargs):
-        threading.Thread(target=self._consume).start()
+        threading.Thread(target=self._consume, *args, **kwargs).start()
         return RabbitMQConsumer(self.queue)
 
     def publish(self, message):
         self.client.send(self.queue_name, message)
 
-    @staticmethod
-    def ack(message):
+    def confirm(self, message):
+        """确认消息"""
         message.msg.ack()
 
-    @staticmethod
-    def nack(message, requeue=False):
-        message.msg.nack(requeue=requeue)
+    def reject(self, message):
+        """拒绝消息"""
+        message.msg.nack(requeue=False)
+
+    def requeue(self, message, is_source=False):
+        """重发消息：先拒绝 再 重入"""
+        if is_source:
+            message.msg.nack(requeue=True)
+        else:
+            message.msg.nack(requeue=False)
+            self.send(message)
 
 
 class RabbitMQConsumer(BaseConsumer):

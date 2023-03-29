@@ -98,13 +98,12 @@ class RabbitmqStore:
         queue_response = self.declare_queue(queue_name)
         return queue_response.get("message_count", 0)
 
-    def start_consuming(self, queue_name, callback):
+    def start_consuming(self, queue_name, callback, prefetch=1, **kwargs):
         """开始消费"""
         while True:
             try:
-                self.channel.basic.consume(
-                    queue=queue_name, callback=callback, no_ack=False
-                )
+                self.channel.basic.qos(prefetch_count=prefetch)
+                self.channel.basic.consume(queue=queue_name, callback=callback, no_ack=False, **kwargs)
                 self.channel.start_consuming(to_tuple=False)
             except AMQPConnectionError:
                 logger.warning("RabbitmqStore consume connection error, reconnecting...")
