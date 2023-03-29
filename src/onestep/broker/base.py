@@ -27,21 +27,38 @@ class BaseBroker:
         # TODO: 对消息发送进行N次重试，确保消息发送成功。
         return self.publish(message.to_json())
 
+    @abc.abstractmethod
     def publish(self, message):
         """
         如果当前Broker是Job的to_broker, 则必须实现此方法
         """
         raise NotImplementedError('Please implement in subclasses.')
 
+    @abc.abstractmethod
     def consume(self, *args, **kwargs):
         """
         如果当前Broker是Job的from_broker, 则必须实现此方法
         """
         raise NotImplementedError('Please implement in subclasses.')
 
-    def requeue(self, message):
-        """重新入队，与 nack 不同的是：nack(requeue=True) 是将消息按【原样】重入，本方法是将消息的【最新状态】重发 """
-        self.send(message)
+    @abc.abstractmethod
+    def confirm(self, message):
+        """确认消息"""
+        raise NotImplementedError('Please implement in subclasses.')
+
+    @abc.abstractmethod
+    def reject(self, message):
+        """拒绝消息"""
+        raise NotImplementedError('Please implement in subclasses.')
+
+    @abc.abstractmethod
+    def requeue(self, message, is_source=False):
+        """
+        重发消息：先拒绝 再 重入
+        is_source = False 重入使用消息的当前状态
+        is_source = True 重入使用消息的初始状态
+        """
+        raise NotImplementedError('Please implement in subclasses.')
 
     def before_emit(self, signal, *args, **kwargs):
         signal = "before_" + signal
