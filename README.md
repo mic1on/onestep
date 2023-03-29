@@ -1,6 +1,18 @@
 # OneStep
 
-内部测试阶段，请勿用于生产。
+<a href="https://github.com/mic1on/onestep/actions/workflows/test.yml?query=event%3Apush+branch%3Amain" target="_blank">
+    <img src="https://github.com/mic1on/onestep/workflows/test%20suite/badge.svg?branch=main&event=push" alt="Test">
+</a>
+<a href="https://pypi.org/project/onestep" target="_blank">
+    <img src="https://img.shields.io/pypi/v/onestep.svg" alt="Package version">
+</a>
+
+<a href="https://pypi.org/project/onestep" target="_blank">
+    <img src="https://img.shields.io/pypi/pyversions/onestep.svg" alt="Supported Python versions">
+</a>
+
+<hr />
+仅需一步，轻松实现分布式异步任务。
 
 ## Brokers
 
