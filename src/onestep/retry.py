@@ -49,7 +49,6 @@ class LocalAndQueueRetry(TimesRetry):
         if isinstance(message.exception, (RetryViaLocal, RetryViaQueue)):
             if message.failure_count < (message.exception.times or self.times):
                 if isinstance(message.exception, RetryViaQueue):
-                    message.requeue()
                     return None  # 入队重试，不回调
                 return True  # 本地重试，不回调
             else:
@@ -69,4 +68,4 @@ class BaseErrorCallback(ABC):
 class NackErrorCallBack(BaseErrorCallback):
 
     def __call__(self, message):
-        message.nack()
+        message.reject()
