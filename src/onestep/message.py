@@ -78,6 +78,8 @@ class Message:
         for key, value in kwargs.items():
             if not hasattr(self, key):
                 continue
+            if key == 'extra':
+                value = self._set_extra(value)
             setattr(self, key, value)
         return self
 
