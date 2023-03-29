@@ -12,22 +12,24 @@ from ..message import Message
 
 class RabbitMQBroker(BaseBroker):
 
-    def __init__(self, queue_name, params: Optional[Dict] = None, *args, **kwargs):
+    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
         self.queue = Queue()
         params = params or {}
         self.client = RabbitmqStore(**params)
         self.client.declare_queue(self.queue_name)
+        self.prefetch = prefetch
 
-    def _consume(self):
+    def _consume(self, *args, **kwargs):
         def callback(message):
             self.queue.put(message)
 
-        self.client.start_consuming(self.queue_name, callback)
+        prefetch = kwargs.pop("prefetch", self.prefetch)
+        self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)
 
     def consume(self, *args, **kwargs):
-        threading.Thread(target=self._consume).start()
+        threading.Thread(target=self._consume, *args, **kwargs).start()
         return RabbitMQConsumer(self.queue)
 
     def publish(self, message):
