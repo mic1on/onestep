@@ -17,7 +17,7 @@ def build_task():
 async def crawl_list(message):
     """模拟访问"""
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"https://httpbin.org/anything/{message.message}")
+        resp = await client.get(f"https://httpbin.org/anything/{message.body}")
         url = resp.json().get("url")
         print("访问结果", url)
         return url

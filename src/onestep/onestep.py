@@ -10,6 +10,7 @@ from .exception import StopMiddleware
 from .message import Message
 from .retry import NeverRetry, NackErrorCallBack
 from .signal import message_sent, started, stopped
+from .state import State
 from .worker import WorkerThread
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ DEFAULT_WORKERS = 1
 
 class BaseOneStep:
     consumers: Dict[str, List[WorkerThread]] = collections.defaultdict(list)
+    state = State()  # 全局状态
 
     def __init__(self, fn,
                  group: str = "OneStep",
@@ -27,7 +29,7 @@ class BaseOneStep:
                  workers: Optional[int] = None,
                  middlewares: Optional[List[Any]] = None,
                  retry: Union[Callable, object] = NeverRetry(),
-                 error_callback: Union[Callable, object] = NackErrorCallBack()):
+                 error_callback: Optional[Union[Callable, object]] = None):
         self.group = group
         self.fn = fn
         self.workers = workers or DEFAULT_WORKERS
@@ -56,7 +58,7 @@ class BaseOneStep:
     def _add_consumer(self, broker):
         for _ in range(self.workers):
             self.consumers[self.group].append(
-                WorkerThread(fn=self, broker=broker)
+                WorkerThread(onestep=self, broker=broker)
             )
 
     @classmethod
@@ -88,17 +90,16 @@ class BaseOneStep:
     def send(self, result, broker=None):
         """将返回的内容交给broker发送"""
         if result is None:
-            logger.debug("message is empty")
+            logger.debug("send(result): body is empty")
             return
 
         brokers = self._init_broker(broker) or self.to_brokers
         if not brokers:
-            logger.debug("broker is empty")
+            logger.debug("send(result): broker is empty")
             return
 
         # 如果是Message类型，就不再封装
-        message = result if isinstance(
-            result, Message) else Message(message=result)
+        message = result if isinstance(result, Message) else Message(body=result)
 
         self.before_emit("send", message)
         for broker in brokers:
@@ -124,10 +125,19 @@ class BaseOneStep:
                 break
 
 
+def decorator_func_proxy(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 class SyncOneStep(BaseOneStep):
 
     def __call__(self, *args, **kwargs):
         """同步执行原函数"""
+
         result = self.fn(*args, **kwargs)
 
         if isgenerator(result):
@@ -157,7 +167,6 @@ class AsyncOneStep(BaseOneStep):
 
 
 class step:
-    _debug = False
 
     def __init__(self, *args, **kwargs):
         self.args = args
@@ -187,11 +196,12 @@ class step:
 
     @staticmethod
     def set_debugging():
-        if not step._debug:
+
+        if not BaseOneStep.state.debug:
             onestep_logger = logging.getLogger("onestep")
             handler = logging.StreamHandler()
             handler.setFormatter(logging.Formatter(
                 "[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
             onestep_logger.addHandler(handler)
             onestep_logger.setLevel(logging.DEBUG)
-            step._debug = True
+            BaseOneStep.state.debug = True

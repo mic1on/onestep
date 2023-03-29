@@ -27,6 +27,7 @@ autopep8 = "^2.0.2"
 pytest = "^7.2.2"
 amqpstorm = "^2.10.6"
 redis = "^4.5.1"
+httpx = "^0.23.3"
 
 [build-system]
 requires = ["poetry-core"]
