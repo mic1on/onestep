@@ -28,7 +28,7 @@ class MemoryBroker(BaseBroker):
     def requeue(self, message, is_source=False):
         """重发消息：先拒绝 再 重入"""
         if is_source:
-            self.send(message.msg)
+            self.publish(message.msg)
         else:
             self.send(message)
 
