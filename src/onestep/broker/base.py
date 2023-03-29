@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
 import abc
-import json
-import time
-import uuid
 from queue import Queue, Empty
 
 from ..exception import StopMiddleware
@@ -27,7 +24,6 @@ class BaseBroker:
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
             message = Message(body=message)
-        message.init_extra()
         # TODO: 对消息发送进行N次重试，确保消息发送成功。
         return self.publish(message.to_json())
 

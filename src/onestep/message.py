@@ -4,25 +4,50 @@ import uuid
 from typing import Optional, Any, Union
 
 
+class Extra:
+    def __init__(self, task_id=None, publish_time=None, failure_count=0):
+        self.task_id = task_id or str(uuid.uuid4())
+        self.publish_time = publish_time or round(time.time(), 3)
+        self.failure_count = failure_count
+
+    def to_dict(self):
+        return {
+            'task_id': self.task_id,
+            'publish_time': self.publish_time,
+            'failure_count': self.failure_count,
+        }
+
+    def __str__(self):
+        return str(self.to_dict())
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.task_id}, {self.publish_time}, {self.failure_count})"
+
+
 class Message:
 
     def __init__(
             self,
             body: Optional[Union[dict, Any]] = None,
-            extra: Optional[dict] = None,
+            extra: Optional[Union[dict, Extra]] = None,
             msg: Optional[Any] = None,
             broker=None
     ):
         self.body = body
-        self.extra = extra or {}
+        self.extra = self._set_extra(extra)
         self.msg = msg
 
         self.broker = broker
         self._exception = None
 
-    def init_extra(self):
-        self.extra.setdefault("task_id", f"{uuid.uuid4()}")
-        self.extra.setdefault("publish_time", round(time.time(), 3))
+    @staticmethod
+    def _set_extra(extra):
+        if isinstance(extra, Extra):
+            return extra
+        elif isinstance(extra, dict):
+            return Extra(**extra)
+        else:
+            return Extra()
 
     def set_exception(self, exception):
         self.exception = exception
@@ -34,7 +59,6 @@ class Message:
 
     @exception.setter
     def exception(self, value):
-        # self.extra['failure_count'] = self.extra.get('failure_count', 0) + 1
         self._exception = value
 
     @property
@@ -43,11 +67,11 @@ class Message:
 
     @property
     def failure_count(self):
-        return self.extra.get('failure_count', 0)
+        return self.extra.failure_count
 
     @failure_count.setter
     def failure_count(self, value):
-        self.extra['failure_count'] = value
+        self.extra.failure_count = value
 
     def replace(self, **kwargs):
         """替换当前message的属性"""
@@ -58,7 +82,7 @@ class Message:
         return self
 
     def to_dict(self) -> dict:
-        return {'body': self.body, 'extra': {**self.extra}}
+        return {'body': self.body, 'extra': self.extra.to_dict()}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict())
