@@ -1,12 +1,9 @@
-import json
 import logging
 import threading
 import collections
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from queue import Queue, Empty
 
-from .base import BaseBroker, BaseConsumer
-from ..message import Message
+from .base import BaseLocalBroker, BaseLocalConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +34,7 @@ class WebHookServer(BaseHTTPRequestHandler):
         self.wfile.write(b'{ "status": "ok" }')
 
 
-class WebHookBroker(BaseBroker):
+class WebHookBroker(BaseLocalBroker):
     _servers = {}
 
     def __init__(self,
@@ -47,7 +44,6 @@ class WebHookBroker(BaseBroker):
                  *args,
                  **kwargs):
         super().__init__(*args, **kwargs)
-        self.queue = Queue()
         self.host = host
         self.port = port
         self.path = path
@@ -72,29 +68,6 @@ class WebHookBroker(BaseBroker):
     def consume(self, *args, **kwargs):
         return WebHookConsumer(self.queue, *args, **kwargs)
 
-    def publish(self, message):
-        self.queue.put_nowait(message)
 
-    def confirm(self, message):
-        pass
-
-    def reject(self, message):
-        pass
-
-    def requeue(self, message, is_source=False):
-        """重发消息：先拒绝 再 重入"""
-        if is_source:
-            self.publish(message.msg)
-        else:
-            self.send(message)
-
-
-class WebHookConsumer(BaseConsumer):
-    def _to_message(self, data: str):
-        message = Message(msg=data)
-        try:
-            body = json.loads(data)
-            message.replace(**body)
-        except json.JSONDecodeError:
-            message.body = data
-        return message
+class WebHookConsumer(BaseLocalConsumer):
+    ...
