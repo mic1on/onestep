@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import abc
+import json
 from queue import Queue, Empty
 
 from ..exception import StopMiddleware
@@ -105,3 +106,49 @@ class BaseConsumer:
 
     def __iter__(self):
         return self
+
+
+class BaseLocalBroker(BaseBroker):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.queue = Queue()
+
+    def publish(self, message):
+        self.queue.put_nowait(message)
+
+    def consume(self, *args, **kwargs):
+        return BaseLocalConsumer(self.queue, *args, **kwargs)
+
+    def confirm(self, message):
+        """确认消息"""
+        pass
+
+    def reject(self, message):
+        """拒绝消息"""
+        pass
+
+    def requeue(self, message, is_source=False):
+        """重发消息：先拒绝 再 重入"""
+        if is_source:
+            self.publish(message.msg)
+        else:
+            self.send(message)
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.name}>"
+
+    def __str__(self):
+        return self.name
+
+
+class BaseLocalConsumer(BaseConsumer):
+
+    def _to_message(self, data):
+        message = Message(msg=data)
+        try:
+            body = json.loads(data)
+            message.replace(**body)
+        except (json.JSONDecodeError, TypeError):
+            message.body = data
+        return message
