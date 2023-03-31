@@ -51,9 +51,9 @@ class WorkerThread(threading.Thread):
                 message.broker = message.broker or self.broker
                 logger.debug(f"receive message<{message}>")
                 message_received.send(self, message=message)
-                self.instance.before_emit("receive", message)
+                self.instance.before_emit("receive", message=message)
                 self._run_instance(message)
-                self.instance.after_emit("receive", message)
+                self.instance.after_emit("receive", message=message)
 
     def shutdown(self):
         self.__shutdown = True
