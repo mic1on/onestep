@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any, Callable, Union
 from .broker.base import BaseBroker
 from .exception import StopMiddleware
 from .message import Message
-from .retry import NeverRetry, NackErrorCallBack
+from .retry import NeverRetry
 from .signal import message_sent, started, stopped
 from .state import State
 from .worker import WorkerThread
