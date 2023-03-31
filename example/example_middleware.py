@@ -5,17 +5,20 @@ todo_broker.send("hello world")
 
 
 class MyMiddleware(BaseMiddleware):
-    def before_send(self, message):
-        print(f"before send: {message}")
+    def __init__(self):
+        self.x = 123
 
-    def after_send(self, message):
-        print(f"after send: {message}")
+    def before_send(self, onestep, message):
+        print(self.x)
 
-    def before_receive(self, message):
-        print(f"before receive: {message}")
+    def after_send(self, onestep, message):
+        pass
 
-    def after_receive(self, message):
-        print(f"after receive: {message}")
+    def before_receive(self, onestep, message):
+        pass
+
+    def after_receive(self, onestep, message):
+        pass
 
 
 # 由于from_broker和to_broker都是todo_broker，
@@ -23,7 +26,7 @@ class MyMiddleware(BaseMiddleware):
 @step(from_broker=todo_broker,
       to_broker=todo_broker,
       workers=3,
-      middlewares=[MyMiddleware])
+      middlewares=[MyMiddleware()])
 def do_something(todo):
     return todo
 

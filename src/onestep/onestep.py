@@ -101,11 +101,11 @@ class BaseOneStep:
         # 如果是Message类型，就不再封装
         message = result if isinstance(result, Message) else Message(body=result)
 
-        self.before_emit("send", message)
+        self.before_emit("send", message=message)
         for broker in brokers:
             message_sent.send(self, message=message, broker=broker)
             broker.send(message)
-        self.after_emit("send", message)
+        self.after_emit("send", message=message)
 
     def before_emit(self, signal, *args, **kwargs):
         signal = "before_" + signal
