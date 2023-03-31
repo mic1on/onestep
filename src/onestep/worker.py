@@ -10,7 +10,7 @@ from asgiref.sync import async_to_sync
 
 from .broker import BaseBroker
 from .exception import DropMessage
-from .signal import message_received, message_consumed, message_error
+from .signal import message_received, message_consumed, message_error, message_drop
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class WorkerThread(threading.Thread):
                 message_consumed.send(self, message=message)
                 return message.confirm()
             except DropMessage as e:
-                # TODO: 加个事件，消息被抛弃
+                message_drop.send(self, message=message, reason=e)
                 logger.warning(f"{self.instance.fn.__name__} dropped <{type(e).__name__}: {str(e)}>")
                 return message.reject()
             except Exception as e:
