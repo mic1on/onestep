@@ -1,5 +1,3 @@
-import redis
-
 from .base import BaseMiddleware
 
 
@@ -77,12 +75,3 @@ class RedisPublishConfigMiddleware(RedisConfigMixin, PublishConfigMixin, BaseCon
 
 class RedisConsumeConfigMiddleware(RedisConfigMixin, ConsumeConfigMixin, BaseConfigMiddleware):
     """消费前附加来自 Redis 的配置"""
-
-
-if __name__ == '__main__':
-    rds_params = {
-    }
-    rds_client = redis.Redis(**rds_params)
-
-    rc = RedisConfigMiddleware(client=rds_client)
-    print(rc.get("name"))
