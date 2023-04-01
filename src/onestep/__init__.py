@@ -1,10 +1,14 @@
 from .onestep import step
-from .retry import NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, NackErrorCallBack
+from .retry import NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, NackErrorCallBack, LocalAndQueueRetry
 from .broker import (
     BaseBroker, BaseConsumer, BaseLocalBroker, BaseLocalConsumer,
     MemoryBroker, RabbitMQBroker, WebHookBroker, CronBroker
 )
-from .middleware import BaseMiddleware, BaseConfigMiddleware, RedisConfigMiddleware, NacosConfigMiddleware
+from .middleware import (
+    BaseMiddleware, BaseConfigMiddleware,
+    NacosPublishConfigMiddleware, NacosConsumeConfigMiddleware,
+    RedisPublishConfigMiddleware, RedisConsumeConfigMiddleware,
+)
 
 __all__ = [
     'step',
@@ -24,12 +28,15 @@ __all__ = [
     'AlwaysRetry',
     'TimesRetry',
     'RetryIfException',
+    'LocalAndQueueRetry',
     #
     'NackErrorCallBack',
 
     # middleware
     'BaseMiddleware',
     'BaseConfigMiddleware',
-    'RedisConfigMiddleware',
-    'NacosConfigMiddleware',
+    'NacosPublishConfigMiddleware',
+    'NacosConsumeConfigMiddleware',
+    'RedisPublishConfigMiddleware',
+    'RedisConsumeConfigMiddleware',
 ]
