@@ -8,16 +8,16 @@ class MyMiddleware(BaseMiddleware):
     def __init__(self):
         self.x = 123
 
-    def before_send(self, onestep, message):
+    def before_send(self, step, message, *args, **kwargs):
         print(self.x)
 
-    def after_send(self, onestep, message):
+    def after_send(self, step, message, *args, **kwargs):
         pass
 
-    def before_receive(self, onestep, message):
+    def before_receive(self, step, message, *args, **kwargs):
         pass
 
-    def after_receive(self, onestep, message):
+    def after_receive(self, step, message, *args, **kwargs):
         pass
 
 

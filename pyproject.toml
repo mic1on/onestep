@@ -22,6 +22,7 @@ rabbitmq = ["amqpstorm"]
 nacos-sdk-python = "^0.1.12"
 redis = "^4.5.1"
 autopep8 = "^2.0.2"
+loguru = "^0.6.0"
 
 
 [tool.poetry.group.test.dependencies]
