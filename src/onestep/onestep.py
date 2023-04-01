@@ -120,7 +120,7 @@ class BaseOneStep:
             if not hasattr(middleware, signal):
                 continue
             try:
-                getattr(middleware, signal)(self, *args, **kwargs)
+                getattr(middleware, signal)(step=self, *args, **kwargs)
             except StopMiddleware:
                 break
 
