@@ -19,10 +19,13 @@ class CronBroker(BaseLocalBroker):
         self.kwargs = kwargs
         self._scheduler()
 
+    def _real_task(self):
+        self.queue.put_nowait(self.kwargs)
+
     def _scheduler(self):
         if self.next_fire_time <= datetime.now():
             self.next_fire_time = self.itr.get_next(datetime)
-            self.queue.put_nowait(self.kwargs)
+            self._real_task()
 
         threading.Timer(interval=1, function=self._scheduler).start()
 
