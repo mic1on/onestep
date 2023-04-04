@@ -104,8 +104,24 @@ class Message:
         if self.broker:
             self.broker.requeue(self)
 
+    def __getattr__(self, item):
+        return None
+
+    def __delattr__(self, item):
+        if hasattr(self, item):
+            setattr(self, item, None)
+
     def __str__(self):
         return str(self.to_dict())
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.body}>"
+
+
+if __name__ == '__main__':
+    msg = Message()
+    msg.x = 1
+    print(msg.x)
+    msg.qq1 = 1
+    del msg.qq1
+    print(msg.qq1)

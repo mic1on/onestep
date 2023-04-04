@@ -121,7 +121,8 @@ class BaseOneStep:
                 continue
             try:
                 getattr(middleware, signal)(step=self, *args, **kwargs)
-            except StopMiddleware:
+            except StopMiddleware as e:
+                logger.debug(f"middleware<{middleware.__name__}> is stopped，reason: {e}")
                 break
 
 
