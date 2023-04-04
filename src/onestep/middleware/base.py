@@ -15,3 +15,6 @@ class BaseMiddleware:
     def after_receive(self, step, message, *args, **kwargs):
         """消息接收之后"""
         pass
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__}>"
