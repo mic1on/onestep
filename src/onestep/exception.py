@@ -13,8 +13,6 @@ class RetryViaQueue(RetryException):
     """消息重试-通过重试队列
 
     抛出此异常，消息将被重新放入队列，等待下次消费。
-
-    具体实现是触发`broker`中`nack`方法，`requeue`参数为True，将消息重新放入队列
     """
 
 

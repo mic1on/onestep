@@ -1,7 +1,7 @@
 from onestep import step
 from onestep.broker import MemoryBroker
 from onestep.exception import RetryViaQueue, DropMessage
-from onestep.retry import LocalAndQueueRetry
+from onestep.retry import AdvancedRetry
 
 todo_broker = MemoryBroker()
 
@@ -31,7 +31,7 @@ def build_todo_list():
     ]
 
 
-@step(from_broker=todo_broker, workers=1, retry=LocalAndQueueRetry())
+@step(from_broker=todo_broker, workers=1, retry=AdvancedRetry())
 def do_something(todo):
     print(todo)
     todo.body["status"] = "done"

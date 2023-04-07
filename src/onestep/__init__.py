@@ -1,7 +1,7 @@
 from .onestep import step
 from .retry import (
-    BaseRetry, BaseErrorCallback,
-    NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, NackErrorCallBack, LocalAndQueueRetry
+    BaseRetry, BaseErrorCallback, NackErrorCallBack,
+    NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, AdvancedRetry
 )
 from .broker import (
     BaseBroker, BaseConsumer, BaseLocalBroker, BaseLocalConsumer,
@@ -32,13 +32,13 @@ __all__ = [
 
     # retry
     'BaseRetry',
-    'BaseErrorCallback',
     'NeverRetry',
     'AlwaysRetry',
     'TimesRetry',
     'RetryIfException',
-    'LocalAndQueueRetry',
-    #
+    'AdvancedRetry',
+    # error callback
+    'BaseErrorCallback',
     'NackErrorCallBack',
 
     # middleware
