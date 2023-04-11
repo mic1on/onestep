@@ -86,7 +86,16 @@ class Message:
     def to_dict(self, include_exception=False) -> dict:
         data = {'body': self.body, 'extra': self.extra.to_dict()}
         if include_exception and self.exception:
-            data['exception'] = str(self.exception)
+            # 保存 异常信息，包括 错误的类名 方法名 行号
+            data['exception'] = {
+                'type': self.exception.__class__.__name__,
+                'message': str(self.exception),
+            }
+            if hasattr(self.exception, '__traceback__'):
+                data['exception']['traceback'] = f"{self.exception.__traceback__.tb_frame.f_code.co_filename}:" \
+                                                 f"{self.exception.__traceback__.tb_frame.f_code.co_name}:" \
+                                                 f"{self.exception.__traceback__.tb_lineno}"
+        
         return data
     
     def to_json(self, include_exception=False) -> str:
