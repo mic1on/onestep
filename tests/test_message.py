@@ -24,3 +24,15 @@ def test_message_replace():
     expected_dict = {'body': {'new_key': 'new_value'},
                      'extra': {'task_id': '123', 'publish_time': 1234567890.123, 'failure_count': 0}}
     assert msg.to_dict() == expected_dict
+
+
+def test_message_set_exception():
+    msg = Message(body={'key': 'value'}, extra={'task_id': '123', 'publish_time': 1234567890.123, 'failure_count': 0})
+    try:
+        raise ValueError('test')
+    except Exception as e:
+        msg.set_exception(e)
+    # msg.set_exception(ValueError('test'))
+    assert msg.exception.args[0] == 'test'
+    assert msg.failure_count == 1
+    print(msg.to_json(True))
