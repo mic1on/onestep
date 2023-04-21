@@ -1,4 +1,5 @@
 import logging
+import time
 from threading import local
 import amqpstorm
 from amqpstorm.exception import AMQPConnectionError
@@ -108,6 +109,8 @@ class RabbitmqStore:
             except AMQPConnectionError:
                 logger.warning("RabbitmqStore consume connection error, reconnecting...")
                 del self.connection
+                time.sleep(1)
             except Exception as e:
                 logger.exception(f"RabbitmqStore consume error<{e}>, reconnecting...")
                 del self.connection
+                time.sleep(1)
