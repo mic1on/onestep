@@ -31,8 +31,9 @@ def test_message_set_exception():
     try:
         raise ValueError('test')
     except Exception as e:
-        msg.set_exception(e)
+        msg.set_exception()
     # msg.set_exception(ValueError('test'))
-    assert msg.exception.args[0] == 'test'
+    assert str(msg.exception) == 'test'
+    assert msg.exception.exc_type == ValueError
     assert msg.failure_count == 1
     print(msg.to_json(True))

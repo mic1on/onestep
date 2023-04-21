@@ -31,7 +31,9 @@ def build_todo_list():
     ]
 
 
-@step(from_broker=todo_broker, workers=1, retry=AdvancedRetry())
+@step(from_broker=todo_broker, workers=1,
+      # retry=AdvancedRetry()
+      )
 def do_something(todo):
     print(todo)
     todo.body["status"] = "done"
