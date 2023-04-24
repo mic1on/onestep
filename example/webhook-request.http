@@ -3,7 +3,7 @@ POST http://127.0.0.1:8090/push
 Content-Type: application/json
 
 {
-  "message": "Hello OneStep"
+  "body": "Hello OneStep"
 }
 
 ###
