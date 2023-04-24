@@ -44,7 +44,12 @@ class RabbitMQBroker(BaseBroker):
         message.msg.nack(requeue=False)
 
     def requeue(self, message, is_source=False):
-        """重发消息：先拒绝 再 重入"""
+        """
+        重发消息：先拒绝 再 重入
+        
+        :param message: 消息
+        :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
+        """
         if is_source:
             message.msg.nack(requeue=True)
         else:

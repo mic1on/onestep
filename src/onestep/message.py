@@ -115,14 +115,18 @@ class Message:
             self.broker.confirm(self)
     
     def reject(self):
-        """拒绝消息 （原始状态重入）"""
+        """拒绝消息"""
         if self.broker:
             self.broker.reject(self)
     
-    def requeue(self):
-        """重发消息 （最新状态重入）"""
+    def requeue(self, is_source=False):
+        """
+        重发消息：先拒绝 再 重入
+        
+        :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
+        """
         if self.broker:
-            self.broker.requeue(self)
+            self.broker.requeue(self, is_source=is_source)
     
     def __getattr__(self, item):
         return None
