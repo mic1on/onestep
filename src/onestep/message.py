@@ -1,6 +1,8 @@
 import json
+import sys
 import time
 import uuid
+from traceback import format_exception, TracebackException
 from typing import Optional, Any, Union
 
 
@@ -49,8 +51,9 @@ class Message:
         else:
             return Extra()
     
-    def set_exception(self, exception):
-        self.exception = exception
+    def set_exception(self, exception: Optional[Union[TracebackException, Exception, Any]] = None):
+        """设置异常信息 一般不用自己传入exception，会自动获取"""
+        self.exception = exception if exception else TracebackException(*sys.exc_info())
         self.failure_count = self.failure_count + 1
     
     @property
@@ -86,15 +89,20 @@ class Message:
     def to_dict(self, include_exception=False) -> dict:
         data = {'body': self.body, 'extra': self.extra.to_dict()}
         if include_exception and self.exception:
-            # 保存 异常信息，包括 错误的类名 方法名 行号
-            data['exception'] = {
-                'type': self.exception.__class__.__name__,
-                'message': str(self.exception),
-            }
-            if hasattr(self.exception, '__traceback__'):
-                data['exception']['traceback'] = f"{self.exception.__traceback__.tb_frame.f_code.co_filename}:" \
-                                                 f"{self.exception.__traceback__.tb_frame.f_code.co_name}:" \
-                                                 f"{self.exception.__traceback__.tb_lineno}"
+            if isinstance(self.exception, TracebackException):
+                data['exception'] = "".join(self.exception.format(chain=True))  # noqa
+            elif isinstance(self.exception, Exception):
+                data['exception'] = "".join(
+                    format_exception(
+                        self.exception.__class__, self.exception,
+                        self.exception.__getattr__('__traceback__', None)
+                    )
+                )
+            else:
+                try:
+                    data['exception'] = json.dumps(self.exception)
+                except Exception:
+                    data['exception'] = str(self.exception)
         
         return data
     
@@ -107,14 +115,18 @@ class Message:
             self.broker.confirm(self)
     
     def reject(self):
-        """拒绝消息 （原始状态重入）"""
+        """拒绝消息"""
         if self.broker:
             self.broker.reject(self)
     
-    def requeue(self):
-        """重发消息 （最新状态重入）"""
+    def requeue(self, is_source=False):
+        """
+        重发消息：先拒绝 再 重入
+        
+        :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
+        """
         if self.broker:
-            self.broker.requeue(self)
+            self.broker.requeue(self, is_source=is_source)
     
     def __getattr__(self, item):
         return None
