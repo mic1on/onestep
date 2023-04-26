@@ -1,1 +1,1 @@
-from .rabbitmq import RabbitmqStore
+from .rabbitmq import RabbitMQStore

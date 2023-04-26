@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import amqpstorm
 
 from .base import BaseBroker, BaseConsumer
-from ..store.rabbitmq import RabbitmqStore
+from ..store.rabbitmq import RabbitMQStore
 from ..message import Message
 
 
@@ -17,7 +17,7 @@ class RabbitMQBroker(BaseBroker):
         self.queue_name = queue_name
         self.queue = Queue()
         params = params or {}
-        self.client = RabbitmqStore(**params)
+        self.client = RabbitMQStore(**params)
         self.client.declare_queue(self.queue_name)
         self.prefetch = prefetch
 

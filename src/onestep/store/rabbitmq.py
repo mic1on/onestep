@@ -10,7 +10,7 @@ MAX_CONNECTION_ATTEMPTS = float('inf')  # 最大连接重试次数
 logger = logging.Logger(__name__)
 
 
-class RabbitmqStore:
+class RabbitMQStore:
     
     def __init__(self, *, confirm_delivery=True, host=None, port=None, username=None, password=None,
                  **kwargs):
@@ -37,6 +37,7 @@ class RabbitmqStore:
         attempts = 1
         while attempts <= MAX_CONNECTION_ATTEMPTS:
             try:
+                # logger.warning("RabbitmqStore connection try: attempts=%s", attempts)
                 return amqpstorm.Connection(**self.parameters)
             except AMQPConnectionError as exc:
                 attempts += 1
@@ -114,3 +115,6 @@ class RabbitmqStore:
                 logger.exception(f"RabbitmqStore consume error<{e}>, reconnecting...")
                 del self.connection
                 time.sleep(1)
+
+
+RabbitmqStore = RabbitMQStore  # 兼容旧版本
