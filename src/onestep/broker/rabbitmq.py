@@ -1,7 +1,7 @@
 import json
 import threading
 from queue import Queue
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 import amqpstorm
 
@@ -22,7 +22,7 @@ class RabbitMQBroker(BaseBroker):
         self.prefetch = prefetch
 
     def _consume(self, *args, **kwargs):
-        def callback(message):
+        def callback(message: amqpstorm.Message):
             self.queue.put(message)
 
         prefetch = kwargs.pop("prefetch", self.prefetch)
@@ -32,18 +32,18 @@ class RabbitMQBroker(BaseBroker):
         threading.Thread(target=self._consume, *args, **kwargs).start()
         return RabbitMQConsumer(self.queue)
 
-    def publish(self, message):
+    def publish(self, message: Any):
         self.client.send(self.queue_name, message)
 
-    def confirm(self, message):
+    def confirm(self, message: Message):
         """确认消息"""
         message.msg.ack()
 
-    def reject(self, message):
+    def reject(self, message: Message):
         """拒绝消息"""
         message.msg.nack(requeue=False)
 
-    def requeue(self, message, is_source=False):
+    def requeue(self, message: Message, is_source=False):
         """
         重发消息：先拒绝 再 重入
         
