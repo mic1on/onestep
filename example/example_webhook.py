@@ -10,8 +10,8 @@ webhook_broker = WebHookBroker(path="/push")
 @step(from_broker=webhook_broker)
 def waiting_messages(message):
     print("收到消息：", message)
-    message.requeue()
 
 
 if __name__ == '__main__':
+    step.set_debugging()
     step.start(block=True)
