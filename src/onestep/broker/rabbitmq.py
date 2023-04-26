@@ -37,11 +37,11 @@ class RabbitMQBroker(BaseBroker):
 
     def confirm(self, message: Message):
         """确认消息"""
-        message.msg.ack()
+        self.client.channel.basic.ack(message.msg.delivery_tag)
 
     def reject(self, message: Message):
         """拒绝消息"""
-        message.msg.nack(requeue=False)
+        self.client.channel.basic.nack(message.msg.delivery_tag, requeue=False)
 
     def requeue(self, message: Message, is_source=False):
         """
@@ -51,9 +51,9 @@ class RabbitMQBroker(BaseBroker):
         :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
         """
         if is_source:
-            message.msg.nack(requeue=True)
+            self.client.channel.basic.nack(message.msg.delivery_tag, requeue=True)
         else:
-            message.msg.nack(requeue=False)
+            self.client.channel.basic.nack(message.msg.delivery_tag, requeue=False)
             self.send(message)
 
 
