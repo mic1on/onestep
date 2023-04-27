@@ -5,6 +5,8 @@ import uuid
 from traceback import format_exception, TracebackException
 from typing import Optional, Any, Union
 
+from onestep._utils import catch_error
+
 
 class Extra:
     def __init__(self, task_id=None, publish_time=None, failure_count=0):
@@ -109,24 +111,24 @@ class Message:
     def to_json(self, include_exception=False) -> str:
         return json.dumps(self.to_dict(include_exception))
     
+    @catch_error
     def confirm(self):
         """确认消息"""
-        if self.broker:
-            self.broker.confirm(self)
+        self.broker.confirm(self)
     
+    @catch_error
     def reject(self):
         """拒绝消息"""
-        if self.broker:
-            self.broker.reject(self)
+        self.broker.reject(self)
     
+    @catch_error
     def requeue(self, is_source=False):
         """
         重发消息：先拒绝 再 重入
         
         :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
         """
-        if self.broker:
-            self.broker.requeue(self, is_source=is_source)
+        self.broker.requeue(self, is_source=is_source)
     
     def __getattr__(self, item):
         return None
