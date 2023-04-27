@@ -111,17 +111,17 @@ class Message:
     def to_json(self, include_exception=False) -> str:
         return json.dumps(self.to_dict(include_exception))
     
-    @catch_error
+    @catch_error()
     def confirm(self):
         """确认消息"""
         self.broker.confirm(self)
     
-    @catch_error
+    @catch_error()
     def reject(self):
         """拒绝消息"""
         self.broker.reject(self)
     
-    @catch_error
+    @catch_error()
     def requeue(self, is_source=False):
         """
         重发消息：先拒绝 再 重入
