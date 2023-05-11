@@ -1,12 +1,12 @@
 import json
 import threading
 from queue import Queue
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 import amqpstorm
 
 from .base import BaseBroker, BaseConsumer
-from ..store.rabbitmq import RabbitmqStore
+from ..store.rabbitmq import RabbitMQStore
 from ..message import Message
 
 
@@ -17,12 +17,12 @@ class RabbitMQBroker(BaseBroker):
         self.queue_name = queue_name
         self.queue = Queue()
         params = params or {}
-        self.client = RabbitmqStore(**params)
+        self.client = RabbitMQStore(**params)
         self.client.declare_queue(self.queue_name)
         self.prefetch = prefetch
 
     def _consume(self, *args, **kwargs):
-        def callback(message):
+        def callback(message: amqpstorm.Message):
             self.queue.put(message)
 
         prefetch = kwargs.pop("prefetch", self.prefetch)
@@ -32,23 +32,28 @@ class RabbitMQBroker(BaseBroker):
         threading.Thread(target=self._consume, *args, **kwargs).start()
         return RabbitMQConsumer(self.queue)
 
-    def publish(self, message):
+    def publish(self, message: Any):
         self.client.send(self.queue_name, message)
 
-    def confirm(self, message):
+    def confirm(self, message: Message):
         """确认消息"""
         message.msg.ack()
 
-    def reject(self, message):
+    def reject(self, message: Message):
         """拒绝消息"""
-        message.msg.nack(requeue=False)
+        message.msg.reject(requeue=False)
 
-    def requeue(self, message, is_source=False):
-        """重发消息：先拒绝 再 重入"""
+    def requeue(self, message: Message, is_source=False):
+        """
+        重发消息：先拒绝 再 重入
+        
+        :param message: 消息
+        :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
+        """
         if is_source:
-            message.msg.nack(requeue=True)
+            message.msg.reject(requeue=True)
         else:
-            message.msg.nack(requeue=False)
+            message.msg.reject(requeue=False)
             self.send(message)
 
 

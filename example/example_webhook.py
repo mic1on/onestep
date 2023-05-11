@@ -14,4 +14,5 @@ def waiting_messages(message):
 
 
 if __name__ == '__main__':
+    step.set_debugging()
     step.start(block=True)

@@ -1,1 +1,2 @@
-from .rabbitmq import RabbitmqStore
+from .rabbitmq import RabbitMQStore
+from .rabbitmq import RabbitmqStore  # deprecated
