@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import amqpstorm
 
 from .base import BaseBroker, BaseConsumer
-from ..store.rabbitmq import RabbitMQStore
+from usepy_plugin_rabbitmq import useRabbitMQ as RabbitMQStore
 from ..message import Message
 
 
