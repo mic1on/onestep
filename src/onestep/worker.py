@@ -49,7 +49,7 @@ class WorkerThread(threading.Thread):
                 if message is None:
                     continue
                 message.broker = message.broker or self.broker
-                logger.debug(f"receive message<{message}>")
+                logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
                 message_received.send(self, message=message)
                 self.instance.before_emit("receive", message=message)
                 self._run_instance(message)
@@ -70,14 +70,14 @@ class WorkerThread(threading.Thread):
                 return message.confirm()
             except DropMessage as e:
                 message_drop.send(self, message=message, reason=e)
-                logger.warning(f"{self.instance.fn.__name__} dropped <{type(e).__name__}: {str(e)}>")
+                logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
                 return message.reject()
             except Exception as e:
                 message_error.send(self, message=message, error=e)
                 if self.instance.state.debug:
-                    logger.exception(f"{self.instance.fn.__name__} run error <{type(e).__name__}: {str(e)}>")
+                    logger.exception(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
                 else:
-                    logger.error(f"{self.instance.fn.__name__} run error <{type(e).__name__}: {str(e)}>")
+                    logger.error(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
                 message.set_exception()
 
                 retry_state = self.retry(message)

@@ -24,6 +24,7 @@ class BaseOneStep:
 
     def __init__(self, fn,
                  group: str = "OneStep",
+                 name: str = None,
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
@@ -32,6 +33,7 @@ class BaseOneStep:
                  error_callback: Optional[Union[Callable, object]] = None):
         self.group = group
         self.fn = fn
+        self.name = name or fn.__name__
         self.workers = workers or DEFAULT_WORKERS
         self.middlewares = middlewares or []
 
@@ -72,13 +74,17 @@ class BaseOneStep:
 
     @classmethod
     def start(cls, group: Optional[str] = None):
+        logger.debug(f"start: {group=}")
         for consumer in cls._find_consumers(group):
             consumer.start()
+            logger.debug(f"started: {consumer=}")
 
     @classmethod
     def stop(cls, group: Optional[str] = None):
+        logger.debug(f"stop: {group=}")
         for consumer in cls._find_consumers(group):
             consumer.shutdown()
+            logger.debug(f"stopped: {consumer=}")
 
     def wraps(self, func):
         @functools.wraps(func)
@@ -90,12 +96,12 @@ class BaseOneStep:
     def send(self, result, broker=None):
         """将返回的内容交给broker发送"""
         if result is None:
-            logger.debug("send(result): body is empty")
+            logger.warning("send(result): body is empty")
             return
 
         brokers = self._init_broker(broker) or self.to_brokers
         if not brokers:
-            logger.debug("send(result): broker is empty")
+            logger.warning("send(result): broker is empty")
             return
 
         # 如果是Message类型，就不再封装
