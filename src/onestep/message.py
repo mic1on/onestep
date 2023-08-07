@@ -55,7 +55,7 @@ class Message:
     
     def set_exception(self, exception: Optional[Union[TracebackException, Exception, Any]] = None):
         """设置异常信息 一般不用自己传入exception，会自动获取"""
-        self.exception = exception if exception else TracebackException(*sys.exc_info())
+        self.exception = exception if exception else sys.exc_info()[1]
         self.failure_count = self.failure_count + 1
     
     @property
