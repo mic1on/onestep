@@ -20,7 +20,7 @@
 - [x] CronBroker
 - [x] WebHookBroker
 - [x] RabbitMQBroker
-- [ ] RedisBroker
+- [x] RedisBroker
 - [ ] KafkaBroker
 
 ## example
