@@ -5,10 +5,7 @@ from onestep.broker import MemoryBroker, RabbitMQBroker
 from onestep.exception import RetryViaLocal, RetryViaQueue
 from onestep.retry import AdvancedRetry
 
-from logging import getLogger
-
-logger = getLogger(__name__)
-logger.setLevel(logging.INFO)
+from loguru import logger
 
 todo_broker = MemoryBroker()
 
@@ -55,6 +52,7 @@ def build_todo_list():
 def callback_on_failure(message):
     # 这里可以按需记录到日志或者发送到失败队列
     logger.warning(f"failure_callback: will send to failure queue: {message}")
+    logger.debug(message.to_json(True))
     pass
 
 
@@ -64,14 +62,14 @@ def callback_on_failure(message):
     error_callback=callback_on_failure
 )
 def do_something(message):
-    print(f"todo: {message.body}")
+    logger.info(f"todo: {message.body}")
     # return
-    if message.body.get("id") == 1:
-        raise RetryViaLocal("Invalid id")
-    elif message.body.get("id") == 2:
+    # if message.body.get("id") == 1:
+    #     raise RetryViaLocal("Invalid id")
+    if message.body.get("id") == 2:
         raise RetryViaQueue("Invalid id", times=2)
-    elif message.body.get("id") == 3:
-        raise ValueError("Invalid id")
+    # elif message.body.get("id") == 3:
+    #     raise ValueError("Invalid id")
     else:
         message.body["status"] = "done"
         return None
