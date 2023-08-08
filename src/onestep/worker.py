@@ -1,6 +1,7 @@
 """
 将指定的函数放入线程中运行
 """
+import collections
 import logging
 import threading
 from asyncio import iscoroutinefunction
@@ -45,15 +46,21 @@ class WorkerThread(threading.Thread):
             if self.__shutdown:
                 break
             # TODO：consume应当传入一些配置参数
-            for message in self.broker.consume():
-                if message is None:
+            for result in self.broker.consume():
+                if result is None:
                     continue
-                message.broker = message.broker or self.broker
-                logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
-                message_received.send(self, message=message)
-                self.instance.before_emit("receive", message=message)
-                self._run_instance(message)
-                self.instance.after_emit("receive", message=message)
+                messages = (
+                    result
+                    if isinstance(result, collections.Iterable)
+                    else [result]
+                )
+                for message in messages:
+                    message.broker = message.broker or self.broker
+                    logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
+                    message_received.send(self, message=message)
+                    self.instance.before_emit("receive", message=message)
+                    self._run_instance(message)
+                    self.instance.after_emit("receive", message=message)
 
     def shutdown(self):
         self.__shutdown = True
