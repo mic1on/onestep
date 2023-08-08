@@ -66,12 +66,12 @@ def callback_on_failure(message):
 def do_something(message):
     print(f"todo: {message.body}")
     # return
-    if message.body.get("id") == 1:
-        raise RetryViaLocal("Invalid id")
-    elif message.body.get("id") == 2:
+    # if message.body.get("id") == 1:
+    #     raise RetryViaLocal("Invalid id")
+    if message.body.get("id") == 2:
         raise RetryViaQueue("Invalid id", times=2)
-    elif message.body.get("id") == 3:
-        raise ValueError("Invalid id")
+    # elif message.body.get("id") == 3:
+    #     raise ValueError("Invalid id")
     else:
         message.body["status"] = "done"
         return None
