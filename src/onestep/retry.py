@@ -40,7 +40,7 @@ class RetryIfException(BaseRetry):
         self.exceptions = exceptions
     
     def __call__(self, message) -> Optional[bool]:
-        return isinstance(message.exception, self.exceptions)  # noqa
+        return isinstance(message.exception.exc_value, self.exceptions)  # noqa
 
 
 class AdvancedRetry(TimesRetry):
