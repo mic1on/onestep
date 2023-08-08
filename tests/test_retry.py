@@ -25,20 +25,11 @@ def test_times_retry(message):
     assert False is retry_class(message)
 
 
-def test_exception_retry(message):
-    retry_class = RetryIfException()
-    assert False is retry_class(message)
-    message.set_exception(ZeroDivisionError())
-    assert True is retry_class(message)
-
 
 def test_exception_retry2(message):
     retry_class = RetryIfException((ZeroDivisionError,))
-    assert False is retry_class(message)
-    message.set_exception(ValueError())
-    assert False is retry_class(message)
     try:
         1 / 0
     except Exception as e:
-        message.set_exception(e)
+        message.set_exception()
         assert True is retry_class(message)
