@@ -1,7 +1,10 @@
 """
 将指定的函数放入线程中运行
 """
-import collections
+try:
+    from collections import Iterable
+except ImportError:
+    from collections.abc import Iterable
 import logging
 import threading
 from asyncio import iscoroutinefunction
@@ -51,7 +54,7 @@ class WorkerThread(threading.Thread):
                     continue
                 messages = (
                     result
-                    if isinstance(result, collections.Iterable)
+                    if isinstance(result, Iterable)
                     else [result]
                 )
                 for message in messages:
