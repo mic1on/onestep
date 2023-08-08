@@ -8,6 +8,12 @@ from typing import Optional, Any, Union
 from onestep._utils import catch_error
 
 
+class MessageTracebackException(TracebackException):
+    def __init__(self, exc_type, exc_value, exc_traceback, **kwargs):
+        super().__init__(exc_type, exc_value, exc_traceback, **kwargs)
+        self.exc_value = exc_value
+
+
 class Extra:
     def __init__(self, task_id=None, publish_time=None, failure_count=0):
         self.task_id = task_id or str(uuid.uuid4())
@@ -53,18 +59,14 @@ class Message:
         else:
             return Extra()
     
-    def set_exception(self, exception: Optional[Union[TracebackException, Exception, Any]] = None):
-        """设置异常信息 一般不用自己传入exception，会自动获取"""
-        self.exception = exception if exception else TracebackException(*sys.exc_info())
+    def set_exception(self):
+        """设置异常信息，会自动获取"""
+        self._exception = MessageTracebackException(*sys.exc_info())
         self.failure_count = self.failure_count + 1
     
     @property
-    def exception(self):
+    def exception(self) -> Optional[MessageTracebackException]:
         return self._exception
-    
-    @exception.setter
-    def exception(self, value):
-        self._exception = value
     
     @property
     def fail(self):
@@ -91,20 +93,7 @@ class Message:
     def to_dict(self, include_exception=False) -> dict:
         data = {'body': self.body, 'extra': self.extra.to_dict()}
         if include_exception and self.exception:
-            if isinstance(self.exception, TracebackException):
-                data['exception'] = "".join(self.exception.format(chain=True))  # noqa
-            elif isinstance(self.exception, Exception):
-                data['exception'] = "".join(
-                    format_exception(
-                        self.exception.__class__, self.exception,
-                        self.exception.__getattr__('__traceback__', None)
-                    )
-                )
-            else:
-                try:
-                    data['exception'] = json.dumps(self.exception)
-                except Exception:
-                    data['exception'] = str(self.exception)
+            data['exception'] = "".join(self.exception.format(chain=True))  # noqa
         
         return data
     

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from traceback import TracebackException
 from typing import Optional, Tuple, Union, Type
+
 from .exception import RetryViaLocal, RetryViaQueue
 from .message import Message
 
@@ -56,11 +56,10 @@ class AdvancedRetry(TimesRetry):
         self.exceptions = (RetryViaLocal, RetryViaQueue) + (exceptions or ())
     
     def __call__(self, message: Message) -> Optional[bool]:
-        exc = message.exception.exc_type() if isinstance(message.exception, TracebackException) else message.exception
-        if isinstance(exc, self.exceptions):
-            max_retry_times = getattr(exc, "times", None) or self.times
+        if isinstance(message.exception.exc_value, self.exceptions):
+            max_retry_times = getattr(message.exception.exc_value, "times", None) or self.times
             if message.failure_count < max_retry_times:
-                if isinstance(exc, RetryViaQueue):
+                if isinstance(message.exception.exc_value, RetryViaQueue):
                     return None  # 入队重试，不回调
                 return True  # 本地重试，不回调
             else:
