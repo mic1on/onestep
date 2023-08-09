@@ -1,0 +1,24 @@
+### Build ###
+node_modules
+dist*
+dist-ssr
+*.local
+auto-imports.d.ts
+.eslintrc-auto-import.json
+src/assets/sprites/*.*
+!src/assets/sprites/.gitkeep
+*.log
+package-lock.json
+pnpm-lock.yaml
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### MAC ###
+.DS_Store
+
+### version check ###
+version.json
