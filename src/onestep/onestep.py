@@ -95,13 +95,14 @@ class BaseOneStep:
 
     def send(self, result, broker=None):
         """将返回的内容交给broker发送"""
-        if result is None:
-            logger.warning("send(result): body is empty")
+        brokers = self._init_broker(broker) or self.to_brokers
+
+        if result and not brokers:
+            logger.debug("send(result): broker is empty")
             return
 
-        brokers = self._init_broker(broker) or self.to_brokers
-        if not brokers:
-            logger.warning("send(result): broker is empty")
+        if not result and brokers:
+            logger.debug("send(result): body is empty")
             return
 
         # 如果是Message类型，就不再封装
