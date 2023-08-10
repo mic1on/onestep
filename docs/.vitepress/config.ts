@@ -36,7 +36,7 @@ export default withPwa(defineConfig({
         ['meta', { name: 'twitter:description', content: vitestDescription }],
         ['meta', { name: 'twitter:image', content: ogImage }],
         ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
-        ['link', { rel: 'preload', as: 'style', onload: 'this.onload=null;this.rel=\'stylesheet\'', href: font }],
+        // ['link', { rel: 'preload', as: 'style', onload: 'this.onload=null;this.rel=\'stylesheet\'', href: font }],
         ['noscript', {}, `<link rel="stylesheet" crossorigin="anonymous" href="${font}" />`],
         ['link', { rel: 'mask-icon', href: '/logo.svg', color: '#ffffff' }],
         ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' }],
