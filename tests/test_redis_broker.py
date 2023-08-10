@@ -63,3 +63,15 @@ def test_redis_consume_multi_messages(broker):
     data = consumer.queue.get()
     assert len(data) == 2  # Ensure that 2 messages are received
     broker.client.shutdown()
+
+
+def test_requeue(broker):
+    broker.publish('{"body": {"a1": "b2"}}')
+    consumer = broker.consume()
+
+    assert isinstance(consumer, RedisStreamConsumer)
+    result = next(consumer)
+    assert isinstance(result, Iterable)
+    message = next(result)
+    broker.requeue(message, is_source=True)
+    broker.client.shutdown()

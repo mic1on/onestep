@@ -46,7 +46,11 @@ class RedisStreamBroker(BaseBroker):
         pass
 
     def requeue(self, message: Message, is_source=False):
-        self.publish(message.to_json() if is_source else message.msg)
+        if is_source:
+            _, message_body = message.msg
+            self.client.send(self.stream, message_body)
+        else:
+            self.send(message)
 
 
 class RedisStreamConsumer(BaseConsumer):
