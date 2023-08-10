@@ -45,9 +45,9 @@ step.start(block=True)
 
 此时我们可以在RabbitMQ管理界面中看到一个名为`test_queue`的队列。尝试在这个队列手动模拟发送一条消息，并查看是否被`do_some_thing`消费。
 
-![Alt text](image.png)
+![](https://miclon-job.oss-cn-hangzhou.aliyuncs.com/img/20230810083326.png)
 
-![Alt text](image-1.png)
+![](https://miclon-job.oss-cn-hangzhou.aliyuncs.com/img/20230810083246.png)
 
 > 消息还附带一些元信息，大部分情况下您都不必关心它们的存在。
 
