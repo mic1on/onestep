@@ -3,7 +3,7 @@ layout: home
 sidebar: false
 
 title: OneStep
-titleTemplate: A blazing easy python tool kit
+titleTemplate: 仅需一步，轻松实现分布式异步任务。
 
 hero:
   name: OneStep
