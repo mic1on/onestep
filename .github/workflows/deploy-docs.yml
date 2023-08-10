@@ -1,8 +1,13 @@
 name: docs
 
 on:
-  # 手动触发部署
   push:
+    branches:
+      - docs
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-docs.yml'
+  pull_request:
     branches:
       - main
     paths:
