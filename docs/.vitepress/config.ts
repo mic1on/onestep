@@ -43,10 +43,7 @@ export default withPwa(defineConfig({
     ],
     lastUpdated: true,
     markdown: {
-        theme: {
-            light: 'vitesse-dark',
-            dark: 'vitesse-dark',
-        },
+        theme: 'vitesse-dark',
     },
     themeConfig: {
         logo: '/logo.png',
@@ -99,13 +96,15 @@ export default withPwa(defineConfig({
                     items: [
                         {
                             text: 'broker',
-                            link: '/api/broker',
+                            link: '/core/broker',
                         },
                         {
-                            text: 'middleware'
+                            text: 'middleware',
+                            link: '/core/middleware',
                         },
                         {
-                            text: 'retry'
+                            text: 'retry',
+                            link: '/core/retry',
                         },
                     ]
                 },
@@ -125,7 +124,7 @@ export default withPwa(defineConfig({
                             link: '/broker/webhook',
                         },
                         {
-                            text: 'RabbitMQ',
+                            text: 'RabbitMQ🔥',
                             link: '/broker/rabbitmq',
                         },
                         {
