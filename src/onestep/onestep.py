@@ -96,6 +96,9 @@ class BaseOneStep:
     def send(self, result, broker=None):
         """将返回的内容交给broker发送"""
         brokers = self._init_broker(broker) or self.to_brokers
+        # 如果是Message类型，就不再封装
+        message = result if isinstance(result, Message) else Message(body=result)
+        self.before_emit("send", message=message)
 
         if result and not brokers:
             logger.debug("send(result): broker is empty")
@@ -104,11 +107,7 @@ class BaseOneStep:
         if not result and brokers:
             logger.debug("send(result): body is empty")
             return
-
-        # 如果是Message类型，就不再封装
-        message = result if isinstance(result, Message) else Message(body=result)
-
-        self.before_emit("send", message=message)
+        
         for broker in brokers:
             message_sent.send(self, message=message, broker=broker)
             broker.send(message)
