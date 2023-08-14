@@ -10,6 +10,7 @@ from .base import BaseBroker, BaseConsumer, Message
 
 class RedisStreamBroker(BaseBroker):
     """ Redis Stream Broker """
+    _thread = None
 
     def __init__(self, stream, group, consumer: Optional[str] = None, params: Optional[Dict] = None,
                  prefetch: Optional[int] = 1, *args, **kwargs):
@@ -32,7 +33,10 @@ class RedisStreamBroker(BaseBroker):
         )
 
     def consume(self, *args, **kwargs):
-        threading.Thread(target=self._consume, *args, **kwargs).start()
+        daemon = kwargs.pop('daemon', True)
+        self._thread = threading.Thread(target=self._consume, *args, **kwargs)
+        self._thread.daemon = daemon
+        self._thread.start()
         return RedisStreamConsumer(self.queue)
 
     def publish(self, message):
@@ -51,6 +55,11 @@ class RedisStreamBroker(BaseBroker):
             self.client.send(self.stream, message_body)
         else:
             self.send(message)
+
+    def shutdown(self):
+        self.client.shutdown()
+        self._thread.join()
+        del self._thread
 
 
 class RedisStreamConsumer(BaseConsumer):

@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class CronBroker(BaseLocalBroker):
+    _thread = None
 
     def __init__(self, cron, name=None, middlewares=None, **kwargs):
         super().__init__(name=name, middlewares=middlewares)
@@ -27,10 +28,14 @@ class CronBroker(BaseLocalBroker):
             self.next_fire_time = self.itr.get_next(datetime)
             self.publish(self.kwargs)
 
-        threading.Timer(interval=1, function=self._scheduler).start()
+        self._thread = threading.Timer(interval=1, function=self._scheduler)
+        self._thread.start()
 
     def consume(self):
         return CronConsumer(self.queue)
+
+    def shutdown(self):
+        self._thread.cancel()
 
 
 class CronConsumer(BaseLocalConsumer):

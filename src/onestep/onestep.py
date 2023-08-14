@@ -81,7 +81,7 @@ class BaseOneStep:
             logger.debug(f"started: {consumer=}")
 
     @classmethod
-    def stop(cls, group: Optional[str] = None):
+    def shutdown(cls, group: Optional[str] = None):
         logger.debug(f"stop: {group=}")
         for consumer in cls._find_consumers(group):
             consumer.shutdown()
@@ -214,8 +214,8 @@ class step:
                 time.sleep(1)
 
     @staticmethod
-    def stop(group=None):
-        BaseOneStep.stop(group=group)
+    def shutdown(group=None):
+        BaseOneStep.shutdown(group=group)
         stopped.send()
 
     @staticmethod
