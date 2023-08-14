@@ -1,7 +1,6 @@
 import functools
 import collections
 import logging
-import atexit
 
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
 from typing import Optional, List, Dict, Any, Callable, Union
@@ -229,8 +228,3 @@ class step:
             onestep_logger.addHandler(handler)
             onestep_logger.setLevel(logging.DEBUG)
             BaseOneStep.state.debug = True
-
-
-@atexit.register
-def cleanup():
-    BaseOneStep.stop()
