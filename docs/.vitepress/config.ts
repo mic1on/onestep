@@ -132,7 +132,7 @@ export default withPwa(defineConfig({
                             link: '/broker/redis',
                         },
                         {
-                            text: 'Kafka(TODO)',
+                            text: 'Kafka',
                             link: '/broker/kafka',
                         },
                         {

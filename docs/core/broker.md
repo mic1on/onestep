@@ -54,8 +54,20 @@ list_job_broker = RabbitMQBroker("list_job", {
 
 @step(from_broker=build_job_broker, to_broker=list_job_broker)
 def task_one(message):
-    return 
+    # todo some work
+    return message
 
 
 step.start(block=True)
 ```
+
+这里就实现了定时触发任务，然后将任务结果发送到RabbitMQ中。
+
+上游`list_job_broker`收到了任务结果，下游`RabbitMQBroker`也可以对接收到的消息进行处理。这就实现了最简单的分布式任务的调度。
+
+
+## 自定义Broker
+
+::: warning ⚠️继承关系
+自定义Broker必须继承自`BaseBroker`
+:::
