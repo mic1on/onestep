@@ -35,7 +35,6 @@ class WorkerThread(threading.Thread):
         self.args = args
         self.kwargs = kwargs
         self.__shutdown = False
-        self.__shutdown_event = threading.Event()
 
     def run(self):
         """线程执行包装过的`onestep`函数
@@ -43,7 +42,6 @@ class WorkerThread(threading.Thread):
         `fn`为`onestep`函数，执行会调用`onestep`的`__call__`方法
         :return:
         """
-        self.__shutdown_event.clear()
 
         while not self.__shutdown:
             if self.__shutdown:
@@ -71,8 +69,8 @@ class WorkerThread(threading.Thread):
                         message.reject()
 
     def shutdown(self):
+        self.broker.shutdown()
         self.__shutdown = True
-        self.__shutdown_event.wait()
 
     def _run_instance(self, message):
         while True:

@@ -80,7 +80,7 @@ class BaseOneStep:
             logger.debug(f"started: {consumer=}")
 
     @classmethod
-    def stop(cls, group: Optional[str] = None):
+    def shutdown(cls, group: Optional[str] = None):
         logger.debug(f"stop: {group=}")
         for consumer in cls._find_consumers(group):
             consumer.shutdown()
@@ -107,7 +107,7 @@ class BaseOneStep:
         if not result and brokers:
             logger.debug("send(result): body is empty")
             return
-        
+
         for broker in brokers:
             message_sent.send(self, message=message, broker=broker)
             broker.send(message)
@@ -175,15 +175,31 @@ class AsyncOneStep(BaseOneStep):
 
 class step:
 
-    def __init__(self, *args, **kwargs):
-        self.args = args
-        self.kwargs = kwargs
+    def __init__(self,
+                 group: str = "OneStep",
+                 name: str = None,
+                 from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
+                 to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
+                 workers: Optional[int] = None,
+                 middlewares: Optional[List[Any]] = None,
+                 retry: Union[Callable, object] = NeverRetry(),
+                 error_callback: Optional[Union[Callable, object]] = None):
+        self.params = {
+            "group": group,
+            "name": name,
+            "from_broker": from_broker,
+            "to_broker": to_broker,
+            "workers": workers,
+            "middlewares": middlewares,
+            "retry": retry,
+            "error_callback": error_callback
+        }
 
     def __call__(self, func, *_args, **_kwargs):
         if iscoroutinefunction(func) or isasyncgenfunction(func):
-            os = AsyncOneStep(fn=func, *self.args, **self.kwargs)
+            os = AsyncOneStep(fn=func, **self.params)
         else:
-            os = SyncOneStep(fn=func, *self.args, **self.kwargs)
+            os = SyncOneStep(fn=func, **self.params)
 
         return os.wraps(func)
 
@@ -197,8 +213,8 @@ class step:
                 time.sleep(1)
 
     @staticmethod
-    def stop(group=None):
-        BaseOneStep.stop(group=group)
+    def shutdown(group=None):
+        BaseOneStep.shutdown(group=group)
         stopped.send()
 
     @staticmethod
