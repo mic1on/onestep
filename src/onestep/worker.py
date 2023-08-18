@@ -35,7 +35,6 @@ class WorkerThread(threading.Thread):
         self.args = args
         self.kwargs = kwargs
         self.__shutdown = False
-        self.__shutdown_event = threading.Event()
 
     def run(self):
         """线程执行包装过的`onestep`函数
@@ -43,7 +42,6 @@ class WorkerThread(threading.Thread):
         `fn`为`onestep`函数，执行会调用`onestep`的`__call__`方法
         :return:
         """
-        self.__shutdown_event.clear()
 
         while not self.__shutdown:
             if self.__shutdown:
@@ -61,13 +59,18 @@ class WorkerThread(threading.Thread):
                     message.broker = message.broker or self.broker
                     logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
                     message_received.send(self, message=message)
-                    self.instance.before_emit("receive", message=message)
-                    self._run_instance(message)
-                    self.instance.after_emit("receive", message=message)
+                    try:
+                        self.instance.before_emit("consume", message=message)
+                        self._run_instance(message)
+                        self.instance.after_emit("consume", message=message)
+                    except DropMessage as e:
+                        message_drop.send(self, message=message, reason=e)
+                        logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
+                        message.reject()
 
     def shutdown(self):
+        self.broker.shutdown()
         self.__shutdown = True
-        self.__shutdown_event.wait()
 
     def _run_instance(self, message):
         while True:
@@ -78,10 +81,6 @@ class WorkerThread(threading.Thread):
                     self.instance(message, *self.args, **self.kwargs)
                 message_consumed.send(self, message=message)
                 return message.confirm()
-            except DropMessage as e:
-                message_drop.send(self, message=message, reason=e)
-                logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
-                return message.reject()
             except Exception as e:
                 message_error.send(self, message=message, error=e)
                 if self.instance.state.debug:
