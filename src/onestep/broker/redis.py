@@ -1,6 +1,6 @@
 import json
 import threading
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from queue import Queue
 
 from usepy_plugin_redis import useRedisStreamStore
@@ -10,7 +10,6 @@ from .base import BaseBroker, BaseConsumer, Message
 
 class RedisStreamBroker(BaseBroker):
     """ Redis Stream Broker """
-    _thread = None
 
     def __init__(self, stream, group, consumer: Optional[str] = None, params: Optional[Dict] = None,
                  prefetch: Optional[int] = 1, *args, **kwargs):
@@ -21,6 +20,7 @@ class RedisStreamBroker(BaseBroker):
         self.prefetch = prefetch
         self.queue = Queue()
         self.client = useRedisStreamStore(**(params or {}))
+        self.threads: List[threading.Thread] = []
 
     def _consume(self, *args, **kwargs):
         def callback(message):
@@ -34,9 +34,10 @@ class RedisStreamBroker(BaseBroker):
 
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
-        self._thread = threading.Thread(target=self._consume, *args, **kwargs)
-        self._thread.daemon = daemon
-        self._thread.start()
+        thread = threading.Thread(target=self._consume, *args, **kwargs)
+        thread.daemon = daemon
+        thread.start()
+        self.threads.append(thread)
         return RedisStreamConsumer(self.queue)
 
     def publish(self, message):
@@ -58,8 +59,8 @@ class RedisStreamBroker(BaseBroker):
 
     def shutdown(self):
         self.client.shutdown()
-        self._thread.join()
-        del self._thread
+        for thread in self.threads:
+            thread.join()
 
 
 class RedisStreamConsumer(BaseConsumer):

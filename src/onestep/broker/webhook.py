@@ -35,7 +35,6 @@ class WebHookServer(BaseHTTPRequestHandler):
 
 
 class WebHookBroker(BaseLocalBroker):
-    _thread = None
     _servers = {}
 
     def __init__(self,
@@ -48,6 +47,7 @@ class WebHookBroker(BaseLocalBroker):
         self.host = host
         self.port = port
         self.path = path
+        self.threads = []
 
         self._create_server()
         logger.debug(f"WebHookBroker: {self.host}:{self.port}{self.path}")
@@ -64,8 +64,9 @@ class WebHookBroker(BaseLocalBroker):
             hs = self._servers[(self.host, self.port)]
 
         WebHookServer.servers[(self.host, self.port)].append(Server(self.path, self.queue))
-        self._thread = threading.Thread(target=hs.serve_forever)
-        self._thread.start()
+        thread = threading.Thread(target=hs.serve_forever)
+        thread.start()
+        self.threads.append(thread)
 
     def consume(self, *args, **kwargs):
         return WebHookConsumer(self.queue, *args, **kwargs)
@@ -74,8 +75,8 @@ class WebHookBroker(BaseLocalBroker):
         hs = self._servers[(self.host, self.port)]
         if hs:
             hs.shutdown()
-        self._thread.join()
-        del self._thread
+        for thread in self.threads:
+            thread.join()
 
 
 class WebHookConsumer(BaseLocalConsumer):
