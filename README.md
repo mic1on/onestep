@@ -1,5 +1,6 @@
-# OneStep
 
+<div align=center><img src="https://onestep.code05.com/logo-3.svg" width="300"></div>
+<div align=center>
 <a href="https://github.com/mic1on/onestep/actions/workflows/test.yml?query=event%3Apush+branch%3Amain" target="_blank">
     <img src="https://github.com/mic1on/onestep/workflows/test%20suite/badge.svg?branch=main&event=push" alt="Test">
 </a>
@@ -11,6 +12,7 @@
     <img src="https://img.shields.io/pypi/pyversions/onestep.svg" alt="Supported Python versions">
 </a>
 
+</div>
 <hr />
 仅需一步，轻松实现分布式异步任务。
 
@@ -20,7 +22,7 @@
 - [x] CronBroker
 - [x] WebHookBroker
 - [x] RabbitMQBroker
-- [ ] RedisBroker
+- [x] RedisBroker
 - [ ] KafkaBroker
 
 ## example

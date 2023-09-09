@@ -29,7 +29,11 @@ class RabbitMQBroker(BaseBroker):
         self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)
     
     def consume(self, *args, **kwargs):
-        threading.Thread(target=self._consume, *args, **kwargs).start()
+        daemon = kwargs.pop('daemon', True)
+        thread = threading.Thread(target=self._consume, *args, **kwargs)
+        thread.daemon = daemon
+        thread.start()
+        self.threads.append(thread)
         return RabbitMQConsumer(self.queue)
     
     def send(self, message: Any):
@@ -61,6 +65,11 @@ class RabbitMQBroker(BaseBroker):
         else:
             message.msg.reject(requeue=False)
             self.send(message)
+
+    def shutdown(self):
+        self.client.shutdown()
+        for thread in self.threads:
+            thread.join()
 
 
 class RabbitMQConsumer(BaseConsumer):

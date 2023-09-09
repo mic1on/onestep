@@ -1,3 +1,5 @@
+import time
+
 from onestep import step
 from onestep.broker import RedisStreamBroker, MemoryBroker
 
@@ -17,11 +19,13 @@ pass
 # todo_broker.send("1")
 
 
-@step(from_broker=rds_broker, to_broker=todo_broker)
+@step(from_broker=rds_broker, to_broker=todo_broker, workers=1)
 def build_todo_list(message):
     print("build_todo_list", message.body)
     return message
 
 
 if __name__ == '__main__':
-    step.start(block=True)
+    step.start()
+    time.sleep(1)
+    step.shutdown()
