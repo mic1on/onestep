@@ -1,16 +1,12 @@
-impor
 import json
 import threading
 import uuid
 from queue import Queue
 from typing import Optional, Dict, Any
 
-
 from usepy_plugin_redis import useRedisStreamStore, RedisStreamMessage
 
 from .base import BaseBroker, BaseConsumer, Message
-
-import uuid
 
 
 class RedisStreamBroker(BaseBroker):
@@ -32,6 +28,8 @@ class RedisStreamBroker(BaseBroker):
         self.group = group
         self.prefetch = prefetch
         self.queue = Queue()
+        
+        self.threads = []
         
         self.client = useRedisStreamStore(
             stream=stream,
@@ -73,12 +71,12 @@ class RedisStreamBroker(BaseBroker):
         self.client.reject(message.msg)
     
     def requeue(self, message: Message, is_source=False):
-       """
-        重发消息：先拒绝 再 重入
-
-        :param message: 消息
-        :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
         """
+         重发消息：先拒绝 再 重入
+ 
+         :param message: 消息
+         :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
+         """
         self.reject(message)
         
         if is_source:
