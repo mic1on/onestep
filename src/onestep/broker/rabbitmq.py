@@ -11,7 +11,7 @@ from ..message import Message
 
 
 class RabbitMQBroker(BaseBroker):
-
+    
     def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
@@ -20,29 +20,35 @@ class RabbitMQBroker(BaseBroker):
         self.client = RabbitMQStore(**params)
         self.client.declare_queue(self.queue_name)
         self.prefetch = prefetch
-
+    
     def _consume(self, *args, **kwargs):
         def callback(message: amqpstorm.Message):
             self.queue.put(message)
-
+        
         prefetch = kwargs.pop("prefetch", self.prefetch)
         self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)
-
+    
     def consume(self, *args, **kwargs):
         threading.Thread(target=self._consume, *args, **kwargs).start()
         return RabbitMQConsumer(self.queue)
-
-    def publish(self, message: Any):
-        self.client.send(self.queue_name, message)
-
+    
+    def send(self, message: Any):
+        """对消息进行预处理，然后再发送"""
+        if not isinstance(message, Message):
+            message = Message(body=message)
+        
+        self.client.send(self.queue_name, message.to_json())
+    
+    publish = send
+    
     def confirm(self, message: Message):
         """确认消息"""
         message.msg.ack()
-
+    
     def reject(self, message: Message):
         """拒绝消息"""
         message.msg.reject(requeue=False)
-
+    
     def requeue(self, message: Message, is_source=False):
         """
         重发消息：先拒绝 再 重入
@@ -65,5 +71,5 @@ class RabbitMQConsumer(BaseConsumer):
             message = {"body": data.body}
         if not isinstance(message, dict):
             message = {"body": message}
-
+        
         return Message(body=message.get("body"), extra=message.get("extra"), msg=data)

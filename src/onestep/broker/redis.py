@@ -1,66 +1,92 @@
 import json
 import threading
-from typing import Optional, Dict
+from typing import Optional, Dict, Union, Any
 from queue import Queue
 
-from usepy_plugin_redis import useRedisStreamStore
+from usepy_plugin_redis import useRedisStreamStore, RedisStreamMessage
 
 from .base import BaseBroker, BaseConsumer, Message
+
+import uuid
 
 
 class RedisStreamBroker(BaseBroker):
     """ Redis Stream Broker """
-
-    def __init__(self, stream, group, consumer: Optional[str] = None, params: Optional[Dict] = None,
-                 prefetch: Optional[int] = 1, *args, **kwargs):
+    
+    def __init__(
+            self,
+            stream: str,
+            group: str = "onestep",
+            params: Optional[Dict] = None,
+            prefetch: Optional[int] = 1,
+            stream_max_entries: int = 0,
+            redeliver_timeout: int = 60000,
+            claim_interval: int = 1800000,
+            *args,
+            **kwargs):
         super().__init__(*args, **kwargs)
         self.stream = stream
         self.group = group
-        self.consumer = consumer or self.name
         self.prefetch = prefetch
         self.queue = Queue()
-        self.client = useRedisStreamStore(**(params or {}))
-
+        self.client = useRedisStreamStore(
+            stream=stream,
+            group=group,
+            stream_max_entries=stream_max_entries,
+            redeliver_timeout=redeliver_timeout,
+            claim_interval=claim_interval,
+            **(params or {})
+        )
+    
     def _consume(self, *args, **kwargs):
         def callback(message):
             self.queue.put(message)
-
+        
         prefetch = kwargs.pop("prefetch", self.prefetch)
-        self.client.start_consuming(
-            stream=self.stream, group=self.group, consumer=self.consumer,
-            callback=callback, prefetch=prefetch, **kwargs
-        )
-
+        self.client.start_consuming(consumer=uuid.uuid4().hex, callback=callback, prefetch=prefetch, **kwargs)
+    
     def consume(self, *args, **kwargs):
         threading.Thread(target=self._consume, *args, **kwargs).start()
         return RedisStreamConsumer(self.queue)
-
-    def publish(self, message):
-        self.client.send(self.stream, {"_message": message})
-
+    
+    def send(self, message: Any):
+        """对消息进行预处理，然后再发送"""
+        if not isinstance(message, Message):
+            message = Message(body=message)
+        
+        self.client.send({"_message": message.to_json()})
+    
+    publish = send
+    
     def confirm(self, message: Message):
-        message_id, _ = message.msg
-        self.client.connection.xack(self.stream, self.group, message_id)
-
+        self.client.ack(message.msg)
+    
     def reject(self, message: Message):
-        pass
-
+        self.client.reject(message.msg)
+    
     def requeue(self, message: Message, is_source=False):
-        self.publish(message.to_json() if is_source else message.msg)
+        """
+        重发消息：先拒绝 再 重入
+
+        :param message: 消息
+        :param is_source: 是否是源消息，True: 使用消息的最新数据重入当前队列，False: 使用消息的最新数据重入当前队列
+        """
+        self.reject(message)
+        
+        if is_source:
+            self.client.send(message.msg.body)
+        else:
+            self.send(message)
 
 
 class RedisStreamConsumer(BaseConsumer):
-    def _to_message(self, data):
-        if not isinstance(data, list):
-            raise TypeError("data must be list")
-        for row in data:
-            _, message = row
-            message = {
-                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
-                for k, v in message.items()
-            }
-            if '_message' in message:
-                message = json.loads(message['_message'])
-                yield Message(body=message.get("body"), extra=message.get("extra"), msg=row)
-            else:
-                yield Message(body=message, msg=row)
+    def _to_message(self, data: RedisStreamMessage):
+        if "_message" in data.body:
+            try:
+                message = json.loads(data.body.get("_message"))
+            except (json.JSONDecodeError, TypeError):
+                message = {"body": data.body.get("_message")}
+        else:
+            message = {"body": data.body}
+        
+        yield Message(body=message.get("body"), extra=message.get("extra"), msg=data)
