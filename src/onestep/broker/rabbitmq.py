@@ -12,13 +12,15 @@ from ..message import Message
 
 class RabbitMQBroker(BaseBroker):
 
-    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, *args, **kwargs):
+    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, auto_create=True, *args,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
         self.queue = Queue()
         params = params or {}
         self.client = RabbitMQStore(**params)
-        self.client.declare_queue(self.queue_name)
+        if auto_create:
+            self.client.declare_queue(self.queue_name)
         self.prefetch = prefetch
         self.threads = []
 
