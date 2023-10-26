@@ -23,14 +23,14 @@ class RabbitMQBroker(BaseBroker):
             self.client.declare_queue(self.queue_name)
         self.prefetch = prefetch
         self.threads = []
-    
+
     def _consume(self, *args, **kwargs):
         def callback(message: amqpstorm.Message):
             self.queue.put(message)
-    
+
         prefetch = kwargs.pop("prefetch", self.prefetch)
         self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)
-    
+
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
         thread = threading.Thread(target=self._consume, *args, **kwargs)
@@ -38,18 +38,18 @@ class RabbitMQBroker(BaseBroker):
         thread.start()
         self.threads.append(thread)
         return RabbitMQConsumer(self.queue)
-    
+
     def publish(self, message: Any):
         self.client.send(self.queue_name, message)
-    
+
     def confirm(self, message: Message):
         """确认消息"""
         message.msg.ack()
-    
+
     def reject(self, message: Message):
         """拒绝消息"""
         message.msg.reject(requeue=False)
-    
+
     def requeue(self, message: Message, is_source=False):
         """
         重发消息：先拒绝 再 重入
@@ -80,5 +80,5 @@ class RabbitMQConsumer(BaseConsumer):
         if "body" not in message:
             # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
             message = {"body": message}
-        
+
         return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
