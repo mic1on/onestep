@@ -35,14 +35,14 @@ class BaseBroker:
     @abc.abstractmethod
     def publish(self, message: Any):
         """
-        如果当前Broker是Job的to_broker, 则必须实现此方法
+        将消息原样发布到 broker 中。如果当前Broker是Job的to_broker, 则必须实现此方法
         """
         raise NotImplementedError('Please implement in subclasses.')
 
     @abc.abstractmethod
     def consume(self, *args, **kwargs):
         """
-        如果当前Broker是Job的from_broker, 则必须实现此方法
+        消费消息。如果当前Broker是Job的from_broker, 则必须实现此方法
         """
         raise NotImplementedError('Please implement in subclasses.')
 
