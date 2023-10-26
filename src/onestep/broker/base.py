@@ -157,10 +157,14 @@ class BaseLocalBroker(BaseBroker):
 class BaseLocalConsumer(BaseConsumer):
 
     def _to_message(self, data: Any):
-        message = Message(msg=data)
         try:
-            body = json.loads(data)
-            message.replace(**body)
-        except (json.JSONDecodeError, TypeError):
-            message.body = data
-        return message
+            message = json.loads(data)
+        except json.JSONDecodeError:
+            message = {"body": data}
+        if not isinstance(message, dict):
+            message = {"body": message}
+        if "body" not in message:
+            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
+            message = {"body": message}
+
+        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
