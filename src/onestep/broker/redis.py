@@ -88,11 +88,13 @@ class RedisStreamBroker(BaseBroker):
 class RedisStreamConsumer(BaseConsumer):
     def _to_message(self, data: RedisStreamMessage):
         if "_message" in data.body:
+            # 来自 RedisStreamBroker.send 的消息，message.body 默认是存于 _message 字段中
             try:
-                message = json.loads(data.body.get("_message"))
+                message = json.loads(data.body.get("_message"))  # 已转换的 message
             except (json.JSONDecodeError, TypeError):
-                message = {"body": data.body.get("_message")}
+                message = {"body": data.body.get("_message")}  # 未转换的 message
         else:
+            # 来自 外部的消息 直接认为都是 message.body
             message = {"body": data.body}
         
         yield Message(body=message.get("body"), extra=message.get("extra"), msg=data)

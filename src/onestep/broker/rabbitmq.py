@@ -78,6 +78,7 @@ class RabbitMQConsumer(BaseConsumer):
         if not isinstance(message, dict):
             message = {"body": message}
         if "body" not in message:
+            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
             message = {"body": message}
         
         return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
