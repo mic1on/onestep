@@ -78,5 +78,7 @@ class RabbitMQConsumer(BaseConsumer):
             message = {"body": data.body}
         if not isinstance(message, dict):
             message = {"body": message}
+        if "body" not in message:
+            message = {"body": message}
 
-        return Message(body=message.get("body", message), extra=message.get("extra"), msg=data)
+        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
