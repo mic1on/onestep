@@ -22,6 +22,18 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
+      rabbitmq:
+        image: rabbitmq:3
+        options: >-
+          --health-cmd "rabbitmqctl node_health_check"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        env:
+          RABBITMQ_DEFAULT_USER: admin
+          RABBITMQ_DEFAULT_PASS: admin
+        ports:
+          - 5672:5672
     steps:
       - uses: actions/checkout@v2
       - name: Set up Python ${{ matrix.python-version }}

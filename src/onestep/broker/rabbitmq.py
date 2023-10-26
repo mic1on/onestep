@@ -1,5 +1,6 @@
 import json
 import threading
+from copy import deepcopy
 from queue import Queue
 from typing import Optional, Dict, Any
 
@@ -78,7 +79,4 @@ class RabbitMQConsumer(BaseConsumer):
         if not isinstance(message, dict):
             message = {"body": message}
 
-        if "body" not in message:
-            message["body"] = message
-
-        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
+        return Message(body=message.get("body", message), extra=message.get("extra"), msg=data)
