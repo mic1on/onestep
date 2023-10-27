@@ -1,3 +1,4 @@
+import time
 from random import randint
 
 from onestep.message import Message
@@ -59,8 +60,8 @@ def test_mq_consume_multi_messages(broker):
         broker.publish('{"a": "b"}')
 
     consumer = broker.consume()
-    next(consumer)
-    assert consumer.queue.unfinished_tasks == 5
+    time.sleep(1)
+    assert consumer.queue.qsize() == broker.prefetch
 
 
 def test_requeue(broker):
