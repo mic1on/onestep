@@ -1,6 +1,7 @@
 """
 将指定的函数放入线程中运行
 """
+
 try:
     from collections import Iterable
 except ImportError:
@@ -12,6 +13,7 @@ from inspect import isasyncgenfunction
 
 from asgiref.sync import async_to_sync
 
+from .retry import RetryStatus
 from .broker import BaseBroker
 from .exception import DropMessage
 from .signal import message_received, message_consumed, message_error, message_drop
@@ -89,12 +91,13 @@ class WorkerThread(threading.Thread):
                     logger.error(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
                 message.set_exception()
 
-                retry_state = self.retry(message)
-                if retry_state:  # True=继续（执行重试）
+                retry_status = self.retry(message)
+                if retry_status is RetryStatus.CONTINUE:
                     continue
-                elif retry_state is False:  # False=结束（执行回调）
+                elif retry_status is RetryStatus.END_WITH_CALLBACK:
                     if self.error_callback:
                         self.error_callback(message)
                     return message.reject()
-                else:  # None=结束（忽略回调）
+                else:  # RetryStatus.END_IGNORE_CALLBACK
+                    # 由于是队列内重试，不会触发错误回调
                     return message.requeue()
