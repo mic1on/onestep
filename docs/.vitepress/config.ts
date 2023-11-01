@@ -88,6 +88,10 @@ export default withPwa(defineConfig({
                         {
                             text: '快速开始',
                             link: '/guide/',
+                        },
+                        {
+                            text: '入门教程',
+                            link: '/guide/tutorial',
                         }
                     ],
                 },
