@@ -157,10 +157,13 @@ class BaseLocalBroker(BaseBroker):
 class BaseLocalConsumer(BaseConsumer):
 
     def _to_message(self, data: Any):
-        try:
-            message = json.loads(data)
-        except json.JSONDecodeError:
-            message = {"body": data}
+        if isinstance(data, (str, bytes, bytearray)):
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                message = {"body": data}
+        else:
+            message = data
         if not isinstance(message, dict):
             message = {"body": message}
         if "body" not in message:
