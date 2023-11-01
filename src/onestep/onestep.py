@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any, Callable, Union
 from .broker.base import BaseBroker
 from .exception import StopMiddleware
 from .message import Message
-from .retry import NeverRetry
+from .retry import TimesRetry
 from .signal import message_sent, started, stopped
 from .state import State
 from .worker import WorkerThread
@@ -29,7 +29,7 @@ class BaseOneStep:
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
                  middlewares: Optional[List[Any]] = None,
-                 retry: Union[Callable, object] = NeverRetry(),
+                 retry: Union[Callable, object] = TimesRetry(),
                  error_callback: Optional[Union[Callable, object]] = None):
         self.group = group
         self.fn = fn
@@ -182,7 +182,7 @@ class step:
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
                  middlewares: Optional[List[Any]] = None,
-                 retry: Union[Callable, object] = NeverRetry(),
+                 retry: Union[Callable, object] = TimesRetry(),
                  error_callback: Optional[Union[Callable, object]] = None):
         self.params = {
             "group": group,
