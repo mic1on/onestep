@@ -49,9 +49,6 @@ class WebHookBroker(BaseLocalBroker):
         self.path = path
         self.threads = []
 
-        self._create_server()
-        logger.debug(f"WebHookBroker: {self.host}:{self.port}{self.path}")
-
     def _create_server(self):
 
         if (self.host, self.port) not in self._servers:
@@ -69,6 +66,8 @@ class WebHookBroker(BaseLocalBroker):
         self.threads.append(thread)
 
     def consume(self, *args, **kwargs):
+        self._create_server()
+        logger.debug(f"WebHookBroker: {self.host}:{self.port}{self.path}")
         return WebHookConsumer(self.queue, *args, **kwargs)
 
     def shutdown(self):

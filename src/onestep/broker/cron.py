@@ -21,7 +21,6 @@ class CronBroker(BaseLocalBroker):
         self.itr = croniter(cron, datetime.now())
         self.next_fire_time = self.itr.get_next(datetime)
         self.kwargs = kwargs
-        self._scheduler()
 
     def _scheduler(self):
         if self.next_fire_time <= datetime.now():
@@ -32,6 +31,7 @@ class CronBroker(BaseLocalBroker):
         self._thread.start()
 
     def consume(self):
+        self._scheduler()
         return CronConsumer(self.queue)
 
     def shutdown(self):
