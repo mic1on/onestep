@@ -4,7 +4,10 @@ import uuid
 from queue import Queue
 from typing import Optional, Dict, Any
 
-from usepy_plugin_redis import useRedisStreamStore, RedisStreamMessage
+try:
+    from usepy_plugin_redis import useRedisStreamStore, RedisStreamMessage
+except ImportError:
+    ...
 
 from .base import BaseBroker, BaseConsumer, Message
 
@@ -86,7 +89,7 @@ class RedisStreamBroker(BaseBroker):
 
 
 class RedisStreamConsumer(BaseConsumer):
-    def _to_message(self, data: RedisStreamMessage):
+    def _to_message(self, data: "RedisStreamMessage"):
         if "_message" in data.body:
             # 来自 RedisStreamBroker.send 的消息，message.body 默认是存于 _message 字段中
             try:

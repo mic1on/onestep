@@ -5,7 +5,7 @@ from .retry import (
 )
 from .broker import (
     BaseBroker, BaseConsumer, BaseLocalBroker, BaseLocalConsumer,
-    MemoryBroker, RabbitMQBroker, WebHookBroker, CronBroker
+    MemoryBroker, RabbitMQBroker, WebHookBroker, CronBroker, RedisStreamBroker
 )
 from .middleware import (
     BaseMiddleware, BaseConfigMiddleware,
@@ -19,7 +19,7 @@ from .exception import (
 
 __all__ = [
     'step',
-    
+
     # broker
     'BaseBroker',
     'BaseConsumer',
@@ -29,7 +29,8 @@ __all__ = [
     'RabbitMQBroker',
     'WebHookBroker',
     'CronBroker',
-    
+    'RedisStreamBroker',
+
     # retry
     'BaseRetry',
     'NeverRetry',
@@ -40,7 +41,7 @@ __all__ = [
     # error callback
     'BaseErrorCallback',
     'NackErrorCallBack',
-    
+
     # middleware
     'BaseMiddleware',
     'BaseConfigMiddleware',
@@ -48,7 +49,7 @@ __all__ = [
     'NacosConsumeConfigMiddleware',
     'RedisPublishConfigMiddleware',
     'RedisConsumeConfigMiddleware',
-    
+
     # exception
     'StopMiddleware',
     'DropMessage',
