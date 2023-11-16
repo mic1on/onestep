@@ -2,6 +2,7 @@ import json
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from traceback import TracebackException
 from typing import Optional, Any, Union
 
@@ -14,11 +15,15 @@ class MessageTracebackException(TracebackException):
         self.exc_value = exc_value
 
 
+@dataclass
 class Extra:
-    def __init__(self, task_id=None, publish_time=None, failure_count=0):
-        self.task_id = task_id or str(uuid.uuid4())
-        self.publish_time = publish_time or round(time.time(), 3)
-        self.failure_count = failure_count
+    task_id: str = None
+    publish_time: float = None
+    failure_count: int = 0
+
+    def __post_init__(self):
+        self.task_id = self.task_id or str(uuid.uuid4())
+        self.publish_time = self.publish_time or round(time.time(), 3)
 
     def to_dict(self):
         return {
@@ -29,9 +34,6 @@ class Extra:
 
     def __str__(self):
         return str(self.to_dict())
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}({self.task_id}, {self.publish_time}, {self.failure_count})"
 
 
 class Message:
