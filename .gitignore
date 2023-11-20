@@ -135,3 +135,5 @@ poetry.lock
 
 # Ignore dynaconf secret files
 *.secrets.*
+node_modules/
+.DS_Store
