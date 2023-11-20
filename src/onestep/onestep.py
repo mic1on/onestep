@@ -58,6 +58,7 @@ class BaseOneStep:
             f"broker must be BaseBroker or list or tuple, not {type(broker)}")
 
     def _add_consumer(self, broker):
+        """ 添加来源消费者 """
         for _ in range(self.workers):
             self.consumers[self.group].append(
                 WorkerThread(onestep=self, broker=broker)
@@ -130,6 +131,11 @@ class BaseOneStep:
             except StopMiddleware as e:
                 logger.debug(f"middleware<{middleware}> is stopped，reason: {e}")
                 break
+
+    @classmethod
+    def is_shutdown(cls, group):
+        # check all broker
+        return all(broker._shutdown for broker in cls._find_consumers(group))
 
 
 def decorator_func_proxy(func):
@@ -209,7 +215,7 @@ class step:
         started.send()
         if block:
             import time
-            while True:
+            while not BaseOneStep.is_shutdown(group):
                 time.sleep(1)
 
     @staticmethod
