@@ -12,10 +12,9 @@ from ..message import Message
 
 class SQSBroker(BaseBroker):
 
-    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1,
-                 auto_create=True, queue_params: Optional[Dict] = None, message_group_id=None,
-                 *args,
-                 **kwargs):
+    def __init__(self, queue_name, message_group_id, params: Optional[Dict] = None, prefetch: Optional[int] = 1,
+                 auto_create=True, queue_params: Optional[Dict] = None,
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
         self.queue = Queue()
