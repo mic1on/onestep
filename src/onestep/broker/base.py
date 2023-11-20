@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 class BaseBroker:
 
-    def __init__(self, name=None, queue=None, middlewares=None):
+    def __init__(self, name=None, queue=None, middlewares=None, once: bool = False):
         self.queue = queue
         self.name = name or "broker"
         self.middlewares = []
+        self.once = once
 
         if middlewares:
             for middleware in middlewares:

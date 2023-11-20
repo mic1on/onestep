@@ -36,7 +36,7 @@ class WorkerThread(threading.Thread):
         self.broker = broker
         self.args = args
         self.kwargs = kwargs
-        self.__shutdown = False
+        self._shutdown = False
 
     def run(self):
         """线程执行包装过的`onestep`函数
@@ -45,11 +45,11 @@ class WorkerThread(threading.Thread):
         :return:
         """
 
-        while not self.__shutdown:
-            if self.__shutdown:
-                break
+        while not self._shutdown:
             # TODO：consume应当传入一些配置参数
             for result in self.broker.consume():
+                if self._shutdown:
+                    break
                 if result is None:
                     continue
                 messages = (
@@ -69,10 +69,14 @@ class WorkerThread(threading.Thread):
                         message_drop.send(self, message=message, reason=e)
                         logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
                         message.reject()
+                else:
+                    if self.broker.once:
+                        self.broker.shutdown()
+                        self._shutdown = True
 
     def shutdown(self):
         self.broker.shutdown()
-        self.__shutdown = True
+        self._shutdown = True
 
     def _run_instance(self, message):
         while True:
