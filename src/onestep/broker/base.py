@@ -3,27 +3,44 @@ import abc
 import json
 import logging
 from queue import Queue, Empty, Full as FullException
-from typing import Any
+from typing import Any, Optional, List, Callable
 
-from ..exception import StopMiddleware
-from ..message import Message
+from onestep.middleware import BaseMiddleware
+from onestep.exception import StopMiddleware
+from onestep.message import Message
 
 logger = logging.getLogger(__name__)
 
 
 class BaseBroker:
 
-    def __init__(self, name=None, queue=None, middlewares=None, once: bool = False):
+    def __init__(self,
+                 name: Optional[str] = None,
+                 queue: Optional[str] = None,
+                 middlewares: Optional[List[BaseMiddleware]] = None,
+                 once: bool = False,
+                 cancel_consume: Optional[Callable] = None):
+        """
+        @param name: broker name
+        @param queue: broker queue name
+        @param middlewares: broker middlewares
+        @param once: just run once
+            if once is True, when broker receive a message, it will shutdown
+        @param cancel_consume: cancel consume
+            cancel_consume(message) -> bool
+            if cancel_consume return True, broker will shutdown
+        """
         self.queue = queue
         self.name = name or "broker"
         self.middlewares = []
         self.once = once
+        self.cancel_consume = cancel_consume
 
         if middlewares:
             for middleware in middlewares:
                 self.add_middleware(middleware)
 
-    def add_middleware(self, middleware):
+    def add_middleware(self, middleware: BaseMiddleware):
         self.middlewares.append(middleware)
 
     def send(self, message):

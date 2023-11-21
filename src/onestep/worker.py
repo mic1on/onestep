@@ -69,10 +69,12 @@ class WorkerThread(threading.Thread):
                         message_drop.send(self, message=message, reason=e)
                         logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
                         message.reject()
+                    finally:
+                        if self.broker.cancel_consume and self.broker.cancel_consume(message):
+                            self.shutdown()
                 else:
                     if self.broker.once:
-                        self.broker.shutdown()
-                        self._shutdown = True
+                        self.shutdown()
 
     def shutdown(self):
         self.broker.shutdown()
