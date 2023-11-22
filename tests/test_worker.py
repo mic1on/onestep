@@ -2,7 +2,7 @@ import pytest
 
 from onestep import MemoryBroker
 from onestep.onestep import BaseOneStep
-from onestep.worker import WorkerThread
+from onestep.worker import ThreadWorker
 
 
 @pytest.fixture
@@ -13,7 +13,9 @@ def broker():
 @pytest.fixture
 def worker_thread(broker):
     onestep = BaseOneStep(fn=lambda message: message)
-    return WorkerThread(onestep, broker)
+    wt = ThreadWorker(onestep, broker)
+    wt.start()
+    yield wt
 
 
 def test_shutdown(worker_thread):

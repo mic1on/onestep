@@ -1,6 +1,7 @@
 """
 将指定的函数放入线程中运行
 """
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
 
 try:
@@ -22,16 +23,11 @@ from .signal import message_received, message_consumed, message_error, message_d
 logger = logging.getLogger(__name__)
 
 
-class WorkerThread(threading.Thread):
+class BaseWorker:
     broker_exit: Dict[BaseBroker, bool] = {}
+    broker_exit_lock = threading.Lock()
 
     def __init__(self, onestep, broker: BaseBroker, *args, **kwargs):
-        """
-        线程执行包装过的`onestep`函数
-        :param onestep: OneStep实例
-        :param broker: 监听的from broker
-        """
-        super().__init__(daemon=True)
         self.instance = onestep
         self.retry = self.instance.retry
         self.error_callback = self.instance.error_callback
@@ -39,6 +35,92 @@ class WorkerThread(threading.Thread):
         self.args = args
         self.kwargs = kwargs
         self._shutdown = False
+
+    def start(self):
+        """启动 Worker"""
+        raise NotImplementedError
+
+    def run(self):
+        """执行 Worker 的逻辑"""
+        raise NotImplementedError
+
+    def shutdown(self):
+        """关闭 Worker"""
+        raise NotImplementedError
+
+    def _receive_message(self):
+        for result in self.broker.consume():
+            if self._shutdown:
+                break
+            if result is None:
+                continue
+            messages = (
+                result
+                if isinstance(result, Iterable)
+                else [result]
+            )
+            for message in messages:
+                message.broker = message.broker or self.broker
+                logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
+                message_received.send(self, message=message)
+                try:
+                    self.instance.before_emit("consume", message=message)
+                    self._run_instance(message)
+                    self.instance.after_emit("consume", message=message)
+                except DropMessage as e:
+                    message_drop.send(self, message=message, reason=e)
+                    logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
+                    message.reject()
+                finally:
+                    # When message is triggered by cancel_consume, it will be shutdown
+                    if self.broker.cancel_consume and self.broker.cancel_consume(message):
+                        self.shutdown()
+            else:
+                if self.broker.once:
+                    self.shutdown()
+
+    def _run_instance(self, message):
+        """执行实例的逻辑"""
+        try:
+            if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
+                async_to_sync(self.instance)(message, *self.args, **self.kwargs)
+            else:
+                self.instance(message, *self.args, **self.kwargs)
+            message_consumed.send(self, message=message)
+            message.confirm()
+        except Exception as e:
+            message_error.send(self, message=message, error=e)
+            if self.instance.state.debug:
+                logger.exception(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
+            else:
+                logger.error(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
+            message.set_exception()
+
+            retry_status = self.retry(message)
+            if retry_status is RetryStatus.END_WITH_CALLBACK:
+                if self.error_callback:
+                    self.error_callback(message)
+                message.reject()
+            elif retry_status is RetryStatus.END_IGNORE_CALLBACK:
+                # 由于是队列内重试，不会触发错误回调
+                message.requeue()
+
+
+class ThreadWorker(BaseWorker):
+
+    def __init__(self, onestep, broker: BaseBroker, *args, **kwargs):
+        """
+        线程执行包装过的`onestep`函数
+        :param onestep: OneStep实例
+        :param broker: 监听的from broker
+        """
+        super().__init__(onestep, broker, *args, **kwargs)
+        self.thread = None
+
+    def start(self):
+        """启动单线程 Worker"""
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
 
     def run(self):
         """线程执行包装过的`onestep`函数
@@ -48,68 +130,44 @@ class WorkerThread(threading.Thread):
         """
 
         while not self._shutdown:
-            if WorkerThread.broker_exit.get(self.broker, False):
-                self.shutdown()
-                break
-            for result in self.broker.consume():
-                if self._shutdown:
+            with ThreadWorker.broker_exit_lock:
+                if ThreadWorker.broker_exit.get(self.broker, False):
+                    self.shutdown()
                     break
-                if result is None:
-                    continue
-                messages = (
-                    result
-                    if isinstance(result, Iterable)
-                    else [result]
-                )
-                for message in messages:
-                    message.broker = message.broker or self.broker
-                    logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
-                    message_received.send(self, message=message)
-                    try:
-                        self.instance.before_emit("consume", message=message)
-                        self._run_instance(message)
-                        self.instance.after_emit("consume", message=message)
-                    except DropMessage as e:
-                        message_drop.send(self, message=message, reason=e)
-                        logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
-                        message.reject()
-                    finally:
-                        # When message is triggered by cancel_consume, it will be shutdown
-                        if self.broker.cancel_consume and self.broker.cancel_consume(message):
-                            self.shutdown()
-                else:
-                    if self.broker.once:
-                        self.shutdown()
+            self._receive_message()
 
     def shutdown(self):
-        WorkerThread.broker_exit[self.broker] = True
+        ThreadWorker.broker_exit[self.broker] = True
         self.broker.shutdown()
         self._shutdown = True
 
-    def _run_instance(self, message):
-        while True:
-            try:
-                if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
-                    async_to_sync(self.instance)(message, *self.args, **self.kwargs)
-                else:
-                    self.instance(message, *self.args, **self.kwargs)
-                message_consumed.send(self, message=message)
-                return message.confirm()
-            except Exception as e:
-                message_error.send(self, message=message, error=e)
-                if self.instance.state.debug:
-                    logger.exception(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
-                else:
-                    logger.error(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
-                message.set_exception()
 
-                retry_status = self.retry(message)
-                if retry_status is RetryStatus.CONTINUE:
-                    continue
-                elif retry_status is RetryStatus.END_WITH_CALLBACK:
-                    if self.error_callback:
-                        self.error_callback(message)
-                    return message.reject()
-                else:  # RetryStatus.END_IGNORE_CALLBACK
-                    # 由于是队列内重试，不会触发错误回调
-                    return message.requeue()
+class ThreadPoolWorker(BaseWorker):
+
+    def __init__(self, onestep, broker: BaseBroker, workers=None, *args, **kwargs):
+        super().__init__(onestep, broker, *args, **kwargs)
+        self.executor = ThreadPoolExecutor(max_workers=workers)
+
+    def start(self):
+        """启动线程池 Worker"""
+        self.executor.submit(self.run)
+
+    def run(self):
+        """线程执行包装过的`onestep`函数
+
+        `fn`为`onestep`函数，执行会调用`onestep`的`__call__`方法
+        :return:
+        """
+
+        while not self._shutdown:
+            with ThreadPoolWorker.broker_exit_lock:
+                if ThreadPoolWorker.broker_exit.get(self.broker, False):
+                    self.shutdown()
+                    break
+            self._receive_message()
+
+    def shutdown(self):
+        """关闭线程池 Worker"""
+        ThreadPoolWorker.broker_exit[self.broker] = True
+        self._shutdown = True
+        self.executor.shutdown()
