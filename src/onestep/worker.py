@@ -52,8 +52,10 @@ class WorkerThread(threading.Thread):
                 self.shutdown()
                 break
             for result in self.broker.consume():
-                if self._shutdown or result is None:
+                if self._shutdown:
                     break
+                if result is None:
+                    continue
                 messages = (
                     result
                     if isinstance(result, Iterable)
