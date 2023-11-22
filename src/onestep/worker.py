@@ -1,6 +1,7 @@
 """
 将指定的函数放入线程中运行
 """
+from typing import Dict
 
 try:
     from collections import Iterable
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerThread(threading.Thread):
+    broker_exit: Dict[BaseBroker, bool] = {}
 
     def __init__(self, onestep, broker: BaseBroker, *args, **kwargs):
         """
@@ -46,12 +48,12 @@ class WorkerThread(threading.Thread):
         """
 
         while not self._shutdown:
-            # TODO：consume应当传入一些配置参数
+            if WorkerThread.broker_exit.get(self.broker, False):
+                self.shutdown()
+                break
             for result in self.broker.consume():
-                if self._shutdown:
+                if self._shutdown or result is None:
                     break
-                if result is None:
-                    continue
                 messages = (
                     result
                     if isinstance(result, Iterable)
@@ -70,6 +72,7 @@ class WorkerThread(threading.Thread):
                         logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
                         message.reject()
                     finally:
+                        # When message is triggered by cancel_consume, it will be shutdown
                         if self.broker.cancel_consume and self.broker.cancel_consume(message):
                             self.shutdown()
                 else:
@@ -77,6 +80,7 @@ class WorkerThread(threading.Thread):
                         self.shutdown()
 
     def shutdown(self):
+        WorkerThread.broker_exit[self.broker] = True
         self.broker.shutdown()
         self._shutdown = True
 
