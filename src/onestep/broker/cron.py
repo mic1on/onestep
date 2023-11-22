@@ -4,6 +4,7 @@
 import logging
 import threading
 from datetime import datetime
+from typing import Any
 
 from croniter import croniter
 
@@ -15,17 +16,17 @@ logger = logging.getLogger(__name__)
 class CronBroker(BaseLocalBroker):
     _thread = None
 
-    def __init__(self, cron, name=None, middlewares=None, **kwargs):
-        super().__init__(name=name, middlewares=middlewares)
+    def __init__(self, cron, name=None, middlewares=None, body: Any = None, *args, **kwargs):
+        super().__init__(name=name, middlewares=middlewares, *args, **kwargs)
         self.cron = cron
         self.itr = croniter(cron, datetime.now())
         self.next_fire_time = self.itr.get_next(datetime)
-        self.kwargs = kwargs
+        self.body = body
 
     def _scheduler(self):
         if self.next_fire_time <= datetime.now():
             self.next_fire_time = self.itr.get_next(datetime)
-            self.publish(self.kwargs)
+            self.publish(self.body)
 
         self._thread = threading.Timer(interval=1, function=self._scheduler)
         self._thread.start()
