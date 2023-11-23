@@ -2,12 +2,8 @@
 将指定的函数放入线程中运行
 """
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict
+from typing import Dict, Iterable
 
-try:
-    from collections import Iterable  # noqa
-except ImportError:
-    from collections.abc import Iterable
 import logging
 import threading
 from asyncio import iscoroutinefunction
