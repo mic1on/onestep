@@ -14,7 +14,7 @@ from .middleware import (
 )
 from .exception import (
     StopMiddleware, DropMessage,
-    RetryException, RetryViaQueue, RetryViaLocal
+    RetryException, RetryInQueue, RetryInLocal
 )
 
 __all__ = [
@@ -54,6 +54,6 @@ __all__ = [
     'StopMiddleware',
     'DropMessage',
     'RetryException',
-    'RetryViaQueue',
-    'RetryViaLocal'
+    'RetryInQueue',
+    'RetryInLocal'
 ]

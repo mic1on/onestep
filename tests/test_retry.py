@@ -1,6 +1,6 @@
 from pytest import fixture
 from onestep.message import Message
-from onestep import NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, RetryViaQueue
+from onestep import NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, RetryInQueue
 from onestep.retry import RetryStatus, AdvancedRetry
 
 
@@ -56,7 +56,7 @@ def test_AdvancedRetry(message):
     message.failure_count = 1
     assert RetryStatus.CONTINUE is retry_class(message)
     try:
-        raise RetryViaQueue()
+        raise RetryInQueue()
     except Exception as e:
         message.set_exception()
     assert message.failure_count == 2
