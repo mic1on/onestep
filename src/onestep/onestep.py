@@ -1,9 +1,10 @@
 import functools
 import collections
+import inspect
 import logging
 
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
-from typing import Optional, List, Dict, Any, Callable, Union
+from typing import Optional, List, Dict, Any, Callable, Union, Type
 
 from .broker.base import BaseBroker
 from .exception import StopMiddleware
@@ -11,15 +12,16 @@ from .message import Message
 from .retry import TimesRetry
 from .signal import message_sent, started, stopped
 from .state import State
-from .worker import WorkerThread
+from .worker import ThreadWorker, BaseWorker
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKERS = 1
+DEFAULT_WORKER_CLASS = ThreadWorker
 
 
 class BaseOneStep:
-    consumers: Dict[str, List[WorkerThread]] = collections.defaultdict(list)
+    consumers: Dict[str, List[BaseWorker]] = collections.defaultdict(list)
     state = State()  # 全局状态
 
     def __init__(self, fn,
@@ -28,6 +30,7 @@ class BaseOneStep:
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
+                 worker_class: Optional[Type[BaseWorker]] = None,
                  middlewares: Optional[List[Any]] = None,
                  retry: Union[Callable, object] = TimesRetry(),
                  error_callback: Optional[Union[Callable, object]] = None):
@@ -35,6 +38,7 @@ class BaseOneStep:
         self.fn = fn
         self.name = name or fn.__name__
         self.workers = workers or DEFAULT_WORKERS
+        self.worker_class = worker_class or DEFAULT_WORKER_CLASS
         self.middlewares = middlewares or []
 
         self.from_brokers = self._init_broker(from_broker)
@@ -59,10 +63,16 @@ class BaseOneStep:
 
     def _add_consumer(self, broker):
         """ 添加来源消费者 """
-        for _ in range(self.workers):
+        worker_class_params = inspect.signature(self.worker_class.__init__).parameters
+        if "workers" in worker_class_params:
             self.consumers[self.group].append(
-                WorkerThread(onestep=self, broker=broker)
+                self.worker_class(onestep=self, broker=broker, workers=self.workers)
             )
+        else:
+            for _ in range(self.workers):
+                self.consumers[self.group].append(
+                    self.worker_class(onestep=self, broker=broker)
+                )
 
     @classmethod
     def _find_consumers(cls, group: Optional[str] = None):
@@ -182,11 +192,13 @@ class AsyncOneStep(BaseOneStep):
 class step:
 
     def __init__(self,
+                 *,
                  group: str = "OneStep",
                  name: str = None,
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
+                 worker_class: Optional[Type[BaseWorker]] = None,
                  middlewares: Optional[List[Any]] = None,
                  retry: Union[Callable, object] = TimesRetry(),
                  error_callback: Optional[Union[Callable, object]] = None):
@@ -196,6 +208,7 @@ class step:
             "from_broker": from_broker,
             "to_broker": to_broker,
             "workers": workers,
+            "worker_class": worker_class,
             "middlewares": middlewares,
             "retry": retry,
             "error_callback": error_callback
