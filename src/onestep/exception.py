@@ -9,14 +9,14 @@ class RetryException(Exception):
         self.kwargs = kwargs
 
 
-class RetryViaQueue(RetryException):
+class RetryInQueue(RetryException):
     """消息重试-通过重试队列
 
     抛出此异常，消息将被重新放入队列，等待下次消费。
     """
 
 
-class RetryViaLocal(RetryException):
+class RetryInLocal(RetryException):
     """消息重试-本地
 
     不经过队列，直接在本地重试，直到达到重试次数。
