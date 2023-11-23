@@ -48,46 +48,37 @@ class BaseWorker:
         """关闭 Worker"""
         raise NotImplementedError
 
-    def _receive_message(self):
+    def _receive_messages(self):
         for result in self.broker.consume():
             if self._shutdown:
                 break
             if result is None:
                 continue
-            messages = (
-                result
-                if isinstance(result, Iterable)
-                else [result]
-            )
-            for message in messages:
-                message.broker = message.broker or self.broker
-                logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
-                message_received.send(self, message=message)
-                try:
-                    self.instance.before_emit("consume", message=message)
-                    self._run_instance(message)
-                    self.instance.after_emit("consume", message=message)
-                except DropMessage as e:
-                    message_drop.send(self, message=message, reason=e)
-                    logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
-                    message.reject()
-                finally:
-                    # When message is triggered by cancel_consume, it will be shutdown
-                    if self.broker.cancel_consume and self.broker.cancel_consume(message):
-                        self.shutdown()
-            else:
-                if self.broker.once:
-                    self.shutdown()
+            messages = result if isinstance(result, Iterable) else [result]
+            yield from messages
+            if self.broker.once:
+                self.shutdown()
 
     def _run_instance(self, message):
         """执行实例的逻辑"""
+        message.broker = message.broker or self.broker
+        logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
+        message_received.send(self, message=message)
         try:
+            self.instance.before_emit("consume", message=message)
+
             if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
                 async_to_sync(self.instance)(message, *self.args, **self.kwargs)
             else:
                 self.instance(message, *self.args, **self.kwargs)
             message_consumed.send(self, message=message)
             message.confirm()
+
+            self.instance.after_emit("consume", message=message)
+        except DropMessage as e:
+            message_drop.send(self, message=message, reason=e)
+            logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
+            message.reject()
         except Exception as e:
             message_error.send(self, message=message, error=e)
             if self.instance.state.debug:
@@ -104,6 +95,10 @@ class BaseWorker:
             elif retry_status is RetryStatus.END_IGNORE_CALLBACK:
                 # 由于是队列内重试，不会触发错误回调
                 message.requeue()
+        finally:
+            # When message is triggered by cancel_consume, it will be shutdown
+            if self.broker.cancel_consume and self.broker.cancel_consume(message):
+                self.shutdown()
 
 
 class ThreadWorker(BaseWorker):
@@ -134,7 +129,8 @@ class ThreadWorker(BaseWorker):
                 if ThreadWorker.broker_exit.get(self.broker, False):
                     self.shutdown()
                     break
-            self._receive_message()
+            for message in self._receive_messages():
+                self._run_instance(message)
 
     def shutdown(self):
         ThreadWorker.broker_exit[self.broker] = True
@@ -164,7 +160,8 @@ class ThreadPoolWorker(BaseWorker):
                 if ThreadPoolWorker.broker_exit.get(self.broker, False):
                     self.shutdown()
                     break
-            self._receive_message()
+            for message in self._receive_messages():
+                self._run_instance(message)
 
     def shutdown(self):
         """关闭线程池 Worker"""
