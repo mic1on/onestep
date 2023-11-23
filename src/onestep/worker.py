@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
 
 try:
-    from collections import Iterable
+    from collections import Iterable  # noqa
 except ImportError:
     from collections.abc import Iterable
 import logging
@@ -15,6 +15,7 @@ from inspect import isasyncgenfunction
 
 from asgiref.sync import async_to_sync
 
+from .message import Message
 from .retry import RetryStatus
 from .broker import BaseBroker
 from .exception import DropMessage
@@ -48,7 +49,8 @@ class BaseWorker:
         """关闭 Worker"""
         raise NotImplementedError
 
-    def _receive_messages(self):
+    def receive_messages(self) -> Iterable[Message]:
+        """ 从broker中获取消息 """
         for result in self.broker.consume():
             if self._shutdown:
                 break
@@ -56,21 +58,26 @@ class BaseWorker:
                 continue
             messages = result if isinstance(result, Iterable) else [result]
             yield from messages
+            # when broker is once, it will shut down after receive a message
             if self.broker.once:
                 self.shutdown()
 
-    def _run_instance(self, message):
-        """执行实例的逻辑"""
+    def _run_real_instance(self, message: Message) -> None:
+        """ 执行实例的逻辑 """
+        if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
+            async_to_sync(self.instance)(message, *self.args, **self.kwargs)
+        else:
+            self.instance(message, *self.args, **self.kwargs)
+
+    def handle_message(self, message: Message):
+        """ 处理消息 """
         message.broker = message.broker or self.broker
         logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
         message_received.send(self, message=message)
         try:
             self.instance.before_emit("consume", message=message)
 
-            if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
-                async_to_sync(self.instance)(message, *self.args, **self.kwargs)
-            else:
-                self.instance(message, *self.args, **self.kwargs)
+            self._run_real_instance(message)
             message_consumed.send(self, message=message)
             message.confirm()
 
@@ -129,8 +136,8 @@ class ThreadWorker(BaseWorker):
                 if ThreadWorker.broker_exit.get(self.broker, False):
                     self.shutdown()
                     break
-            for message in self._receive_messages():
-                self._run_instance(message)
+            for message in self.receive_messages():
+                self.handle_message(message)
 
     def shutdown(self):
         ThreadWorker.broker_exit[self.broker] = True
@@ -160,8 +167,8 @@ class ThreadPoolWorker(BaseWorker):
                 if ThreadPoolWorker.broker_exit.get(self.broker, False):
                     self.shutdown()
                     break
-            for message in self._receive_messages():
-                self._run_instance(message)
+            for message in self.receive_messages():
+                self.handle_message(message)
 
     def shutdown(self):
         """关闭线程池 Worker"""
