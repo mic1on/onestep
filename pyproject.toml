@@ -8,6 +8,10 @@ packages = [
     { include = 'onestep', from = 'src' }
 ]
 
+[tool.poetry.scripts]
+onestep = "onestep.cli:main"
+
+
 [tool.poetry.dependencies]
 python = "^3.8"
 asgiref = "^3.6.0"

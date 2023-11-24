@@ -85,14 +85,18 @@ class BaseOneStep:
 
     @classmethod
     def start(cls, group: Optional[str] = None):
-        logger.debug(f"start: {group=}")
-        for consumer in cls._find_consumers(group):
+        logger.debug(f"start group [{group or 'all'}]")
+        _consumers = cls._find_consumers(group)
+        if not _consumers:
+            logger.debug(f"no consumer found in group [{group or 'all'}]")
+            return
+        for consumer in _consumers:
             consumer.start()
             logger.debug(f"started: {consumer=}")
 
     @classmethod
     def shutdown(cls, group: Optional[str] = None):
-        logger.debug(f"stop: {group=}")
+        logger.debug(f"stop group [{group or 'all'}]")
         for consumer in cls._find_consumers(group):
             consumer.shutdown()
             logger.debug(f"stopped: {consumer=}")
@@ -145,7 +149,10 @@ class BaseOneStep:
     @classmethod
     def is_shutdown(cls, group):
         # check all broker
-        return all(broker._shutdown for broker in cls._find_consumers(group))
+        _consumers = cls._find_consumers(group)
+        if not _consumers:
+            return True
+        return all(broker._shutdown for broker in _consumers)
 
 
 def decorator_func_proxy(func):
