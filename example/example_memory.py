@@ -1,6 +1,6 @@
 from onestep import step
 from onestep.broker import MemoryBroker
-from onestep.exception import RetryViaQueue, DropMessage
+from onestep.exception import RetryInQueue, DropMessage
 from onestep.retry import AdvancedRetry
 
 todo_broker = MemoryBroker()
@@ -32,14 +32,14 @@ def build_todo_list():
 
 
 @step(from_broker=todo_broker, workers=1,
-      # retry=AdvancedRetry()
+      retry=AdvancedRetry()
       )
 def do_something(todo):
     print(todo)
     todo.body["status"] = "done"
     if todo.body["id"] == 2:
         todo.body["id"] = 21
-        raise RetryViaQueue("test requeue")
+        raise RetryInQueue("test requeue")
     elif todo.body["id"] == 3:
         raise DropMessage("test reject")
     else:
