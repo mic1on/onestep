@@ -24,7 +24,7 @@
 - [x] RedisBroker
 - [ ] KafkaBroker
 
-## example
+## 😋example
 
 ```python
 # example.py
@@ -42,6 +42,20 @@ if __name__ == '__main__':
     step.start(block=True)
 ```
 
+also, you can use `onestep` command to start, like this:
+
+```bash
+$ onestep example
+```
+
+then, you can send a message to webhook:
+
+```bash
+$ curl -X POST -H "Content-Type: application/json" -d '{"a": 1}' http://localhost:8090/push
+```
+
+## 🤩 other brokers
+
 ```python
 from onestep import step, CronBroker
 
@@ -57,4 +71,4 @@ if __name__ == '__main__':
     step.start(block=True)
 ```
 
-更多例子请参阅：[examples](example)
+🤔more examples: [examples](example)
