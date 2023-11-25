@@ -55,5 +55,9 @@ __all__ = [
     'DropMessage',
     'RetryException',
     'RetryInQueue',
-    'RetryInLocal'
+    'RetryInLocal',
+
+    '__version__'
 ]
+
+__version__ = '0.3.5'

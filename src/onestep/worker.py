@@ -33,6 +33,10 @@ class BaseWorker:
         self.kwargs = kwargs
         self._shutdown = False
 
+    @property
+    def instance_name(self):
+        return self.instance.fn.__name__
+
     def start(self):
         """启动 Worker"""
         raise NotImplementedError
@@ -102,6 +106,9 @@ class BaseWorker:
             # When message is triggered by cancel_consume, it will be shutdown
             if self.broker.cancel_consume and self.broker.cancel_consume(message):
                 self.shutdown()
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.instance.name}>"
 
 
 class ThreadWorker(BaseWorker):
