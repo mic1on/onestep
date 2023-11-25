@@ -4,6 +4,7 @@ import inspect
 import logging
 
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
+from itertools import groupby
 from typing import Optional, List, Dict, Any, Callable, Union, Type
 
 from .broker.base import BaseBroker
@@ -16,6 +17,7 @@ from .worker import ThreadWorker, BaseWorker
 
 logger = logging.getLogger(__name__)
 
+MAX_WORKERS = 20
 DEFAULT_WORKERS = 1
 DEFAULT_WORKER_CLASS = ThreadWorker
 
@@ -39,6 +41,9 @@ class BaseOneStep:
         self.name = name or fn.__name__
         self.workers = workers or DEFAULT_WORKERS
         self.worker_class = worker_class or DEFAULT_WORKER_CLASS
+        if self.workers > MAX_WORKERS:
+            logger.warning(f"workers[{self.workers}] litter than {MAX_WORKERS}")
+            self.workers = MAX_WORKERS
         self.middlewares = middlewares or []
 
         self.from_brokers = self._init_broker(from_broker)
@@ -84,12 +89,26 @@ class BaseOneStep:
         return consumers
 
     @classmethod
-    def start(cls, group: Optional[str] = None):
+    def print_jobs(cls, group):
+        print("Jobs:")
+        prints = []
+        _consumers = cls._find_consumers(group)
+        group_instance = groupby(_consumers, key=lambda x: x.instance)
+        for instance, _ in group_instance:
+            prints.append([instance.name, instance.group, instance.workers, str(instance.from_brokers)])
+        print("{:<15} {:<10} {:<10} {:<20}".format("Job", "Group", "Workers", "From Brokers"))
+        for v in prints:
+            print("{:<15} {:<10} {:<10} {:<20}".format(*v))
+
+    @classmethod
+    def start(cls, group: Optional[str] = None, print_jobs: bool = False):
         logger.debug(f"start group [{group or 'all'}]")
         _consumers = cls._find_consumers(group)
         if not _consumers:
             logger.debug(f"no consumer found in group [{group or 'all'}]")
             return
+        if print_jobs:
+            cls.print_jobs(group)
         for consumer in _consumers:
             consumer.start()
             logger.debug(f"started: {consumer=}")
@@ -230,8 +249,8 @@ class step:
         return os.wraps(func)
 
     @staticmethod
-    def start(group=None, block=None):
-        BaseOneStep.start(group=group)
+    def start(group=None, block=None, print_jobs=False):
+        BaseOneStep.start(group=group, print_jobs=print_jobs)
         started.send()
         if block:
             import time

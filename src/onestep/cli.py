@@ -2,7 +2,6 @@ import argparse
 import importlib
 import logging
 import sys
-import signal
 from onestep import step, __version__
 
 LOGFORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
@@ -33,6 +32,10 @@ def parse_args():
         type=str
     )
     parser.add_argument(
+        "--print",
+        action="store_true",
+        help="enable printing")
+    parser.add_argument(
         "--path", "-P", default=".", nargs="*", type=str,
         help="the step import path (default: current running directory)"
     )
@@ -46,7 +49,7 @@ def main():
     logger.info(f"OneStep {__version__} is start up.")
     try:
         importlib.import_module(args.step)
-        step.start(group=args.group, block=True)
+        step.start(group=args.group, block=True, print_jobs=args.print)
     except KeyboardInterrupt:
         step.shutdown()
 
