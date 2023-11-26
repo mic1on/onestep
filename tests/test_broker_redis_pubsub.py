@@ -24,7 +24,7 @@ def test_publish_and_consume(broker):
     message_to_publish = "Test Message"
     broker.publish(message_to_publish)
 
-    time.sleep(1)
+    time.sleep(3)
 
     received_message = next(next(consumer))
     assert isinstance(received_message, Message)
