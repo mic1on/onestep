@@ -4,5 +4,5 @@ from .base import (
 from .memory import MemoryBroker
 from .webhook import WebHookBroker
 from .rabbitmq import RabbitMQBroker
-from .redis import RedisStreamBroker
+from .redis import RedisStreamBroker, RedisPubSubBroker
 from .cron import CronBroker

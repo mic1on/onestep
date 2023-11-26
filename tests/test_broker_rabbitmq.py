@@ -3,10 +3,6 @@ from random import randint
 
 from onestep.message import Message
 
-try:
-    from collections import Iterable
-except ImportError:
-    from collections.abc import Iterable
 from queue import Queue
 import pytest
 

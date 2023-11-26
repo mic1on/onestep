@@ -9,7 +9,7 @@ try:
 except ImportError:
     ...
 
-from .base import BaseBroker, BaseConsumer, Message
+from ..base import BaseBroker, BaseConsumer, Message
 
 
 class RedisStreamBroker(BaseBroker):
@@ -76,7 +76,7 @@ class RedisStreamBroker(BaseBroker):
     def requeue(self, message: Message, is_source=False):
         """
          重发消息：先拒绝 再 重入
- 
+
          :param message: 消息
          :param is_source: 是否是原始消息消息，True: 使用原始消息重入当前队列，False: 使用消息的最新数据重入当前队列
          """
