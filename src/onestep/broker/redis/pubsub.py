@@ -4,7 +4,7 @@ from queue import Queue
 from typing import Any
 
 try:
-    from usepy_plugin_redis import useRedis
+    from use_redis import useRedis
 except ImportError:
     ...
 

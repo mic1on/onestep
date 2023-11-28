@@ -5,7 +5,7 @@ from queue import Queue
 from typing import Optional, Dict, Any
 
 try:
-    from usepy_plugin_redis import useRedisStreamStore, RedisStreamMessage
+    from use_redis import useRedisStreamStore, RedisStreamMessage
 except ImportError:
     ...
 

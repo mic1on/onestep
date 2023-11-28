@@ -17,11 +17,11 @@ python = "^3.8"
 asgiref = "^3.6.0"
 blinker = "^1.5"
 croniter = "^1.3.8"
-usepy-plugin-rabbitmq = "^0.1.0"
-usepy-plugin-redis = { version = "^0.1.6", optional = true }
+use-rabbitmq = "^0.1.6"
+use-redis = { version = "^0.1.6", optional = true }
 
 [tool.poetry.extras]
-redis = ["usepy-plugin-redis"]
+redis = ["use-redis"]
 
 [tool.poetry.group.dev.dependencies]
 nacos-sdk-python = "^0.1.12"
