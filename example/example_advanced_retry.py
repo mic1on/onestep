@@ -1,11 +1,9 @@
-import logging
+from loguru import logger
 
 from onestep import step
-from onestep.broker import MemoryBroker, RabbitMQBroker
-from onestep.exception import RetryInLocal, RetryInQueue
+from onestep.broker import MemoryBroker
+from onestep.exception import RetryInQueue
 from onestep.retry import AdvancedRetry
-
-from loguru import logger
 
 todo_broker = MemoryBroker()
 

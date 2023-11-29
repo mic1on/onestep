@@ -6,7 +6,7 @@ from onestep.broker.redis import RedisStreamBroker, RedisStreamConsumer
 try:
     from collections import Iterable
 except ImportError:
-    from collections.abc import Iterable
+    from collections.abc import Iterable  # noqa: 401
 
 
 @pytest.fixture

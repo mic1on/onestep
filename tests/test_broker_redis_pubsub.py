@@ -1,8 +1,6 @@
-import pytest
-import threading
 import time
 
-from onestep.broker.redis.pubsub import RedisPubSubConsumer
+import pytest
 
 from onestep import RedisPubSubBroker
 from onestep.message import Message

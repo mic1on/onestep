@@ -36,6 +36,14 @@ amqpstorm = "^2.10.6"
 redis = "^4.5.1"
 httpx = "^0.23.3"
 
+[tool.ruff]
+ignore = [
+    "E501", # line too long, handled by black
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

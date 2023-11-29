@@ -1,9 +1,10 @@
 from typing import Generator
+
 import pytest
 
 from onestep import MemoryBroker, BaseMiddleware, DropMessage
 from onestep.message import Message
-from onestep.onestep import BaseOneStep, SyncOneStep
+from onestep.onestep import SyncOneStep
 from onestep.worker import BaseWorker, ThreadWorker
 
 

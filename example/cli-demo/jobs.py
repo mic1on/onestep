@@ -1,4 +1,4 @@
-from onestep import step, MemoryBroker, CronBroker
+from onestep import step, CronBroker
 
 cron_broker = CronBroker("* * * * * */3", body="hi cron")
 
