@@ -30,7 +30,7 @@ class _RedisStreamMessage(Message):
 
 class RedisStreamBroker(BaseBroker):
     """ Redis Stream Broker """
-    message_class = _RedisStreamMessage
+    message_cls = _RedisStreamMessage
 
     def __init__(
             self,
@@ -78,7 +78,7 @@ class RedisStreamBroker(BaseBroker):
     def send(self, message: Any):
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
-            message = self.message_class(body=message)
+            message = self.message_cls(body=message)
 
         self.client.send({"_message": message.to_json()})
 

@@ -28,7 +28,7 @@ class _RabbitMQMessage(Message):
 
 
 class RabbitMQBroker(BaseBroker):
-    message_class = _RabbitMQMessage
+    message_cls = _RabbitMQMessage
 
     def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, auto_create=True, *args,
                  **kwargs):

@@ -143,16 +143,4 @@ class Message:
 
     @classmethod
     def from_broker(cls, broker_message: Any):
-        if isinstance(broker_message, (str, bytes, bytearray)):
-            try:
-                message = json.loads(broker_message)
-            except json.JSONDecodeError:
-                message = {"body": broker_message}
-        else:
-            message = broker_message
-        if not isinstance(message, dict):
-            message = {"body": message}
-        if "body" not in message:
-            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
-            message = {"body": message}
-        return cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)
+        return cls(body=broker_message, extra=None, message=broker_message, broker=None)

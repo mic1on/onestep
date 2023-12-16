@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class BaseBroker:
-    message_class = Message
+    message_cls = Message
 
     def __init__(self,
                  name: Optional[str] = None,
@@ -46,7 +46,7 @@ class BaseBroker:
     def send(self, message):
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
-            message = self.message_class(body=message)
+            message = self.message_cls(body=message)
         # TODO: 对消息发送进行N次重试，确保消息发送成功。
         return self.publish(message.to_json())
 
@@ -114,13 +114,13 @@ class BaseConsumer:
 
     def __init__(self, broker: BaseBroker, *args, **kwargs):
         self.queue = broker.queue
-        self.message_class = broker.message_class or Message
+        self.message_cls = broker.message_cls or Message
         self.timeout = kwargs.pop("timeout", 1000)
 
     def __next__(self):
         try:
             data = self.queue.get(timeout=self.timeout / 1000)
-            return self.message_class.from_broker(broker_message=data)
+            return self.message_cls.from_broker(broker_message=data)
         except Empty:
             return None
 

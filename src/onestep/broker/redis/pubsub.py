@@ -29,7 +29,7 @@ class _RedisPubSubMessage(Message):
 
 class RedisPubSubBroker(BaseBroker):
     """ Redis PubSub Broker """
-    message_class = _RedisPubSubMessage
+    message_cls = _RedisPubSubMessage
 
     def __init__(self, channel: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -62,7 +62,7 @@ class RedisPubSubBroker(BaseBroker):
     def send(self, message: Any):
         """Publish message to the Redis channel"""
         if not isinstance(message, Message):
-            message = self.message_class(body=message)
+            message = self.message_cls(body=message)
 
         self.client.publish(self.channel, message.to_json())
 
