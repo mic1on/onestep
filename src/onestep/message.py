@@ -42,12 +42,19 @@ class Message:
             self,
             body: Optional[Union[dict, Any]] = None,
             extra: Optional[Union[dict, Extra]] = None,
-            msg: Optional[Any] = None,
+            message: Optional[Any] = None,
             broker=None
     ):
+        """ Message
+
+        :param body: 解析后的消息体
+        :param extra: 额外信息
+        :param message: 原始消息体
+        :param broker: 当前消息所属的 broker
+        """
         self.body = body
         self.extra = self._set_extra(extra)
-        self.msg = msg
+        self.message = message
 
         self.broker = broker
         self._exception = None
@@ -134,11 +141,18 @@ class Message:
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.body}>"
 
-
-if __name__ == '__main__':
-    msg = Message()
-    msg.x = 1
-    print(msg.x)
-    msg.qq1 = 1
-    del msg.qq1
-    print(msg.qq1)
+    @classmethod
+    def from_broker(cls, broker_message: Any):
+        if isinstance(broker_message, (str, bytes, bytearray)):
+            try:
+                message = json.loads(broker_message)
+            except json.JSONDecodeError:
+                message = {"body": broker_message}
+        else:
+            message = broker_message
+        if not isinstance(message, dict):
+            message = {"body": message}
+        if "body" not in message:
+            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
+            message = {"body": message}
+        return cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)

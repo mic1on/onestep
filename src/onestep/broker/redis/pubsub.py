@@ -11,8 +11,25 @@ except ImportError:
 from ..base import BaseBroker, BaseConsumer, Message
 
 
+class _RedisPubSubMessage(Message):
+
+    @classmethod
+    def from_broker(cls, broker_message: Any):
+        if "channel" in broker_message:
+            try:
+                message = json.loads(broker_message.get("data"))  # 已转换的 message
+            except (json.JSONDecodeError, TypeError):
+                message = {"body": broker_message.get("data")}  # 未转换的 message
+        else:
+            # 来自 外部的消息 直接认为都是 message.body
+            message = {"body": broker_message.body}
+
+        yield cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)
+
+
 class RedisPubSubBroker(BaseBroker):
     """ Redis PubSub Broker """
+    message_class = _RedisPubSubMessage
 
     def __init__(self, channel: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -40,14 +57,14 @@ class RedisPubSubBroker(BaseBroker):
         thread.daemon = daemon
         thread.start()
         self.threads.append(thread)
-        return RedisPubSubConsumer(self.queue)
+        return RedisPubSubConsumer(self)
 
     def send(self, message: Any):
         """Publish message to the Redis channel"""
         if not isinstance(message, Message):
-            message = Message(body=message)
+            message = self.message_class(body=message)
 
-        print(self.client.publish(self.channel, message.to_json()))
+        self.client.publish(self.channel, message.to_json())
 
     publish = send
 
@@ -67,20 +84,10 @@ class RedisPubSubBroker(BaseBroker):
         self.reject(message)
 
         if is_source:
-            self.client.publish(self.channel, message.msg['data'])
+            self.client.publish(self.channel, message.message['data'])
         else:
             self.send(message)
 
 
 class RedisPubSubConsumer(BaseConsumer):
-    def _to_message(self, data):
-        if "channel" in data:
-            try:
-                message = json.loads(data.get("data"))  # 已转换的 message
-            except (json.JSONDecodeError, TypeError):
-                message = {"body": data.get("data")}  # 未转换的 message
-        else:
-            # 来自 外部的消息 直接认为都是 message.body
-            message = {"body": data.body}
-
-        yield Message(body=message.get("body"), extra=message.get("extra"), msg=data)
+    ...

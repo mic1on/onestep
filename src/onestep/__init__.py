@@ -4,7 +4,7 @@ from .retry import (
     NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, AdvancedRetry
 )
 from .broker import (
-    BaseBroker, BaseConsumer, BaseLocalBroker, BaseLocalConsumer,
+    BaseBroker, BaseConsumer,
     MemoryBroker, RabbitMQBroker, WebHookBroker, CronBroker, RedisStreamBroker, RedisPubSubBroker
 )
 from .middleware import (

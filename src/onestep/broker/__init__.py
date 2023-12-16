@@ -1,7 +1,7 @@
 from .base import (
-    BaseBroker, BaseConsumer, BaseLocalBroker, BaseLocalConsumer
+    BaseBroker, BaseConsumer
 )
-from .memory import MemoryBroker
+from .memory import MemoryBroker, MemoryConsumer
 from .webhook import WebHookBroker
 from .rabbitmq import RabbitMQBroker
 from .redis import RedisStreamBroker, RedisPubSubBroker
