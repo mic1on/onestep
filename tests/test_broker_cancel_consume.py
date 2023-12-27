@@ -1,4 +1,4 @@
-from onestep.broker import BaseLocalBroker
+from onestep.broker import MemoryBroker
 
 
 def test_cancel_consume():
@@ -7,7 +7,7 @@ def test_cancel_consume():
             return True
         return False
 
-    broker = BaseLocalBroker(cancel_consume=cancel_consume)
+    broker = MemoryBroker(cancel_consume=cancel_consume)
     # Add messages to the queue
     broker.queue.put("message 1")
     broker.queue.put("cancel")

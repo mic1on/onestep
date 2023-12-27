@@ -3,7 +3,7 @@ import threading
 import collections
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .base import BaseLocalBroker, BaseLocalConsumer
+from .memory import MemoryBroker, MemoryConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class WebHookServer(BaseHTTPRequestHandler):
         self.wfile.write(b'{ "status": "ok" }')
 
 
-class WebHookBroker(BaseLocalBroker):
+class WebHookBroker(MemoryBroker):
     _servers = {}
 
     def __init__(self,
@@ -68,7 +68,7 @@ class WebHookBroker(BaseLocalBroker):
     def consume(self, *args, **kwargs):
         self._create_server()
         logger.debug(f"WebHookBroker: {self.host}:{self.port}{self.path}")
-        return WebHookConsumer(self.queue, *args, **kwargs)
+        return WebHookConsumer(self, *args, **kwargs)
 
     def shutdown(self):
         hs = self._servers[(self.host, self.port)]
@@ -78,5 +78,5 @@ class WebHookBroker(BaseLocalBroker):
             thread.join()
 
 
-class WebHookConsumer(BaseLocalConsumer):
+class WebHookConsumer(MemoryConsumer):
     ...

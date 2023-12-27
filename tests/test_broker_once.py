@@ -1,10 +1,10 @@
 import pytest
-from onestep.broker import BaseLocalBroker
+from onestep.broker import MemoryBroker
 
 
 @pytest.fixture
 def broker():
-    return BaseLocalBroker(once=True)
+    return MemoryBroker(once=True)
 
 
 def test_once(broker):

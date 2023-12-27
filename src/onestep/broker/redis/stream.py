@@ -12,8 +12,25 @@ except ImportError:
 from ..base import BaseBroker, BaseConsumer, Message
 
 
+class _RedisStreamMessage(Message):
+    @classmethod
+    def from_broker(cls, broker_message: "RedisStreamMessage"):
+        if "_message" in broker_message.body:
+            # 来自 RedisStreamBroker.send 的消息，message.body 默认是存于 _message 字段中
+            try:
+                message = json.loads(broker_message.body.get("_message"))  # 已转换的 message
+            except (json.JSONDecodeError, TypeError):
+                message = {"body": broker_message.body.get("_message")}  # 未转换的 message
+        else:
+            # 来自 外部的消息 直接认为都是 message.body
+            message = {"body": broker_message.body}
+
+        yield cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)
+
+
 class RedisStreamBroker(BaseBroker):
     """ Redis Stream Broker """
+    message_cls = _RedisStreamMessage
 
     def __init__(
             self,
@@ -56,22 +73,22 @@ class RedisStreamBroker(BaseBroker):
         thread.daemon = daemon
         thread.start()
         self.threads.append(thread)
-        return RedisStreamConsumer(self.queue)
+        return RedisStreamConsumer(self)
 
     def send(self, message: Any):
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
-            message = Message(body=message)
+            message = self.message_cls(body=message)
 
         self.client.send({"_message": message.to_json()})
 
     publish = send
 
     def confirm(self, message: Message):
-        self.client.ack(message.msg)
+        self.client.ack(message.message)
 
     def reject(self, message: Message):
-        self.client.reject(message.msg)
+        self.client.reject(message.message)
 
     def requeue(self, message: Message, is_source=False):
         """
@@ -83,21 +100,10 @@ class RedisStreamBroker(BaseBroker):
         self.reject(message)
 
         if is_source:
-            self.client.send(message.msg.body)
+            self.client.send(message.message.body)
         else:
             self.send(message)
 
 
 class RedisStreamConsumer(BaseConsumer):
-    def _to_message(self, data: "RedisStreamMessage"):
-        if "_message" in data.body:
-            # 来自 RedisStreamBroker.send 的消息，message.body 默认是存于 _message 字段中
-            try:
-                message = json.loads(data.body.get("_message"))  # 已转换的 message
-            except (json.JSONDecodeError, TypeError):
-                message = {"body": data.body.get("_message")}  # 未转换的 message
-        else:
-            # 来自 外部的消息 直接认为都是 message.body
-            message = {"body": data.body}
-
-        yield Message(body=message.get("body"), extra=message.get("extra"), msg=data)
+    ...

@@ -10,7 +10,25 @@ from use_rabbitmq import useRabbitMQ as RabbitMQStore
 from ..message import Message
 
 
+class _RabbitMQMessage(Message):
+
+    @classmethod
+    def from_broker(cls, broker_message: amqpstorm.Message):
+        try:
+            message = json.loads(broker_message.body)
+        except json.JSONDecodeError:
+            message = {"body": broker_message.body}
+        if not isinstance(message, dict):
+            message = {"body": message}
+        if "body" not in message:
+            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
+            message = {"body": message}
+
+        return cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)
+
+
 class RabbitMQBroker(BaseBroker):
+    message_cls = _RabbitMQMessage
 
     def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, auto_create=True, *args,
                  **kwargs):
@@ -37,18 +55,18 @@ class RabbitMQBroker(BaseBroker):
         thread.daemon = daemon
         thread.start()
         self.threads.append(thread)
-        return RabbitMQConsumer(self.queue)
+        return RabbitMQConsumer(self)
 
     def publish(self, message: Any):
         self.client.send(self.queue_name, message)
 
     def confirm(self, message: Message):
         """确认消息"""
-        message.msg.ack()
+        message.message.ack()
 
     def reject(self, message: Message):
         """拒绝消息"""
-        message.msg.reject(requeue=False)
+        message.message.reject(requeue=False)
 
     def requeue(self, message: Message, is_source=False):
         """
@@ -58,9 +76,9 @@ class RabbitMQBroker(BaseBroker):
         :param is_source: 是否是原始消息，True: 使用原始消息重入当前队列，False: 使用消息的最新数据重入当前队列
         """
         if is_source:
-            message.msg.reject(requeue=True)
+            message.message.reject(requeue=True)
         else:
-            message.msg.reject(requeue=False)
+            message.message.reject(requeue=False)
             self.send(message)
 
     def shutdown(self):
@@ -70,15 +88,4 @@ class RabbitMQBroker(BaseBroker):
 
 
 class RabbitMQConsumer(BaseConsumer):
-    def _to_message(self, data: amqpstorm.Message):
-        try:
-            message = json.loads(data.body)
-        except json.JSONDecodeError:
-            message = {"body": data.body}
-        if not isinstance(message, dict):
-            message = {"body": message}
-        if "body" not in message:
-            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
-            message = {"body": message}
-
-        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
+    ...

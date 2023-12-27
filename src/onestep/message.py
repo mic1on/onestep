@@ -42,12 +42,19 @@ class Message:
             self,
             body: Optional[Union[dict, Any]] = None,
             extra: Optional[Union[dict, Extra]] = None,
-            msg: Optional[Any] = None,
+            message: Optional[Any] = None,
             broker=None
     ):
+        """ Message
+
+        :param body: 解析后的消息体
+        :param extra: 额外信息
+        :param message: 原始消息体
+        :param broker: 当前消息所属的 broker
+        """
         self.body = body
         self.extra = self._set_extra(extra)
-        self.msg = msg
+        self.message = message
 
         self.broker = broker
         self._exception = None
@@ -134,11 +141,6 @@ class Message:
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.body}>"
 
-
-if __name__ == '__main__':
-    msg = Message()
-    msg.x = 1
-    print(msg.x)
-    msg.qq1 = 1
-    del msg.qq1
-    print(msg.qq1)
+    @classmethod
+    def from_broker(cls, broker_message: Any):
+        return cls(body=broker_message, extra=None, message=broker_message, broker=None)

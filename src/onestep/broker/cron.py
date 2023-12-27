@@ -8,12 +8,12 @@ from typing import Any
 
 from croniter import croniter
 
-from .base import BaseLocalBroker, BaseLocalConsumer
+from .memory import MemoryBroker, MemoryConsumer
 
 logger = logging.getLogger(__name__)
 
 
-class CronBroker(BaseLocalBroker):
+class CronBroker(MemoryBroker):
     _thread = None
 
     def __init__(self, cron, name=None, middlewares=None, body: Any = None, *args, **kwargs):
@@ -31,13 +31,13 @@ class CronBroker(BaseLocalBroker):
         self._thread = threading.Timer(interval=1, function=self._scheduler)
         self._thread.start()
 
-    def consume(self):
+    def consume(self, *args, **kwargs):
         self._scheduler()
-        return CronConsumer(self.queue)
+        return CronConsumer(self, *args, **kwargs)
 
     def shutdown(self):
         self._thread.cancel()
 
 
-class CronConsumer(BaseLocalConsumer):
+class CronConsumer(MemoryConsumer):
     ...
