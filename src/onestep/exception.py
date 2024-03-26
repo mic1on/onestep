@@ -25,3 +25,11 @@ class RetryInLocal(RetryException):
 
 class DropMessage(Exception):
     """从 Brokers 中 丢弃该消息"""
+
+
+class RejectMessage(DropMessage):
+    """从 Brokers 中 丢弃该消息"""
+
+
+class RequeueMessage(Exception):
+    """重新入队该消息"""

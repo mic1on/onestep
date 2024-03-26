@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "onestep"
-version = "0.3.8"
+version = "0.3.81"
 description = ""
 authors = ["miclon <jcnd@163.com>"]
 readme = "README.md"

@@ -14,8 +14,8 @@ from asgiref.sync import async_to_sync
 from .message import Message
 from .retry import RetryStatus
 from .broker import BaseBroker
-from .exception import DropMessage
-from .signal import message_received, message_consumed, message_error, message_drop
+from . import exception
+from .signal import message_received, message_consumed, message_error, message_drop, message_requeue
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +82,14 @@ class BaseWorker:
             message.confirm()
 
             self.instance.after_emit("consume", message=message)
-        except DropMessage as e:
+        except (exception.DropMessage, exception.RejectMessage) as e:
             message_drop.send(self, message=message, reason=e)
             logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
             message.reject()
+        except exception.RequeueMessage as e:
+            message_requeue.send(self, message=message, reason=e)
+            logger.warning(f"{self.instance.name} requeue <{type(e).__name__}: {str(e)}>")
+            message.requeue(is_source=True)
         except Exception as e:
             message_error.send(self, message=message, error=e)
             if self.instance.state.debug:
