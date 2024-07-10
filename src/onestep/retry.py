@@ -31,6 +31,30 @@ class AlwaysRetry(BaseRetry):
         return RetryStatus.CONTINUE
 
 
+class AllRetry(BaseRetry):
+    def __init__(self, *retries):
+        self.retries = retries
+
+    def __call__(self, message) -> Optional[RetryStatus]:
+        for retry in self.retries:
+            status = retry(message)
+            if status != RetryStatus.CONTINUE:
+                return status
+        return RetryStatus.CONTINUE
+
+
+class AnyRetry(BaseRetry):
+    def __init__(self, *retries):
+        self.retries = retries
+
+    def __call__(self, message) -> Optional[RetryStatus]:
+        for retry in self.retries:
+            status = retry(message)
+            if status == RetryStatus.CONTINUE:
+                return RetryStatus.CONTINUE
+        return RetryStatus.END_WITH_CALLBACK
+
+
 class TimesRetry(BaseRetry):
 
     def __init__(self, times: int = 3):
