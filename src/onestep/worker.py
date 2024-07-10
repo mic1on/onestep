@@ -74,42 +74,58 @@ class BaseWorker:
         message.broker = message.broker or self.broker
         logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
         message_received.send(self, message=message)
+
         try:
             self.instance.before_emit("consume", message=message)
-
             self._run_real_instance(message)
-            message_consumed.send(self, message=message)
-            message.confirm()
-
+            self.handle_success(message)
             self.instance.after_emit("consume", message=message)
         except (exception.DropMessage, exception.RejectMessage) as e:
-            message_drop.send(self, message=message, reason=e)
-            logger.warning(f"{self.instance.name} dropped <{type(e).__name__}: {str(e)}>")
-            message.reject()
+            self.handle_drop(message, e)
         except exception.RequeueMessage as e:
-            message_requeue.send(self, message=message, reason=e)
-            logger.warning(f"{self.instance.name} requeue <{type(e).__name__}: {str(e)}>")
-            message.requeue(is_source=True)
+            self.handle_requeue(message, e)
         except Exception as e:
             message_error.send(self, message=message, error=e)
-            if self.instance.state.debug:
-                logger.exception(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
-            else:
-                logger.error(f"{self.instance.name} run error <{type(e).__name__}: {str(e)}>")
-            message.set_exception()
-
-            retry_status = self.retry(message)
-            if retry_status is RetryStatus.END_WITH_CALLBACK:
-                if self.error_callback:
-                    self.error_callback(message)
-                message.reject()
-            elif retry_status is RetryStatus.END_IGNORE_CALLBACK:
-                # 由于是队列内重试，不会触发错误回调
-                message.requeue()
+            self.handle_error(message, e)
+            self.handle_retry(message)
         finally:
-            # When message is triggered by cancel_consume, it will be shutdown
-            if self.broker.cancel_consume and self.broker.cancel_consume(message):
-                self.shutdown()
+            self.handle_cancel_consume(message)
+
+    def handle_success(self, message):
+        message_consumed.send(self, message=message)
+        message.confirm()
+
+    def handle_drop(self, message, reason):
+        message_drop.send(self, message=message, reason=reason)
+        logger.warning(f"{self.instance.name} dropped <{type(reason).__name__}: {str(reason)}>")
+        message.reject()
+
+    def handle_requeue(self, message, reason):
+        message_requeue.send(self, message=message, reason=reason)
+        logger.warning(f"{self.instance.name} requeue <{type(reason).__name__}: {str(reason)}>")
+        message.requeue(is_source=True)
+
+    def handle_error(self, message, error):
+        if self.instance.state.debug:
+            logger.exception(f"{self.instance.name} run error <{type(error).__name__}: {str(error)}>")
+        else:
+            logger.error(f"{self.instance.name} run error <{type(error).__name__}: {str(error)}>")
+        message.set_exception()
+
+    def handle_cancel_consume(self, message):
+        if self.broker.cancel_consume and self.broker.cancel_consume(message):
+            self.shutdown()
+
+    def handle_retry(self, message):
+        retry_status = self.retry(message)
+        if retry_status is RetryStatus.END_WITH_CALLBACK:
+            if self.error_callback:
+                self.error_callback(message)
+            message.reject()
+        elif retry_status is RetryStatus.END_IGNORE_CALLBACK:
+            message.requeue()
+        elif retry_status is RetryStatus.CONTINUE:
+            message.requeue()
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.instance.name}>"
