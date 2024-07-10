@@ -23,8 +23,6 @@ __all__ = [
     # broker
     'BaseBroker',
     'BaseConsumer',
-    'BaseLocalBroker',
-    'BaseLocalConsumer',
     'MemoryBroker',
     'RabbitMQBroker',
     'WebHookBroker',
@@ -61,4 +59,4 @@ __all__ = [
     '__version__'
 ]
 
-__version__ = '0.3.81'
+__version__ = '0.3.9'
