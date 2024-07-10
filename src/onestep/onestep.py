@@ -241,6 +241,7 @@ class step:
         }
 
     def __call__(self, func, *_args, **_kwargs):
+        func.__step_params__ = self.params
         if iscoroutinefunction(func) or isasyncgenfunction(func):
             os = AsyncOneStep(fn=func, **self.params)
         else:
