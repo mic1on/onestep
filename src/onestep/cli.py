@@ -22,8 +22,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='run onestep'
     )
-    parser.add_argument(
-        "step",
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "step", nargs='?',
         help="the run step",
     )
     parser.add_argument(
@@ -39,6 +40,11 @@ def parse_args():
         "--path", "-P", default=".", nargs="*", type=str,
         help="the step import path (default: current running directory)"
     )
+    group.add_argument(
+        "--cron",
+        help="the cron expression to test",
+        type=str
+    )
     return parser.parse_args()
 
 
@@ -46,10 +52,20 @@ def main():
     args = parse_args()
     for path in args.path:
         sys.path.insert(0, path)
+    if args.cron:
+        from croniter import croniter
+        from datetime import datetime
+        cron = croniter(args.cron, datetime.now())
+        for _ in range(10):
+            print(cron.get_next(datetime))
+        return
+
     logger.info(f"OneStep {__version__} is start up.")
     try:
         importlib.import_module(args.step)
         step.start(group=args.group, block=True, print_jobs=args.print)
+    except ModuleNotFoundError:
+        logger.error(f"Module `{args.step}` not found.")
     except KeyboardInterrupt:
         step.shutdown()
 
