@@ -1,6 +1,12 @@
 import { join, resolve } from 'pathe'
 import fs from 'fs-extra'
 import { $fetch } from 'ohmyfetch'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
 
 const docsDir = resolve(__dirname, '../..')
 const pathContributors = resolve(docsDir, '.vitepress/contributor-names.json')
@@ -18,7 +24,7 @@ async function download(url: string, fileName: string) {
     const image = await $fetch(url, { responseType: 'arrayBuffer' })
     await fs.writeFile(fileName, Buffer.from(image))
   }
-  catch {}
+  catch { }
 }
 
 async function fetchAvatars() {

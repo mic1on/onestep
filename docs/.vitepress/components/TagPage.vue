@@ -9,8 +9,8 @@ function filerArticleByTag(articles: any[], tag: string) {
   });
 }
 
-const tagName = ref(useUrlParams(window.location.href).tag)
-
+// const tagName = ref(useUrlParams(window.location.href).tag)
+const tagName = ref('')
 const articles = filerArticleByTag(
   useArticles(),
   tagName.value
