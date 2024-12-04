@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "install": "npm install --legacy-peer-deps",
     "dev": "vitepress --port 3333",
     "build": "nr prefetch && vitepress build",
     "build-no-prefetch": "vitepress build",
