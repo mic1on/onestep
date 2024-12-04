@@ -1,6 +1,6 @@
 ---
 # layout: false
-title: TAG
+title: TAGS
 ---
 
 <TagPage />
