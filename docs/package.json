@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "install": "npm install --legacy-peer-deps",
     "dev": "vitepress --port 3333",
     "build": "nr prefetch && vitepress build",
     "build-no-prefetch": "vitepress build",
@@ -23,15 +22,15 @@
     "@iconify-json/carbon": "^1.2.4",
     "@unocss/reset": "^0.48.5",
     "@vite-pwa/vitepress": "^0.0.4",
-    "@vitejs/plugin-vue": "latest",
+    "@vitejs/plugin-vue": "^5.2.1",
     "esno": "^0.16.3",
     "fast-glob": "^3.3.2",
     "fs-extra": "^10.1.0",
     "https-localhost": "^4.7.1",
     "unocss": "^0.48.5",
     "unplugin-vue-components": "^0.22.12",
-    "vite": "^4.5.5",
-    "vite-plugin-pwa": "^0.14.7",
+    "vite": "^5.0.0",
+    "vite-plugin-pwa": "^0.21.1",
     "vitepress": "^1.5.0",
     "workbox-window": "^6.6.0"
   }
