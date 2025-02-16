@@ -75,12 +75,12 @@ class RedisStreamBroker(BaseBroker):
         self.threads.append(thread)
         return RedisStreamConsumer(self)
 
-    def send(self, message: Any):
+    def send(self, message: Any, *args, **kwargs):
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
             message = self.message_cls(body=message)
 
-        self.client.send({"_message": message.to_json()})
+        self.client.send({"_message": message.to_json()}, *args, **kwargs)
 
     publish = send
 
