@@ -43,15 +43,15 @@ class BaseBroker:
     def add_middleware(self, middleware: BaseMiddleware):
         self.middlewares.append(middleware)
 
-    def send(self, message):
+    def send(self, message, *args, **kwargs):
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
             message = self.message_cls(body=message)
         # TODO: 对消息发送进行N次重试，确保消息发送成功。
-        return self.publish(message.to_json())
+        return self.publish(message.to_json(), *args, **kwargs)
 
     @abc.abstractmethod
-    def publish(self, message: Any):
+    def publish(self, message: Any, *args, **kwargs):
         """
         将消息原样发布到 broker 中。如果当前Broker是Job的to_broker, 则必须实现此方法
         """

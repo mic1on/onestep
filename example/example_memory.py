@@ -47,7 +47,10 @@ def do_something(todo):
 
 
 if __name__ == '__main__':
+    import time
     step.set_debugging()
 
     build_todo_list()
-    step.start(block=True)
+    step.start(block=False)
+    time.sleep(5)
+    step.shutdown()

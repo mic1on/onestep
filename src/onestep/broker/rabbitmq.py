@@ -30,15 +30,43 @@ class _RabbitMQMessage(Message):
 class RabbitMQBroker(BaseBroker):
     message_cls = _RabbitMQMessage
 
-    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, auto_create=True, *args,
-                 **kwargs):
+    def __init__(
+        self,
+        queue_name,
+        params: Optional[Dict] = None,
+        prefetch: Optional[int] = 1,
+        auto_create: Optional[bool]=True,
+        queue_params: Optional[Dict]=None,
+        *args,
+        **kwargs
+        ):
+        """
+        Initializes the RabbitMQ broker.
+
+        Args:
+            queue_name (str): The name of the queue.
+            params (Optional[Dict], optional): Parameters for RabbitMQStore. Defaults to None.
+            prefetch (Optional[int], optional): Number of messages to prefetch. Defaults to 1.
+            auto_create (Optional[bool], optional): Whether to automatically create the queue. Defaults to True.
+            queue_params (Optional[Dict], optional): Parameters for queue declaration. Defaults to None.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Attributes:
+            queue_name (str): The name of the queue.
+            queue (Queue): The queue instance.
+            client (RabbitMQStore): The RabbitMQ client instance.
+            prefetch (int): Number of messages to prefetch.
+            threads (list): List of threads.
+        """
+        
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
         self.queue = Queue()
         params = params or {}
         self.client = RabbitMQStore(**params)
         if auto_create:
-            self.client.declare_queue(self.queue_name)
+            self.client.declare_queue(self.queue_name, **(queue_params or {}))
         self.prefetch = prefetch
         self.threads = []
 
@@ -57,8 +85,9 @@ class RabbitMQBroker(BaseBroker):
         self.threads.append(thread)
         return RabbitMQConsumer(self)
 
-    def publish(self, message: Any):
-        self.client.send(self.queue_name, message)
+    def publish(self, message: Any, properties: Optional[dict] = None, **kwargs):
+        """发布消息"""
+        self.client.send(self.queue_name, message, properties=properties, **kwargs)
 
     def confirm(self, message: Message):
         """确认消息"""

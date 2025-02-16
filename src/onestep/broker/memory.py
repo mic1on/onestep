@@ -36,7 +36,7 @@ class MemoryBroker(BaseBroker):
         super().__init__(*args, **kwargs)
         self.queue = Queue(maxsize)
 
-    def publish(self, message: Any):
+    def publish(self, message: Any, *args, **kwargs):
         try:
             self.queue.put_nowait(message)
         except FullException:
