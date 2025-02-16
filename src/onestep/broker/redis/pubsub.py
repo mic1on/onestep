@@ -59,12 +59,12 @@ class RedisPubSubBroker(BaseBroker):
         self.threads.append(thread)
         return RedisPubSubConsumer(self)
 
-    def send(self, message: Any):
+    def send(self, message: Any, *args, **kwargs):
         """Publish message to the Redis channel"""
         if not isinstance(message, Message):
             message = self.message_cls(body=message)
 
-        self.client.publish(self.channel, message.to_json())
+        self.client.publish(self.channel, message.to_json(), *args, **kwargs)
 
     publish = send
 

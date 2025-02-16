@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "onestep"
-version = "0.4.1"
+version = "0.4.2"
 description = "仅需一步，轻松实现分布式异步任务。"
 authors = ["miclon <jcnd@163.com>"]
 readme = "README.md"
@@ -28,6 +28,7 @@ nacos-sdk-python = "^0.1.12"
 redis = "^4.5.1"
 autopep8 = "^2.0.2"
 loguru = "^0.6.0"
+use-redis = "^0.1.92"
 
 
 [tool.poetry.group.test.dependencies]
