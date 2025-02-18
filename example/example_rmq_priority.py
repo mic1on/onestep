@@ -10,16 +10,10 @@ step.set_debugging()
 rmq_broker = RabbitMQBroker(
     "onstep_test_priority",
     {
-        # "username": "admin",
-        # "password": "admin",
-        "host": "39.98.56.253",
-        "port": 5672,
-        "username": "nowanti",
-        "password": "em1hi!EDBF9obiWf",
-        "virtual_host": "dev",
-        "heartbeat": 60,
+        "username": "admin",
+        "password": "admin",
     },
-    queue_params={"arguments": {"x-max-priority": 10}}
+    queue_params={"arguments": {"x-max-priority": 10}},
 )
 
 # 模拟一个内存队列
@@ -38,7 +32,8 @@ def build_todo_list(message):
     # 返回的内容将发给RabbitMQ队列
     return message
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     step.start()
     time.sleep(5)
     step.shutdown()
