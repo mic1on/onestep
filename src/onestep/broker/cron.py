@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 class CronBroker(MemoryBroker):
-    _thread = None
 
     def __init__(self, cron, name=None, middlewares=None, body: Any = None, *args, **kwargs):
         super().__init__(name=name, middlewares=middlewares, *args, **kwargs)
@@ -22,6 +21,7 @@ class CronBroker(MemoryBroker):
         self.itr = croniter(cron, datetime.now())
         self.next_fire_time = self.itr.get_next(datetime)
         self.body = body
+        self._thread = None
 
     def _scheduler(self):
         if self.next_fire_time <= datetime.now():
@@ -36,7 +36,8 @@ class CronBroker(MemoryBroker):
         return CronConsumer(self, *args, **kwargs)
 
     def shutdown(self):
-        self._thread.cancel()
+        if self._thread:
+            self._thread.cancel()
 
 
 class CronConsumer(MemoryConsumer):

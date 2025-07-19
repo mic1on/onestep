@@ -42,7 +42,7 @@ class BaseOneStep:
         self.workers = workers or DEFAULT_WORKERS
         self.worker_class = worker_class or DEFAULT_WORKER_CLASS
         if self.workers > MAX_WORKERS:
-            logger.warning(f"workers[{self.workers}] litter than {MAX_WORKERS}")
+            logger.warning(f"workers[{self.workers}] greater than {MAX_WORKERS}")
             self.workers = MAX_WORKERS
         self.middlewares = middlewares or []
 

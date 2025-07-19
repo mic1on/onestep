@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from . import BaseMiddleware
+from .base import BaseMiddleware
 from ..exception import DropMessage
 
 

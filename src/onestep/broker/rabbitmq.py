@@ -3,17 +3,21 @@ import threading
 from queue import Queue
 from typing import Optional, Dict, Any
 
-import amqpstorm
+try:
+    import amqpstorm
+    from use_rabbitmq import useRabbitMQ as RabbitMQStore
+except ImportError:
+    amqpstorm = None
+    RabbitMQStore = None
 
 from .base import BaseBroker, BaseConsumer
-from use_rabbitmq import useRabbitMQ as RabbitMQStore
 from ..message import Message
 
 
 class _RabbitMQMessage(Message):
 
     @classmethod
-    def from_broker(cls, broker_message: amqpstorm.Message):
+    def from_broker(cls, broker_message):
         try:
             message = json.loads(broker_message.body)
         except json.JSONDecodeError:
@@ -60,6 +64,9 @@ class RabbitMQBroker(BaseBroker):
             threads (list): List of threads.
         """
         
+        if RabbitMQStore is None:
+            raise ImportError("RabbitMQ dependencies not installed. Please install 'use-rabbitmq' package.")
+        
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
         self.queue = Queue()
@@ -71,7 +78,7 @@ class RabbitMQBroker(BaseBroker):
         self.threads = []
 
     def _consume(self, *args, **kwargs):
-        def callback(message: amqpstorm.Message):
+        def callback(message):
             self.queue.put(message)
 
         prefetch = kwargs.pop("prefetch", self.prefetch)

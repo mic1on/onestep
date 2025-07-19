@@ -57,13 +57,15 @@ class WebHookBroker(MemoryBroker):
                 WebHookServer
             )
             self._servers[(self.host, self.port)] = hs
+            # 只有在创建新服务器时才启动线程
+            thread = threading.Thread(target=hs.serve_forever)
+            thread.daemon = True
+            thread.start()
+            self.threads.append(thread)
         else:
             hs = self._servers[(self.host, self.port)]
 
         WebHookServer.servers[(self.host, self.port)].append(Server(self.path, self.queue))
-        thread = threading.Thread(target=hs.serve_forever)
-        thread.start()
-        self.threads.append(thread)
 
     def consume(self, *args, **kwargs):
         self._create_server()
@@ -71,7 +73,7 @@ class WebHookBroker(MemoryBroker):
         return WebHookConsumer(self, *args, **kwargs)
 
     def shutdown(self):
-        hs = self._servers[(self.host, self.port)]
+        hs = self._servers.get((self.host, self.port))
         if hs:
             hs.shutdown()
         for thread in self.threads:

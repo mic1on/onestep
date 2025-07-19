@@ -11,6 +11,7 @@ from .middleware import (
     BaseMiddleware, BaseConfigMiddleware,
     NacosPublishConfigMiddleware, NacosConsumeConfigMiddleware,
     RedisPublishConfigMiddleware, RedisConsumeConfigMiddleware,
+    UniqueMiddleware, MemoryUniqueMiddleware,
 )
 from .exception import (
     StopMiddleware, DropMessage,
@@ -48,6 +49,8 @@ __all__ = [
     'NacosConsumeConfigMiddleware',
     'RedisPublishConfigMiddleware',
     'RedisConsumeConfigMiddleware',
+    'UniqueMiddleware',
+    'MemoryUniqueMiddleware',
 
     # exception
     'StopMiddleware',
@@ -59,4 +62,4 @@ __all__ = [
     '__version__'
 ]
 
-__version__ = '0.4.0'
+__version__ = '0.4.2'

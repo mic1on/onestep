@@ -169,6 +169,8 @@ class ThreadWorker(BaseWorker):
 
 
 class ThreadPoolWorker(BaseWorker):
+    broker_exit: Dict[BaseBroker, bool] = {}
+    broker_exit_lock = threading.Lock()
 
     def __init__(self, onestep, broker: BaseBroker, workers=None, *args, **kwargs):
         super().__init__(onestep, broker, *args, **kwargs)
@@ -191,7 +193,8 @@ class ThreadPoolWorker(BaseWorker):
                     self.shutdown()
                     break
             for message in self.receive_messages():
-                self.handle_message(message)
+                # 将消息处理提交到线程池中并发执行
+                self.executor.submit(self.handle_message, message)
 
     def shutdown(self):
         """关闭线程池 Worker"""
