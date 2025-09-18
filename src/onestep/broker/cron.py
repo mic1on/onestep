@@ -15,10 +15,11 @@ logger = logging.getLogger(__name__)
 
 class CronBroker(MemoryBroker):
 
-    def __init__(self, cron, name=None, middlewares=None, body: Any = None, *args, **kwargs):
+    def __init__(self, cron, name=None, middlewares=None, body: Any = None, start_time=None, *args, **kwargs):
         super().__init__(name=name, middlewares=middlewares, *args, **kwargs)
         self.cron = cron
-        self.itr = croniter(cron, datetime.now())
+        self.start_time = start_time or datetime.now()
+        self.itr = croniter(cron, self.start_time)
         self.next_fire_time = self.itr.get_next(datetime)
         self.body = body
         self._thread = None
