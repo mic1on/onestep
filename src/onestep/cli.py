@@ -8,11 +8,17 @@ LOGFORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
 
 
 def setup_logging():
-    logging.basicConfig(level=logging.DEBUG, format=LOGFORMAT, stream=sys.stdout)
+    # 设置全局日志级别为INFO，避免第三方库的DEBUG日志输出
+    logging.basicConfig(level=logging.INFO, format=LOGFORMAT, stream=sys.stdout)
 
     # exclude amqpstorm logs
     logging.getLogger("amqpstorm").setLevel(logging.CRITICAL)
-    return logging.getLogger("onestep")
+    
+    # 获取onestep的logger并设置为DEBUG级别以便调试
+    onestep_logger = logging.getLogger("onestep")
+    onestep_logger.setLevel(logging.DEBUG)
+    
+    return onestep_logger
 
 
 logger = setup_logging()
