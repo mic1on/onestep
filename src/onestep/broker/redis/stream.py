@@ -69,7 +69,7 @@ class RedisStreamBroker(BaseBroker):
 
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
-        thread = threading.Thread(target=self._consume, *args, **kwargs)
+        thread = threading.Thread(target=self._consume, args=args, kwargs=kwargs)
         thread.daemon = daemon
         thread.start()
         self.threads.append(thread)
@@ -85,10 +85,14 @@ class RedisStreamBroker(BaseBroker):
     publish = send
 
     def confirm(self, message: Message):
-        self.client.ack(message.message)
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None:
+            self.client.ack(broker_msg)
 
     def reject(self, message: Message):
-        self.client.reject(message.message)
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None:
+            self.client.reject(broker_msg)
 
     def requeue(self, message: Message, is_source=False):
         """
@@ -99,8 +103,9 @@ class RedisStreamBroker(BaseBroker):
          """
         self.reject(message)
 
-        if is_source:
-            self.client.send(message.message.body)
+        broker_msg = getattr(message, "message", None)
+        if is_source and broker_msg is not None and hasattr(broker_msg, "body"):
+            self.client.send(broker_msg.body)
         else:
             self.send(message)
 

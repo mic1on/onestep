@@ -119,9 +119,17 @@ class BaseConsumer:
 
     def __next__(self):
         try:
-            data = self.queue.get(timeout=self.timeout / 1000)
+            q = self.queue
+            if q is None:
+                return None
+            timeout_ms = self.timeout
+            if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+                data = q.get(timeout=timeout_ms / 1000.0)
+            else:
+                # 当超时为0、负数或非数字时，使用非阻塞获取以避免ValueError
+                data = q.get_nowait()
             return self.message_cls.from_broker(broker_message=data)
-        except Empty:
+        except (Empty, ValueError):
             return None
 
     def __iter__(self):

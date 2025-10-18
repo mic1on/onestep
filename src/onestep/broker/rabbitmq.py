@@ -86,7 +86,7 @@ class RabbitMQBroker(BaseBroker):
 
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
-        thread = threading.Thread(target=self._consume, *args, **kwargs)
+        thread = threading.Thread(target=self._consume, args=args, kwargs=kwargs)
         thread.daemon = daemon
         thread.start()
         self.threads.append(thread)
@@ -98,11 +98,21 @@ class RabbitMQBroker(BaseBroker):
 
     def confirm(self, message: Message):
         """确认消息"""
-        message.message.ack()
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "ack"):
+            broker_msg.ack()
+        else:
+            # 无可确认的原始消息，忽略确认
+            return
 
     def reject(self, message: Message):
         """拒绝消息"""
-        message.message.reject(requeue=False)
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "reject"):
+            broker_msg.reject(requeue=False)
+        else:
+            # 无法拒绝（无原始消息对象），忽略
+            return
 
     def requeue(self, message: Message, is_source=False):
         """
@@ -111,11 +121,20 @@ class RabbitMQBroker(BaseBroker):
         :param message: 消息
         :param is_source: 是否是原始消息，True: 使用原始消息重入当前队列，False: 使用消息的最新数据重入当前队列
         """
-        if is_source:
-            message.message.reject(requeue=True)
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "reject"):
+            if is_source:
+                broker_msg.reject(requeue=True)
+            else:
+                broker_msg.reject(requeue=False)
+                self.send(message)
         else:
-            message.message.reject(requeue=False)
-            self.send(message)
+            # 没有原始消息控制能力，回退为直接发送当前消息状态
+            if is_source and broker_msg is not None and hasattr(broker_msg, "body"):
+                # 尝试使用原始消息体重入队列
+                self.client.send(self.queue_name, broker_msg.body)
+            else:
+                self.send(message)
 
     def shutdown(self):
         self.client.shutdown()

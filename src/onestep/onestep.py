@@ -28,7 +28,7 @@ class BaseOneStep:
 
     def __init__(self, fn,
                  group: str = "OneStep",
-                 name: str = None,
+                 name: Optional[str] = None,
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
@@ -220,7 +220,7 @@ class step:
     def __init__(self,
                  *,
                  group: str = "OneStep",
-                 name: str = None,
+                 name: Optional[str] = None,
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,

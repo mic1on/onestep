@@ -26,7 +26,10 @@ class MemoryMessage(Message):
         if "body" not in message:
             # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
             message = {"body": message}
-        return cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)
+        extra_val = message.get("extra")
+        if not isinstance(extra_val, dict):
+            extra_val = None
+        return cls(body=message.get("body"), extra=extra_val, message=broker_message)
 
 
 class MemoryBroker(BaseBroker):
