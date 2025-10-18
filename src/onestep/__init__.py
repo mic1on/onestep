@@ -1,4 +1,5 @@
 from .onestep import step
+from .cron import Cron
 from .retry import (
     BaseRetry, BaseErrorCallback, NackErrorCallBack,
     NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, AdvancedRetry
@@ -19,7 +20,7 @@ from .exception import (
 )
 
 __all__ = [
-    'step',
+    'step', 'Cron',
 
     # broker
     'BaseBroker',
