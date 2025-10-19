@@ -28,10 +28,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='run onestep'
     )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "step", nargs='?',
-        help="the run step",
+    # 位置参数不允许放在互斥组中，这里改为手动校验
+    parser.add_argument(
+        "step", nargs='*',
+        help="the run step(s)",
     )
     parser.add_argument(
         "--group", "-G", default=None,
@@ -46,12 +46,19 @@ def parse_args():
         "--path", "-P", default=".", nargs="*", type=str,
         help="the step import path (default: current running directory)"
     )
-    group.add_argument(
+    parser.add_argument(
         "--cron",
         help="the cron expression to test",
         type=str
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    # 手动互斥校验：不可同时指定 step 与 --cron
+    if args.cron and args.step:
+        parser.error("`step` and `--cron` are mutually exclusive")
+    # 未指定 cron 时，必须至少一个 step
+    if not args.cron and len(args.step) == 0:
+        parser.error("please specify at least one step module")
+    return args
 
 
 def main():
@@ -67,11 +74,35 @@ def main():
         return
 
     logger.info(f"OneStep {__version__} is start up.")
+
+    imported = 0
+    for module in args.step:
+        try:
+            importlib.import_module(module)
+            imported += 1
+            continue
+        except ModuleNotFoundError:
+            # 兼容文件路径与斜杠风格：转换为模块路径再尝试
+            alt = module
+            if alt.endswith('.py'):
+                alt = alt[:-3]
+            alt = alt.replace('/', '.').replace('\\', '.')
+            if alt != module:
+                try:
+                    importlib.import_module(alt)
+                    logger.debug(f"Imported `{module}` as `{alt}`")
+                    imported += 1
+                    continue
+                except ModuleNotFoundError:
+                    pass
+            logger.error(f"Module `{module}` not found.")
+
+    if imported == 0:
+        logger.error("No valid step modules were imported; exiting.")
+        return
+
     try:
-        importlib.import_module(args.step)
         step.start(group=args.group, block=True, print_jobs=args.print)
-    except ModuleNotFoundError:
-        logger.error(f"Module `{args.step}` not found.")
     except KeyboardInterrupt:
         step.shutdown()
 
