@@ -1,16 +1,23 @@
-install: ## Run `poetry install`
-	poetry install --no-root
+install: ## Run `uv sync`
+	uv sync
 
 lint:
-	poetry run ruff .
-	poetry run ruff check .
+	uv run ruff .
+	uv run ruff check .
 
-format: ## Formasts you code with Black
-	poetry run ruff . --fix
-	poetry run ruff check . --fix
+format: ## Formats your code with Ruff
+	uv run ruff . --fix
+	uv run ruff check . --fix
 
 test:
-	poetry run pytest -v tests
+	uv run pytest -v tests
 
 publish:
-	poetry publish --build
+	uv build
+	uv publish
+
+dev-install: ## Install with dev dependencies
+	uv sync --extra dev
+
+test-install: ## Install with test dependencies
+	uv sync --extra test
