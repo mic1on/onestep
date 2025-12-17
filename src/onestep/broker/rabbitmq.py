@@ -76,6 +76,8 @@ class RabbitMQBroker(BaseBroker):
             self.client.declare_queue(self.queue_name, **(queue_params or {}))
         self.prefetch = prefetch
         self.threads = []
+        self._consuming_started = False
+        self._consume_lock = threading.Lock()
 
     def _consume(self, *args, **kwargs):
         def callback(message):
@@ -86,10 +88,13 @@ class RabbitMQBroker(BaseBroker):
 
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
-        thread = threading.Thread(target=self._consume, args=args, kwargs=kwargs)
-        thread.daemon = daemon
-        thread.start()
-        self.threads.append(thread)
+        with self._consume_lock:
+            if not self._consuming_started:
+                thread = threading.Thread(target=self._consume, args=args, kwargs=kwargs)
+                thread.daemon = daemon
+                thread.start()
+                self.threads.append(thread)
+                self._consuming_started = True
         return RabbitMQConsumer(self)
 
     def publish(self, message: Any, properties: Optional[dict] = None, **kwargs):
@@ -140,6 +145,8 @@ class RabbitMQBroker(BaseBroker):
         self.client.shutdown()
         for thread in self.threads:
             thread.join()
+        self._consuming_started = False
+        self.threads = []
 
 
 class RabbitMQConsumer(BaseConsumer):
