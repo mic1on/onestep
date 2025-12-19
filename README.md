@@ -24,7 +24,7 @@
 - [x] RedisBroker
     - [x] RedisStreamBroker
     - [x] RedisPubSubBroker 
-- [ ] KafkaBroker
+- [x] SQSBroker
 
 ## 😋example
 
