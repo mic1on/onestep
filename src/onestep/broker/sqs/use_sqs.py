@@ -107,7 +107,9 @@ class SQSStore:
                         self._reconnection_delay * (2**attempt),
                         self.MAX_RECONNECTION_DELAY,
                     )
-                    logger.warning(f"Failed to get queue, retrying in {delay}s...")
+                    logger.warning(
+                        f"Failed to get queue, retrying in {delay}s...error={e}"
+                    )
                     time.sleep(delay)
                     continue
                 raise
@@ -152,7 +154,9 @@ class SQSStore:
                         self._reconnection_delay * (2**attempt),
                         self.MAX_RECONNECTION_DELAY,
                     )
-                    logger.warning(f"Failed to send message, retrying in {delay}s...")
+                    logger.warning(
+                        f"Failed to send message, retrying in {delay}s...error={e}"
+                    )
                     time.sleep(delay)
                     continue
                 raise
