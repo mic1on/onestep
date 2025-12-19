@@ -6,7 +6,7 @@ from .retry import (
 )
 from .broker import (
     BaseBroker, BaseConsumer,
-    MemoryBroker, RabbitMQBroker, WebHookBroker, CronBroker, RedisStreamBroker, RedisPubSubBroker
+    MemoryBroker, RabbitMQBroker, WebHookBroker, CronBroker, RedisStreamBroker, RedisPubSubBroker, SQSBroker
 )
 from .middleware import (
     BaseMiddleware, BaseConfigMiddleware,
@@ -31,6 +31,7 @@ __all__ = [
     'CronBroker',
     'RedisStreamBroker',
     'RedisPubSubBroker',
+    'SQSBroker',
 
     # retry
     'BaseRetry',
