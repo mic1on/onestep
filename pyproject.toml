@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "0.4.6"
+version = "0.4.7"
 description = "仅需一步，轻松实现分布式异步任务。"
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -45,6 +45,9 @@ test = [
 sqs = [
     "boto3>=1.37.38",
 ]
+mysql = [
+    "use-mysql>=0.0.4",
+]
 
 [project.scripts]
 onestep = "onestep.cli:main"
@@ -58,6 +61,7 @@ dev-dependencies = [
     "use-redis>=0.1.92",
     "pytest>=7.2.2",
     "httpx>=0.23.3",
+    "use-mysql>=0.0.4",
 ]
 
 [tool.ruff]
@@ -75,7 +79,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/onestep"]
 
-[[tool.uv.index]]
-name = "aliyun"
-url = "https://mirrors.aliyun.com/pypi/simple/"
-default = true
+# [[tool.uv.index]]
+# name = "aliyun"
+# url = "https://mirrors.aliyun.com/pypi/simple/"
+# default = true
