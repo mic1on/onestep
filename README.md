@@ -25,6 +25,7 @@
     - [x] RedisStreamBroker
     - [x] RedisPubSubBroker 
 - [x] SQSBroker
+- [x] MysqlBroker
 
 ## 😋example
 
