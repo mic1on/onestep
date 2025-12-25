@@ -43,7 +43,7 @@ test = [
     "httpx>=0.23.3",
 ]
 sqs = [
-    "boto3>=1.37.38",
+    "use-sqs>=0.1.0",
 ]
 mysql = [
     "use-mysql>=0.0.4",
@@ -79,7 +79,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/onestep"]
 
-# [[tool.uv.index]]
-# name = "aliyun"
-# url = "https://mirrors.aliyun.com/pypi/simple/"
-# default = true
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
