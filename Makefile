@@ -16,8 +16,5 @@ publish:
 	uv build
 	uv publish
 
-dev-install: ## Install with dev dependencies
-	uv sync --extra dev
-
 test-install: ## Install with test dependencies
 	uv sync --extra test
