@@ -5,7 +5,7 @@ from .memory import MemoryBroker, MemoryConsumer
 from .webhook import WebHookBroker
 from .rabbitmq import RabbitMQBroker
 from .mysql import MysqlBroker
-from .sqs.sqs import SQSBroker
+from .sqs import SQSBroker, SQSConsumer
 from .redis import RedisStreamBroker, RedisPubSubBroker
 from .cron import CronBroker
 
@@ -16,7 +16,7 @@ __all__ = [
     "WebHookBroker",
     "RabbitMQBroker",
     "MysqlBroker",
-    "SQSBroker",
+    "SQSBroker", "SQSConsumer",
     "RedisStreamBroker", "RedisPubSubBroker",
     "CronBroker"
 ]
