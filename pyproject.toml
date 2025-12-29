@@ -30,13 +30,20 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["use-redis>=0.1.6"]
+dev = [
+    "nacos-sdk-python>=0.1.12",
+    "redis>=4.5.1",
+    "autopep8>=2.0.2",
+    "loguru>=0.6.0",
+    "use-redis>=0.1.92",
+]
 test = [
     "pytest>=7.2.2",
     "redis>=4.5.1",
     "httpx>=0.23.3",
 ]
 sqs = [
-    "use-sqs>=0.0.1",
+    "boto3>=1.37.38",
 ]
 mysql = [
     "use-mysql>=0.0.4",
@@ -45,23 +52,24 @@ mysql = [
 [project.scripts]
 onestep = "onestep.cli:main"
 
-[dependency-groups]
-dev = [
+[tool.uv]
+dev-dependencies = [
+    "nacos-sdk-python>=0.1.12",
     "redis>=4.5.1",
+    "autopep8>=2.0.2",
     "loguru>=0.6.0",
     "use-redis>=0.1.92",
     "pytest>=7.2.2",
     "httpx>=0.23.3",
     "use-mysql>=0.0.4",
-    "ruff>=0.1.0",
 ]
 
-[tool.ruff.lint]
+[tool.ruff]
 ignore = [
     "E501", # line too long, handled by black
 ]
 
-[tool.ruff.lint.per-file-ignores]
+[tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
 
 [build-system]
