@@ -1,7 +1,11 @@
 from typing import Optional, Dict, Any
 
 from onestep.broker import BaseBroker
-from db.use_sns import SNSPublisher
+
+try:
+    from use_sqs import SNSPublisher
+except ImportError:
+    SNSPublisher = None
 
 
 class SNSBroker(BaseBroker):
@@ -22,6 +26,9 @@ class SNSBroker(BaseBroker):
         :param message_group_id: 消息组ID (FIFO主题必需)
         :param params: SNS连接参数
         """
+        if SNSPublisher is None:
+            raise ImportError("Please install the `use-sqs` module to use SNSBroker")
+
         super().__init__(*args, **kwargs)
         self.topic_arn = topic_arn
         self.message_group_id = message_group_id
