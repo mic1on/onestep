@@ -4,14 +4,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from traceback import TracebackException
-from typing import Optional, Any, Union
+from typing import Optional, Any, Union, Type
 from types import TracebackType
 
 from onestep._utils import catch_error
 
 
 class MessageTracebackException(TracebackException):
-    def __init__(self, exc_type: type[BaseException], exc_value: BaseException, exc_traceback: Optional[TracebackType], **kwargs):
+    def __init__(self, exc_type: Type[BaseException], exc_value: BaseException, exc_traceback: Optional[TracebackType], **kwargs):
         super().__init__(exc_type, exc_value, exc_traceback, **kwargs)
         self.exc_value = exc_value
 
