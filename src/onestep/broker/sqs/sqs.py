@@ -85,7 +85,7 @@ class SQSBroker(BaseBroker):
 
         # 创建SQSStore实例
         if SQSStore is None:
-            raise ImportError("SQSStore is not available. Please install `boto3`.")
+            raise ImportError("Please install the `use-sqs` module to use SQSBroker")
         self.store = SQSStore(**(params or {}))
 
         # 确保队列存在
