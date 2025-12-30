@@ -2,7 +2,7 @@ from queue import Queue
 from typing import Optional, Dict, Any, cast
 
 try:
-    from use_mysql import MysqlStore, Model, SQLModel, Field
+    from use_mysql import MysqlStore, Model, SQLModel
 except ImportError:
     MysqlStore = None
 

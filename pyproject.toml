@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "0.4.7"
+version = "0.4.8"
 description = "仅需一步，轻松实现分布式异步任务。"
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -43,7 +43,7 @@ test = [
     "httpx>=0.23.3",
 ]
 sqs = [
-    "boto3>=1.37.38",
+    "use-sqs>=0.1.0",
 ]
 mysql = [
     "use-mysql>=0.0.4",
