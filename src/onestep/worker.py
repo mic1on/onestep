@@ -76,10 +76,12 @@ class BaseWorker:
         message_received.send(self, message=message)
 
         try:
+            self.broker.before_emit("consume", message=message, step=self.instance)
             self.instance.before_emit("consume", message=message)
             self._run_real_instance(message)
             self.handle_success(message)
             self.instance.after_emit("consume", message=message)
+            self.broker.after_emit("consume", message=message, step=self.instance)
         except (exception.DropMessage, exception.RejectMessage) as e:
             self.handle_drop(message, e)
         except exception.RequeueMessage as e:
@@ -93,17 +95,17 @@ class BaseWorker:
 
     def handle_success(self, message):
         message_consumed.send(self, message=message)
-        message.confirm()
+        message.confirm(step=self.instance)
 
     def handle_drop(self, message, reason):
         message_drop.send(self, message=message, reason=reason)
         logger.warning(f"{self.instance.name} dropped <{type(reason).__name__}: {str(reason)}>")
-        message.reject()
+        message.reject(step=self.instance)
 
     def handle_requeue(self, message, reason):
         message_requeue.send(self, message=message, reason=reason)
         logger.warning(f"{self.instance.name} requeue <{type(reason).__name__}: {str(reason)}>")
-        message.requeue(is_source=True)
+        message.requeue(is_source=True, step=self.instance)
 
     def handle_error(self, message, error):
         if self.instance.state.debug:

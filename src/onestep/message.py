@@ -115,21 +115,29 @@ class Message:
         return json.dumps(self.to_dict(include_exception))
 
     @catch_error()
-    def confirm(self):
+    def confirm(self, **kwargs):
         """确认消息"""
         broker = getattr(self, 'broker', None)
         if broker and hasattr(broker, 'confirm'):
+            if hasattr(broker, 'before_emit'):
+                broker.before_emit('confirm', message=self, step=kwargs.get('step'))
             broker.confirm(self)
+            if hasattr(broker, 'after_emit'):
+                broker.after_emit('confirm', message=self, step=kwargs.get('step'))
 
     @catch_error()
-    def reject(self):
+    def reject(self, **kwargs):
         """拒绝消息"""
         broker = getattr(self, 'broker', None)
         if broker and hasattr(broker, 'reject'):
+            if hasattr(broker, 'before_emit'):
+                broker.before_emit('reject', message=self, step=kwargs.get('step'))
             broker.reject(self)
+            if hasattr(broker, 'after_emit'):
+                broker.after_emit('reject', message=self, step=kwargs.get('step'))
 
     @catch_error()
-    def requeue(self, is_source=False):
+    def requeue(self, is_source=False, **kwargs):
         """
         重发消息：先拒绝 再 重入
         
@@ -137,7 +145,11 @@ class Message:
         """
         broker = getattr(self, 'broker', None)
         if broker and hasattr(broker, 'requeue'):
+            if hasattr(broker, 'before_emit'):
+                broker.before_emit('requeue', message=self, step=kwargs.get('step'))
             broker.requeue(self, is_source=is_source)
+            if hasattr(broker, 'after_emit'):
+                broker.after_emit('requeue', message=self, step=kwargs.get('step'))
 
     def __getattr__(self, item):
         return None
