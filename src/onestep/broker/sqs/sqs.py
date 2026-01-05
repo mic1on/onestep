@@ -143,7 +143,7 @@ class SQSBroker(BaseBroker):
 
     def reject(self, message: Message):
         """拒绝消息"""
-        pass  # 拒绝消息时不删除，等待下一次消费 # 以支持 DLQ 机制
+        message.message.delete()
 
     def requeue(self, message: Message, is_source: bool = False):
         """
