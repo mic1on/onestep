@@ -17,7 +17,7 @@ class BaseConfigMiddleware(BaseMiddleware):
 
 
 class PublishConfigMixin:
-    def before_receive(self, step, message, *args, **kwargs):
+    def before_send(self, step, message, *args, **kwargs):
         """消息发送之前，给消息添加配置"""
         config = self.process(step, message, *args, **kwargs)  # noqa
         # 持久性，会跟随消息传递到其他 broker
@@ -25,7 +25,7 @@ class PublishConfigMixin:
 
 
 class ConsumeConfigMixin:
-    def before_receive(self, step, message, *args, **kwargs):
+    def before_consume(self, step, message, *args, **kwargs):
         """消息消费之前，给消息附加配置"""
         config = self.process(step, message, *args, **kwargs)  # noqa
         # 一次性，不跟随消息传递到其他 broker

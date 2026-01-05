@@ -47,8 +47,11 @@ class BaseBroker:
         """对消息进行预处理，然后再发送"""
         if not isinstance(message, Message):
             message = self.message_cls(body=message)
+        self.before_emit("send", message=message, step=kwargs.get("step"))
         # TODO: 对消息发送进行N次重试，确保消息发送成功。
-        return self.publish(message.to_json(), *args, **kwargs)
+        result = self.publish(message.to_json(), *args, **kwargs)
+        self.after_emit("send", message=message, step=kwargs.get("step"))
+        return result
 
     @abc.abstractmethod
     def publish(self, message: Any, *args, **kwargs):
@@ -83,20 +86,23 @@ class BaseBroker:
         """
         raise NotImplementedError('Please implement in subclasses.')
 
-    def before_emit(self, signal, *args, **kwargs):
+    def before_emit(self, signal, **kwargs):
         signal = "before_" + signal
-        self._emit(signal, *args, **kwargs)
+        self._emit(signal, **kwargs)
 
-    def after_emit(self, signal, *args, **kwargs):
+    def after_emit(self, signal, **kwargs):
         signal = "after_" + signal
-        self._emit(signal, *args, **kwargs)
+        self._emit(signal, **kwargs)
 
-    def _emit(self, signal, *args, **kwargs):
+    def _emit(self, signal, **kwargs):
         for middleware in self.middlewares:
             if not hasattr(middleware, signal):
                 continue
             try:
-                getattr(middleware, signal)(self, *args, **kwargs)
+                params = dict(kwargs)
+                params.setdefault("broker", self)
+                params.setdefault("step", None)
+                getattr(middleware, signal)(self, **params)
             except StopMiddleware:
                 break
 
