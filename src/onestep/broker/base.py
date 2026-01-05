@@ -41,6 +41,8 @@ class BaseBroker:
                 self.add_middleware(middleware)
 
     def add_middleware(self, middleware: BaseMiddleware):
+        if not isinstance(middleware, BaseMiddleware):
+            raise TypeError(f"middleware must be BaseMiddleware instance, not {type(middleware)}")
         self.middlewares.append(middleware)
 
     def send(self, message, *args, **kwargs):
@@ -102,7 +104,7 @@ class BaseBroker:
                 params = dict(kwargs)
                 params.setdefault("broker", self)
                 params.setdefault("step", None)
-                getattr(middleware, signal)(self, **params)
+                getattr(middleware, signal)(**params)
             except StopMiddleware:
                 break
 

@@ -13,23 +13,23 @@ class BrokerTestMiddleware(BaseMiddleware):
     def __init__(self):
         self.calls = []
 
-    def before_send(self, broker, message, *args, **kwargs):
+    def before_send(self, step, message, *args, **kwargs):
         self.calls.append("before_send")
 
-    def after_send(self, broker, message, *args, **kwargs):
+    def after_send(self, step, message, *args, **kwargs):
         self.calls.append("after_send")
 
-    def before_consume(self, broker, message, *args, **kwargs):
+    def before_consume(self, step, message, *args, **kwargs):
         self.calls.append("before_consume")
         message.broker_mark_consume = True
 
-    def after_consume(self, broker, message, *args, **kwargs):
+    def after_consume(self, step, message, *args, **kwargs):
         self.calls.append("after_consume")
 
-    def before_confirm(self, broker, message, *args, **kwargs):
+    def before_confirm(self, step, message, *args, **kwargs):
         self.calls.append("before_confirm")
 
-    def after_confirm(self, broker, message, *args, **kwargs):
+    def after_confirm(self, step, message, *args, **kwargs):
         self.calls.append("after_confirm")
 
 

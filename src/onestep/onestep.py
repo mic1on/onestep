@@ -8,6 +8,7 @@ from itertools import groupby
 from typing import Optional, List, Dict, Any, Callable, Union, Type
 
 from .broker.base import BaseBroker
+from .middleware import BaseMiddleware
 from .exception import StopMiddleware
 from .message import Message
 from .retry import TimesRetry
@@ -45,6 +46,10 @@ class BaseOneStep:
             logger.warning(f"workers[{self.workers}] greater than {MAX_WORKERS}")
             self.workers = MAX_WORKERS
         self.middlewares = middlewares or []
+        if self.middlewares:
+            for m in self.middlewares:
+                if not isinstance(m, BaseMiddleware):
+                    raise TypeError(f"middleware must be BaseMiddleware instance, not {type(m)}")
 
         self.from_brokers = self._init_broker(from_broker)
         self.to_brokers = self._init_broker(to_broker)
@@ -144,7 +149,7 @@ class BaseOneStep:
 
         for broker in brokers:
             message_sent.send(self, message=message, broker=broker)
-            broker.send(message)
+            broker.send(message, step=self)
         self.after_emit("send", message=message)
 
     def before_emit(self, signal, *args, **kwargs):
