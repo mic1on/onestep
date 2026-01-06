@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "0.5.0"
+version = "0.5.1"
 description = "仅需一步，轻松实现分布式异步任务。"
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
