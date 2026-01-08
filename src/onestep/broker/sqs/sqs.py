@@ -10,9 +10,6 @@ try:
 except ImportError:
     SQSStore = None
 
-if TYPE_CHECKING:
-    import boto3  # type: ignore[import-untyped]
-
 
 class _SQSMessage(Message):
     """SQS消息类"""
