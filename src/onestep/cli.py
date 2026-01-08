@@ -59,7 +59,7 @@ def main():
     for path in args.path:
         sys.path.insert(0, path)
     if args.cron:
-        from croniter import croniter
+        from croniter import croniter  # type: ignore[import-untyped]
         from datetime import datetime
         cron = croniter(args.cron, datetime.now())
         for _ in range(10):

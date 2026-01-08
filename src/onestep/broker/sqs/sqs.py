@@ -1,7 +1,7 @@
 import json
 import threading
 from queue import Queue
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, List, TYPE_CHECKING
 
 from onestep.broker import BaseBroker, BaseConsumer
 from onestep.message import Message
@@ -9,15 +9,13 @@ try:
     from use_sqs import SQSStore
 except ImportError:
     SQSStore = None
-    boto3 = None
-
 
 
 class _SQSMessage(Message):
     """SQS消息类"""
 
     @classmethod
-    def from_broker(cls, broker_message: "boto3.resources.factory.sqs.Message"):
+    def from_broker(cls, broker_message: Any):
         """从SQS消息创建Message对象"""
         required_attrs = ("body", "delete", "message_id")
         if not all(hasattr(broker_message, attr) for attr in required_attrs):
@@ -27,17 +25,13 @@ class _SQSMessage(Message):
 
         try:
             # 如果body已经是dict，直接使用；如果是字符串，则解析JSON
-            if isinstance(broker_message.body, dict):
-                message = broker_message.body
+            body = broker_message.body
+            if isinstance(body, dict):
+                message = body
             else:
-                message = json.loads(broker_message.body)
+                message = json.loads(body)
         except (json.JSONDecodeError, TypeError):
             message = {"body": broker_message.body}
-
-        if not isinstance(message, dict):
-            message = {"body": message}
-        if "body" not in message:
-            message = {"body": message}
 
         return cls(
             body=message.get("body"), extra=message.get("extra"), message=broker_message
@@ -53,7 +47,7 @@ class SQSBroker(BaseBroker):
         self,
         queue_name: str,
         message_group_id: str,
-        message_deduplication_id_func: Optional[Callable] = None,
+        message_deduplication_id_func: Optional[Callable[[Any], str]] = None,
         params: Optional[Dict] = None,
         prefetch: Optional[int] = 1,
         auto_create: bool = True,
@@ -74,11 +68,11 @@ class SQSBroker(BaseBroker):
         """
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
-        self.queue = Queue()
+        self.queue: Queue = Queue()
         self.prefetch = prefetch
         self.message_group_id = message_group_id
         self.message_deduplication_id_func = message_deduplication_id_func
-        self.threads = []
+        self.threads: List[threading.Thread] = []
         self._shutdown = False
         self._consuming_started = False
         self._consume_lock = threading.Lock()
@@ -96,10 +90,11 @@ class SQSBroker(BaseBroker):
         """消费消息的内部方法"""
         prefetch = kwargs.pop("prefetch", self.prefetch)
 
-        def callback(message):
+        def callback(message: Any) -> None:
             """处理接收到的消息"""
             # 直接将原始SQS消息放入队列，保留完整的消息引用
-            self.queue.put(message)
+            if self.queue is not None:
+                self.queue.put(message)
 
         self.store.start_consuming(
             self.queue_name, callback=callback, prefetch=prefetch, **kwargs
@@ -139,11 +134,15 @@ class SQSBroker(BaseBroker):
 
     def confirm(self, message: Message):
         """确认消息"""
-        message.message.delete()
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "delete"):
+            broker_msg.delete()
 
     def reject(self, message: Message):
         """拒绝消息"""
-        message.message.delete()
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "delete"):
+            broker_msg.delete()
 
     def requeue(self, message: Message, is_source: bool = False):
         """
@@ -155,16 +154,19 @@ class SQSBroker(BaseBroker):
         broker_msg = getattr(message, "message", None)
         # 确认原始消息，重新入队处理后的消息，以实现将消息放在队列尾部并等待处理
         if is_source and broker_msg is not None and hasattr(broker_msg, "body"):
-            broker_msg.delete()
+            if hasattr(broker_msg, "delete"):
+                broker_msg.delete()
             self.store.send(
                 self.queue_name,
                 broker_msg.body,
                 message_group_id=self.message_group_id,
             )
         else:
-            broker_msg.delete()
+            if broker_msg is not None and hasattr(broker_msg, "delete"):
+                broker_msg.delete()
+            # 使用 to_json() 序列化完整的 Message 对象
             self.store.send(
-                self.queue_name, message.body, message_group_id=self.message_group_id
+                self.queue_name, message.to_json(), message_group_id=self.message_group_id
             )
 
     def shutdown(self):

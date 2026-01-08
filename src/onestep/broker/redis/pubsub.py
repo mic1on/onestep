@@ -1,12 +1,12 @@
 import json
 import threading
 from queue import Queue
-from typing import Any
+from typing import Any, List, Dict, Optional
 
 try:
     from use_redis import useRedis
 except ImportError:
-    ...
+    useRedis = None
 
 from ..base import BaseBroker, BaseConsumer, Message
 
@@ -15,9 +15,13 @@ class _RedisPubSubMessage(Message):
 
     @classmethod
     def from_broker(cls, broker_message: Any):
-        if "channel" in broker_message:
+        if isinstance(broker_message, dict) and "channel" in broker_message:
             try:
-                message = json.loads(broker_message.get("data"))  # 已转换的 message
+                data = broker_message.get("data")
+                if data is not None:
+                    message = json.loads(data)  # 已转换的 message
+                else:
+                    message = {"body": None}
             except (json.JSONDecodeError, TypeError):
                 message = {"body": broker_message.get("data")}  # 未转换的 message
         else:
@@ -34,17 +38,18 @@ class RedisPubSubBroker(BaseBroker):
     def __init__(self, channel: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.channel = channel
-        self.queue = Queue()
+        self.queue: Queue = Queue()
 
-        self.threads = []
+        self.threads: List[threading.Thread] = []
 
         self.client = useRedis(**kwargs).connection
 
-    def _consume(self):
-        def callback(message: dict):
+    def _consume(self) -> None:
+        def callback(message: Dict[str, Any]) -> None:
             if message.get('type') != 'message':
                 return
-            self.queue.put(message)
+            if self.queue is not None:
+                self.queue.put(message)
 
         ps = self.client.pubsub()
         ps.subscribe(self.channel)
@@ -53,8 +58,7 @@ class RedisPubSubBroker(BaseBroker):
 
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
-        thread = threading.Thread(target=self._consume, *args, **kwargs)
-        thread.daemon = daemon
+        thread = threading.Thread(target=self._consume, daemon=daemon)
         thread.start()
         self.threads.append(thread)
         return RedisPubSubConsumer(self)
@@ -83,8 +87,10 @@ class RedisPubSubBroker(BaseBroker):
          """
         self.reject(message)
 
-        if is_source:
-            self.client.publish(self.channel, message.message['data'])
+        if is_source and isinstance(message.message, dict):
+            data = message.message.get('data')
+            if data is not None:
+                self.client.publish(self.channel, data)
         else:
             self.send(message)
 

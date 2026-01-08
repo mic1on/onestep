@@ -1,7 +1,7 @@
 import logging
 import json
 from queue import Queue, Full as FullException
-from typing import Any
+from typing import Any, Optional
 
 from .base import BaseBroker, BaseConsumer
 
@@ -35,13 +35,14 @@ class MemoryMessage(Message):
 class MemoryBroker(BaseBroker):
     message_cls = MemoryMessage
 
-    def __init__(self, maxsize=0, *args, **kwargs):
+    def __init__(self, maxsize: int = 0, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.queue = Queue(maxsize)
+        self.queue: Queue = Queue(maxsize)
 
     def publish(self, message: Any, *args, **kwargs):
         try:
-            self.queue.put_nowait(message)
+            if self.queue is not None:
+                self.queue.put_nowait(message)
         except FullException:
             logger.warning("CronBroker queue is full, skip this task, "
                            "you can increase maxsize with `maxsize` argument")

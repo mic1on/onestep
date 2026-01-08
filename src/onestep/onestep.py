@@ -126,10 +126,10 @@ class BaseOneStep:
             consumer.shutdown()
             logger.debug(f"stopped: {consumer=}")
 
-    def wraps(self, func):
+    def wraps(self, func: Callable) -> Callable:
         @functools.wraps(func)
-        def wrapped_f(*args, **kwargs):
-            return self(*args, **kwargs)  # noqa
+        def wrapped_f(*args: Any, **kwargs: Any) -> Any:
+            return self(*args, **kwargs)  # type: ignore[operator]  # Subclasses will implement __call__
 
         return wrapped_f
 
@@ -246,12 +246,12 @@ class step:
             "error_callback": error_callback
         }
 
-    def __call__(self, func, *_args, **_kwargs):
-        func.__step_params__ = self.params
+    def __call__(self, func: Callable, *_args: Any, **_kwargs: Any) -> Any:
+        func.__step_params__ = self.params  # type: ignore[attr-defined]
         if iscoroutinefunction(func) or isasyncgenfunction(func):
-            os = AsyncOneStep(fn=func, **self.params)
+            os: Any = AsyncOneStep(fn=func, **self.params)  # type: ignore[arg-type]
         else:
-            os = SyncOneStep(fn=func, **self.params)
+            os = SyncOneStep(fn=func, **self.params)  # type: ignore[arg-type]
 
         return os.wraps(func)
 
