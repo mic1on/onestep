@@ -62,6 +62,7 @@ dev-dependencies = [
     "pytest>=7.2.2",
     "httpx>=0.23.3",
     "use-mysql>=0.0.4",
+    "mypy>=1.0.0",
 ]
 
 [tool.ruff]
@@ -71,6 +72,30 @@ ignore = [
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "use_rabbitmq.*",
+    "use_redis.*",
+    "use_sqs.*",
+    "use_mysql.*",
+    "nacos.*",
+]
+ignore_missing_imports = true
 
 [build-system]
 requires = ["hatchling"]

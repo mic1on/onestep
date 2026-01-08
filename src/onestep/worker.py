@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class BaseWorker:
+    # 共享的 broker 退出状态，所有 Worker 子类共享
     broker_exit: Dict[BaseBroker, bool] = {}
     broker_exit_lock = threading.Lock()
 
@@ -157,22 +158,20 @@ class ThreadWorker(BaseWorker):
         """
 
         while not self._shutdown:
-            with ThreadWorker.broker_exit_lock:
-                if ThreadWorker.broker_exit.get(self.broker, False):
+            with BaseWorker.broker_exit_lock:
+                if BaseWorker.broker_exit.get(self.broker, False):
                     self.shutdown()
                     break
             for message in self.receive_messages():
                 self.handle_message(message)
 
     def shutdown(self):
-        ThreadWorker.broker_exit[self.broker] = True
+        BaseWorker.broker_exit[self.broker] = True
         self.broker.shutdown()
         self._shutdown = True
 
 
 class ThreadPoolWorker(BaseWorker):
-    broker_exit: Dict[BaseBroker, bool] = {}
-    broker_exit_lock = threading.Lock()
 
     def __init__(self, onestep, broker: BaseBroker, workers=None, *args, **kwargs):
         super().__init__(onestep, broker, *args, **kwargs)
@@ -190,8 +189,8 @@ class ThreadPoolWorker(BaseWorker):
         """
 
         while not self._shutdown:
-            with ThreadPoolWorker.broker_exit_lock:
-                if ThreadPoolWorker.broker_exit.get(self.broker, False):
+            with BaseWorker.broker_exit_lock:
+                if BaseWorker.broker_exit.get(self.broker, False):
                     self.shutdown()
                     break
             for message in self.receive_messages():
@@ -200,6 +199,6 @@ class ThreadPoolWorker(BaseWorker):
 
     def shutdown(self):
         """关闭线程池 Worker"""
-        ThreadPoolWorker.broker_exit[self.broker] = True
+        BaseWorker.broker_exit[self.broker] = True
         self._shutdown = True
         self.executor.shutdown()

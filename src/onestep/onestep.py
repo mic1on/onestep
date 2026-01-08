@@ -2,6 +2,7 @@ import functools
 import collections
 import inspect
 import logging
+import os
 
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
 from itertools import groupby
@@ -18,7 +19,7 @@ from .worker import ThreadWorker, BaseWorker
 
 logger = logging.getLogger(__name__)
 
-MAX_WORKERS = 20
+MAX_WORKERS = int(os.getenv('ONESTEP_MAX_WORKERS', '20'))
 DEFAULT_WORKERS = 1
 DEFAULT_WORKER_CLASS = ThreadWorker
 
@@ -270,12 +271,16 @@ class step:
 
     @staticmethod
     def set_debugging():
-
+        """设置调试模式日志"""
         if not BaseOneStep.state.debug:
             onestep_logger = logging.getLogger("onestep")
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter(
-                "[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
-            onestep_logger.addHandler(handler)
+            # 检查是否已经有 handler，避免重复添加
+            if not onestep_logger.handlers:
+                handler = logging.StreamHandler()
+                handler.setFormatter(logging.Formatter(
+                    "[%(levelname)s] %(asctime)s %(name)s:%(message)s"))
+                onestep_logger.addHandler(handler)
             onestep_logger.setLevel(logging.DEBUG)
+            # 防止日志传播到根 logger
+            onestep_logger.propagate = False
             BaseOneStep.state.debug = True

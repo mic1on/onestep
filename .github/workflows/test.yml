@@ -59,5 +59,7 @@ jobs:
       - name: Install dependencies
         if: steps.cached-uv-dependencies.outputs.cache-hit != 'true'
         run: uv sync --all-extras
+      - name: Run type checking
+        run: uv run mypy src/onestep
       - name: Run tests
         run: uv run pytest tests/

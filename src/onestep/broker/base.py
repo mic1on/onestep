@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import abc
 import logging
+import time
 from queue import Queue, Empty
 from typing import Any, Optional, List, Callable
 
@@ -19,7 +20,9 @@ class BaseBroker:
                  queue: Optional[Queue] = None,
                  middlewares: Optional[List[BaseMiddleware]] = None,
                  once: bool = False,
-                 cancel_consume: Optional[Callable] = None):
+                 cancel_consume: Optional[Callable] = None,
+                 send_retry_times: int = 3,
+                 send_retry_delay: float = 1.0):
         """
         @param name: broker name
         @param queue: broker queue name
@@ -29,12 +32,16 @@ class BaseBroker:
         @param cancel_consume: cancel consume
             cancel_consume(message) -> bool
             if cancel_consume return True, broker will shutdown
+        @param send_retry_times: message send retry times (default: 3)
+        @param send_retry_delay: message send retry delay in seconds (default: 1.0)
         """
         self.queue = queue
         self.name = name or "broker"
         self.middlewares = []
         self.once = once
         self.cancel_consume = cancel_consume
+        self.send_retry_times = send_retry_times
+        self.send_retry_delay = send_retry_delay
 
         if middlewares:
             for middleware in middlewares:
@@ -50,8 +57,28 @@ class BaseBroker:
         if not isinstance(message, Message):
             message = self.message_cls(body=message)
         self.before_emit("send", message=message, step=kwargs.get("step"))
-        # TODO: 对消息发送进行N次重试，确保消息发送成功。
-        result = self.publish(message.to_json(), *args, **kwargs)
+
+        # 消息发送重试机制
+        result = None
+        for attempt in range(self.send_retry_times):
+            try:
+                result = self.publish(message.to_json(), *args, **kwargs)
+                break  # 发送成功，退出重试
+            except Exception as e:
+                if attempt < self.send_retry_times - 1:
+                    # 使用指数退避策略
+                    delay = self.send_retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Message send failed (attempt {attempt + 1}/{self.send_retry_times}), "
+                        f"retrying in {delay}s: {e}"
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"Message send failed after {self.send_retry_times} attempts: {e}"
+                    )
+                    raise
+
         self.after_emit("send", message=message, step=kwargs.get("step"))
         return result
 

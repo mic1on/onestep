@@ -18,6 +18,7 @@ from .exception import (
     StopMiddleware, DropMessage,
     RetryException, RetryInQueue, RetryInLocal
 )
+from .worker import BaseWorker, ThreadWorker, ThreadPoolWorker
 
 __all__ = [
     'step', 'Cron',
@@ -32,6 +33,11 @@ __all__ = [
     'RedisStreamBroker',
     'RedisPubSubBroker',
     'SQSBroker',
+
+    # worker
+    'BaseWorker',
+    'ThreadWorker',
+    'ThreadPoolWorker',
 
     # retry
     'BaseRetry',
