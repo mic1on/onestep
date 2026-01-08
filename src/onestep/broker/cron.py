@@ -8,9 +8,9 @@
 import logging
 import threading
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]
 from ..cron import resolve_cron
 
 from .memory import MemoryBroker, MemoryConsumer
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class CronBroker(MemoryBroker):
 
-    def __init__(self, cron, name=None, middlewares=None, body: Any = None, start_time=None, *args, **kwargs):
+    def __init__(self, cron: Any, name: Optional[str] = None, middlewares: Any = None, body: Any = None, start_time: Optional[datetime] = None, *args, **kwargs):
         super().__init__(name=name, middlewares=middlewares, *args, **kwargs)
         # 支持 DSL/宏/原始字符串：统一解析为标准表达式
         self.cron = resolve_cron(cron)
@@ -28,9 +28,9 @@ class CronBroker(MemoryBroker):
         self.itr = croniter(self.cron, self.start_time)
         self.next_fire_time = self.itr.get_next(datetime)
         self.body = body
-        self._thread = None
+        self._thread: Optional[threading.Timer] = None
 
-    def _scheduler(self):
+    def _scheduler(self) -> None:
         if self.next_fire_time <= datetime.now():
             self.next_fire_time = self.itr.get_next(datetime)
             self.publish(self.body)
@@ -42,8 +42,8 @@ class CronBroker(MemoryBroker):
         self._scheduler()
         return CronConsumer(self, *args, **kwargs)
 
-    def shutdown(self):
-        if self._thread:
+    def shutdown(self) -> None:
+        if self._thread is not None:
             self._thread.cancel()
 
 

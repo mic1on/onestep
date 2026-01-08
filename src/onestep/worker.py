@@ -2,7 +2,7 @@
 将指定的函数放入线程中运行
 """
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional, Any
 
 import logging
 import threading
@@ -25,7 +25,7 @@ class BaseWorker:
     broker_exit: Dict[BaseBroker, bool] = {}
     broker_exit_lock = threading.Lock()
 
-    def __init__(self, onestep, broker: BaseBroker, *args, **kwargs):
+    def __init__(self, onestep: Any, broker: BaseBroker, *args: Any, **kwargs: Any):
         self.instance = onestep
         self.retry = self.instance.retry
         self.error_callback = self.instance.error_callback
@@ -35,18 +35,18 @@ class BaseWorker:
         self._shutdown = False
 
     @property
-    def instance_name(self):
+    def instance_name(self) -> Any:
         return self.instance.fn.__name__
 
-    def start(self):
+    def start(self) -> None:
         """启动 Worker"""
         raise NotImplementedError
 
-    def run(self):
+    def run(self) -> None:
         """执行 Worker 的逻辑"""
         raise NotImplementedError
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """关闭 Worker"""
         raise NotImplementedError
 
@@ -70,7 +70,7 @@ class BaseWorker:
         else:
             self.instance(message, *self.args, **self.kwargs)
 
-    def handle_message(self, message: Message):
+    def handle_message(self, message: Message) -> None:
         """ 处理消息 """
         message.broker = message.broker or self.broker
         logger.debug(f"{self.instance.name} receive message<{message}> from {self.broker!r}")
@@ -94,32 +94,32 @@ class BaseWorker:
         finally:
             self.handle_cancel_consume(message)
 
-    def handle_success(self, message):
+    def handle_success(self, message: Message) -> None:
         message_consumed.send(self, message=message)
         message.confirm(step=self.instance)
 
-    def handle_drop(self, message, reason):
+    def handle_drop(self, message: Message, reason: Exception) -> None:
         message_drop.send(self, message=message, reason=reason)
         logger.warning(f"{self.instance.name} dropped <{type(reason).__name__}: {str(reason)}>")
         message.reject(step=self.instance)
 
-    def handle_requeue(self, message, reason):
+    def handle_requeue(self, message: Message, reason: Exception) -> None:
         message_requeue.send(self, message=message, reason=reason)
         logger.warning(f"{self.instance.name} requeue <{type(reason).__name__}: {str(reason)}>")
         message.requeue(is_source=True, step=self.instance)
 
-    def handle_error(self, message, error):
+    def handle_error(self, message: Message, error: Exception) -> None:
         if self.instance.state.debug:
             logger.exception(f"{self.instance.name} run error <{type(error).__name__}: {str(error)}>")
         else:
             logger.error(f"{self.instance.name} run error <{type(error).__name__}: {str(error)}>")
         message.set_exception()
 
-    def handle_cancel_consume(self, message):
+    def handle_cancel_consume(self, message: Message) -> None:
         if self.broker.cancel_consume and self.broker.cancel_consume(message):
             self.shutdown()
 
-    def handle_retry(self, message):
+    def handle_retry(self, message: Message) -> None:
         retry_status = self.retry(message)
         if retry_status is RetryStatus.END_WITH_CALLBACK:
             if self.error_callback:
@@ -130,25 +130,26 @@ class BaseWorker:
         elif retry_status is RetryStatus.CONTINUE:
             message.requeue()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.instance.name}>"
 
 
 class ThreadWorker(BaseWorker):
 
-    def __init__(self, onestep, broker: BaseBroker, *args, **kwargs):
+    def __init__(self, onestep: Any, broker: BaseBroker, *args: Any, **kwargs: Any):
         """
         线程执行包装过的`onestep`函数
         :param onestep: OneStep实例
         :param broker: 监听的from broker
         """
         super().__init__(onestep, broker, *args, **kwargs)
-        self.thread = None
+        self.thread: Optional[threading.Thread] = None
 
-    def start(self):
+    def start(self) -> None:
         """启动单线程 Worker"""
         self.thread = threading.Thread(target=self.run, daemon=True)
-        self.thread.start()
+        if self.thread is not None:
+            self.thread.start()
 
     def run(self):
         """线程执行包装过的`onestep`函数

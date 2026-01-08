@@ -1,10 +1,10 @@
 import json
 import threading
 from queue import Queue
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 try:
-    import amqpstorm
+    import amqpstorm  # type: ignore[import-untyped]
     from use_rabbitmq import useRabbitMQ as RabbitMQStore
 except ImportError:
     amqpstorm = None
@@ -17,7 +17,7 @@ from ..message import Message
 class _RabbitMQMessage(Message):
 
     @classmethod
-    def from_broker(cls, broker_message):
+    def from_broker(cls, broker_message: Any):
         try:
             message = json.loads(broker_message.body)
         except json.JSONDecodeError:
@@ -69,19 +69,20 @@ class RabbitMQBroker(BaseBroker):
         
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
-        self.queue = Queue()
+        self.queue: Queue = Queue()
         params = params or {}
         self.client = RabbitMQStore(**params)
         if auto_create:
             self.client.declare_queue(self.queue_name, **(queue_params or {}))
         self.prefetch = prefetch
-        self.threads = []
+        self.threads: List[threading.Thread] = []
         self._consuming_started = False
         self._consume_lock = threading.Lock()
 
     def _consume(self, *args, **kwargs):
-        def callback(message):
-            self.queue.put(message)
+        def callback(message: Any) -> None:
+            if self.queue is not None:
+                self.queue.put(message)
 
         prefetch = kwargs.pop("prefetch", self.prefetch)
         self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)

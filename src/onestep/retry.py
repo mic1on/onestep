@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Optional, Tuple, Union, Type
+from typing import Optional, Tuple, Union, Type, List
 
 from .exception import RetryInLocal, RetryInQueue
 from .message import Message
@@ -32,10 +32,10 @@ class AlwaysRetry(BaseRetry):
 
 
 class AllRetry(BaseRetry):
-    def __init__(self, *retries):
-        self.retries = retries
+    def __init__(self, *retries: BaseRetry):
+        self.retries: Tuple[BaseRetry, ...] = retries
 
-    def __call__(self, message) -> Optional[RetryStatus]:
+    def __call__(self, message: Message) -> Optional[RetryStatus]:
         for retry in self.retries:
             status = retry(message)
             if status != RetryStatus.CONTINUE:
@@ -44,10 +44,10 @@ class AllRetry(BaseRetry):
 
 
 class AnyRetry(BaseRetry):
-    def __init__(self, *retries):
-        self.retries = retries
+    def __init__(self, *retries: BaseRetry):
+        self.retries: Tuple[BaseRetry, ...] = retries
 
-    def __call__(self, message) -> Optional[RetryStatus]:
+    def __call__(self, message: Message) -> Optional[RetryStatus]:
         for retry in self.retries:
             status = retry(message)
             if status == RetryStatus.CONTINUE:

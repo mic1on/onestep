@@ -2,19 +2,20 @@ import json
 import threading
 import uuid
 from queue import Queue
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
 try:
     from use_redis import useRedisStreamStore, RedisStreamMessage
 except ImportError:
-    ...
+    useRedisStreamStore = None
+    RedisStreamMessage = None
 
 from ..base import BaseBroker, BaseConsumer, Message
 
 
 class _RedisStreamMessage(Message):
     @classmethod
-    def from_broker(cls, broker_message: "RedisStreamMessage"):
+    def from_broker(cls, broker_message: Any):
         if "_message" in broker_message.body:
             # 来自 RedisStreamBroker.send 的消息，message.body 默认是存于 _message 字段中
             try:
@@ -47,9 +48,9 @@ class RedisStreamBroker(BaseBroker):
         self.stream = stream
         self.group = group
         self.prefetch = prefetch
-        self.queue = Queue()
+        self.queue: Queue = Queue()
 
-        self.threads = []
+        self.threads: List[threading.Thread] = []
 
         self.client = useRedisStreamStore(
             stream=stream,
@@ -61,8 +62,9 @@ class RedisStreamBroker(BaseBroker):
         )
 
     def _consume(self, *args, **kwargs):
-        def callback(message):
-            self.queue.put(message)
+        def callback(message: Any) -> None:
+            if self.queue is not None:
+                self.queue.put(message)
 
         prefetch = kwargs.pop("prefetch", self.prefetch)
         self.client.start_consuming(consumer=uuid.uuid4().hex, callback=callback, prefetch=prefetch, **kwargs)

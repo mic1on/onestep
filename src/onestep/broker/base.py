@@ -3,7 +3,7 @@ import abc
 import logging
 import time
 from queue import Queue, Empty
-from typing import Any, Optional, List, Callable
+from typing import Any, Optional, List, Callable, Type
 
 from onestep.middleware import BaseMiddleware
 from onestep.exception import StopMiddleware
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class BaseBroker:
-    message_cls = Message
+    message_cls: Type[Message] = Message
 
     def __init__(self,
                  name: Optional[str] = None,
@@ -37,7 +37,7 @@ class BaseBroker:
         """
         self.queue = queue
         self.name = name or "broker"
-        self.middlewares = []
+        self.middlewares: List[BaseMiddleware] = []
         self.once = once
         self.cancel_consume = cancel_consume
         self.send_retry_times = send_retry_times
@@ -149,7 +149,7 @@ class BaseConsumer:
 
     def __init__(self, broker: BaseBroker, *args, **kwargs):
         self.queue = broker.queue
-        self.message_cls = broker.message_cls or Message
+        self.message_cls: Type[Message] = broker.message_cls if broker.message_cls else Message
         self.timeout = kwargs.pop("timeout", 1000)
 
     def __next__(self):

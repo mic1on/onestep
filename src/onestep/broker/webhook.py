@@ -1,6 +1,7 @@
 import logging
 import threading
 import collections
+from typing import Dict, List, DefaultDict, Any
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .memory import MemoryBroker, MemoryConsumer
@@ -11,7 +12,7 @@ Server = collections.namedtuple("Server", ["path", "queue"])
 
 
 class WebHookServer(BaseHTTPRequestHandler):
-    servers = collections.defaultdict(list)
+    servers: DefaultDict[Any, List[Server]] = collections.defaultdict(list)
 
     def do_POST(self):
         """
@@ -35,7 +36,7 @@ class WebHookServer(BaseHTTPRequestHandler):
 
 
 class WebHookBroker(MemoryBroker):
-    _servers = {}
+    _servers: Dict[tuple, ThreadingHTTPServer] = {}
 
     def __init__(self,
                  path: str,
@@ -47,7 +48,7 @@ class WebHookBroker(MemoryBroker):
         self.host = host
         self.port = port
         self.path = path
-        self.threads = []
+        self.threads: List[threading.Thread] = []
 
     def _create_server(self):
 

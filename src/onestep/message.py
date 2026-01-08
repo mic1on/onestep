@@ -58,7 +58,7 @@ class Message:
         self.message = message
 
         self.broker = broker
-        self._exception = None
+        self._exception: Optional[MessageTracebackException] = None
 
     @staticmethod
     def _set_extra(extra):
