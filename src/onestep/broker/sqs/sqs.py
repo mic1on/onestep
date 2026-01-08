@@ -164,8 +164,9 @@ class SQSBroker(BaseBroker):
         else:
             if broker_msg is not None and hasattr(broker_msg, "delete"):
                 broker_msg.delete()
+            # 使用 to_json() 序列化完整的 Message 对象
             self.store.send(
-                self.queue_name, message.body, message_group_id=self.message_group_id
+                self.queue_name, message.to_json(), message_group_id=self.message_group_id
             )
 
     def shutdown(self):
