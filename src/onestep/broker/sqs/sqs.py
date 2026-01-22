@@ -38,7 +38,8 @@ class _SQSMessage(Message):
             body_value = message.get("body", message)
             extra = message.get("extra")
         else:
-            body_value = message
+            # 添加 type: ignore[unreachable] 以忽略 Mypy 的误报
+            body_value = message  # type: ignore[unreachable]
             extra = None
 
         return cls(body=body_value, extra=extra, message=broker_message)
