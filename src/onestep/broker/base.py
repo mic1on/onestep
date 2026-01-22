@@ -54,9 +54,10 @@ class BaseBroker:
 
     def send(self, message, *args, **kwargs):
         """对消息进行预处理，然后再发送"""
+        step = kwargs.pop("step", None)
         if not isinstance(message, Message):
             message = self.message_cls(body=message)
-        self.before_emit("send", message=message, step=kwargs.get("step"))
+        self.before_emit("send", message=message, step=step)
 
         # 消息发送重试机制
         result = None
@@ -79,7 +80,7 @@ class BaseBroker:
                     )
                     raise
 
-        self.after_emit("send", message=message, step=kwargs.get("step"))
+        self.after_emit("send", message=message, step=step)
         return result
 
     @abc.abstractmethod
