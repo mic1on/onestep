@@ -1,10 +1,11 @@
 import json
 import threading
 from queue import Queue
-from typing import Optional, Dict, Any, Callable, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, Callable, List
 
 from onestep.broker import BaseBroker, BaseConsumer
 from onestep.message import Message
+
 try:
     from use_sqs import SQSStore
 except ImportError:
@@ -33,9 +34,15 @@ class _SQSMessage(Message):
         except (json.JSONDecodeError, TypeError):
             message = {"body": broker_message.body}
 
-        return cls(
-            body=message.get("body"), extra=message.get("extra"), message=broker_message
-        )
+        if isinstance(message, dict):
+            body_value = message.get("body", message)
+            extra = message.get("extra")
+        else:
+            # 添加 type: ignore[unreachable] 以忽略 Mypy 的误报
+            body_value = message  # type: ignore[unreachable]
+            extra = None
+
+        return cls(body=body_value, extra=extra, message=broker_message)
 
 
 class SQSBroker(BaseBroker):
@@ -107,7 +114,9 @@ class SQSBroker(BaseBroker):
         with self._consume_lock:
             if not self._consuming_started:
                 thread_kwargs = kwargs.copy()
-                thread = threading.Thread(target=self._consume, args=args, kwargs=thread_kwargs)
+                thread = threading.Thread(
+                    target=self._consume, args=args, kwargs=thread_kwargs
+                )
                 thread.daemon = daemon
                 thread.start()
                 self.threads.append(thread)
@@ -166,7 +175,9 @@ class SQSBroker(BaseBroker):
                 broker_msg.delete()
             # 使用 to_json() 序列化完整的 Message 对象
             self.store.send(
-                self.queue_name, message.to_json(), message_group_id=self.message_group_id
+                self.queue_name,
+                message.to_json(),
+                message_group_id=self.message_group_id,
             )
 
     def shutdown(self):
