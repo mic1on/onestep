@@ -64,16 +64,29 @@ def main():
         cron = croniter(args.cron, datetime.now())
         for _ in range(10):
             print(cron.get_next(datetime))
-        return
+        return 0
 
     logger.info(f"OneStep {__version__} is start up.")
     try:
         importlib.import_module(args.step)
         step.start(group=args.group, block=True, print_jobs=args.print)
-    except ModuleNotFoundError:
-        logger.error(f"Module `{args.step}` not found.")
+        return 0
+    except ModuleNotFoundError as e:
+        if getattr(e, "name", None) == args.step:
+            logger.error(f"step module not found: {args.step}")
+            return 2
+        logger.error(f"failed to import step module: {args.step}")
+        logger.error(f"caused by missing dependency: {e!r}")
+        logger.exception("import traceback")
+        return 1
+    except Exception as e:
+        logger.error(f"failed to import step module: {args.step}")
+        logger.error(f"import error: {e!r}")
+        logger.exception("import traceback")
+        return 1
     except KeyboardInterrupt:
         step.shutdown()
+        return 130
 
 
 if __name__ == '__main__':
