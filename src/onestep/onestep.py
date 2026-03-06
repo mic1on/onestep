@@ -2,7 +2,6 @@ import functools
 import collections
 import inspect
 import logging
-import os
 
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
 from itertools import groupby
@@ -16,11 +15,11 @@ from .retry import TimesRetry
 from .signal import message_sent, started, stopped
 from .state import State
 from .worker import ThreadWorker, BaseWorker
+from .constants import DEFAULT_GROUP, DEFAULT_WORKERS, MAX_WORKERS
 
 logger = logging.getLogger(__name__)
 
-MAX_WORKERS = int(os.getenv('ONESTEP_MAX_WORKERS', '20'))
-DEFAULT_WORKERS = 1
+# 默认 worker 类
 DEFAULT_WORKER_CLASS = ThreadWorker
 
 
@@ -29,7 +28,7 @@ class BaseOneStep:
     state = State()  # 全局状态
 
     def __init__(self, fn,
-                 group: str = "OneStep",
+                 group: str = DEFAULT_GROUP,
                  name: Optional[str] = None,
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
@@ -38,19 +37,33 @@ class BaseOneStep:
                  middlewares: Optional[List[Any]] = None,
                  retry: Union[Callable, object] = TimesRetry(),
                  error_callback: Optional[Union[Callable, object]] = None):
+        """
+        BaseOneStep 实例
+
+        :param fn: 要执行的函数
+        :param group: 分组名称 (默认: "OneStep")
+        :param name: 任务名称 (默认: 函数名)
+        :param from_broker: 消息来源 broker
+        :param to_broker: 消息目标 broker
+        :param workers: worker 数量 (默认: 1)
+        :param worker_class: worker 类 (默认: ThreadWorker)
+        :param middlewares: 中间件列表
+        :param retry: 重试策略 (默认: TimesRetry())
+        :param error_callback: 错误回调函数
+        """
         self.group = group
         self.fn = fn
         self.name = name or fn.__name__
         self.workers = workers or DEFAULT_WORKERS
         self.worker_class = worker_class or DEFAULT_WORKER_CLASS
         if self.workers > MAX_WORKERS:
-            logger.warning(f"workers[{self.workers}] greater than {MAX_WORKERS}")
+            logger.warning(f"workers[{self.workers}] 大于最大值 {MAX_WORKERS}，已自动调整")
             self.workers = MAX_WORKERS
         self.middlewares = middlewares or []
         if self.middlewares:
             for m in self.middlewares:
                 if not isinstance(m, BaseMiddleware):
-                    raise TypeError(f"middleware must be BaseMiddleware instance, not {type(m)}")
+                    raise TypeError(f"中间件必须是 BaseMiddleware 实例，当前类型: {type(m)}")
 
         self.from_brokers = self._init_broker(from_broker)
         self.to_brokers = self._init_broker(to_broker)
@@ -204,9 +217,16 @@ class SyncOneStep(BaseOneStep):
 
 
 class AsyncOneStep(BaseOneStep):
+    """异步任务执行器"""
 
     async def __call__(self, *args, **kwargs):
-        """"异步执行原函数"""
+        """
+        异步执行原函数
+
+        :param args: 位置参数
+        :param kwargs: 关键字参数
+        :return: 函数执行结果
+        """
 
         if iscoroutinefunction(self.fn):
             result = await self.fn(*args, **kwargs)
@@ -225,15 +245,28 @@ class step:
 
     def __init__(self,
                  *,
-                 group: str = "OneStep",
+                 group: str = DEFAULT_GROUP,
                  name: Optional[str] = None,
                  from_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  to_broker: Union[BaseBroker, List[BaseBroker], None] = None,
                  workers: Optional[int] = None,
                  worker_class: Optional[Type[BaseWorker]] = None,
-                 middlewares: Optional[List[Any]] = None,
+                 middlewares: Optional[List[BaseMiddleware]] = None,
                  retry: Union[Callable, object] = TimesRetry(),
                  error_callback: Optional[Union[Callable, object]] = None):
+        """
+        step 装饰器参数
+
+        :param group: 分组名称 (默认: "OneStep")
+        :param name: 任务名称 (默认: 函数名)
+        :param from_broker: 消息来源 broker
+        :param to_broker: 消息目标 broker
+        :param workers: worker 数量 (默认: 1)
+        :param worker_class: worker 类 (默认: ThreadWorker)
+        :param middlewares: 中间件列表
+        :param retry: 重试策略 (默认: TimesRetry())
+        :param error_callback: 错误回调函数
+        """
         self.params = {
             "group": group,
             "name": name,

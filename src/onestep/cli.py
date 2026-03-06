@@ -26,30 +26,46 @@ logger = setup_logging()
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='run onestep'
+        description='OneStep - 分布式异步任务框架',
+        epilog='Examples:\n'
+               '  onestep example.py                    # 运行 example.py 中的 step\n'
+               '  onestep --group mygroup example.py   # 运行指定组的 step\n'
+               '  onestep --cron "*/5 * * * *"          # 测试 cron 表达式\n'
+               '  onestep --version                     # 显示版本号',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "step", nargs='?',
-        help="the run step",
+        help="要运行的 step 模块名称（如 example）",
+        metavar='MODULE'
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"OneStep {__version__}"
     )
     parser.add_argument(
         "--group", "-G", default=None,
-        help="the run group",
-        type=str
+        help="要运行的组名称 (默认: OneStep)",
+        type=str,
+        metavar='GROUP'
     )
     parser.add_argument(
         "--print",
         action="store_true",
-        help="enable printing")
+        help="启动前打印所有已注册的 job 信息"
+    )
     parser.add_argument(
         "--path", "-P", default=".", nargs="*", type=str,
-        help="the step import path (default: current running directory)"
+        help="模块导入路径，可指定多个 (默认: 当前目录)",
+        metavar='PATH'
     )
     group.add_argument(
         "--cron",
-        help="the cron expression to test",
-        type=str
+        help="测试 cron 表达式，显示未来 10 次执行时间",
+        type=str,
+        metavar='EXPR'
     )
     return parser.parse_args()
 
@@ -61,31 +77,52 @@ def main():
     if args.cron:
         from croniter import croniter  # type: ignore[import-untyped]
         from datetime import datetime
-        cron = croniter(args.cron, datetime.now())
-        for _ in range(10):
-            print(cron.get_next(datetime))
+        try:
+            cron = croniter(args.cron, datetime.now())
+            print(f"Cron 表达式: {args.cron}")
+            print("未来 10 次执行时间:")
+            for i, next_time in enumerate([cron.get_next(datetime) for _ in range(10)], 1):
+                print(f"  {i}. {next_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        except ValueError as e:
+            logger.error(f"无效的 cron 表达式: {args.cron}")
+            logger.error(f"错误: {e}")
+            return 1
         return 0
 
-    logger.info(f"OneStep {__version__} is start up.")
+    logger.info(f"OneStep {__version__} 启动中...")
     try:
         importlib.import_module(args.step)
         step.start(group=args.group, block=True, print_jobs=args.print)
         return 0
     except ModuleNotFoundError as e:
-        if getattr(e, "name", None) == args.step:
-            logger.error(f"step module not found: {args.step}")
+        missing_module = getattr(e, "name", None)
+        if missing_module == args.step:
+            logger.error(f"❌ 找不到模块: {args.step}")
+            logger.error(f"请检查:")
+            logger.error(f"  1. 模块名称是否正确")
+            logger.error(f"  2. 文件是否存在于指定路径: {' '.join(args.path)}")
+            logger.error(f"  3. 是否需要使用 --path 参数指定模块路径")
             return 2
-        logger.error(f"failed to import step module: {args.step}")
-        logger.error(f"caused by missing dependency: {e!r}")
-        logger.exception("import traceback")
+        logger.error(f"❌ 导入模块失败: {args.step}")
+        logger.error(f"缺少依赖: {missing_module}")
+        logger.error(f"请使用 'pip install {missing_module}' 安装缺失的依赖")
+        logger.exception("详细信息:")
+        return 1
+    except ImportError as e:
+        logger.error(f"❌ 导入模块失败: {args.step}")
+        logger.error(f"原因: {e}")
+        logger.exception("详细信息:")
         return 1
     except Exception as e:
-        logger.error(f"failed to import step module: {args.step}")
-        logger.error(f"import error: {e!r}")
-        logger.exception("import traceback")
+        logger.error(f"❌ 启动失败: {args.step}")
+        logger.error(f"错误类型: {type(e).__name__}")
+        logger.error(f"错误信息: {e}")
+        logger.exception("详细信息:")
         return 1
     except KeyboardInterrupt:
+        logger.info("接收到中断信号，正在关闭...")
         step.shutdown()
+        logger.info("已关闭")
         return 130
 
 

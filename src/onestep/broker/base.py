@@ -154,6 +154,7 @@ class BaseConsumer:
         self.timeout = kwargs.pop("timeout", 1000)
 
     def __next__(self):
+        """从队列获取下一条消息"""
         try:
             q = self.queue
             if q is None:
@@ -165,7 +166,11 @@ class BaseConsumer:
                 # 当超时为0、负数或非数字时，使用非阻塞获取以避免ValueError
                 data = q.get_nowait()
             return self.message_cls.from_broker(broker_message=data)
-        except (Empty, ValueError):
+        except Empty:
+            # 队列为空，这是正常情况，不需要记录日志
+            return None
+        except ValueError as e:
+            logger.warning(f"队列获取失败，无效的超时配置: timeout_ms={self.timeout}, error: {e}")
             return None
 
     def __iter__(self):

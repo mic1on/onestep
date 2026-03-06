@@ -40,12 +40,22 @@ class MemoryBroker(BaseBroker):
         self.queue: Queue = Queue(maxsize)
 
     def publish(self, message: Any, *args, **kwargs):
+        """
+        发布消息到内存队列
+
+        :param message: 要发布的消息
+        :param args: 额外参数
+        :param kwargs: 额外关键字参数
+        :raises: FullException 当队列满时抛出（不阻塞，直接跳过）
+        """
         try:
             if self.queue is not None:
                 self.queue.put_nowait(message)
         except FullException:
-            logger.warning("CronBroker queue is full, skip this task, "
-                           "you can increase maxsize with `maxsize` argument")
+            logger.warning(
+                f"队列已满，消息被丢弃。建议增加 maxsize 参数 (当前: {self.queue.maxsize})"
+            )
+            # 不抛出异常，避免中断执行流程
 
     def consume(self, *args, **kwargs):
         return MemoryConsumer(self, *args, **kwargs)

@@ -1,8 +1,10 @@
 """
 将指定的函数放入线程中运行
+
+提供 Worker 抽象，支持单线程和线程池两种执行模式
 """
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Iterable, Optional, Any
+from typing import Dict, Iterable, Optional, Type, Union, TYPE_CHECKING
 
 import logging
 import threading
@@ -17,15 +19,29 @@ from .broker import BaseBroker
 from . import exception
 from .signal import message_received, message_consumed, message_error, message_drop, message_requeue
 
+# 避免循环导入
+if TYPE_CHECKING:
+    from .onestep import BaseOneStep
+
 logger = logging.getLogger(__name__)
 
 
 class BaseWorker:
+    """Worker 基类，处理消息消费和执行"""
+
     # 共享的 broker 退出状态，所有 Worker 子类共享
     broker_exit: Dict[BaseBroker, bool] = {}
     broker_exit_lock = threading.Lock()
 
-    def __init__(self, onestep: Any, broker: BaseBroker, *args: Any, **kwargs: Any):
+    def __init__(self, onestep: "BaseOneStep", broker: BaseBroker, *args: Any, **kwargs: Any):
+        """
+        初始化 Worker
+
+        :param onestep: BaseOneStep 实例
+        :param broker: 要监听的 broker
+        :param args: 传递给 worker 的额外位置参数
+        :param kwargs: 传递给 worker 的额外关键字参数
+        """
         self.instance = onestep
         self.retry = self.instance.retry
         self.error_callback = self.instance.error_callback
