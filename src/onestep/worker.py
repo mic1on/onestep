@@ -189,16 +189,26 @@ class ThreadWorker(BaseWorker):
 
 
 class ThreadPoolWorker(BaseWorker):
+    """线程池 Worker，支持并发处理消息"""
 
-    def __init__(self, onestep, broker: BaseBroker, workers=None, *args, **kwargs):
+    def __init__(self, onestep: "BaseOneStep", broker: BaseBroker, workers: Optional[int] = None, *args: Any, **kwargs: Any):
+        """
+        初始化线程池 Worker
+
+        :param onestep: BaseOneStep 实例
+        :param broker: 要监听的 broker
+        :param workers: 线程池大小（默认: None，自动确定）
+        :param args: 传递给 worker 的额外位置参数
+        :param kwargs: 传递给 worker 的额外关键字参数
+        """
         super().__init__(onestep, broker, *args, **kwargs)
         self.executor = ThreadPoolExecutor(max_workers=workers)
 
-    def start(self):
+    def start(self) -> None:
         """启动线程池 Worker"""
         self.executor.submit(self.run)
 
-    def run(self):
+    def run(self) -> None:
         """线程执行包装过的`onestep`函数
 
         `fn`为`onestep`函数，执行会调用`onestep`的`__call__`方法
@@ -214,8 +224,10 @@ class ThreadPoolWorker(BaseWorker):
                 # 将消息处理提交到线程池中并发执行
                 self.executor.submit(self.handle_message, message)
 
-    def shutdown(self):
-        """关闭线程池 Worker"""
+    def shutdown(self) -> None:
+        """关闭线程池 Worker，确保优雅关闭"""
         BaseWorker.broker_exit[self.broker] = True
         self._shutdown = True
-        self.executor.shutdown()
+        # 等待所有任务完成再关闭线程池
+        self.executor.shutdown(wait=True)
+        logger.debug(f"ThreadPoolWorker 已优雅关闭: {self.instance.name}")

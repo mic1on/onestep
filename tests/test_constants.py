@@ -37,7 +37,7 @@ def test_log_format():
 
 def test_default_webhook_host():
     """测试默认 WebHook 主机"""
-    assert DEFAULT_WEBHOOK_HOST == "0.0.0.0"
+    assert DEFAULT_WEBHOOK_HOST == "127.0.0.1"  # 更安全的默认值，只监听本地
 
 
 def test_default_webhook_port():

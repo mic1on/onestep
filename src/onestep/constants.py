@@ -15,7 +15,7 @@ MAX_WORKERS = int(os.getenv("ONESTEP_MAX_WORKERS", "20"))
 LOG_FORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
 
 # WebHook 相关
-DEFAULT_WEBHOOK_HOST = "0.0.0.0"
+DEFAULT_WEBHOOK_HOST = "127.0.0.1"  # 默认只监听本地，更安全
 DEFAULT_WEBHOOK_PORT = 8090
 
 # Broker 消息重试
