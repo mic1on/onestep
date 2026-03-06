@@ -5,13 +5,13 @@ import logging
 
 from inspect import isgenerator, iscoroutinefunction, isasyncgenfunction, isasyncgen
 from itertools import groupby
-from typing import Optional, List, Dict, Any, Callable, Union, Type
+from typing import Optional, List, Dict, Any, Callable, Union, Type, Protocol
 
 from .broker.base import BaseBroker
 from .middleware import BaseMiddleware
 from .exception import StopMiddleware
 from .message import Message
-from .retry import TimesRetry
+from .retry import TimesRetry, BaseRetry, RetryStatus
 from .signal import message_sent, started, stopped
 from .state import State
 from .worker import ThreadWorker, BaseWorker
@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 # 默认 worker 类
 DEFAULT_WORKER_CLASS = ThreadWorker
+
+# 类型别名
+RetryType = BaseRetry
+ErrorCallbackType = Callable[[Message], Any]
 
 
 class BaseOneStep:
@@ -35,8 +39,8 @@ class BaseOneStep:
                  workers: Optional[int] = None,
                  worker_class: Optional[Type[BaseWorker]] = None,
                  middlewares: Optional[List[Any]] = None,
-                 retry: Union[Callable, object] = TimesRetry(),
-                 error_callback: Optional[Union[Callable, object]] = None):
+                 retry: RetryType = TimesRetry(),
+                 error_callback: Optional[ErrorCallbackType] = None):
         """
         BaseOneStep 实例
 
