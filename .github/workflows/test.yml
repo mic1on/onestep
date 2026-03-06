@@ -61,5 +61,13 @@ jobs:
         run: uv sync --all-extras
       - name: Run type checking
         run: uv run mypy src/onestep
-      - name: Run tests
-        run: uv run pytest tests/
+      - name: Run tests with coverage
+        run: uv run pytest tests/ --cov=src/onestep --cov-report=term-missing --cov-report=xml
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-${{ matrix.os }}-${{ matrix.python-version }}
+          fail_ci_if_error: false
