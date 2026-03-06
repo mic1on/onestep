@@ -56,7 +56,37 @@ class WebHookServer(BaseHTTPRequestHandler):
 
 
 class WebHookBroker(MemoryBroker):
-    """WebHook Broker，通过 HTTP 接收消息"""
+    """WebHook Broker，通过 HTTP 接收消息
+
+    提供轻量级的 HTTP 接口，支持 WebHook 模式的消息接收。
+
+    功能：
+    - HTTP POST 接口接收消息
+    - API Key 认证保护
+    - 多路径支持
+    - 并发处理（ThreadingHTTPServer）
+
+    安全特性：
+    - 默认只监听 127.0.0.1（本地访问）
+    - 可选 API Key 认证
+    - 并发保护机制
+
+    使用示例：
+    ```python
+    @step(from_broker=WebHookBroker(path="/webhook", api_key="secret"))
+    def handler(message):
+        print(message.body)
+
+    step.start(block=True)
+    ```
+
+    发送消息：
+    ```bash
+    curl -X POST http://127.0.0.1:8090/webhook \\
+         -H "X-API-Key: secret" \\
+         -d '{"data": "value"}'
+    ```
+    """
 
     _servers: Dict[tuple, ThreadingHTTPServer] = {}
     _lock = threading.Lock()  # 保护 _servers 字典的并发访问
@@ -73,8 +103,12 @@ class WebHookBroker(MemoryBroker):
 
         :param path: WebHook 路径（如 "/webhook"）
         :param host: 监听主机（默认: "127.0.0.1"，仅本地访问）
+                      生产环境建议使用反向代理（如 Nginx）
         :param port: 监听端口（默认: 8090）
         :param api_key: 可选的 API 密钥，用于简单认证
+                       请求需通过 X-API-Key 请求头传递
+        :param args: 传递给 MemoryBroker 的额外位置参数
+        :param kwargs: 传递给 MemoryBroker 的额外关键字参数
         """
         super().__init__(*args, **kwargs)
         self.host = host
