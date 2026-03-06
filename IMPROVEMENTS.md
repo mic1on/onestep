@@ -146,21 +146,64 @@ except ValueError as e:
 
 ---
 
+## 测试结果
+
+### ✅ 已通过的测试 (27/27)
+
+所有相关测试已通过：
+
+```bash
+# 基础测试
+$ PYTHONPATH=src python3 -m pytest tests/test_cli_import_error_handling.py -v
+3 passed
+
+$ PYTHONPATH=src python3 -m pytest tests/test_worker.py -v
+3 passed
+
+$ PYTHONPATH=src python3 -m pytest tests/test_memory_broker.py -v
+5 passed
+
+$ PYTHONPATH=src python3 -m pytest tests/test_message.py -v
+4 passed
+
+# 新功能测试
+$ PYTHONPATH=src python3 -m pytest tests/test_cli_features.py -v
+4 passed
+
+$ PYTHONPATH=src python3 -m pytest tests/test_constants.py -v
+8 passed
+```
+
+### 新增测试文件
+
+- **test_cli_features.py** - 测试 CLI 新功能
+  - `test_version_argument` - --version 参数
+  - `test_cron_valid_expression` - 有效的 cron 表达式
+  - `test_cron_invalid_expression` - 无效的 cron 表达式
+  - `test_help_argument` - --help 参数
+
+- **test_constants.py** - 测试常量模块
+  - 测试所有常量值和类型
+  - 验证环境变量配置
+
+### 更新的测试文件
+
+- **test_cli_import_error_handling.py** - 更新错误消息断言以匹配改进后的中文提示
+
 ## 测试建议
 
 在合并前，建议运行以下测试:
 
 ```bash
 # 运行单元测试
-$ uv run pytest -v tests
+$ PYTHONPATH=src python3 -m pytest -v tests
 
 # 运行代码风格检查
-$ uv run ruff check .
+$ python3 -m ruff check .
 
 # 测试 CLI 功能
-$ onestep --version
-$ onestep --cron "*/5 * * * *"
-$ onestep example/example.py
+$ PYTHONPATH=src python3 -m onestep.cli --version
+$ PYTHONPATH=src python3 -m onestep.cli --cron "*/5 * * * *"
 ```
 
 ---
