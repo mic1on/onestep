@@ -1,13 +1,18 @@
 import json
+import logging
+import os
+import re
 import sys
 import time
 import uuid
 from dataclasses import dataclass
 from traceback import TracebackException
-from typing import Optional, Any, Union, Type
+from typing import Optional, Any, Union, Type, Dict, List
 from types import TracebackType
 
 from onestep._utils import catch_error
+
+logger = logging.getLogger(__name__)
 
 
 class MessageTracebackException(TracebackException):
@@ -104,12 +109,81 @@ class Message:
             setattr(self, key, value)
         return self
 
-    def to_dict(self, include_exception=False) -> dict:
-        data = {'body': self.body, 'extra': self.extra.to_dict()}
+    def to_dict(self, include_exception=False, redact_sensitive=False, sensitive_keys: Optional[List[str]] = None) -> dict:
+        """
+        转换为字典
+
+        :param include_exception: 是否包含异常信息
+        :param redact_sensitive: 是否脱敏敏感数据
+        :param sensitive_keys: 需要脱敏的键列表（如果为 None，使用默认列表）
+        :return: 消息字典
+        """
+        body = self.body
+
+        # 如果需要脱敏
+        if redact_sensitive:
+            body = self._redact_sensitive_data(body, sensitive_keys)
+
+        data = {'body': body, 'extra': self.extra.to_dict()}
+
         if include_exception and self.exception:
             data['exception'] = "".join(self.exception.format(chain=True))  # noqa
 
         return data
+
+    @staticmethod
+    def _redact_sensitive_data(data: Any, sensitive_keys: Optional[List[str]] = None) -> Any:
+        """
+        脱敏敏感数据
+
+        :param data: 要脱敏的数据
+        :param sensitive_keys: 需要脱敏的键列表
+        :return: 脱敏后的数据
+        """
+        # 默认的敏感键列表
+        default_sensitive_keys = [
+            'password', 'passwd', 'pwd',
+            'secret', 'token', 'apikey', 'api_key',
+            'authorization', 'auth',
+            'credit_card', 'card_number',
+            'ssn', 'social_security_number',
+            'phone', 'mobile', 'telephone',
+            'email', 'email_address',
+        ]
+
+        keys_to_redact = sensitive_keys or default_sensitive_keys
+
+        # 处理字典
+        if isinstance(data, dict):
+            return {
+                k: '***REDACTED***' if Message._is_sensitive_key(k, keys_to_redact)
+                else Message._redact_sensitive_data(v, keys_to_redact)
+                for k, v in data.items()
+            }
+
+        # 处理列表
+        elif isinstance(data, (list, tuple)):
+            return [Message._redact_sensitive_data(item, keys_to_redact) for item in data]
+
+        # 其他类型直接返回
+        else:
+            return data
+
+    @staticmethod
+    def _is_sensitive_key(key: str, sensitive_keys: List[str]) -> bool:
+        """
+        检查键是否敏感
+
+        :param key: 键名
+        :param sensitive_keys: 敏感键列表
+        :return: 是否敏感
+        """
+        key_lower = key.lower()
+        for sensitive in sensitive_keys:
+            # 完全匹配或包含敏感词
+            if sensitive in key_lower:
+                return True
+        return False
 
     def to_json(self, include_exception=False) -> str:
         return json.dumps(self.to_dict(include_exception))
@@ -159,7 +233,15 @@ class Message:
             setattr(self, item, None)
 
     def __str__(self):
-        return str(self.to_dict())
+        """
+        返回字符串表示（默认启用脱敏）
+
+        可以通过环境变量 ONESTEP_LOG_REDACT=true/false 控制脱敏
+        """
+        # 默认启用脱敏（生产环境更安全）
+        enable_redaction = os.getenv('ONESTEP_LOG_REDACT', 'true').lower() in ('true', '1', 'yes')
+
+        return str(self.to_dict(redact_sensitive=enable_redaction))
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.body}>"

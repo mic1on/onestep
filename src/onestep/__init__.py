@@ -1,6 +1,7 @@
 from .onestep import step
 from .cron import Cron
 from .config import Config
+from .message import Message
 from .retry import (
     BaseRetry, BaseErrorCallback, NackErrorCallBack,
     NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, AdvancedRetry
@@ -26,6 +27,9 @@ __all__ = [
 
     # config
     'Config',
+
+    # message
+    'Message',
 
     # broker
     'BaseBroker',
