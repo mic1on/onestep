@@ -110,6 +110,7 @@ class MemoryBroker(BaseBroker):
                       - timeout: 获取消息的超时时间（毫秒，默认: 5000）
         :return: BaseConsumer 实例，支持迭代获取消息
         """
+        return MemoryConsumer(self, *args, **kwargs)
 
     def confirm(self, message: Message):
         """确认消息已成功处理
