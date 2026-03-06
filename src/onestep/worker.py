@@ -82,8 +82,7 @@ class BaseWorker:
     def _run_real_instance(self, message: Message) -> None:
         """ 执行实例的逻辑 """
         if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
-            # type: ignore[arg-type]
-            async_to_sync(self.instance)(message, *self.args, **self.kwargs)  # type: ignore[arg-type]
+            async_to_sync(self.instance)(message, *self.args, **self.kwargs)  # type: ignore
         else:
             self.instance(message, *self.args, **self.kwargs)
 
