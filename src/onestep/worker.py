@@ -4,7 +4,7 @@
 提供 Worker 抽象，支持单线程和线程池两种执行模式
 """
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Iterable, Optional, Type, Union, TYPE_CHECKING
+from typing import Dict, Iterable, Optional, Type, Union, TYPE_CHECKING, Any
 
 import logging
 import threading

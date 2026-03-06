@@ -11,7 +11,7 @@ def test_step_module_not_found(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="onestep"):
         code = cli.main()
     assert code == 2
-    assert "step module not found: this_module_should_not_exist_12345" in caplog.text
+    assert "找不到模块: this_module_should_not_exist_12345" in caplog.text
 
 
 def test_step_import_missing_dependency(tmp_path, monkeypatch, caplog):
@@ -24,8 +24,8 @@ def test_step_import_missing_dependency(tmp_path, monkeypatch, caplog):
         code = cli.main()
 
     assert code == 1
-    assert f"failed to import step module: {module_name}" in caplog.text
-    assert "caused by missing dependency" in caplog.text
+    assert f"导入模块失败: {module_name}" in caplog.text
+    assert "缺少依赖: this_dependency_should_not_exist_12345" in caplog.text
 
     sys.modules.pop(module_name, None)
 
@@ -40,7 +40,8 @@ def test_step_import_other_exception(tmp_path, monkeypatch, caplog):
         code = cli.main()
 
     assert code == 1
-    assert f"failed to import step module: {module_name}" in caplog.text
-    assert "import error" in caplog.text
+    assert f"启动失败: {module_name}" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "boom" in caplog.text
 
     sys.modules.pop(module_name, None)
