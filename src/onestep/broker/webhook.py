@@ -5,6 +5,7 @@ from typing import Dict, List, DefaultDict, Any, Optional
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .memory import MemoryBroker, MemoryConsumer
+from ..constants import DEFAULT_WEBHOOK_HOST, DEFAULT_WEBHOOK_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +135,8 @@ class WebHookBroker(MemoryBroker):
         """
         return cls(
             path=path,
-            host=config.get("webhook.host", "127.0.0.1"),
-            port=config.get("webhook.port", 8090),
+            host=config.get("webhook.host", DEFAULT_WEBHOOK_HOST),
+            port=config.get("webhook.port", DEFAULT_WEBHOOK_PORT),
             api_key=config.get("webhook.api_key"),
         )
 

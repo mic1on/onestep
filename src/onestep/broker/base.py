@@ -8,7 +8,7 @@ from typing import Any, Optional, List, Callable, Type
 from onestep.middleware import BaseMiddleware
 from onestep.exception import StopMiddleware
 from onestep.message import Message
-from onestep.constants import DEFAULT_MEMORY_BROKER_TIMEOUT
+from onestep.constants import DEFAULT_MEMORY_BROKER_TIMEOUT, MILLISECONDS_PER_SECOND
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ class BaseConsumer:
                 return None
             timeout_ms = self.timeout
             if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
-                data = q.get(timeout=timeout_ms / 1000.0)
+                data = q.get(timeout=timeout_ms / MILLISECONDS_PER_SECOND)
             else:
                 # 当超时为0、负数或非数字时，使用非阻塞获取以避免ValueError
                 data = q.get_nowait()

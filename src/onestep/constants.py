@@ -34,10 +34,14 @@ __all__ = [
     "DEFAULT_SEND_RETRY_DELAY",
     "DEFAULT_MEMORY_BROKER_MAXSIZE",
     "DEFAULT_MEMORY_BROKER_TIMEOUT",
+    "MILLISECONDS_PER_SECOND",
 ]
 
 
 # Broker 相关配置
 DEFAULT_MEMORY_BROKER_MAXSIZE = 1000  # MemoryBroker 默认队列大小，防止内存溢出
 DEFAULT_MEMORY_BROKER_TIMEOUT = 5000  # Consumer 等待消息的超时时间（毫秒）
+
+# 时间转换常量
+MILLISECONDS_PER_SECOND = 1000  # 毫秒转秒的除数
 

@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, Callable, List
 
 from onestep.broker import BaseBroker, BaseConsumer
 from onestep.message import Message
+from onestep.constants import DEFAULT_MEMORY_BROKER_TIMEOUT
 
 try:
     from use_sqs import SQSStore
@@ -110,7 +111,7 @@ class SQSBroker(BaseBroker):
     def consume(self, *args, **kwargs) -> "SQSConsumer":
         """启动消费者"""
         daemon = kwargs.pop("daemon", True)
-        timeout = kwargs.pop("timeout", 1000)
+        timeout = kwargs.pop("timeout", DEFAULT_MEMORY_BROKER_TIMEOUT)
         with self._consume_lock:
             if not self._consuming_started:
                 thread_kwargs = kwargs.copy()
