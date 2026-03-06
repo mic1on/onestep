@@ -83,7 +83,7 @@ class BaseWorker:
         """ 执行实例的逻辑 """
         if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
             # type: ignore[arg-type]
-            async_to_sync(self.instance)(message, *self.args, **self.kwargs)
+            async_to_sync(self.instance)(message, *self.args, **self.kwargs)  # type: ignore[arg-type]
         else:
             self.instance(message, *self.args, **self.kwargs)
 
