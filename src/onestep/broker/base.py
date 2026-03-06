@@ -8,6 +8,7 @@ from typing import Any, Optional, List, Callable, Type
 from onestep.middleware import BaseMiddleware
 from onestep.exception import StopMiddleware
 from onestep.message import Message
+from onestep.constants import DEFAULT_MEMORY_BROKER_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,8 @@ class BaseConsumer:
     def __init__(self, broker: BaseBroker, *args, **kwargs):
         self.queue = broker.queue
         self.message_cls: Type[Message] = broker.message_cls if broker.message_cls else Message
-        self.timeout = kwargs.pop("timeout", 1000)
+        # 使用默认超时时间（可通过 timeout 参数覆盖）
+        self.timeout = kwargs.pop("timeout", DEFAULT_MEMORY_BROKER_TIMEOUT)
 
     def __next__(self):
         """从队列获取下一条消息"""

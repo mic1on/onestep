@@ -179,7 +179,9 @@ class BaseOneStep:
         self.emit(signal, *args, **kwargs)
 
     def emit(self, signal, *args, **kwargs):
-        for middleware in self.middlewares:
+        # 按中间件的 order 属性排序（order 值越小，越早执行）
+        sorted_middlewares = sorted(self.middlewares, key=lambda m: getattr(m, 'order', 100))
+        for middleware in sorted_middlewares:
             if not hasattr(middleware, signal):
                 continue
             try:

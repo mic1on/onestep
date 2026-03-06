@@ -4,7 +4,7 @@ from queue import Queue, Full as FullException
 from typing import Any, Optional
 
 from .base import BaseBroker, BaseConsumer
-
+from ..constants import DEFAULT_MEMORY_BROKER_MAXSIZE, DEFAULT_MEMORY_BROKER_TIMEOUT
 from ..message import Message
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,13 @@ class MemoryMessage(Message):
 class MemoryBroker(BaseBroker):
     message_cls = MemoryMessage
 
-    def __init__(self, maxsize: int = 0, *args, **kwargs):
+    def __init__(self, maxsize: int = DEFAULT_MEMORY_BROKER_MAXSIZE, *args, **kwargs):
+        """
+        初始化内存 Broker
+
+        :param maxsize: 队列最大大小（默认: 1000，防止内存溢出）
+                     使用 0 表示无限制（不建议生产环境）
+        """
         super().__init__(*args, **kwargs)
         self.queue: Queue = Queue(maxsize)
 

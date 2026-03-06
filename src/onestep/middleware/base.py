@@ -11,6 +11,21 @@ class DeprecationMeta(type):
 
 
 class BaseMiddleware(metaclass=DeprecationMeta):
+    """中间件基类
+
+    支持通过 `order` 参数控制执行顺序。
+    数值越小，越早执行。
+    """
+
+    order: int = 100  # 默认顺序
+
+    def __init__(self, order: int = 100):
+        """
+        初始化中间件
+
+        :param order: 执行顺序（数值越小越早，默认: 100）
+        """
+        self.order = order
 
     def before_send(self, step, message, *args, **kwargs):
         """消息发送之前"""
@@ -29,4 +44,4 @@ class BaseMiddleware(metaclass=DeprecationMeta):
         pass
 
     def __repr__(self):
-        return f"<{self.__class__.__name__}>"
+        return f"<{self.__class__.__name__} order={self.order}>"
