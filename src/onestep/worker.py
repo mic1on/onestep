@@ -84,7 +84,7 @@ class BaseWorker:
         if iscoroutinefunction(self.instance.fn) or isasyncgenfunction(self.instance.fn):
             async_to_sync(self.instance)(message, *self.args, **self.kwargs)  # type: ignore
         else:
-            self.instance(message, *self.args, **self.kwargs)
+            self.instance(message, *self.args, **self.kwargs)  # type: ignore
 
     def handle_message(self, message: Message) -> None:
         """ 处理消息 """
