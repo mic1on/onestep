@@ -84,6 +84,27 @@ class WebHookBroker(MemoryBroker):
         self.threads: List[threading.Thread] = []
         WebHookServer.api_key = api_key  # 设置全局 API key
 
+    @classmethod
+    def from_config(cls, config, path: str = "/webhook") -> "WebHookBroker":
+        """
+        从配置对象创建 WebHook Broker
+
+        :param config: Config 实例
+        :param path: WebHook 路径（默认: "/webhook"）
+        :return: WebHookBroker 实例
+
+        配置项:
+        - webhook.host: 监听主机（默认: "127.0.0.1"）
+        - webhook.port: 监听端口（默认: 8090）
+        - webhook.api_key: API 密钥（可选）
+        """
+        return cls(
+            path=path,
+            host=config.get("webhook.host", "127.0.0.1"),
+            port=config.get("webhook.port", 8090),
+            api_key=config.get("webhook.api_key"),
+        )
+
     def _create_server(self):
         """创建并启动 WebHook 服务器"""
         with self._lock:
