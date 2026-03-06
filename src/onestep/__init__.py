@@ -1,5 +1,6 @@
 from .onestep import step
 from .cron import Cron
+from .config import Config
 from .retry import (
     BaseRetry, BaseErrorCallback, NackErrorCallBack,
     NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, AdvancedRetry
@@ -22,6 +23,9 @@ from .worker import BaseWorker, ThreadWorker, ThreadPoolWorker
 
 __all__ = [
     'step', 'Cron',
+
+    # config
+    'Config',
 
     # broker
     'BaseBroker',

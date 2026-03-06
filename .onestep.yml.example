@@ -1,0 +1,47 @@
+# OneStep 配置文件示例
+
+# WebHook Broker 配置
+webhook:
+  host: "127.0.0.1"  # 监听主机，默认 127.0.0.1（仅本地访问）
+  port: 8090            # 监听端口，默认 8090
+  api_key: null          # 可选：API 密钥，用于认证
+
+# Worker 配置
+workers:
+  default: 1            # 默认 worker 数量
+  max: 20               # 最大 worker 数量（可通过环境变量 ONESTEP_MAX_WORKERS 覆盖）
+
+# 消息重试配置
+retry:
+  send_times: 3          # 消息发送重试次数
+  send_delay: 1.0        # 消息发送重试延迟（秒）
+
+# 日志配置
+logging:
+  level: "INFO"         # 日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s [%(name)s] [%(levelname)s] %(message)s"
+
+# Broker 特定配置
+rabbitmq:
+  host: "localhost"
+  port: 5672
+  username: "guest"
+  password: "guest"
+  virtual_host: "/"
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+
+sqs:
+  region_name: "us-east-1"
+  # AWS 凭证通常通过环境变量或 IAM 角色获取
+
+# 任务配置
+tasks:
+  group: "OneStep"       # 默认任务组名称
+
+# 内存配置
+memory:
+  broker_maxsize: 0      # MemoryBroker 最大队列大小，0 表示无限制

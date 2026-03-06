@@ -29,6 +29,8 @@
 
 ## 😋example
 
+### 基础用法
+
 ```python
 # example.py
 
@@ -75,3 +77,72 @@ if __name__ == '__main__':
 ```
 
 🤔more examples: [examples](example)
+
+## ⚙️ Configuration
+
+OneStep 支持通过配置文件和环境变量来管理配置，方便不同环境的部署。
+
+### 配置文件
+
+支持 `.json`、`.yaml`、`.yml` 格式的配置文件。
+
+示例配置文件 `.onestep.yml`:
+
+```yaml
+# WebHook Broker 配置
+webhook:
+  host: "127.0.0.1"
+  port: 8090
+  api_key: "your-secret-key"
+
+# Worker 配置
+workers:
+  default: 1
+  max: 20
+```
+
+### 使用配置
+
+```python
+from onestep import step, WebHookBroker, Config
+
+# 加载配置
+config = Config(config_file=".onestep.yml")
+
+# 使用配置
+@step(
+    from_broker=WebHookBroker(
+        path="/webhook",
+        host=config.get("webhook.host", "127.0.0.1"),
+        port=config.get("webhook.port", 8090),
+        api_key=config.get("webhook.api_key"),
+    ),
+    workers=config.get("workers.default", 1),
+)
+def handle_webhook(message):
+    print(f"收到消息: {message}")
+
+if __name__ == '__main__':
+    step.start(block=True)
+```
+
+### 环境变量覆盖
+
+支持通过环境变量覆盖配置值，格式为 `ONESTEP_<CONFIG_KEY>`。
+
+嵌套键使用下划线分隔（例如 `webhook.port` → `ONESTEP_WEBHOOK_PORT`）。
+
+```bash
+# 覆盖配置
+export ONESTEP_WEBHOOK_PORT=9000
+export ONESTEP_WORKERS=5
+
+# 运行应用
+python app.py
+```
+
+类型会自动转换：数字、布尔值、null。
+
+### 更多示例
+
+查看完整示例：[`.onestep.yml.example`](.onestep.yml.example) 和 [`config_example.py`](example/config_example.py)
