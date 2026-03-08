@@ -1,0 +1,57 @@
+[project]
+name = "onestep-control-plane"
+version = "0.1.0a0"
+description = "Control plane for OneStep runtime monitoring and telemetry ingestion."
+authors = [
+  { name = "miclon", email = "jcnd@163.com" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "alembic>=1.16.0",
+  "fastapi>=0.116.0",
+  "pydantic-settings>=2.7.0",
+  "psycopg[binary]>=3.2.0",
+  "sqlalchemy>=2.0.36",
+  "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx>=0.28.0",
+  "pytest>=8.4.0",
+]
+dev = [
+  "httpx>=0.28.0",
+  "pytest>=8.4.0",
+  "ruff>=0.13.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["apps/api/src/onestep_control_plane_api"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/alembic.ini",
+  "/README.md",
+  "/pyproject.toml",
+  "/apps/api/alembic",
+  "/apps/api/src/onestep_control_plane_api",
+  "/apps/api/tests",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["apps/api/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
