@@ -139,6 +139,56 @@ sudo journalctl -u onestep-app -f
 See `deploy/README.md` for the expected directory layout and the env vars you need to adjust first.
 The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined inside the repo can be imported by the `onestep` console script.
 
+## Control Plane Reporter
+
+`onestep` can push runtime telemetry to `onestep-control-plane` without adding a new connector or changing task code.
+
+Attach the reporter explicitly:
+
+```python
+from onestep import ControlPlaneReporter, ControlPlaneReporterConfig, IntervalSource, OneStepApp
+
+app = OneStepApp("billing-sync")
+reporter = ControlPlaneReporter(ControlPlaneReporterConfig.from_env(app_name=app.name))
+reporter.attach(app)
+
+
+@app.task(source=IntervalSource.every(hours=1, immediate=True, overlap="skip"))
+async def sync_users(ctx, _):
+    print("syncing users")
+```
+
+Required environment variables:
+
+- `ONESTEP_CONTROL_PLANE_URL` or `ONESTEP_CONTROL_URL`
+- `ONESTEP_CONTROL_PLANE_TOKEN` or `ONESTEP_CONTROL_TOKEN`
+
+Common optional environment variables:
+
+- `ONESTEP_ENV`
+- `ONESTEP_SERVICE_NAME`
+- `ONESTEP_NODE_NAME`
+- `ONESTEP_DEPLOYMENT_VERSION`
+- `ONESTEP_INSTANCE_ID`
+- `ONESTEP_CONTROL_PLANE_HEARTBEAT_INTERVAL_S`
+- `ONESTEP_CONTROL_PLANE_METRICS_INTERVAL_S`
+- `ONESTEP_CONTROL_PLANE_EVENT_FLUSH_INTERVAL_S`
+- `ONESTEP_CONTROL_PLANE_EVENT_BATCH_SIZE`
+- `ONESTEP_CONTROL_PLANE_TIMEOUT_S`
+
+The reporter currently pushes:
+
+- `POST /api/v1/agents/heartbeat`
+- `POST /api/v1/agents/metrics`
+- `POST /api/v1/agents/events`
+
+Behavior:
+
+- startup sends an initial heartbeat
+- task execution events are aggregated into task window metrics
+- important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
+- reporter failures are logged but do not stop task execution
+
 ## Runtime
 
 The runtime now has a few explicit control points:

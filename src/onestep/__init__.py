@@ -4,6 +4,7 @@ from .app import OneStepApp
 from .context import TaskContext
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
+from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
 from .retry import (
     FailureInfo,
     FailureKind,
@@ -32,6 +33,8 @@ __all__ = [
     "BearerAuth",
     "CronSource",
     "CursorStore",
+    "ControlPlaneReporter",
+    "ControlPlaneReporterConfig",
     "Delivery",
     "Envelope",
     "FailureInfo",

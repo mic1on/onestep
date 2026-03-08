@@ -18,3 +18,7 @@ Files:
 - `mysql_incremental.py`: incremental sync using a durable cursor store
 - `rabbitmq_queue.py`: RabbitMQ source/sink usage
 - `sqs_queue.py`: SQS source/sink usage
+
+Control plane reporting is documented in the top-level `README.md`. It currently needs a reachable
+`onestep-control-plane` endpoint and is better shown as an integration snippet than as a standalone
+local example.
