@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.integration.yml"
 KEEP_SERVICES="${KEEP_INTEGRATION_SERVICES:-0}"
+PYTHON_BIN="${ONESTEP_PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="${ONESTEP_PYTHON_BIN:-python3}"
+fi
 
 cleanup() {
   local exit_code="$1"
@@ -20,4 +25,4 @@ docker compose -f "$COMPOSE_FILE" up -d
 # shellcheck disable=SC1091
 eval "$("$ROOT_DIR/scripts/setup-integration-env.sh")"
 
-python3 -m pytest tests/integration -q "$@"
+"$PYTHON_BIN" -m pytest tests/integration -q "$@"

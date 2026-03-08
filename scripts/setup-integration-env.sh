@@ -14,6 +14,11 @@ MYSQL_PORT="${ONESTEP_MYSQL_PORT:-3306}"
 MYSQL_DATABASE="${ONESTEP_MYSQL_DATABASE:-onestep}"
 MYSQL_USER="${ONESTEP_MYSQL_USER:-root}"
 MYSQL_PASSWORD="${ONESTEP_MYSQL_PASSWORD:-root}"
+PYTHON_BIN="${ONESTEP_PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="${ONESTEP_PYTHON_BIN:-python3}"
+fi
 
 wait_for_url() {
   local url="$1"
@@ -51,7 +56,7 @@ wait_for_mysql() {
   MYSQL_USER="$MYSQL_USER" \
   MYSQL_PASSWORD="$MYSQL_PASSWORD" \
   MYSQL_DATABASE="$MYSQL_DATABASE" \
-  python3 - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import os
 import time
 
@@ -85,7 +90,7 @@ PY
 }
 
 ensure_sqs_queue() {
-  python3 - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import boto3
 import json
 import os
@@ -118,7 +123,7 @@ wait_for_rabbitmq
 wait_for_mysql
 
 SQS_QUEUE_JSON="$(LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" AWS_REGION_VALUE="$AWS_REGION_VALUE" SQS_QUEUE_NAME="$SQS_QUEUE_NAME" ensure_sqs_queue)"
-SQS_QUEUE_URL="$(printf '%s' "$SQS_QUEUE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["QueueUrl"])')"
+SQS_QUEUE_URL="$(printf '%s' "$SQS_QUEUE_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["QueueUrl"])')"
 MYSQL_DSN="mysql+pymysql://$MYSQL_USER:$MYSQL_PASSWORD@$MYSQL_HOST:$MYSQL_PORT/$MYSQL_DATABASE"
 
 cat <<ENV
