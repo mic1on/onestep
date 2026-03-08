@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
 import os
 import platform
+import re
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -73,6 +75,72 @@ def _read_env(*names: str) -> str | None:
         if value is not None and value.strip():
             return value.strip()
     return None
+
+
+_KIND_OVERRIDES = {
+    "CronSource": "cron",
+    "IncrementalTableSource": "mysql_incremental",
+    "IntervalSource": "interval",
+    "MaxAttempts": "max_attempts",
+    "MemoryQueue": "memory_queue",
+    "NoRetry": "no_retry",
+    "RabbitMQQueue": "rabbitmq_queue",
+    "SQSQueue": "sqs_queue",
+    "TableQueueSource": "mysql_table_queue",
+    "TableSink": "mysql_table_sink",
+    "WebhookSource": "webhook",
+}
+
+
+def _snake_case(value: str) -> str:
+    normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+    return normalized.strip("_")
+
+
+def _kind_name(value: object) -> str:
+    class_name = value.__class__.__name__
+    if class_name in _KIND_OVERRIDES:
+        return _KIND_OVERRIDES[class_name]
+    for suffix in ("Source", "Sink"):
+        if class_name.endswith(suffix):
+            class_name = class_name[: -len(suffix)]
+            break
+    return _snake_case(class_name)
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, (str, int, float, bool)):
+        return enum_value
+    return str(value)
+
+
+def _stable_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_json_default,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _seconds_value(value: float) -> int | float:
+    if float(value).is_integer():
+        return int(value)
+    return value
 
 
 @dataclass
@@ -240,6 +308,7 @@ class ControlPlaneReporter:
         self._metrics_by_task: dict[str, _TaskMetricsState] = {}
         self._pending_metric_batches: list[_PreparedMetricsBatch] = []
         self._degraded_since_last_heartbeat = False
+        self._last_synced_topology_hash: str | None = None
         self._loop_tasks: list[asyncio.Task[None]] = []
         self._stop_event: asyncio.Event | None = None
         self._event_flush_signal: asyncio.Event | None = None
@@ -265,11 +334,13 @@ class ControlPlaneReporter:
         self._pending_metric_batches.clear()
         self._metrics_by_task.clear()
         self._degraded_since_last_heartbeat = False
+        self._last_synced_topology_hash = None
         self._stop_event = asyncio.Event()
         self._event_flush_signal = asyncio.Event()
         self._started_at = _utcnow()
         self._metrics_window_started_at = self._started_at
         await self._safe_send_heartbeat()
+        await self._safe_send_sync()
         self._loop_tasks = [
             asyncio.create_task(self._heartbeat_loop(), name="onestep-control-plane-heartbeat"),
             asyncio.create_task(self._metrics_loop(), name="onestep-control-plane-metrics"),
@@ -333,6 +404,7 @@ class ControlPlaneReporter:
 
     async def _heartbeat_loop(self) -> None:
         while not await self._wait_for_stop(self.config.heartbeat_interval_s):
+            await self._safe_send_sync()
             await self._safe_send_heartbeat()
 
     async def _metrics_loop(self) -> None:
@@ -402,6 +474,180 @@ class ControlPlaneReporter:
             "uptime_s": max(0, int((_utcnow() - self._started_at).total_seconds())),
             "inflight_tasks": inflight_tasks,
         }
+
+    def _build_retry_descriptor(self, policy: Any) -> dict[str, Any]:
+        kind = _kind_name(policy)
+        if kind == "max_attempts":
+            return {
+                "kind": kind,
+                "config": {
+                    "max_attempts": policy.max_attempts,
+                    "delay_s": policy.delay_s,
+                },
+            }
+        return {"kind": kind, "config": {}}
+
+    def _build_connector_config(self, resource: Any) -> dict[str, Any]:
+        class_name = resource.__class__.__name__
+        if class_name == "IntervalSource":
+            return {
+                "seconds": _seconds_value(resource.interval.total_seconds()),
+                "immediate": resource.immediate,
+                "overlap": resource.overlap,
+                "timezone": str(resource.timezone),
+                "poll_interval_s": resource.poll_interval_s,
+            }
+        if class_name == "CronSource":
+            return {
+                "expression": resource.schedule.expression,
+                "immediate": resource.immediate,
+                "overlap": resource.overlap,
+                "timezone": str(resource.timezone),
+                "poll_interval_s": resource.poll_interval_s,
+            }
+        if class_name == "MemoryQueue":
+            return {
+                "maxsize": resource._maxsize,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+            }
+        if class_name == "WebhookSource":
+            return {
+                "path": resource.path,
+                "methods": list(resource.methods),
+                "host": resource.host,
+                "port": resource.port,
+                "parser": resource.parser,
+                "max_body_bytes": resource.max_body_bytes,
+                "read_timeout_s": resource.read_timeout_s,
+                "queue_maxsize": resource.queue_maxsize,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+            }
+        if class_name == "RabbitMQQueue":
+            return {
+                "routing_key": resource.routing_key,
+                "exchange": resource.exchange_name,
+                "exchange_type": resource.exchange_type,
+                "bind": resource.bind,
+                "bind_arguments": resource.bind_arguments,
+                "durable": resource.durable,
+                "auto_delete": resource.auto_delete,
+                "arguments": resource.arguments,
+                "exchange_durable": resource.exchange_durable,
+                "exchange_auto_delete": resource.exchange_auto_delete,
+                "exchange_arguments": resource.exchange_arguments,
+                "prefetch": resource.prefetch,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+                "publisher_confirms": resource.publisher_confirms,
+                "persistent": resource.persistent,
+            }
+        if class_name == "SQSQueue":
+            return {
+                "url": resource.url,
+                "wait_time_s": resource.wait_time_s,
+                "visibility_timeout": resource.visibility_timeout,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+                "message_group_id": resource.message_group_id,
+                "on_fail": resource.on_fail,
+                "delete_batch_size": resource.delete_batch_size,
+                "delete_flush_interval_s": resource.delete_flush_interval_s,
+                "heartbeat_interval_s": resource.heartbeat_interval_s,
+                "heartbeat_visibility_timeout": resource.heartbeat_visibility_timeout,
+            }
+        if class_name == "TableQueueSource":
+            return {
+                "table": resource.table_name,
+                "key": resource.key,
+                "where": resource.where,
+                "claim": resource.claim,
+                "ack": resource.ack,
+                "nack": resource.nack,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+            }
+        if class_name == "IncrementalTableSource":
+            return {
+                "table": resource.table_name,
+                "key": resource.key,
+                "cursor": list(resource.cursor),
+                "where": resource.where,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+                "state_key": resource.state_key,
+            }
+        if class_name == "TableSink":
+            return {
+                "table": resource.table_name,
+                "mode": resource.mode,
+                "keys": list(resource.keys),
+            }
+        return {}
+
+    def _build_connector_descriptor(self, resource: Any) -> dict[str, Any]:
+        custom_descriptor = getattr(resource, "control_plane_descriptor", None)
+        if callable(custom_descriptor):
+            payload = _json_safe(custom_descriptor())
+            if isinstance(payload, dict):
+                return {
+                    "kind": str(payload.get("kind") or _kind_name(resource)),
+                    "name": str(payload.get("name") or resource.name),
+                    "config": _json_safe(payload.get("config") or {}),
+                }
+        return {
+            "kind": _kind_name(resource),
+            "name": resource.name,
+            "config": _json_safe(self._build_connector_config(resource)),
+        }
+
+    def _build_app_topology_descriptor(self) -> dict[str, Any]:
+        if self._app is None:
+            raise RuntimeError("reporter is not attached to an app")
+        tasks = []
+        for task in self._app.tasks:
+            tasks.append(
+                {
+                    "name": task.name,
+                    "source": (
+                        self._build_connector_descriptor(task.source) if task.source is not None else None
+                    ),
+                    "emit": [self._build_connector_descriptor(sink) for sink in task.sinks],
+                    "concurrency": task.concurrency,
+                    "timeout_s": task.timeout_s,
+                    "retry": self._build_retry_descriptor(task.retry),
+                }
+            )
+        return {
+            "name": self._service_name,
+            "shutdown_timeout_s": self._app.shutdown_timeout_s,
+            "tasks": tasks,
+        }
+
+    async def _safe_send_sync(self) -> None:
+        if self._app is None:
+            return
+        app_payload = self._build_app_topology_descriptor()
+        topology_hash = _stable_hash(app_payload)
+        if topology_hash == self._last_synced_topology_hash:
+            return
+        payload = {
+            "service": self._service_descriptor(),
+            "runtime": self._build_runtime_descriptor(),
+            "app": {
+                **app_payload,
+                "topology_hash": topology_hash,
+            },
+            "sent_at": _utcnow(),
+            "sequence": self._next_sequence(),
+        }
+        try:
+            await self._sender("/api/v1/agents/sync", payload)
+        except Exception:
+            self._logger.exception("control plane sync failed")
+        else:
+            self._last_synced_topology_hash = topology_hash
 
     async def _safe_send_heartbeat(self) -> None:
         payload = {

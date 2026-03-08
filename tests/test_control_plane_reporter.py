@@ -10,6 +10,9 @@ from onestep import (
     ControlPlaneReporterConfig,
     FailureInfo,
     FailureKind,
+    IntervalSource,
+    MaxAttempts,
+    MemoryQueue,
     OneStepApp,
     TaskEvent,
     TaskEventKind,
@@ -53,19 +56,100 @@ def test_reporter_startup_sends_heartbeat() -> None:
 
     asyncio.run(scenario())
 
-    assert recorder.calls
-    endpoint, payload = recorder.calls[0]
-    assert endpoint == "/api/v1/agents/heartbeat"
-    assert payload["service"] == {
+    assert [endpoint for endpoint, _ in recorder.calls[:2]] == [
+        "/api/v1/agents/heartbeat",
+        "/api/v1/agents/sync",
+    ]
+    heartbeat_payload = recorder.calls[0][1]
+    sync_payload = recorder.calls[1][1]
+
+    assert heartbeat_payload["service"] == {
         "name": "billing-sync",
         "environment": "prod",
         "node_name": "vm-prod-3",
         "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
         "deployment_version": "1.0.0a0+c435c99",
     }
-    assert payload["health"]["status"] == "ok"
-    assert payload["sequence"] == 1
-    assert payload["runtime"]["pid"] > 0
+    assert heartbeat_payload["health"]["status"] == "ok"
+    assert heartbeat_payload["sequence"] == 1
+    assert heartbeat_payload["runtime"]["pid"] > 0
+    assert sync_payload["app"] == {
+        "name": "billing-sync",
+        "shutdown_timeout_s": 30.0,
+        "tasks": [],
+        "topology_hash": sync_payload["app"]["topology_hash"],
+    }
+    assert sync_payload["sequence"] == 2
+    assert sync_payload["app"]["topology_hash"].startswith("sha256:")
+
+
+def test_reporter_sync_payload_includes_task_topology() -> None:
+    recorder = SenderRecorder()
+    source = IntervalSource.every(hours=1, immediate=True, overlap="skip")
+    sink = MemoryQueue("results", maxsize=50, batch_size=25, poll_interval_s=0.2)
+    app = OneStepApp("billing-sync")
+
+    @app.task(
+        source=source,
+        emit=sink,
+        concurrency=16,
+        timeout_s=30.0,
+        retry=MaxAttempts(max_attempts=5, delay_s=10.0),
+    )
+    async def sync_users(ctx, payload):
+        return payload
+
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_calls = [payload for endpoint, payload in recorder.calls if endpoint.endswith("/sync")]
+    assert len(sync_calls) == 1
+    sync_payload = sync_calls[0]
+    assert sync_payload["app"]["name"] == "billing-sync"
+    assert sync_payload["app"]["shutdown_timeout_s"] == 30.0
+    assert sync_payload["app"]["topology_hash"].startswith("sha256:")
+    assert sync_payload["app"]["tasks"] == [
+        {
+            "name": "sync_users",
+            "source": {
+                "kind": "interval",
+                "name": "interval:3600s",
+                "config": {
+                    "seconds": 3600,
+                    "immediate": True,
+                    "overlap": "skip",
+                    "timezone": str(source.timezone),
+                    "poll_interval_s": source.poll_interval_s,
+                },
+            },
+            "emit": [
+                {
+                    "kind": "memory_queue",
+                    "name": "results",
+                    "config": {
+                        "maxsize": 50,
+                        "batch_size": 25,
+                        "poll_interval_s": 0.2,
+                    },
+                }
+            ],
+            "concurrency": 16,
+            "timeout_s": 30.0,
+            "retry": {
+                "kind": "max_attempts",
+                "config": {
+                    "max_attempts": 5,
+                    "delay_s": 10.0,
+                },
+            },
+        }
+    ]
 
 
 def test_reporter_flushes_metrics_and_events() -> None:

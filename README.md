@@ -178,6 +178,7 @@ Common optional environment variables:
 
 The reporter currently pushes:
 
+- `POST /api/v1/agents/sync`
 - `POST /api/v1/agents/heartbeat`
 - `POST /api/v1/agents/metrics`
 - `POST /api/v1/agents/events`
@@ -185,9 +186,32 @@ The reporter currently pushes:
 Behavior:
 
 - startup sends an initial heartbeat
+- startup also sends a topology sync built from the current app tasks
+- sync is retried on later heartbeat cycles until the current topology hash is accepted
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
 - reporter failures are logged but do not stop task execution
+
+Quick local demo:
+
+1. Start `onestep-control-plane`:
+
+```bash
+/Users/miclon/development/onestep-control-plane/scripts/start-local.sh
+```
+
+2. Start a long-running OneStep reporter demo:
+
+```bash
+./scripts/run-control-plane-demo.sh
+```
+
+3. Inspect the control plane:
+
+```text
+http://127.0.0.1:8080/api/v1/services?environment=dev
+http://127.0.0.1:8080/openapi.json
+```
 
 ## Runtime
 
