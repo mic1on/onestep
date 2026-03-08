@@ -435,6 +435,31 @@ version = "1.0.0a0"
 source = { editable = "." }
 
 [package.optional-dependencies]
+all = [
+    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "boto3" },
+    { name = "pymysql" },
+    { name = "sqlalchemy" },
+]
+dev = [
+    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "boto3" },
+    { name = "pymysql" },
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "sqlalchemy" },
+]
+integration = [
+    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "boto3" },
+    { name = "pymysql" },
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "sqlalchemy" },
+]
 mysql = [
     { name = "pymysql" },
     { name = "sqlalchemy" },
@@ -454,14 +479,28 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aio-pika", marker = "extra == 'all'", specifier = ">=9.0.0" },
+    { name = "aio-pika", marker = "extra == 'dev'", specifier = ">=9.0.0" },
+    { name = "aio-pika", marker = "extra == 'integration'", specifier = ">=9.0.0" },
     { name = "aio-pika", marker = "extra == 'rabbitmq'", specifier = ">=9.0.0" },
+    { name = "boto3", marker = "extra == 'all'", specifier = ">=1.34.0" },
+    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34.0" },
+    { name = "boto3", marker = "extra == 'integration'", specifier = ">=1.34.0" },
     { name = "boto3", marker = "extra == 'sqs'", specifier = ">=1.34.0" },
+    { name = "pymysql", marker = "extra == 'all'", specifier = ">=1.1.0" },
+    { name = "pymysql", marker = "extra == 'dev'", specifier = ">=1.1.0" },
+    { name = "pymysql", marker = "extra == 'integration'", specifier = ">=1.1.0" },
     { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'integration'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "sqlalchemy", marker = "extra == 'all'", specifier = ">=2.0.0" },
+    { name = "sqlalchemy", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "sqlalchemy", marker = "extra == 'integration'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", marker = "extra == 'mysql'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", marker = "extra == 'test'", specifier = ">=2.0.0" },
 ]
-provides-extras = ["mysql", "rabbitmq", "sqs", "test"]
+provides-extras = ["mysql", "rabbitmq", "sqs", "test", "integration", "all", "dev"]
 
 [[package]]
 name = "packaging"
