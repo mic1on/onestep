@@ -44,7 +44,7 @@ jobs:
       - name: Smoke-install wheel
         run: |
           uv venv .release-smoke
-          UV_PROJECT_ENVIRONMENT=.release-smoke uv pip install dist/*.whl
+          uv pip install --python .release-smoke/bin/python dist/*.whl
           .release-smoke/bin/onestep --version
 
       - name: Upload release artifacts
