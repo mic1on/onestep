@@ -1,0 +1,25 @@
+[Unit]
+Description=OneStep application service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=onestep
+Group=onestep
+WorkingDirectory=/
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/onestep/onestep-app.env
+ExecStartPre=/bin/sh -lc 'exec /bin/sh "$APP_CWD/deploy/bin/onestep-preflight.sh"'
+ExecStart=/bin/sh -lc 'export PYTHONPATH="$APP_CWD${PYTHONPATH:+:$PYTHONPATH}"; cd "$APP_CWD" && exec "$ONESTEP_BIN" run "$APP_TARGET"'
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

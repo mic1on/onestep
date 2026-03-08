@@ -1,65 +1,77 @@
-name: test suite
+name: CI
 
 on:
   push:
     paths:
+      - ".github/workflows/test.yml"
+      - "docker-compose.integration.yml"
+      - "pyproject.toml"
+      - "scripts/**"
       - "src/**"
       - "tests/**"
+      - "uv.lock"
   pull_request:
     paths:
+      - ".github/workflows/test.yml"
+      - "docker-compose.integration.yml"
+      - "pyproject.toml"
+      - "scripts/**"
       - "src/**"
       - "tests/**"
+      - "uv.lock"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  unit:
+    name: Unit and Contract (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
-        os: [ "ubuntu-latest" ]
-        python-version: [ "3.9", "3.10", "3.11", "3.12" ]
-    runs-on: ${{ matrix.os }}
-    services:
-      redis:
-        image: redis:latest
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-      rabbitmq:
-        image: rabbitmq:3
-        options: >-
-          --health-cmd "rabbitmqctl node_health_check"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        env:
-          RABBITMQ_DEFAULT_USER: admin
-          RABBITMQ_DEFAULT_PASS: admin
-        ports:
-          - 5672:5672
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
     steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install test dependencies
+        run: uv sync --frozen --extra test
+
+      - name: Run unit and contract tests
+        run: uv run pytest -q -m "not integration"
+
+  integration:
+    name: Integration (py3.11)
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          version: "latest"
-      - name: Load cached dependencies
-        id: cached-uv-dependencies
-        uses: actions/cache@v3
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/uv.lock') }}
-      - name: Install dependencies
-        if: steps.cached-uv-dependencies.outputs.cache-hit != 'true'
-        run: uv sync --all-extras
-      - name: Run type checking
-        run: uv run mypy src/onestep
-      - name: Run tests
-        run: uv run pytest tests/
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install integration dependencies
+        run: uv sync --frozen --extra integration
+
+      - name: Run live integration tests
+        run: ./scripts/run-integration-tests.sh

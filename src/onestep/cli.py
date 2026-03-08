@@ -1,93 +1,110 @@
+from __future__ import annotations
+
 import argparse
-import importlib
-import logging
+import json
 import sys
-from onestep import step, __version__
+from importlib.metadata import PackageNotFoundError, version
 
-LOGFORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
-
-
-def setup_logging():
-    # 设置全局日志级别为INFO，避免第三方库的DEBUG日志输出
-    logging.basicConfig(level=logging.INFO, format=LOGFORMAT, stream=sys.stdout)
-
-    # exclude amqpstorm logs
-    logging.getLogger("amqpstorm").setLevel(logging.CRITICAL)
-    
-    # 获取onestep的logger并设置为DEBUG级别以便调试
-    onestep_logger = logging.getLogger("onestep")
-    onestep_logger.setLevel(logging.DEBUG)
-    
-    return onestep_logger
+from .app import OneStepApp
 
 
-logger = setup_logging()
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description='run onestep'
-    )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "step", nargs='?',
-        help="the run step",
-    )
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run or inspect a OneStepApp target")
     parser.add_argument(
-        "--group", "-G", default=None,
-        help="the run group",
-        type=str
+        "--version",
+        action="version",
+        version=f"%(prog)s {_resolve_version()}",
     )
-    parser.add_argument(
-        "--print",
-        action="store_true",
-        help="enable printing")
-    parser.add_argument(
-        "--path", "-P", default=".", nargs="*", type=str,
-        help="the step import path (default: current running directory)"
-    )
-    group.add_argument(
-        "--cron",
-        help="the cron expression to test",
-        type=str
-    )
-    return parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser("run", help="Load and run a OneStepApp target")
+    run_parser.add_argument("target", help="Python target in the form package.module:app")
+
+    check_parser = subparsers.add_parser("check", help="Load a target and print its task summary")
+    check_parser.add_argument("target", help="Python target in the form package.module:app")
+    check_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit the summary as JSON")
+
+    return parser.parse_args(_normalize_argv(argv))
 
 
-def main():
-    args = parse_args()
-    for path in args.path:
-        sys.path.insert(0, path)
-    if args.cron:
-        from croniter import croniter  # type: ignore[import-untyped]
-        from datetime import datetime
-        cron = croniter(args.cron, datetime.now())
-        for _ in range(10):
-            print(cron.get_next(datetime))
-        return 0
-
-    logger.info(f"OneStep {__version__} is start up.")
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     try:
-        importlib.import_module(args.step)
-        step.start(group=args.group, block=True, print_jobs=args.print)
+        app = OneStepApp.load(args.target)
+    except Exception as exc:
+        print(f"onestep: failed to load {args.target}: {exc}", file=sys.stderr)
+        return 2
+
+    if args.command == "check":
+        _print_summary(args.target, app, as_json=getattr(args, "as_json", False))
         return 0
-    except ModuleNotFoundError as e:
-        if getattr(e, "name", None) == args.step:
-            logger.error(f"step module not found: {args.step}")
-            return 2
-        logger.error(f"failed to import step module: {args.step}")
-        logger.error(f"caused by missing dependency: {e!r}")
-        logger.exception("import traceback")
+
+    try:
+        app.run()
+    except Exception as exc:
+        print(f"onestep: {args.target} failed while running: {exc}", file=sys.stderr)
         return 1
-    except Exception as e:
-        logger.error(f"failed to import step module: {args.step}")
-        logger.error(f"import error: {e!r}")
-        logger.exception("import traceback")
-        return 1
-    except KeyboardInterrupt:
-        step.shutdown()
-        return 130
+    return 0
 
 
-if __name__ == '__main__':
+def _normalize_argv(argv: list[str] | None) -> list[str] | None:
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:
+        return argv
+    if argv[0].startswith("-") or argv[0] in {"run", "check"}:
+        return argv
+    return ["run", *argv]
+
+
+def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:
+    summary = {
+        "target": target,
+        **app.describe(),
+    }
+    if as_json:
+        print(json.dumps(summary, indent=2))
+        return
+
+    print(f"Target: {summary['target']}")
+    print(f"App: {summary['name']}")
+    print(f"Shutdown timeout: {_format_timeout(summary['shutdown_timeout_s'])}")
+    print(f"Tasks: {len(summary['tasks'])}")
+    for task in summary["tasks"]:
+        source = _format_resource(task["source"])
+        emit = _format_resources(task["emit"])
+        dead_letter = _format_resources(task["dead_letter"])
+        timeout = _format_timeout(task["timeout_s"])
+        print(
+            f"- {task['name']} source={source} emit={emit} dead_letter={dead_letter} "
+            f"concurrency={task['concurrency']} timeout={timeout} retry={task['retry']}"
+        )
+
+
+def _format_timeout(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.2f}s"
+
+
+def _format_resources(items: list[dict[str, str]]) -> str:
+    if not items:
+        return "-"
+    return ",".join(_format_resource(item) for item in items)
+
+
+def _format_resource(item: dict[str, str] | None) -> str:
+    if item is None:
+        return "-"
+    return f"{item['name']}<{item['type']}>"
+
+
+def _resolve_version() -> str:
+    try:
+        return version("onestep")
+    except PackageNotFoundError:
+        return "dev"
+
+
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())
