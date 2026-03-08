@@ -1,5 +1,13 @@
 # onestep
 
+<div align=center><img src="https://onestep.code05.com/logo-3.svg" width="300"></div>
+<div align=center>
+<a href="https://pypi.org/project/onestep" target="_blank">
+    <img src="https://img.shields.io/pypi/pyversions/onestep.svg" alt="Supported Python versions">
+</a>
+</div>
+<hr />
+
 `onestep` is a small async task runtime centered on four concepts:
 
 - `OneStepApp`: task registry and lifecycle manager
