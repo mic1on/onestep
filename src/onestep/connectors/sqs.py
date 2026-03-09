@@ -307,14 +307,29 @@ class SQSQueue(Source, Sink):
                 continue
 
     async def _flush_locked(self) -> None:
-        if not self._pending_delete:
-            return
-        entries = self._pending_delete[:10]
-        self._pending_delete = self._pending_delete[10:]
-        await asyncio.to_thread(
-            self.client.delete_message_batch,
-            QueueUrl=self.url,
-            Entries=entries,
-        )
-        if self._pending_delete:
-            await self._flush_locked()
+        batch_limit = min(10, self.delete_batch_size)
+        while self._pending_delete:
+            entries = list(self._pending_delete[:batch_limit])
+            response = await asyncio.to_thread(
+                self.client.delete_message_batch,
+                QueueUrl=self.url,
+                Entries=entries,
+            )
+            failed_ids: set[str] = set()
+            if isinstance(response, dict):
+                failed_ids = {
+                    item["Id"]
+                    for item in response.get("Failed", [])
+                    if isinstance(item, dict) and "Id" in item
+                }
+            if failed_ids:
+                succeeded = len(entries) - len(failed_ids)
+                remainder = self._pending_delete[len(entries) :]
+                self._pending_delete = [
+                    entry for entry in entries if entry["Id"] in failed_ids
+                ] + remainder
+                raise RuntimeError(
+                    f"SQS batch delete partially failed for {len(failed_ids)} entries"
+                    f" ({succeeded} succeeded)"
+                )
+            self._pending_delete = self._pending_delete[len(entries) :]

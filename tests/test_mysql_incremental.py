@@ -182,3 +182,65 @@ def test_mysql_incremental_uses_key_as_tie_breaker_when_cursor_is_not_unique(tmp
         await db.close()
 
     asyncio.run(scenario())
+
+
+def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental_where_scope.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    users = sa.Table(
+        "users",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("name", sa.String, nullable=False),
+        sa.Column("updated_at", sa.Integer, nullable=False),
+        sa.Column("deleted", sa.Integer, nullable=False, default=0),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.insert(users),
+            [
+                {"id": 1, "name": "A", "updated_at": 10, "deleted": 0},
+                {"id": 2, "name": "B", "updated_at": 11, "deleted": 0},
+                {"id": 3, "name": "C", "updated_at": 9, "deleted": 1},
+            ],
+        )
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = db.cursor_store(table="onestep_cursor")
+        active = db.incremental(
+            table="users",
+            key="id",
+            cursor=("updated_at",),
+            where="deleted = 0",
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=state,
+        )
+        deleted = db.incremental(
+            table="users",
+            key="id",
+            cursor=("updated_at",),
+            where="deleted = 1",
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=state,
+        )
+
+        assert active.state_key != deleted.state_key
+
+        active_batch = await active.fetch(10)
+        assert [item.payload["id"] for item in active_batch] == [1, 2]
+        await active_batch[0].ack()
+        await active_batch[1].ack()
+
+        deleted_batch = await deleted.fetch(10)
+        assert [item.payload["id"] for item in deleted_batch] == [3]
+        await deleted_batch[0].ack()
+
+        await db.close()
+
+    asyncio.run(scenario())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -116,7 +117,12 @@ class MySQLConnector:
             batch_size=batch_size,
             poll_interval_s=poll_interval_s,
             state=state or InMemoryCursorStore(),
-            state_key=state_key or f"{table}:{','.join(effective_cursor)}",
+            state_key=state_key or _default_incremental_state_key(
+                table=table,
+                cursor=effective_cursor,
+                key=key,
+                where=where,
+            ),
         )
 
     def table_sink(
@@ -135,6 +141,23 @@ class MySQLConnector:
             table = sa.Table(table_name, metadata, autoload_with=self.engine)
             self._tables[table_name] = table
         return table
+
+
+def _default_incremental_state_key(
+    *,
+    table: str,
+    cursor: Sequence[str],
+    key: str,
+    where: str | None,
+) -> str:
+    normalized_where = " ".join((where or "").split())
+    if normalized_where:
+        where_fragment = normalized_where
+        if len(where_fragment) > 64:
+            where_fragment = f"sha1:{hashlib.sha1(where_fragment.encode('utf-8')).hexdigest()}"
+    else:
+        where_fragment = "-"
+    return f"{table}:{','.join(cursor)}:key={key}:where={where_fragment}"
 
 
 @dataclass

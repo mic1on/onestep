@@ -46,6 +46,7 @@ class FakeSQSClient:
             receipt_handle = entry["ReceiptHandle"]
             self.deleted.append((QueueUrl, receipt_handle))
             self.inflight.pop(receipt_handle, None)
+        return {"Successful": [{"Id": entry["Id"]} for entry in Entries], "Failed": []}
 
     def change_message_visibility(self, QueueUrl, ReceiptHandle, VisibilityTimeout):
         self.visibility_changes.append((QueueUrl, ReceiptHandle, VisibilityTimeout))
@@ -158,5 +159,46 @@ def test_sqs_queue_send_maps_retryable_errors():
             assert exc.operation is ConnectorOperation.SEND
         else:
             raise AssertionError("expected ConnectorOperationError")
+
+    asyncio.run(scenario())
+
+
+def test_sqs_batch_delete_keeps_pending_entries_when_delete_raises() -> None:
+    class BrokenDeleteClient(FakeSQSClient):
+        def delete_message_batch(self, QueueUrl, Entries):
+            raise TimeoutError("timeout")
+
+    async def scenario():
+        client = BrokenDeleteClient()
+        connector = SQSConnector(region_name="ap-southeast-1", client=client)
+        queue = connector.queue(
+            "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs",
+            wait_time_s=0,
+            delete_batch_size=2,
+            delete_flush_interval_s=60,
+        )
+
+        await queue.publish({"value": 1})
+        await queue.publish({"value": 2})
+        batch = await queue.fetch(2)
+        first_receipt = batch[0]._message["ReceiptHandle"]
+        second_receipt = batch[1]._message["ReceiptHandle"]
+
+        await batch[0].ack()
+        try:
+            await batch[1].ack()
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError("expected batch delete failure")
+
+        assert [entry["ReceiptHandle"] for entry in queue._pending_delete] == [
+            first_receipt,
+            second_receipt,
+        ]
+        assert first_receipt in client.inflight
+        assert second_receipt in client.inflight
+
+        await connector.close()
 
     asyncio.run(scenario())
