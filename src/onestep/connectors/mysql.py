@@ -106,16 +106,17 @@ class MySQLConnector:
     ) -> "IncrementalTableSource":
         if len(cursor) < 1:
             raise ValueError("cursor must contain at least one column")
+        effective_cursor = tuple(cursor) if key in cursor else (*tuple(cursor), key)
         return IncrementalTableSource(
             connector=self,
             table=table,
             key=key,
-            cursor=tuple(cursor),
+            cursor=effective_cursor,
             where=where,
             batch_size=batch_size,
             poll_interval_s=poll_interval_s,
             state=state or InMemoryCursorStore(),
-            state_key=state_key or f"{table}:{','.join(cursor)}",
+            state_key=state_key or f"{table}:{','.join(effective_cursor)}",
         )
 
     def table_sink(
@@ -287,7 +288,8 @@ class IncrementalTableSource(Source):
         self.connector = connector
         self.table_name = table
         self.key = key
-        self.cursor = cursor
+        self.configured_cursor = cursor
+        self.cursor = cursor if key in cursor else (*cursor, key)
         self.where = where
         self.batch_size = batch_size
         self.poll_interval_s = poll_interval_s
@@ -297,13 +299,15 @@ class IncrementalTableSource(Source):
         self._acked: set[tuple[Any, ...]] = set()
         self._commit_lock = asyncio.Lock()
         self._loaded = False
-        self._last_cursor: tuple[Any, ...] | None = None
+        self._committed_cursor: tuple[Any, ...] | None = None
+        self._fetched_cursor: tuple[Any, ...] | None = None
 
     async def open(self) -> None:
         if not self._loaded:
             loaded = await self.state.load(self.state_key)
-            if loaded is not None:
-                self._last_cursor = tuple(loaded)
+            if loaded is not None and len(loaded) == len(self.cursor):
+                self._committed_cursor = tuple(loaded)
+                self._fetched_cursor = self._committed_cursor
             self._loaded = True
 
     async def fetch(self, limit: int) -> list[Delivery]:
@@ -325,6 +329,7 @@ class IncrementalTableSource(Source):
         for row in rows:
             token = _CursorToken(tuple(row[column] for column in self.cursor))
             self._pending.append(token.value)
+            self._fetched_cursor = token.value
             envelope = Envelope(body=row, meta={"table": self.table_name})
             deliveries.append(IncrementalDelivery(self, envelope, token))
         return deliveries
@@ -335,9 +340,10 @@ class IncrementalTableSource(Source):
         predicates = []
         if self.where:
             predicates.append(sa.text(self.where))
-        if self._last_cursor is not None:
+        read_cursor = self._fetched_cursor or self._committed_cursor
+        if read_cursor is not None:
             cursor_columns = [table.c[name] for name in self.cursor]
-            predicates.append(sa.tuple_(*cursor_columns) > tuple(self._last_cursor))
+            predicates.append(sa.tuple_(*cursor_columns) > tuple(read_cursor))
         if predicates:
             stmt = stmt.where(*predicates)
         order_columns = [table.c[name] for name in self.cursor]
@@ -354,7 +360,9 @@ class IncrementalTableSource(Source):
                 advanced = self._pending.popleft()
                 self._acked.remove(advanced)
             if advanced is not None:
-                self._last_cursor = advanced
+                self._committed_cursor = advanced
+                if not self._pending:
+                    self._fetched_cursor = advanced
                 await self.state.save(self.state_key, list(advanced))
 
 

@@ -84,6 +84,27 @@ class _FlakySink(Sink):
         self.items.append(envelope.body)
 
 
+class _ManagedSource(Source):
+    def __init__(self, name: str, *, fail_open: bool = False) -> None:
+        super().__init__(name)
+        self.fail_open = fail_open
+        self.opened = False
+        self.closed = False
+        self.fetch_calls = 0
+
+    async def open(self) -> None:
+        self.opened = True
+        if self.fail_open:
+            raise RuntimeError(f"{self.name} failed to open")
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        self.fetch_calls += 1
+        return []
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def test_return_value_publishes_to_default_sink_contract() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming")
@@ -159,6 +180,62 @@ def test_retryable_sink_send_error_retries_and_succeeds_contract() -> None:
 
         assert sink.calls == 2
         assert sink.items == [{"value": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_startup_failure_closes_resources_opened_before_failing_resource_contract() -> None:
+    async def scenario() -> None:
+        healthy = _ManagedSource("healthy")
+        broken = _ManagedSource("broken", fail_open=True)
+        app = OneStepApp("startup-resource-failure")
+
+        @app.task(source=healthy)
+        async def consume_healthy(ctx, item):
+            return None
+
+        @app.task(source=broken)
+        async def consume_broken(ctx, item):
+            return None
+
+        try:
+            await app.startup()
+        except RuntimeError as exc:
+            assert "failed to open" in str(exc)
+        else:
+            raise AssertionError("expected startup failure")
+
+        assert healthy.opened is True
+        assert healthy.closed is True
+        assert broken.opened is True
+        assert app._resources == []
+
+    asyncio.run(scenario())
+
+
+def test_startup_hook_failure_closes_opened_resources_contract() -> None:
+    async def scenario() -> None:
+        source = _ManagedSource("source")
+        app = OneStepApp("startup-hook-failure")
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            return None
+
+        @app.on_startup
+        async def broken_startup(app):
+            raise RuntimeError("startup hook broke")
+
+        try:
+            await app.startup()
+        except RuntimeError as exc:
+            assert str(exc) == "startup hook broke"
+        else:
+            raise AssertionError("expected startup hook failure")
+
+        assert source.opened is True
+        assert source.closed is True
+        assert app._resources == []
 
     asyncio.run(scenario())
 

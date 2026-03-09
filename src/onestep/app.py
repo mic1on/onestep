@@ -121,21 +121,35 @@ class OneStepApp:
                 if id(sink) not in seen:
                     resources.append(sink)
                     seen.add(id(sink))
-        self._resources = resources
-        for resource in self._resources:
-            await resource.open()
-        await self._run_hooks(self._startup_hooks)
+        opened: list[Any] = []
+        self._resources = []
+        try:
+            for resource in resources:
+                await resource.open()
+                opened.append(resource)
+            self._resources = list(opened)
+            await self._run_hooks(self._startup_hooks)
+        except Exception:
+            await self._close_resources(opened, suppress_exceptions=True)
+            self._resources = []
+            raise
 
     async def shutdown(self) -> None:
         self._shutdown_requested = True
         if self._shutdown is not None:
             self._shutdown.set()
+        hook_error: BaseException | None = None
         try:
             await self._run_hooks(self._shutdown_hooks)
+        except BaseException as exc:
+            hook_error = exc
         finally:
-            for resource in reversed(self._resources):
-                await resource.close()
+            close_error = await self._close_resources(self._resources, suppress_exceptions=False)
             self._resources = []
+        if hook_error is not None:
+            raise hook_error
+        if close_error is not None:
+            raise close_error
 
     async def serve(self) -> None:
         await self.startup()
@@ -213,6 +227,27 @@ class OneStepApp:
                     await result
             except Exception:
                 self._events_logger.exception("event handler failed", extra={"event_kind": event.kind.value})
+
+    async def _close_resources(
+        self,
+        resources: Sequence[Any],
+        *,
+        suppress_exceptions: bool,
+    ) -> BaseException | None:
+        first_error: BaseException | None = None
+        for resource in reversed(resources):
+            try:
+                await resource.close()
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+                self._events_logger.exception(
+                    "resource close failed",
+                    extra={"resource_name": getattr(resource, "name", resource.__class__.__name__)},
+                )
+        if first_error is not None and not suppress_exceptions:
+            return first_error
+        return None
 
     def _ensure_shutdown_event(self) -> asyncio.Event:
         current_loop = asyncio.get_running_loop()
