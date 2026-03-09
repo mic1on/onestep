@@ -2,8 +2,8 @@
 
 Monorepo for the OneStep control plane. This repository will host:
 
-- `apps/api`: telemetry ingestion API and query API for the monitoring console
-- `apps/ui`: future web console
+- `backend`: telemetry ingestion API and query API for the monitoring console
+- `frontend`: web console
 
 ## API skeleton
 
@@ -15,10 +15,11 @@ Current scope:
 - task-oriented SQLAlchemy data model for services, instances, task windows, and task events
 - bearer-protected ingestion endpoints under `/api/v1/agents/*`
 - query endpoints under `/api/v1/services*` for the future UI
+- `frontend` monitoring console scaffold for service, task, and instance views
 
 ## Data model
 
-`apps/api` now defines five core tables:
+`backend` now defines five core tables:
 
 - `services`: logical service identity keyed by `(name, environment)`
 - `instances`: runtime instance snapshot keyed by `instance_id`
@@ -38,6 +39,20 @@ Ingestion endpoints require bearer auth via `ONESTEP_CP_INGEST_TOKENS`, for exam
 export ONESTEP_CP_INGEST_TOKENS='dev-token'
 export ONESTEP_CP_INGEST_TOKENS='token-a,token-b'
 export ONESTEP_CP_INGEST_TOKENS='["token-a","token-b"]'
+```
+
+Browser access to the query API is controlled by `ONESTEP_CP_CORS_ALLOW_ORIGINS`. For local or
+demo environments you can allow all origins:
+
+```bash
+export ONESTEP_CP_CORS_ALLOW_ORIGINS='*'
+```
+
+Or set an explicit frontend origin:
+
+```bash
+export ONESTEP_CP_CORS_ALLOW_ORIGINS='http://192.168.1.214:5173'
+export ONESTEP_CP_CORS_ALLOW_ORIGINS='http://localhost:5173,http://192.168.1.214:5173'
 ```
 
 `/healthz` and `/readyz` expose `ingestion_auth_configured` so you can tell whether
@@ -84,8 +99,43 @@ uv sync --extra test
 Run the API locally:
 
 ```bash
-uv run uvicorn onestep_control_plane_api.main:app --app-dir apps/api/src --reload
+uv run uvicorn onestep_control_plane_api.main:app --app-dir backend/src --reload
 ```
+
+## Frontend
+
+`frontend` is a Vite + React + TypeScript monitoring console with:
+
+- React Router for page routing
+- TanStack Query for API state
+- feature-oriented source layout under `src/features`
+- pages for service list, service detail, task detail, and instance detail
+
+Install frontend dependencies:
+
+```bash
+pnpm install
+```
+
+Run the UI locally:
+
+```bash
+cp frontend/.env.example frontend/.env
+pnpm run dev
+```
+
+The Vite dev server binds to `0.0.0.0:5173` by default so you can access it from other
+machines on the same network.
+
+Build the UI:
+
+```bash
+pnpm ui:build
+```
+
+Set `VITE_API_BASE_URL` in `frontend/.env` if the API is not running on `http://127.0.0.1:8000`.
+If you open the UI from another machine, point `VITE_API_BASE_URL` at the externally reachable
+API address and make sure `ONESTEP_CP_CORS_ALLOW_ORIGINS` allows that frontend origin.
 
 Quick local start with SQLite:
 

@@ -138,6 +138,7 @@ celerybeat.pid
 .env
 .envrc
 .venv
+node_modules/
 env/
 venv/
 ENV/
@@ -190,6 +191,8 @@ cython_debug/
 
 # Ruff stuff:
 .ruff_cache/
+*.tsbuildinfo
+.vite/
 
 # PyPI configuration file
 .pypirc

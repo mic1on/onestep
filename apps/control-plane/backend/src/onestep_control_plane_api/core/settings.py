@@ -17,6 +17,7 @@ class Settings(BaseSettings):
         "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
     )
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",
@@ -24,9 +25,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("ingest_tokens", mode="before")
+    @field_validator("ingest_tokens", "cors_allow_origins", mode="before")
     @classmethod
-    def parse_ingest_tokens(cls, value: object) -> object:
+    def parse_string_list(cls, value: object) -> object:
         if isinstance(value, str):
             candidate = value.strip()
             if not candidate:
