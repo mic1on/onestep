@@ -1,6 +1,6 @@
 import asyncio
 
-from onestep import SQSConnector
+from onestep import ConnectorOperation, ConnectorOperationError, SQSConnector
 
 
 class FakeSQSClient:
@@ -135,5 +135,28 @@ def test_sqs_queue_retry_and_heartbeat_release():
 
         await queue.close()
         await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_sqs_queue_send_maps_retryable_errors():
+    class BrokenClient(FakeSQSClient):
+        def send_message(self, **kwargs):
+            raise TimeoutError("timeout")
+
+    async def scenario():
+        client = BrokenClient()
+        connector = SQSConnector(region_name="ap-southeast-1", client=client)
+        queue = connector.queue(
+            "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs",
+            wait_time_s=0,
+        )
+
+        try:
+            await queue.publish({"value": 1})
+        except ConnectorOperationError as exc:
+            assert exc.operation is ConnectorOperation.SEND
+        else:
+            raise AssertionError("expected ConnectorOperationError")
 
     asyncio.run(scenario())

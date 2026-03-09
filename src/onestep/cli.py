@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
 
@@ -29,6 +30,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    _ensure_cwd_on_syspath()
     try:
         app = OneStepApp.load(args.target)
     except Exception as exc:
@@ -45,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"onestep: {args.target} failed while running: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _ensure_cwd_on_syspath() -> None:
+    cwd = os.getcwd()
+    if not cwd:
+        return
+    if cwd in sys.path:
+        return
+    sys.path.insert(0, cwd)
 
 
 def _normalize_argv(argv: list[str] | None) -> list[str] | None:

@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from onestep import RabbitMQConnector
+from onestep import ConnectorOperation, ConnectorOperationError, RabbitMQConnector
 import onestep.connectors.rabbitmq as rabbitmq_module
 
 
@@ -179,5 +179,35 @@ def test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding(monkeypatch):
         await events.close()
         await queue.close()
         await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_queue_open_maps_connection_errors_and_releases_reference(monkeypatch):
+    class BrokenConnection(FakeConnection):
+        async def channel(self, publisher_confirms=False):
+            raise RuntimeError("connection closed")
+
+    async def broken_connect_robust(url, **kwargs):
+        return BrokenConnection()
+
+    fake_driver = SimpleNamespace(
+        connect_robust=broken_connect_robust,
+        Message=FakeMessage,
+        DeliveryMode=SimpleNamespace(PERSISTENT="persistent"),
+    )
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", fake_driver)
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://guest:guest@localhost/")
+        queue = connector.queue("jobs", poll_interval_s=0.01)
+
+        try:
+            await queue.open()
+        except ConnectorOperationError as exc:
+            assert exc.operation is ConnectorOperation.OPEN
+            assert connector._ref_count == 0
+        else:
+            raise AssertionError("expected ConnectorOperationError")
 
     asyncio.run(scenario())

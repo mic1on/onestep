@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import types
 from contextlib import contextmanager
@@ -86,3 +87,35 @@ def test_cli_invalid_target_returns_non_zero(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "failed to load testsupport_missing_module:app" in captured.err
+
+
+def test_cli_check_loads_modules_from_current_working_directory(tmp_path, monkeypatch, capsys) -> None:
+    example_dir = tmp_path / "example"
+    example_dir.mkdir()
+    (example_dir / "cli_app.py").write_text(
+        "\n".join(
+            [
+                "from onestep import OneStepApp",
+                "",
+                "app = OneStepApp('cwd-cli-app')",
+                "",
+                "@app.task()",
+                "async def consume(ctx, item):",
+                "    return None",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [entry for entry in sys.path if os.path.abspath(entry) != os.path.abspath(str(tmp_path))],
+    )
+
+    exit_code = main(["check", "example.cli_app:app"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "App: cwd-cli-app" in captured.out

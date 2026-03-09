@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import signal
 
 from onestep import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
     FailureKind,
     InMemoryMetrics,
     InMemoryStateStore,
@@ -16,6 +21,67 @@ from onestep import (
     StructuredEventLogger,
     TaskEventKind,
 )
+from onestep.connectors.base import Delivery, Sink, Source
+from onestep.envelope import Envelope
+
+
+class _StubDelivery(Delivery):
+    def __init__(self, payload):
+        super().__init__(Envelope(body=payload))
+        self.acked = False
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        return None
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        return None
+
+
+class _FlakySource(Source):
+    def __init__(self, name: str, *, retryable: bool) -> None:
+        super().__init__(name)
+        self.poll_interval_s = 0.01
+        self._retryable = retryable
+        self._calls = 0
+        self.delivery = _StubDelivery({"value": 1})
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        self._calls += 1
+        if self._calls == 1:
+            raise ConnectorOperationError(
+                backend="fake",
+                operation=ConnectorOperation.FETCH,
+                kind=ConnectorErrorKind.DISCONNECTED if self._retryable else ConnectorErrorKind.MISCONFIGURED,
+                source_name=self.name,
+                retry_delay_s=0,
+            )
+        if self._calls == 2:
+            return [self.delivery]
+        return []
+
+
+class _FlakySink(Sink):
+    def __init__(self, name: str, *, failures: int, retryable: bool) -> None:
+        super().__init__(name)
+        self.failures = failures
+        self.retryable = retryable
+        self.calls = 0
+        self.items = []
+
+    async def send(self, envelope: Envelope) -> None:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ConnectorOperationError(
+                backend="fake",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.DISCONNECTED if self.retryable else ConnectorErrorKind.MISCONFIGURED,
+                source_name=self.name,
+                retry_delay_s=0,
+            )
+        self.items.append(envelope.body)
 
 
 def test_return_value_publishes_to_default_sink_contract() -> None:
@@ -35,6 +101,64 @@ def test_return_value_publishes_to_default_sink_contract() -> None:
         deliveries = await sink.fetch(1)
         assert len(deliveries) == 1
         assert deliveries[0].payload == {"value": 42}
+
+    asyncio.run(scenario())
+
+
+def test_retryable_source_fetch_error_does_not_exit_worker_contract() -> None:
+    async def scenario() -> None:
+        source = _FlakySource("flaky-source", retryable=True)
+        app = OneStepApp("retryable-source")
+        seen: list[dict[str, int]] = []
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            seen.append(item)
+            ctx.app.request_shutdown()
+
+        await app.serve()
+
+        assert seen == [{"value": 1}]
+        assert source.delivery.acked is True
+
+    asyncio.run(scenario())
+
+
+def test_non_retryable_source_fetch_error_still_fails_fast_contract() -> None:
+    async def scenario() -> None:
+        source = _FlakySource("broken-source", retryable=False)
+        app = OneStepApp("broken-source")
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            raise AssertionError("should not run")
+
+        try:
+            await app.serve()
+        except ConnectorOperationError as exc:
+            assert exc.kind is ConnectorErrorKind.MISCONFIGURED
+        else:
+            raise AssertionError("expected ConnectorOperationError")
+
+    asyncio.run(scenario())
+
+
+def test_retryable_sink_send_error_retries_and_succeeds_contract() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming")
+        sink = _FlakySink("flaky-sink", failures=1, retryable=True)
+        app = OneStepApp("retryable-sink")
+
+        @app.task(source=source, emit=sink)
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        await source.publish({"value": 1})
+        await app.serve()
+
+        assert sink.calls == 2
+        assert sink.items == [{"value": 2}]
 
     asyncio.run(scenario())
 

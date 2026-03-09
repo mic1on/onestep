@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from onestep.envelope import Envelope
+from onestep.resilience import ConnectorOperation, as_connector_operation_error
 from onestep.state import CursorStore, InMemoryCursorStore
 from onestep.state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 
@@ -184,7 +185,19 @@ class TableQueueSource(Source):
         self.poll_interval_s = poll_interval_s
 
     async def fetch(self, limit: int) -> list[Delivery]:
-        rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+        try:
+            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="mysql",
+                operation=ConnectorOperation.FETCH,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
@@ -295,7 +308,19 @@ class IncrementalTableSource(Source):
 
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
-        rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+        try:
+            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="mysql",
+                operation=ConnectorOperation.FETCH,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
         deliveries: list[Delivery] = []
         for row in rows:
             token = _CursorToken(tuple(row[column] for column in self.cursor))
@@ -346,7 +371,19 @@ class TableSink(Sink):
     async def send(self, envelope: Envelope) -> None:
         if not isinstance(envelope.body, Mapping):
             raise TypeError("TableSink only accepts mapping payloads")
-        await asyncio.to_thread(self._send_sync, dict(envelope.body))
+        try:
+            await asyncio.to_thread(self._send_sync, dict(envelope.body))
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="mysql",
+                operation=ConnectorOperation.SEND,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
 
     def _send_sync(self, payload: dict[str, Any]) -> None:
         table = self.connector._table(self.table_name)

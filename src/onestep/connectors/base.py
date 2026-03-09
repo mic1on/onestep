@@ -43,6 +43,8 @@ class Source(abc.ABC):
 
     @abc.abstractmethod
     async def fetch(self, limit: int) -> list[Delivery]:
+        # Dependency failures should surface as ConnectorOperationError so the runtime
+        # can degrade and retry the source loop without exiting the worker.
         raise NotImplementedError
 
     async def close(self) -> None:

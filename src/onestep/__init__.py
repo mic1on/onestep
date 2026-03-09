@@ -5,6 +5,11 @@ from .context import TaskContext
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
 from .retry import (
     FailureInfo,
     FailureKind,
@@ -35,6 +40,9 @@ __all__ = [
     "CursorStore",
     "ControlPlaneReporter",
     "ControlPlaneReporterConfig",
+    "ConnectorErrorKind",
+    "ConnectorOperation",
+    "ConnectorOperationError",
     "Delivery",
     "Envelope",
     "FailureInfo",

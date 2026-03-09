@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import copy
 import inspect
 import time
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 from onestep.context import TaskContext
 from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
+from onestep.resilience import ConnectorOperationError, connector_retry_delay, is_retryable_connector_error
 from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
 from onestep.task import TaskSpec
 
@@ -18,10 +20,12 @@ if TYPE_CHECKING:
 
 
 class TaskRunner:
+    _SEND_ATTEMPTS = 2
     def __init__(self, app: "OneStepApp", task: TaskSpec) -> None:
         self.app = app
         self.task = task
         self._inflight: set[asyncio.Task[None]] = set()
+        self._logger = logging.getLogger(f"onestep.{app.name}.{task.name}")
 
     async def run(self) -> None:
         if self.task.source is None:
@@ -67,7 +71,13 @@ class TaskRunner:
         )
         try:
             if fetch_task in done:
-                return fetch_task.result()
+                try:
+                    return fetch_task.result()
+                except ConnectorOperationError as exc:
+                    if not is_retryable_connector_error(exc):
+                        raise
+                    await self._handle_source_fetch_error(exc)
+                    return []
             fetch_task.cancel()
             await asyncio.gather(fetch_task, return_exceptions=True)
             return []
@@ -75,6 +85,54 @@ class TaskRunner:
             for pending_task in pending:
                 pending_task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _handle_source_fetch_error(self, exc: ConnectorOperationError) -> None:
+        fallback_s = self.task.source.poll_interval_s if self.task.source is not None else 1.0
+        delay_s = connector_retry_delay(exc, fallback_s=fallback_s)
+        self._logger.warning(
+            "source fetch degraded; backing off",
+            extra={
+                "connector_backend": exc.backend,
+                "connector_operation": exc.operation.value,
+                "connector_kind": exc.kind.value,
+                "connector_retry_delay_s": delay_s,
+            },
+            exc_info=exc,
+        )
+        if delay_s <= 0 or self.app.is_stopping:
+            return
+        try:
+            await asyncio.wait_for(self.app.wait_for_shutdown(), timeout=delay_s)
+        except asyncio.TimeoutError:
+            return
+
+    async def _send_to_sink(self, sink, envelope: Envelope) -> None:
+        fallback_s = getattr(sink, "poll_interval_s", 1.0)
+        for attempt in range(self._SEND_ATTEMPTS):
+            try:
+                await sink.send(envelope)
+                return
+            except ConnectorOperationError as exc:
+                if not is_retryable_connector_error(exc) or attempt == self._SEND_ATTEMPTS - 1:
+                    raise
+                delay_s = connector_retry_delay(exc, fallback_s=fallback_s)
+                self._logger.warning(
+                    "sink send degraded; retrying",
+                    extra={
+                        "connector_backend": exc.backend,
+                        "connector_operation": exc.operation.value,
+                        "connector_kind": exc.kind.value,
+                        "connector_retry_delay_s": delay_s,
+                    },
+                    exc_info=exc,
+                )
+                if delay_s <= 0 or self.app.is_stopping:
+                    continue
+                try:
+                    await asyncio.wait_for(self.app.wait_for_shutdown(), timeout=delay_s)
+                except asyncio.TimeoutError:
+                    continue
+                raise
 
     async def _handle_delivery(self, delivery: "Delivery") -> None:
         ctx = TaskContext(app=self.app, task=self.task, delivery=delivery)
@@ -86,7 +144,7 @@ class TaskRunner:
             if result is not None and self.task.sinks:
                 envelope = Envelope(body=result)
                 for sink in self.task.sinks:
-                    await sink.send(envelope)
+                    await self._send_to_sink(sink, envelope)
             await delivery.ack()
             await self._emit_event(
                 TaskEventKind.SUCCEEDED,

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from onestep.envelope import Envelope
+from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
 
 from .base import Delivery, Sink, Source
 from .codec import decode_envelope, encode_envelope
@@ -178,11 +179,23 @@ class SQSQueue(Source, Sink):
         self._delete_counter = 0
 
     async def open(self) -> None:
-        if self.client is None:
-            self.client = self.connector.get_client()
-        self._ensure_runtime_state()
-        if self._delete_flusher_task is None and self.delete_flush_interval_s > 0:
-            self._delete_flusher_task = asyncio.create_task(self._delete_flush_loop())
+        try:
+            if self.client is None:
+                self.client = self.connector.get_client()
+            self._ensure_runtime_state()
+            if self._delete_flusher_task is None and self.delete_flush_interval_s > 0:
+                self._delete_flusher_task = asyncio.create_task(self._delete_flush_loop())
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="sqs",
+                operation=ConnectorOperation.OPEN,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=max(self.poll_interval_s, float(self.wait_time_s)),
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
 
     async def close(self) -> None:
         if self._delete_flusher_task is not None:
@@ -198,34 +211,62 @@ class SQSQueue(Source, Sink):
         self.client = None
 
     async def fetch(self, limit: int) -> list[Delivery]:
-        await self.open()
-        params = {
-            "QueueUrl": self.url,
-            "MaxNumberOfMessages": max(1, min(limit, self.batch_size, 10)),
-            "WaitTimeSeconds": self.wait_time_s,
-            "MessageAttributeNames": ["All"],
-            "AttributeNames": ["All"],
-        }
-        if self.visibility_timeout is not None:
-            params["VisibilityTimeout"] = self.visibility_timeout
-        response = await asyncio.to_thread(self.client.receive_message, **params)
-        messages = response.get("Messages", [])
-        return [SQSDelivery(self, message) for message in messages]
+        try:
+            await self.open()
+            params = {
+                "QueueUrl": self.url,
+                "MaxNumberOfMessages": max(1, min(limit, self.batch_size, 10)),
+                "WaitTimeSeconds": self.wait_time_s,
+                "MessageAttributeNames": ["All"],
+                "AttributeNames": ["All"],
+            }
+            if self.visibility_timeout is not None:
+                params["VisibilityTimeout"] = self.visibility_timeout
+            response = await asyncio.to_thread(self.client.receive_message, **params)
+            messages = response.get("Messages", [])
+            return [SQSDelivery(self, message) for message in messages]
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="sqs",
+                operation=ConnectorOperation.FETCH,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=max(self.poll_interval_s, float(self.wait_time_s)),
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
 
     async def send(self, envelope: Envelope) -> None:
-        await self.open()
-        params = {
-            "QueueUrl": self.url,
-            "MessageBody": encode_envelope(envelope).decode("utf-8"),
-        }
-        if self.url.endswith(".fifo"):
-            group_id = self.message_group_id
-            if not group_id:
-                raise ValueError("FIFO SQS queues require message_group_id")
-            params["MessageGroupId"] = group_id
-            if self.deduplication_id_factory is not None:
-                params["MessageDeduplicationId"] = self.deduplication_id_factory(envelope)
-        await asyncio.to_thread(self.client.send_message, **params)
+        try:
+            await self.open()
+            params = {
+                "QueueUrl": self.url,
+                "MessageBody": encode_envelope(envelope).decode("utf-8"),
+            }
+            if self.url.endswith(".fifo"):
+                group_id = self.message_group_id
+                if not group_id:
+                    raise ValueError("FIFO SQS queues require message_group_id")
+                params["MessageGroupId"] = group_id
+                if self.deduplication_id_factory is not None:
+                    params["MessageDeduplicationId"] = self.deduplication_id_factory(envelope)
+            await asyncio.to_thread(self.client.send_message, **params)
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="sqs",
+                operation=ConnectorOperation.SEND,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=max(self.poll_interval_s, float(self.wait_time_s)),
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
 
     async def stage_delete(self, message: dict[str, Any]) -> None:
         await self.open()

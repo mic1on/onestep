@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from onestep.envelope import Envelope
+from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
 
 from .base import Delivery, Sink, Source
 from .codec import decode_envelope, encode_envelope
@@ -177,40 +178,56 @@ class RabbitMQQueue(Source, Sink):
     async def open(self) -> None:
         if self._opened:
             return
-        connection = await self.connector.acquire()
-        self._receive_channel = await connection.channel()
-        await self._receive_channel.set_qos(prefetch_count=self.prefetch)
-        self._publish_channel = await connection.channel(publisher_confirms=self.publisher_confirms)
-        self._queue = await self._receive_channel.declare_queue(
-            self.name,
-            durable=self.durable,
-            auto_delete=self.auto_delete,
-            arguments=self.arguments,
-        )
-        if self.exchange_name:
-            receive_exchange = await self._receive_channel.declare_exchange(
-                self.exchange_name,
-                self.exchange_type,
-                durable=self.exchange_durable,
-                auto_delete=self.exchange_auto_delete,
-                arguments=self.exchange_arguments,
+        acquired = False
+        try:
+            connection = await self.connector.acquire()
+            acquired = True
+            self._receive_channel = await connection.channel()
+            await self._receive_channel.set_qos(prefetch_count=self.prefetch)
+            self._publish_channel = await connection.channel(publisher_confirms=self.publisher_confirms)
+            self._queue = await self._receive_channel.declare_queue(
+                self.name,
+                durable=self.durable,
+                auto_delete=self.auto_delete,
+                arguments=self.arguments,
             )
-            if self.bind:
-                await self._queue.bind(
-                    receive_exchange,
-                    routing_key=self.routing_key,
-                    arguments=self.bind_arguments or None,
+            if self.exchange_name:
+                receive_exchange = await self._receive_channel.declare_exchange(
+                    self.exchange_name,
+                    self.exchange_type,
+                    durable=self.exchange_durable,
+                    auto_delete=self.exchange_auto_delete,
+                    arguments=self.exchange_arguments,
                 )
-            self._exchange = await self._publish_channel.declare_exchange(
-                self.exchange_name,
-                self.exchange_type,
-                durable=self.exchange_durable,
-                auto_delete=self.exchange_auto_delete,
-                arguments=self.exchange_arguments,
+                if self.bind:
+                    await self._queue.bind(
+                        receive_exchange,
+                        routing_key=self.routing_key,
+                        arguments=self.bind_arguments or None,
+                    )
+                self._exchange = await self._publish_channel.declare_exchange(
+                    self.exchange_name,
+                    self.exchange_type,
+                    durable=self.exchange_durable,
+                    auto_delete=self.exchange_auto_delete,
+                    arguments=self.exchange_arguments,
+                )
+            else:
+                self._exchange = self._publish_channel.default_exchange
+            self._opened = True
+        except Exception as exc:
+            if acquired:
+                await self._reset_transport_state(release_connection=True)
+            connector_error = as_connector_operation_error(
+                backend="rabbitmq",
+                operation=ConnectorOperation.OPEN,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
             )
-        else:
-            self._exchange = self._publish_channel.default_exchange
-        self._opened = True
+            if connector_error is None:
+                raise
+            raise connector_error from exc
 
     async def close(self) -> None:
         if not self._opened:
@@ -229,33 +246,80 @@ class RabbitMQQueue(Source, Sink):
             await self.connector.release()
 
     async def fetch(self, limit: int) -> list[Delivery]:
-        await self.open()
-        if self._queue is None:
-            return []
-        deliveries: list[Delivery] = []
-        fetch_limit = max(1, min(limit, self.batch_size))
-        for index in range(fetch_limit):
-            timeout = self.poll_interval_s if index == 0 else 0
-            try:
-                message = await self._queue.get(fail=False, timeout=timeout)
-            except asyncio.TimeoutError:
-                break
-            if message is None:
-                break
-            deliveries.append(RabbitMQDelivery(message))
-        return deliveries
+        try:
+            await self.open()
+            if self._queue is None:
+                return []
+            deliveries: list[Delivery] = []
+            fetch_limit = max(1, min(limit, self.batch_size))
+            for index in range(fetch_limit):
+                timeout = self.poll_interval_s if index == 0 else 0
+                try:
+                    message = await self._queue.get(fail=False, timeout=timeout)
+                except asyncio.TimeoutError:
+                    break
+                if message is None:
+                    break
+                deliveries.append(RabbitMQDelivery(message))
+            return deliveries
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="rabbitmq",
+                operation=ConnectorOperation.FETCH,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+            )
+            if connector_error is None:
+                raise
+            await self._reset_transport_state(release_connection=True)
+            raise connector_error from exc
 
     async def send(self, envelope: Envelope) -> None:
-        await self.open()
-        if self._exchange is None:
-            raise RuntimeError("RabbitMQ queue is not open")
-        driver = self.connector._driver()
-        message_kwargs = {
-            "body": encode_envelope(envelope),
-            "content_type": "application/json",
-        }
-        delivery_mode = getattr(getattr(driver, "DeliveryMode", None), "PERSISTENT", None)
-        if self.persistent and delivery_mode is not None:
-            message_kwargs["delivery_mode"] = delivery_mode
-        message = driver.Message(**message_kwargs)
-        await self._exchange.publish(message, routing_key=self.routing_key)
+        try:
+            await self.open()
+            if self._exchange is None:
+                raise RuntimeError("RabbitMQ queue is not open")
+            driver = self.connector._driver()
+            message_kwargs = {
+                "body": encode_envelope(envelope),
+                "content_type": "application/json",
+            }
+            delivery_mode = getattr(getattr(driver, "DeliveryMode", None), "PERSISTENT", None)
+            if self.persistent and delivery_mode is not None:
+                message_kwargs["delivery_mode"] = delivery_mode
+            message = driver.Message(**message_kwargs)
+            await self._exchange.publish(message, routing_key=self.routing_key)
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            connector_error = as_connector_operation_error(
+                backend="rabbitmq",
+                operation=ConnectorOperation.SEND,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+            )
+            if connector_error is None:
+                raise
+            await self._reset_transport_state(release_connection=True)
+            raise connector_error from exc
+
+    async def _reset_transport_state(self, *, release_connection: bool) -> None:
+        try:
+            if self._publish_channel is not None:
+                await self._publish_channel.close()
+            if self._receive_channel is not None:
+                await self._receive_channel.close()
+        except Exception:
+            pass
+        finally:
+            self._publish_channel = None
+            self._receive_channel = None
+            self._queue = None
+            self._exchange = None
+            self._opened = False
+            if release_connection:
+                await self.connector.release()
