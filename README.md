@@ -46,6 +46,19 @@ Common extras:
 - `pip install -e '.[dev]'`
 - `pip install -e '.[integration]'`
 
+## Upgrading from 0.5.x
+
+`1.0.0a1` is a runtime rewrite. Projects built on the legacy `step` and
+`*Broker` APIs should treat the upgrade as a migration, not a drop-in package
+bump.
+
+See `MIGRATION-0.5-to-1.0a1.md` for:
+
+- old-to-new API mapping
+- unsupported legacy features
+- a minimal before/after example
+- rollout guidance for existing projects
+
 ## CLI
 
 The deployment entrypoint is the `onestep` CLI.

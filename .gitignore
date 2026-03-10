@@ -110,6 +110,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+!deploy/env/
+!deploy/env/onestep-app.env.example
 
 # Spyder project settings
 .spyderproject

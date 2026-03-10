@@ -8,6 +8,7 @@ Included files:
 - `env/onestep-app.env.example`: service environment variables
 - `systemd/onestep-app.service`: example `systemd` unit
 - `bin/onestep-preflight.sh`: startup check script used by `ExecStartPre`
+- `web-service-integration.md`: recommended deployment shape for FastAPI/Django and other web apps
 
 ## Expected layout
 
@@ -39,6 +40,16 @@ sudo systemctl enable --now onestep-app
 sudo systemctl status onestep-app
 sudo journalctl -u onestep-app -f
 ```
+
+## Web framework projects
+
+If your project already runs a web service such as FastAPI or Django, do not
+start `OneStepApp` inside the web worker process by default. Run the web app
+and the `onestep` worker as separate services that share the same codebase and
+configuration.
+
+See `deploy/web-service-integration.md` for the recommended process model,
+examples, and the cases where embedded startup is acceptable.
 
 ## How it works
 
