@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 from onestep_control_plane_api.core.settings import Settings
 
 
@@ -50,3 +51,30 @@ def test_settings_default_cors_allow_origins_is_empty(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.cors_allow_origins == []
+
+
+def test_settings_parse_console_auth_pair(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_CONSOLE_AUTH_USERNAME", "admin")
+    monkeypatch.setenv("ONESTEP_CP_CONSOLE_AUTH_PASSWORD", "secret-pass")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.console_auth_configured is True
+    assert settings.console_auth_username == "admin"
+
+
+def test_settings_reject_partial_console_auth_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_CONSOLE_AUTH_USERNAME", "admin")
+    monkeypatch.delenv("ONESTEP_CP_CONSOLE_AUTH_PASSWORD", raising=False)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_settings_blank_console_auth_is_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_CONSOLE_AUTH_USERNAME", "   ")
+    monkeypatch.setenv("ONESTEP_CP_CONSOLE_AUTH_PASSWORD", "   ")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.console_auth_configured is False

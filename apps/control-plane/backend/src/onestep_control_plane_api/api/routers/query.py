@@ -51,10 +51,15 @@ from onestep_control_plane_api.api.schemas import (
     TaskEventListResponse,
     TaskMetricWindowListResponse,
 )
+from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.db.models import Instance, Service, TaskEvent, TaskMetricWindow
 from onestep_control_plane_api.db.session import get_db_session
 
-router = APIRouter(prefix="/api/v1", tags=["query"])
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["query"],
+    dependencies=[Depends(require_console_auth)],
+)
 
 
 @router.get("/services", response_model=ServiceListResponse)

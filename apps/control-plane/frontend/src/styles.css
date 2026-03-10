@@ -149,6 +149,17 @@ button {
   gap: 22px;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
+.auth-panel {
+  width: min(100%, 28rem);
+}
+
 .page-header,
 .toolbar,
 .toolbar.compact,
@@ -333,6 +344,25 @@ button {
 }
 
 .search-field input {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.auth-form {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-field {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.auth-field input {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 14px;

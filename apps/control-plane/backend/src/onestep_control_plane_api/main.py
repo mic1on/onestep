@@ -1,8 +1,15 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import (
+    get_redoc_html,
+    get_swagger_ui_html,
+    get_swagger_ui_oauth2_redirect_html,
+)
+from fastapi.responses import JSONResponse
 
 from onestep_control_plane_api import __version__
 from onestep_control_plane_api.api import router
+from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.core import settings
 
 
@@ -11,16 +18,43 @@ def create_app() -> FastAPI:
         title="OneStep Control Plane API",
         version=__version__,
         debug=settings.debug,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
     if settings.cors_allow_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=settings.cors_allow_origins,
-            allow_credentials=False,
+            allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
     app.include_router(router)
+
+    @app.get("/openapi.json", include_in_schema=False)
+    def openapi_schema(_: str | None = Depends(require_console_auth)) -> JSONResponse:
+        return JSONResponse(app.openapi())
+
+    @app.get("/docs", include_in_schema=False)
+    def swagger_ui(_: str | None = Depends(require_console_auth)):
+        return get_swagger_ui_html(
+            openapi_url="/openapi.json",
+            title=f"{app.title} - Swagger UI",
+            oauth2_redirect_url="/docs/oauth2-redirect",
+        )
+
+    @app.get("/docs/oauth2-redirect", include_in_schema=False)
+    def swagger_ui_redirect(_: str | None = Depends(require_console_auth)):
+        return get_swagger_ui_oauth2_redirect_html()
+
+    @app.get("/redoc", include_in_schema=False)
+    def redoc_ui(_: str | None = Depends(require_console_auth)):
+        return get_redoc_html(
+            openapi_url="/openapi.json",
+            title=f"{app.title} - ReDoc",
+        )
+
     return app
 
 

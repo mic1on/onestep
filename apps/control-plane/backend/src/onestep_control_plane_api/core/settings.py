@@ -4,7 +4,7 @@ import json
 from json import JSONDecodeError
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -17,6 +17,9 @@ class Settings(BaseSettings):
         "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
     )
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    console_auth_username: str = ""
+    console_auth_password: str = ""
+    console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     model_config = SettingsConfigDict(
@@ -42,9 +45,23 @@ class Settings(BaseSettings):
             return [item.strip() for item in candidate.split(",") if item.strip()]
         return value
 
+    @model_validator(mode="after")
+    def validate_console_auth_pair(self) -> Settings:
+        has_username = bool(self.console_auth_username.strip())
+        has_password = bool(self.console_auth_password.strip())
+        if has_username != has_password:
+            raise ValueError(
+                "ONESTEP_CP_CONSOLE_AUTH_USERNAME and ONESTEP_CP_CONSOLE_AUTH_PASSWORD must be set together"
+            )
+        return self
+
     @property
     def ingest_auth_configured(self) -> bool:
         return bool(self.ingest_tokens)
+
+    @property
+    def console_auth_configured(self) -> bool:
+        return bool(self.console_auth_username.strip() and self.console_auth_password.strip())
 
 
 settings = Settings()

@@ -169,6 +169,17 @@ class SyncAcceptedResponse(IngestionAcceptedResponse):
     task_count: int = Field(ge=0)
 
 
+class ConsoleLoginRequest(APIModel):
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=255)
+
+
+class ConsoleSessionResponse(APIModel):
+    auth_configured: bool
+    authenticated: bool
+    username: str | None = None
+
+
 class PaginatedResponse(APIModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
