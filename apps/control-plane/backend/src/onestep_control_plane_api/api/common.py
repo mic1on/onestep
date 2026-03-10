@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterable
 from datetime import UTC, datetime
+from typing import Any
 from typing import TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.dml import Insert
 
 from onestep_control_plane_api.api.schemas import RuntimeDescriptor, ServiceDescriptor
 from onestep_control_plane_api.db.models import Instance, Service, TaskEvent, TaskMetricWindow
@@ -44,6 +48,16 @@ def get_service(
     )
 
 
+def build_insert_statement(db: Session, model: type[Any]) -> Insert:
+    dialect_name = db.get_bind().dialect.name
+    if dialect_name == "sqlite":
+        return sqlite_insert(model)
+    if dialect_name == "postgresql":
+        return postgresql_insert(model)
+
+    raise RuntimeError(f"unsupported database dialect for upsert helpers: {dialect_name}")
+
+
 def ensure_service(
     db: Session,
     identity: ServiceDescriptor,
@@ -52,14 +66,21 @@ def ensure_service(
 ) -> Service:
     service = get_service(db, identity)
     if service is None:
-        service = Service(
-            name=identity.name,
-            environment=identity.environment,
-            latest_deployment_version=identity.deployment_version,
+        db.execute(
+            build_insert_statement(db, Service)
+            .values(
+                name=identity.name,
+                environment=identity.environment,
+                latest_deployment_version=identity.deployment_version,
+            )
+            .on_conflict_do_nothing(index_elements=["name", "environment"])
         )
-        db.add(service)
-        db.flush()
-        return service
+        service = get_service(db, identity)
+        if service is None:
+            raise RuntimeError(
+                "service insert returned no row; the transaction may not be able to "
+                "observe the newly inserted service"
+            )
 
     if update_existing_version:
         service.latest_deployment_version = identity.deployment_version
@@ -73,7 +94,7 @@ def get_instance(
     return db.scalar(select(Instance).where(Instance.instance_id == instance_id))
 
 
-def create_instance_stub(
+def build_instance_values(
     service: Service,
     identity: ServiceDescriptor,
     *,
@@ -87,27 +108,51 @@ def create_instance_stub(
     last_seen_at: datetime | None = None,
     last_heartbeat_sent_at: datetime | None = None,
     last_heartbeat_sequence: int | None = None,
+) -> dict[str, object]:
+    return {
+        "service_id": service.id,
+        "instance_id": identity.instance_id,
+        "node_name": identity.node_name,
+        "hostname": runtime.hostname if runtime is not None else None,
+        "pid": runtime.pid if runtime is not None else None,
+        "deployment_version": identity.deployment_version,
+        "onestep_version": runtime.onestep_version if runtime is not None else None,
+        "python_version": runtime.python_version if runtime is not None else None,
+        "started_at": as_utc(runtime.started_at) if runtime is not None else None,
+        "last_sync_at": last_sync_at,
+        "last_topology_hash": last_topology_hash,
+        "app_snapshot_json": app_snapshot_json,
+        "last_sync_sent_at": last_sync_sent_at,
+        "last_sync_sequence": last_sync_sequence,
+        "last_heartbeat_sent_at": last_heartbeat_sent_at,
+        "last_heartbeat_sequence": last_heartbeat_sequence,
+        "last_seen_at": last_seen_at,
+        "status": status_value or "unknown",
+    }
+
+
+def ensure_instance_stub(
+    db: Session,
+    *,
+    service: Service,
+    identity: ServiceDescriptor,
 ) -> Instance:
-    return Instance(
-        service=service,
-        instance_id=identity.instance_id,
-        node_name=identity.node_name,
-        hostname=runtime.hostname if runtime is not None else None,
-        pid=runtime.pid if runtime is not None else None,
-        deployment_version=identity.deployment_version,
-        onestep_version=runtime.onestep_version if runtime is not None else None,
-        python_version=runtime.python_version if runtime is not None else None,
-        started_at=as_utc(runtime.started_at) if runtime is not None else None,
-        last_sync_at=last_sync_at,
-        last_topology_hash=last_topology_hash,
-        app_snapshot_json=app_snapshot_json,
-        last_sync_sent_at=last_sync_sent_at,
-        last_sync_sequence=last_sync_sequence,
-        last_heartbeat_sent_at=last_heartbeat_sent_at,
-        last_heartbeat_sequence=last_heartbeat_sequence,
-        last_seen_at=last_seen_at,
-        status=status_value or "unknown",
-    )
+    instance = get_instance(db, identity.instance_id)
+    if instance is None:
+        db.execute(
+            build_insert_statement(db, Instance)
+            .values(build_instance_values(service, identity))
+            .on_conflict_do_nothing(index_elements=["instance_id"])
+        )
+        instance = get_instance(db, identity.instance_id)
+        if instance is None:
+            raise RuntimeError(
+                "instance insert returned no row; the transaction may not be able to "
+                "observe the newly inserted instance"
+            )
+
+    ensure_instance_identity_matches(instance, identity)
+    return instance
 
 
 def ensure_instance_identity_matches(

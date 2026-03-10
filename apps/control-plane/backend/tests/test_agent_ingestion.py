@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+import onestep_control_plane_api.api.common as common
 from onestep_control_plane_api.db.models import (
     Instance,
     Service,
@@ -8,6 +9,7 @@ from onestep_control_plane_api.db.models import (
     TaskEvent,
     TaskMetricWindow,
 )
+from onestep_control_plane_api.api.schemas import ServiceDescriptor
 from sqlalchemy import select
 
 
@@ -291,11 +293,16 @@ def test_stale_heartbeat_does_not_roll_back_instance_snapshot(
     assert stale.status_code == 202
 
     db_session.expire_all()
+    service = db_session.scalar(
+        select(Service).where(Service.name == "billing-sync", Service.environment == "prod")
+    )
     instance = db_session.scalar(
         select(Instance).where(
             Instance.instance_id == UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df")
         )
     )
+    assert service is not None
+    assert service.latest_deployment_version == "1.1.0"
     assert instance is not None
     assert instance.status == "degraded"
     assert instance.deployment_version == "1.1.0"
@@ -866,6 +873,76 @@ def test_events_retry_with_same_event_id_is_idempotent(client, auth_headers, db_
     assert events[0].event_id == "evt_01JNXABCDEF"
     assert events[0].failure_kind == "timeout"
     assert events[0].message == "task exceeded timeout"
+
+
+def test_ensure_service_recovers_when_row_appears_after_initial_lookup(
+    monkeypatch,
+    db_session,
+) -> None:
+    identity = ServiceDescriptor.model_validate(make_service_payload())
+    existing = Service(
+        name=identity.name,
+        environment=identity.environment,
+        latest_deployment_version="0.9.0",
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    original_get_service = common.get_service
+    calls = {"count": 0}
+
+    def flaky_get_service(db, service_identity):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return original_get_service(db, service_identity)
+
+    monkeypatch.setattr(common, "get_service", flaky_get_service)
+
+    service = common.ensure_service(db_session, identity, update_existing_version=True)
+
+    assert service.id == existing.id
+    assert service.latest_deployment_version == identity.deployment_version
+
+
+def test_ensure_instance_stub_recovers_when_row_appears_after_initial_lookup(
+    monkeypatch,
+    db_session,
+) -> None:
+    identity = ServiceDescriptor.model_validate(make_service_payload())
+    service = Service(
+        name=identity.name,
+        environment=identity.environment,
+        latest_deployment_version=identity.deployment_version,
+    )
+    db_session.add(service)
+    db_session.flush()
+
+    existing = Instance(
+        service=service,
+        instance_id=identity.instance_id,
+        node_name=identity.node_name,
+        deployment_version=identity.deployment_version,
+        status="unknown",
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    original_get_instance = common.get_instance
+    calls = {"count": 0}
+
+    def flaky_get_instance(db, instance_id):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return original_get_instance(db, instance_id)
+
+    monkeypatch.setattr(common, "get_instance", flaky_get_instance)
+
+    instance = common.ensure_instance_stub(db_session, service=service, identity=identity)
+
+    assert instance.id == existing.id
+    assert instance.instance_id == identity.instance_id
 
 
 def test_missing_or_invalid_bearer_token_returns_401(client) -> None:

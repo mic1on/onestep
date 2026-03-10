@@ -42,3 +42,11 @@ def test_settings_parse_blank_ingest_tokens_from_env(monkeypatch) -> None:
 
     assert settings.ingest_tokens == []
     assert settings.ingest_auth_configured is False
+
+
+def test_settings_default_cors_allow_origins_is_empty(monkeypatch) -> None:
+    monkeypatch.delenv("ONESTEP_CP_CORS_ALLOW_ORIGINS", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.cors_allow_origins == []

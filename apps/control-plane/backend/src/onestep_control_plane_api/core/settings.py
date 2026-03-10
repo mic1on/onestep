@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
     )
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",

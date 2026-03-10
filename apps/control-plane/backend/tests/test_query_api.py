@@ -489,11 +489,20 @@ def test_service_dashboard_returns_instance_and_task_overview(client, db_session
         kind="succeeded",
         occurred_at=now - timedelta(seconds=40),
     )
+    seed_task_event(
+        db_session,
+        service,
+        online_instance,
+        event_id="evt_dashboard_old",
+        task_name="sync_users",
+        kind="failed",
+        occurred_at=now - timedelta(minutes=45),
+    )
     db_session.commit()
 
     response = client.get(
         "/api/v1/services/billing-sync/dashboard",
-        params={"environment": "prod", "lookback_minutes": 15, "recent_event_limit": 2},
+        params={"environment": "prod", "lookback_minutes": 15, "recent_event_limit": 3},
     )
     assert response.status_code == 200
 

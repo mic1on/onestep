@@ -153,7 +153,10 @@ def get_service_dashboard(
     )
     recent_events = db.scalars(
         select(TaskEvent)
-        .where(TaskEvent.service_id == service.id)
+        .where(
+            TaskEvent.service_id == service.id,
+            TaskEvent.occurred_at >= lookback_started_at,
+        )
         .order_by(TaskEvent.occurred_at.desc(), TaskEvent.event_id)
         .limit(recent_event_limit)
     ).all()

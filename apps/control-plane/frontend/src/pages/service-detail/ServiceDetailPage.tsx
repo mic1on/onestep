@@ -43,10 +43,16 @@ export function ServiceDetailPage() {
   const environment = parseEnvironment(searchParams);
   const lookbackMinutes = parseLookback(searchParams, 60);
   const currentTab = parseTab(searchParams.get("tab"));
+  const shouldFetchTasks = currentTab === "overview" || currentTab === "tasks";
+  const shouldFetchInstances = currentTab === "overview" || currentTab === "instances";
 
   const dashboardQuery = useServiceDashboardQuery(serviceName, environment, lookbackMinutes);
-  const tasksQuery = useServiceTasksQuery(serviceName, environment, lookbackMinutes);
-  const instancesQuery = useServiceInstancesQuery(serviceName, environment);
+  const tasksQuery = useServiceTasksQuery(serviceName, environment, lookbackMinutes, {
+    enabled: shouldFetchTasks,
+  });
+  const instancesQuery = useServiceInstancesQuery(serviceName, environment, {
+    enabled: shouldFetchInstances,
+  });
 
   function updateParam(key: string, value: string) {
     const next = new URLSearchParams(searchParams);
@@ -165,8 +171,10 @@ export function ServiceDetailPage() {
         dashboard,
         dashboardLoading: dashboardQuery.isPending,
         tasks,
+        tasksError: tasksQuery.error,
         tasksLoading: tasksQuery.isPending,
         instances,
+        instancesError: instancesQuery.error,
         instancesLoading: instancesQuery.isPending,
         serviceName,
         environment,
@@ -189,8 +197,10 @@ type RenderTabContentProps = {
   dashboard: ServiceDashboardResponse | undefined;
   dashboardLoading: boolean;
   tasks: TaskDashboardSummary[];
+  tasksError: Error | null;
   tasksLoading: boolean;
   instances: InstanceSummary[];
+  instancesError: Error | null;
   instancesLoading: boolean;
   serviceName: string;
   environment: Environment;
@@ -203,8 +213,10 @@ function renderTabContent({
   dashboard,
   dashboardLoading,
   tasks,
+  tasksError,
   tasksLoading,
   instances,
+  instancesError,
   instancesLoading,
   serviceName,
   environment,
@@ -216,7 +228,13 @@ function renderTabContent({
       <div className="two-column-grid">
         <Panel title={t("serviceDetail.allTasksTitle")} subtitle={t("serviceDetail.allTasksSubtitle")}>
           {tasksLoading ? <div className="loading-block">{t("serviceDetail.loadingTaskSummaries")}</div> : null}
-          {!tasksLoading ? (
+          {!tasksLoading && tasksError ? (
+            <EmptyState
+              title={t("serviceDetail.taskLoadErrorTitle")}
+              body={String(tasksError)}
+            />
+          ) : null}
+          {!tasksLoading && !tasksError ? (
             <ServiceTasksList
               environment={environment}
               lookbackMinutes={lookbackMinutes}
@@ -237,7 +255,13 @@ function renderTabContent({
       <div className="two-column-grid">
         <Panel title={t("serviceDetail.allInstancesTitle")} subtitle={t("serviceDetail.allInstancesSubtitle")}>
           {instancesLoading ? <div className="loading-block">{t("serviceDetail.loadingInstanceSnapshots")}</div> : null}
-          {!instancesLoading ? (
+          {!instancesLoading && instancesError ? (
+            <EmptyState
+              title={t("serviceDetail.instanceLoadErrorTitle")}
+              body={String(instancesError)}
+            />
+          ) : null}
+          {!instancesLoading && !instancesError ? (
             <ServiceInstancesList
               environment={environment}
               instances={instances}
@@ -278,7 +302,13 @@ function renderTabContent({
       <div className="two-column-grid">
         <Panel title={t("serviceDetail.tasksTitle")} subtitle={t("serviceDetail.tasksSubtitle")}>
           {tasksLoading ? <div className="loading-block">{t("serviceDetail.loadingTaskSummaries")}</div> : null}
-          {!tasksLoading ? (
+          {!tasksLoading && tasksError ? (
+            <EmptyState
+              title={t("serviceDetail.taskLoadErrorTitle")}
+              body={String(tasksError)}
+            />
+          ) : null}
+          {!tasksLoading && !tasksError ? (
             <ServiceTasksList
               environment={environment}
               limit={6}
@@ -303,7 +333,13 @@ function renderTabContent({
 
         <Panel title={t("serviceDetail.instancesTitle")} subtitle={t("serviceDetail.instancesSubtitle")}>
           {instancesLoading ? <div className="loading-block">{t("serviceDetail.loadingInstanceSnapshots")}</div> : null}
-          {!instancesLoading ? (
+          {!instancesLoading && instancesError ? (
+            <EmptyState
+              title={t("serviceDetail.instanceLoadErrorTitle")}
+              body={String(instancesError)}
+            />
+          ) : null}
+          {!instancesLoading && !instancesError ? (
             <ServiceInstancesList
               environment={environment}
               instances={instances}

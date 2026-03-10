@@ -41,8 +41,9 @@ export ONESTEP_CP_INGEST_TOKENS='token-a,token-b'
 export ONESTEP_CP_INGEST_TOKENS='["token-a","token-b"]'
 ```
 
-Browser access to the query API is controlled by `ONESTEP_CP_CORS_ALLOW_ORIGINS`. For local or
-demo environments you can allow all origins:
+Browser access to the query API is controlled by `ONESTEP_CP_CORS_ALLOW_ORIGINS`. It defaults to
+no allowed browser origins, so configure it explicitly when the UI is hosted separately. For local
+or demo environments you can allow all origins:
 
 ```bash
 export ONESTEP_CP_CORS_ALLOW_ORIGINS='*'
@@ -153,7 +154,7 @@ The script will:
 Example heartbeat call:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/agents/heartbeat \
+curl -X POST http://127.0.0.1:8080/api/v1/agents/heartbeat \
   -H 'Authorization: Bearer dev-token' \
   -H 'Content-Type: application/json' \
   -d @heartbeat.json
@@ -162,7 +163,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agents/heartbeat \
 Example topology sync call:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/agents/sync \
+curl -X POST http://127.0.0.1:8080/api/v1/agents/sync \
   -H 'Authorization: Bearer dev-token' \
   -H 'Content-Type: application/json' \
   -d @sync.json
