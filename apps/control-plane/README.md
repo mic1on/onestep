@@ -117,9 +117,11 @@ Endpoints after startup:
 
 The API container runs `alembic upgrade head` automatically before starting Uvicorn.
 The frontend is built as static assets and served by Nginx, which proxies `/api/*`,
-`/docs`, `/redoc`, `/healthz`, and `/readyz` back to the API container. With the default
-`VITE_API_BASE_URL=/`, the UI works both locally and when accessed through another host
-or reverse proxy. If `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and
+`/docs`, `/redoc`, `/healthz`, and `/readyz` back to the API container. At container
+startup, Nginx writes `/app-config.js` from `ONESTEP_CP_UI_API_BASE_URL`, so you can
+reuse the same frontend image across environments without rebuilding it. The default
+runtime API base is `/`, which works with the bundled reverse proxy. If
+`ONESTEP_CP_CONSOLE_AUTH_USERNAME` and
 `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` are set in `.env`, this local full-stack compose flow
 also serves the login page and enforces console auth.
 
@@ -141,6 +143,7 @@ Set at least these values in `.env.deploy`:
 - `ONESTEP_CP_INGEST_TOKENS`
 - `ONESTEP_CP_CONSOLE_AUTH_USERNAME`
 - `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`
+- `ONESTEP_CP_UI_API_BASE_URL`
 - `ONESTEP_CP_POSTGRES_PASSWORD`
 
 `ONESTEP_CP_DATABASE_URL` is optional. Leave it empty to use the bundled `postgres`
@@ -217,9 +220,11 @@ Build the UI:
 pnpm ui:build
 ```
 
-Set `VITE_API_BASE_URL` in `frontend/.env` if the API is not running on `http://127.0.0.1:8000`.
-If you open the UI from another machine, point `VITE_API_BASE_URL` at the externally reachable
-API address and make sure `ONESTEP_CP_CORS_ALLOW_ORIGINS` allows that frontend origin.
+For local `pnpm` development, you can still set `VITE_API_BASE_URL` in `frontend/.env` if
+the API is not running on `http://127.0.0.1:8000`. In the Docker/Nginx image, runtime
+`ONESTEP_CP_UI_API_BASE_URL` takes precedence over the compiled fallback, so you can point
+the same image at different API origins after build. If you open the UI from another
+machine, make sure `ONESTEP_CP_CORS_ALLOW_ORIGINS` allows that frontend origin.
 
 Quick local start with SQLite:
 

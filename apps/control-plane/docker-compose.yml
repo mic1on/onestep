@@ -58,12 +58,12 @@ services:
       context: .
       dockerfile: Dockerfile
       target: frontend
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/}
     restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      ONESTEP_CP_UI_API_BASE_URL: ${ONESTEP_CP_UI_API_BASE_URL:-/}
     ports:
       - "${ONESTEP_CP_FRONTEND_PORT:-4173}:80"
     healthcheck:
