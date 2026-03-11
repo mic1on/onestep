@@ -48,11 +48,11 @@ Common extras:
 
 ## Upgrading from 0.5.x
 
-`1.0.0a1` is a runtime rewrite. Projects built on the legacy `step` and
+`1.0.0a2` is a runtime rewrite. Projects built on the legacy `step` and
 `*Broker` APIs should treat the upgrade as a migration, not a drop-in package
 bump.
 
-See `MIGRATION-0.5-to-1.0a1.md` for:
+See `MIGRATION-0.5-to-1.0.0a2.md` for:
 
 - old-to-new API mapping
 - unsupported legacy features

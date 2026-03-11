@@ -24,6 +24,11 @@ def registered_module(name: str, **attrs):
             sys.modules[name] = previous
 
 
+def clear_modules(monkeypatch, *names: str) -> None:
+    for name in names:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+
 def test_cli_check_prints_task_summary(capsys) -> None:
     source = MemoryQueue("incoming")
     sink = MemoryQueue("processed")
@@ -113,9 +118,98 @@ def test_cli_check_loads_modules_from_current_working_directory(tmp_path, monkey
         "path",
         [entry for entry in sys.path if os.path.abspath(entry) != os.path.abspath(str(tmp_path))],
     )
+    clear_modules(monkeypatch, "example", "example.cli_app")
 
     exit_code = main(["check", "example.cli_app:app"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "App: cwd-cli-app" in captured.out
+
+
+def test_cli_check_loads_modules_from_src_layout(tmp_path, monkeypatch, capsys) -> None:
+    src_dir = tmp_path / "src" / "example"
+    src_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("", encoding="utf-8")
+    (src_dir / "cli_app.py").write_text(
+        "\n".join(
+            [
+                "from onestep import OneStepApp",
+                "",
+                "app = OneStepApp('src-cli-app')",
+                "",
+                "@app.task()",
+                "async def consume(ctx, item):",
+                "    return None",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry) not in {os.path.abspath(str(tmp_path)), os.path.abspath(str(tmp_path / 'src'))}
+        ],
+    )
+    clear_modules(monkeypatch, "example", "example.cli_app")
+
+    exit_code = main(["check", "example.cli_app:app"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "App: src-cli-app" in captured.out
+
+
+def test_cli_check_loads_modules_from_project_root_when_running_in_subdirectory(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test-app'\nversion = '0.0.0'\n", encoding="utf-8")
+    src_dir = tmp_path / "src" / "example"
+    src_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("", encoding="utf-8")
+    (src_dir / "cli_app.py").write_text(
+        "\n".join(
+            [
+                "from onestep import OneStepApp",
+                "",
+                "app = OneStepApp('project-root-cli-app')",
+                "",
+                "@app.task()",
+                "async def consume(ctx, item):",
+                "    return None",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    work_dir = tmp_path / "tools"
+    work_dir.mkdir()
+    monkeypatch.chdir(work_dir)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry)
+            not in {
+                os.path.abspath(str(work_dir)),
+                os.path.abspath(str(tmp_path)),
+                os.path.abspath(str(tmp_path / "src")),
+            }
+        ],
+    )
+    clear_modules(monkeypatch, "example", "example.cli_app")
+
+    exit_code = main(["check", "example.cli_app:app"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "App: project-root-cli-app" in captured.out

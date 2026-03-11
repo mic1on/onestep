@@ -8,6 +8,8 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .app import OneStepApp
 
+_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run or inspect a OneStepApp target")
@@ -30,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    _ensure_cwd_on_syspath()
+    _ensure_local_import_paths()
     try:
         app = OneStepApp.load(args.target)
     except Exception as exc:
@@ -49,13 +51,57 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _ensure_cwd_on_syspath() -> None:
+def _ensure_local_import_paths() -> None:
     cwd = os.getcwd()
     if not cwd:
         return
-    if cwd in sys.path:
-        return
-    sys.path.insert(0, cwd)
+    for path in reversed(_candidate_import_paths(cwd)):
+        if _path_on_syspath(path):
+            continue
+        sys.path.insert(0, path)
+
+
+def _candidate_import_paths(cwd: str) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        absolute_path = os.path.abspath(path)
+        normalized_path = os.path.normcase(absolute_path)
+        if normalized_path in seen or not os.path.isdir(absolute_path):
+            return
+        seen.add(normalized_path)
+        candidates.append(absolute_path)
+
+    add(cwd)
+    add(os.path.join(cwd, "src"))
+
+    project_root = _find_project_root(cwd)
+    if project_root is not None:
+        add(project_root)
+        add(os.path.join(project_root, "src"))
+
+    return candidates
+
+
+def _find_project_root(start: str) -> str | None:
+    current = os.path.abspath(start)
+    while True:
+        if any(os.path.exists(os.path.join(current, marker)) for marker in _PROJECT_MARKERS):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+
+def _path_on_syspath(path: str) -> bool:
+    normalized_path = os.path.normcase(os.path.abspath(path))
+    for entry in sys.path:
+        current = entry or os.getcwd()
+        if os.path.normcase(os.path.abspath(current)) == normalized_path:
+            return True
+    return False
 
 
 def _normalize_argv(argv: list[str] | None) -> list[str] | None:

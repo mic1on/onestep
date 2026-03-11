@@ -1,4 +1,4 @@
-# Migration Guide: 0.5.x to 1.0.0a1
+# Migration Guide: 0.5.x to 1.0.0a2
 
 This guide is for projects built on the legacy `0.5.x` API surface:
 
@@ -7,7 +7,7 @@ This guide is for projects built on the legacy `0.5.x` API surface:
 - `step.start(...)`
 - legacy retry, middleware, worker, and group options
 
-`1.0.0a1` is not a drop-in upgrade. The package now exposes a new async runtime
+`1.0.0a2` is not a drop-in upgrade. The package now exposes a new async runtime
 based on `OneStepApp`, `Source`, `Sink`, and `Delivery`. Treat this as a
 migration.
 
@@ -30,7 +30,7 @@ Delay the upgrade if one of these is true:
 
 The upgrade changes the programming model, runtime, and deployment entrypoint.
 
-| Area | 0.5.x | 1.0.0a1 |
+| Area | 0.5.x | 1.0.0a2 |
 | --- | --- | --- |
 | App definition | `@step(...)` | `app = OneStepApp(...)` + `@app.task(...)` |
 | Input backend | `from_broker=` | `source=` |
@@ -45,7 +45,7 @@ The upgrade changes the programming model, runtime, and deployment entrypoint.
 
 These legacy brokers have a direct or near-direct migration path:
 
-| 0.5.x | 1.0.0a1 |
+| 0.5.x | 1.0.0a2 |
 | --- | --- |
 | `MemoryBroker` | `MemoryQueue` |
 | `CronBroker` | `CronSource(...)` or `IntervalSource.every(...)` |
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     step.start(block=True)
 ```
 
-New `1.0.0a1` style:
+New `1.0.0a2` style:
 
 ```python
 from onestep import OneStepApp, WebhookSource
