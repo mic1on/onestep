@@ -274,7 +274,7 @@ const resources = {
       app: {
         brand: "OneStep",
         title: "Control Plane",
-        subtitle: "面向运行时健康、拓扑和漂移的任务级监控视图。",
+        subtitle: "面向运行时健康、拓扑和偏离的任务级监控视图。",
         servicesNav: "服务",
         logout: "退出登录",
         signedInAs: "当前账号 {{username}}",
@@ -308,7 +308,7 @@ const resources = {
         starting: "启动中",
         unknown: "未知",
         consistent: "一致",
-        drift: "漂移",
+        drift: "偏离",
       },
       eventKind: {
         failed: "失败",
@@ -396,7 +396,7 @@ const resources = {
         recentEventsSubtitle: "所选服务最近 {{lookbackMinutes}} 分钟的事件。",
         quietServiceTitle: "静默服务",
         quietServiceBody: "当前时间窗口内没有任务事件。",
-        topologyDriftTitle: "拓扑漂移",
+        topologyDriftTitle: "拓扑偏离",
         topologyDriftSubtitle: "当前实例可见的不同 topology hash。",
         tasksTitle: "任务",
         tasksSubtitle: "融合 task topology、指标窗口和事件的服务级视图。",
