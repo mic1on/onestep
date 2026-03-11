@@ -1,6 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version as _package_version
 
 from .app import OneStepApp
+from .config import load_app_config, load_yaml_app
 from .context import TaskContext
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
@@ -74,4 +75,6 @@ __all__ = [
     "WebhookResponse",
     "WebhookSource",
     "__version__",
+    "load_app_config",
+    "load_yaml_app",
 ]

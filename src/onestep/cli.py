@@ -12,7 +12,7 @@ _PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run or inspect a OneStepApp target")
+    parser = argparse.ArgumentParser(description="Run or inspect a OneStepApp target or YAML config")
     parser.add_argument(
         "--version",
         action="version",
@@ -20,11 +20,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = subparsers.add_parser("run", help="Load and run a OneStepApp target")
-    run_parser.add_argument("target", help="Python target in the form package.module:app")
+    run_parser = subparsers.add_parser("run", help="Load and run a OneStepApp target or YAML config")
+    run_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
 
-    check_parser = subparsers.add_parser("check", help="Load a target and print its task summary")
-    check_parser.add_argument("target", help="Python target in the form package.module:app")
+    check_parser = subparsers.add_parser("check", help="Load a target or YAML config and print its task summary")
+    check_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
     check_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit the summary as JSON")
 
     return parser.parse_args(_normalize_argv(argv))

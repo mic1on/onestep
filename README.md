@@ -39,6 +39,7 @@ pip install -e .
 
 Common extras:
 
+- `pip install -e '.[yaml]'`
 - `pip install -e '.[mysql]'`
 - `pip install -e '.[rabbitmq]'`
 - `pip install -e '.[sqs]'`
@@ -105,6 +106,59 @@ Use JSON output when you want the check result in CI or deployment scripts:
 ```bash
 onestep check --json your_package.tasks:app
 ```
+
+You can also load a YAML app definition with `handler.ref` entries that point to Python callables:
+
+```yaml
+app:
+  name: billing-sync
+
+connectors:
+  tick:
+    type: interval
+    minutes: 5
+    immediate: true
+  processed:
+    type: memory
+
+tasks:
+  - name: sync_billing
+    source: tick
+    handler:
+      ref: your_package.handlers.billing:sync_billing
+      params:
+        region: cn
+    emit: [processed]
+    retry:
+      type: max_attempts
+      max_attempts: 3
+      delay_s: 10
+```
+
+Check or run the YAML target the same way:
+
+```bash
+onestep check worker.yaml
+onestep run worker.yaml
+```
+
+YAML resources can reference other resources by name, for example `rabbitmq_queue.connector: rmq`
+or `mysql_incremental.state: cursor_store`.
+
+Currently supported YAML resource types:
+
+- `memory`
+- `interval`
+- `cron`
+- `webhook`
+- `rabbitmq`
+- `rabbitmq_queue`
+- `mysql`
+- `mysql_state_store`
+- `mysql_cursor_store`
+- `mysql_table_queue`
+- `mysql_incremental`
+- `mysql_table_sink`
 
 A runnable example lives in:
 

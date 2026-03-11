@@ -188,6 +188,10 @@ class OneStepApp:
 
     @classmethod
     def load(cls, target: str) -> "OneStepApp":
+        from .config import is_yaml_target, load_yaml_app
+
+        if is_yaml_target(target):
+            return load_yaml_app(target)
         module_name, _, attr = target.partition(":")
         app_attr = attr or "app"
         module = importlib.import_module(module_name)
