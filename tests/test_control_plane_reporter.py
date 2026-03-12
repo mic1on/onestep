@@ -34,7 +34,7 @@ def _make_config() -> ControlPlaneReporterConfig:
         environment="prod",
         service_name="billing-sync",
         node_name="vm-prod-3",
-        deployment_version="1.0.0a2+c435c99",
+        deployment_version="1.0.0+c435c99",
         instance_id=UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
         heartbeat_interval_s=3600.0,
         metrics_interval_s=3600.0,
@@ -68,7 +68,7 @@ def test_reporter_startup_sends_heartbeat() -> None:
         "environment": "prod",
         "node_name": "vm-prod-3",
         "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
-        "deployment_version": "1.0.0a2+c435c99",
+        "deployment_version": "1.0.0+c435c99",
     }
     assert heartbeat_payload["health"]["status"] == "ok"
     assert heartbeat_payload["sequence"] == 1

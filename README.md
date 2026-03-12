@@ -15,7 +15,7 @@
 - `Sink`: publish processed data
 - `Delivery`: a single fetched item with `ack/retry/fail`
 
-The current `1.0.0` alpha line (`1.0.0a3` at the time of writing) keeps the V1 surface intentionally small:
+The V1 stable surface includes:
 
 - `MemoryQueue`
 - `MySQLConnector.table_queue(...)`
@@ -34,26 +34,30 @@ The current `1.0.0` alpha line (`1.0.0a3` at the time of writing) keeps the V1 s
 Core package:
 
 ```bash
-pip install -e .
+pip install onestep
 ```
 
 Common extras:
 
-- `pip install -e '.[yaml]'`
-- `pip install -e '.[mysql]'`
-- `pip install -e '.[rabbitmq]'`
-- `pip install -e '.[sqs]'`
-- `pip install -e '.[all]'`
+- `pip install 'onestep[yaml]'`
+- `pip install 'onestep[mysql]'`
+- `pip install 'onestep[rabbitmq]'`
+- `pip install 'onestep[sqs]'`
+- `pip install 'onestep[all]'`
+
+From a source checkout:
+
+- `pip install -e .`
 - `pip install -e '.[dev]'`
 - `pip install -e '.[integration]'`
 
 ## Upgrading from 0.5.x
 
-The `1.0.0` alpha line is a runtime rewrite. Projects built on the legacy `step` and
+`1.0.0` is a runtime rewrite. Projects built on the legacy `step` and
 `*Broker` APIs should treat the upgrade as a migration, not a drop-in package
 bump.
 
-See `MIGRATION-0.5-to-1.0.0a2.md` for:
+See `MIGRATION-0.5-to-1.0.0.md` for:
 
 - old-to-new API mapping
 - unsupported legacy features
