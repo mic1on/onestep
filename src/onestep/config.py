@@ -71,6 +71,7 @@ def load_app_config(config: Mapping[str, Any], *, source_path: str | None = None
         handler = _build_handler(task_config.get("handler"), task_name=task_name)
         app.task(
             name=task_name,
+            description=_optional_string(task_config, "description"),
             source=_resolve_optional_source(resources, task_config.get("source"), task_index=index),
             emit=_resolve_optional_sinks(resources, task_config.get("emit"), field="emit", task_index=index),
             dead_letter=_resolve_optional_sinks(
@@ -325,6 +326,7 @@ def _build_handler(raw_handler: Any, *, task_name: str | None):
         return result
 
     bound_handler.__name__ = task_name or getattr(func, "__name__", "configured_handler")
+    bound_handler.__doc__ = getattr(func, "__doc__", None)
     return bound_handler
 
 

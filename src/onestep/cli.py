@@ -132,9 +132,10 @@ def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:
         emit = _format_resources(task["emit"])
         dead_letter = _format_resources(task["dead_letter"])
         timeout = _format_timeout(task["timeout_s"])
+        description = f" description={task['description']!r}" if task.get("description") else ""
         print(
             f"- {task['name']} source={source} emit={emit} dead_letter={dead_letter} "
-            f"concurrency={task['concurrency']} timeout={timeout} retry={task['retry']}"
+            f"concurrency={task['concurrency']} timeout={timeout} retry={task['retry']}{description}"
         )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,7 @@ TaskHandler = Callable[["TaskContext", Any], Any]
 @dataclass
 class TaskSpec:
     name: str
+    description: str | None
     handler: TaskHandler
     source: Source | None
     sinks: tuple[Sink, ...]
@@ -26,6 +28,7 @@ class TaskSpec:
         cls,
         *,
         name: str,
+        description: str | None,
         handler: TaskHandler,
         source: Source | None,
         sinks: Sink | Sequence[Sink] | None,
@@ -42,6 +45,7 @@ class TaskSpec:
         resolved_dead_letter_sinks = _normalize_sinks(dead_letter)
         return cls(
             name=name,
+            description=_normalize_description(description) or inspect.getdoc(handler),
             handler=handler,
             source=source,
             sinks=resolved_sinks,
@@ -58,3 +62,10 @@ def _normalize_sinks(sinks: Sink | Sequence[Sink] | None) -> tuple[Sink, ...]:
     if isinstance(sinks, Sequence) and not isinstance(sinks, (str, bytes)):
         return tuple(sinks)
     return (sinks,)
+
+
+def _normalize_description(description: str | None) -> str | None:
+    if description is None:
+        return None
+    normalized = description.strip()
+    return normalized or None

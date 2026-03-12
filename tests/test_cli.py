@@ -46,7 +46,12 @@ def test_cli_check_prints_task_summary(capsys) -> None:
     sink = MemoryQueue("processed")
     app = OneStepApp("cli-check")
 
-    @app.task(source=source, emit=sink, timeout_s=5.0)
+    @app.task(
+        source=source,
+        emit=sink,
+        timeout_s=5.0,
+        description="Process incoming jobs and forward them to the processed queue.",
+    )
     async def consume(ctx, item):
         return item
 
@@ -59,6 +64,7 @@ def test_cli_check_prints_task_summary(capsys) -> None:
     assert "App: cli-check" in captured.out
     assert "- consume source=incoming<MemoryQueue> emit=processed<MemoryQueue>" in captured.out
     assert "timeout=5.00s" in captured.out
+    assert "description='Process incoming jobs and forward them to the processed queue.'" in captured.out
 
 
 def test_cli_check_json_supports_factory_targets(capsys) -> None:
@@ -68,6 +74,7 @@ def test_cli_check_json_supports_factory_targets(capsys) -> None:
 
         @app.task(source=source)
         async def consume(ctx, item):
+            """Consume a single item from the factory queue."""
             return None
 
         return app
@@ -81,6 +88,7 @@ def test_cli_check_json_supports_factory_targets(capsys) -> None:
     assert summary["target"] == "testsupport_cli_factory:build_app"
     assert summary["name"] == "cli-factory"
     assert summary["tasks"][0]["name"] == "consume"
+    assert summary["tasks"][0]["description"] == "Consume a single item from the factory queue."
     assert summary["tasks"][0]["source"] == {"name": "factory.incoming", "type": "MemoryQueue"}
 
 
@@ -240,6 +248,7 @@ def test_cli_check_loads_yaml_target(capsys, tmp_path) -> None:
                 "tasks": [
                     {
                         "name": "consume",
+                        "description": "Consume queued messages from YAML config.",
                         "source": "incoming",
                         "handler": "testsupport_yaml_cli:consume",
                         "emit": ["processed"],
@@ -263,6 +272,7 @@ def test_cli_check_loads_yaml_target(capsys, tmp_path) -> None:
     assert "App: yaml-cli-app" in captured.out
     assert "- consume source=incoming<MemoryQueue> emit=processed<MemoryQueue>" in captured.out
     assert "retry=MaxAttempts" in captured.out
+    assert "description='Consume queued messages from YAML config.'" in captured.out
 
 
 def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_path) -> None:

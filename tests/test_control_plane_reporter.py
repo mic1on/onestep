@@ -95,6 +95,7 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
         concurrency=16,
         timeout_s=30.0,
         retry=MaxAttempts(max_attempts=5, delay_s=10.0),
+        description="Sync billing users from the scheduled source into the results queue.",
     )
     async def sync_users(ctx, payload):
         return payload
@@ -117,6 +118,7 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
     assert sync_payload["app"]["tasks"] == [
         {
             "name": "sync_users",
+            "description": "Sync billing users from the scheduled source into the results queue.",
             "source": {
                 "kind": "interval",
                 "name": "interval:3600s",

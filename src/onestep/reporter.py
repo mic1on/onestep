@@ -610,6 +610,7 @@ class ControlPlaneReporter:
             tasks.append(
                 {
                     "name": task.name,
+                    "description": task.description,
                     "source": (
                         self._build_connector_descriptor(task.source) if task.source is not None else None
                     ),

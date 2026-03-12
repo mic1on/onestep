@@ -80,6 +80,7 @@ class OneStepApp:
         self,
         *,
         name: str | None = None,
+        description: str | None = None,
         source: Source | None = None,
         emit: Sink | Sequence[Sink] | None = None,
         dead_letter: Sink | Sequence[Sink] | None = None,
@@ -90,6 +91,7 @@ class OneStepApp:
         def decorator(func: TaskHandler) -> TaskHandler:
             task = TaskSpec.build(
                 name=name or func.__name__,
+                description=description,
                 handler=func,
                 source=source,
                 sinks=emit,
@@ -175,6 +177,7 @@ class OneStepApp:
             "tasks": [
                 {
                     "name": task.name,
+                    "description": task.description,
                     "source": _describe_resource(task.source),
                     "emit": [_describe_resource(sink) for sink in task.sinks],
                     "dead_letter": [_describe_resource(sink) for sink in task.dead_letter_sinks],
