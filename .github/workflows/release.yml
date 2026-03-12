@@ -44,8 +44,10 @@ jobs:
       - name: Smoke-install wheel
         run: |
           uv venv .release-smoke
-          uv pip install --python .release-smoke/bin/python dist/*.whl
+          uv pip install --python .release-smoke/bin/python dist/*.whl 'PyYAML>=6.0'
           .release-smoke/bin/onestep --version
+          .release-smoke/bin/onestep check example.cli_app:app
+          .release-smoke/bin/onestep check example/cli_app.yaml
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4

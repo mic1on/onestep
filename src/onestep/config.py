@@ -13,6 +13,7 @@ from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
 from .connectors.schedule import CronSource, IntervalSource
+from .connectors.sqs import SQSConnector
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
 from .retry import MaxAttempts, NoRetry, RetryPolicy
 
@@ -39,12 +40,14 @@ def load_app_config(config: Mapping[str, Any], *, source_path: str | None = None
         app_name = _require_string(config, "name")
         shutdown_timeout_s = config.get("shutdown_timeout_s", 30.0)
         app_config = config.get("config")
+        app_state = config.get("state")
     else:
         if not isinstance(app_section, Mapping):
             raise TypeError("'app' must be a mapping")
         app_name = _require_string(app_section, "name")
         shutdown_timeout_s = app_section.get("shutdown_timeout_s", 30.0)
         app_config = app_section.get("config")
+        app_state = app_section.get("state")
 
     if app_config is None:
         app_config = {}
@@ -60,6 +63,8 @@ def load_app_config(config: Mapping[str, Any], *, source_path: str | None = None
         app.config.setdefault("config_path", source_path)
 
     resources = _build_resources(config)
+    if app_state is not None:
+        app.state = _resolve_app_state(resources, app_state)
     tasks = config.get("tasks", [])
     if not isinstance(tasks, Sequence) or isinstance(tasks, (str, bytes)):
         raise TypeError("'tasks' must be a list")
@@ -220,6 +225,32 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             poll_interval_s=spec.get("poll_interval_s", 1.0),
             publisher_confirms=spec.get("publisher_confirms", True),
             persistent=spec.get("persistent", True),
+        )
+    if resource_type == "sqs":
+        return SQSConnector(
+            region_name=spec.get("region_name"),
+            options=_mapping_value(spec.get("options"), field=f"resources.{name}.options"),
+        )
+    if resource_type == "sqs_queue":
+        connector = _resolve_dependency(resolve, spec, "connector")
+        if not hasattr(connector, "queue"):
+            raise TypeError(f"resource {spec['connector']!r} cannot build sqs_queue")
+        return connector.queue(
+            _require_string(spec, "url"),
+            wait_time_s=spec.get("wait_time_s", 20),
+            visibility_timeout=spec.get("visibility_timeout"),
+            batch_size=spec.get("batch_size", 10),
+            poll_interval_s=spec.get("poll_interval_s", 0.0),
+            message_group_id=spec.get("message_group_id"),
+            deduplication_id_factory=_optional_ref(
+                spec.get("deduplication_id_factory"),
+                field=f"resources.{name}.deduplication_id_factory",
+            ),
+            on_fail=spec.get("on_fail", "leave"),
+            delete_batch_size=spec.get("delete_batch_size", 10),
+            delete_flush_interval_s=spec.get("delete_flush_interval_s", 0.5),
+            heartbeat_interval_s=spec.get("heartbeat_interval_s"),
+            heartbeat_visibility_timeout=spec.get("heartbeat_visibility_timeout"),
         )
     if resource_type == "mysql":
         return MySQLConnector(
@@ -412,6 +443,14 @@ def _resolve_optional_sinks(
     return tuple(sinks)
 
 
+def _resolve_app_state(resources: Mapping[str, Any], value: Any) -> Any:
+    name = _string_value(value, field="app.state")
+    resolved = _resolve_resource(resources, name)
+    if not _is_state_store(resolved):
+        raise TypeError(f"resource {name!r} cannot be used as app state")
+    return resolved
+
+
 def _resolve_resource(resources: Mapping[str, Any], name: str) -> Any:
     try:
         return resources[name]
@@ -490,8 +529,22 @@ def _mapping_value(value: Any, *, field: str) -> dict[str, Any]:
     return _optional_mapping(value, field=field) or {}
 
 
+def _optional_ref(value: Any, *, field: str) -> Any:
+    if value is None:
+        return None
+    if callable(value):
+        return value
+    if isinstance(value, str):
+        return _load_ref(value)
+    raise TypeError(f"'{field}' must be a callable or ref string")
+
+
 def _is_cursor_store(value: Any) -> bool:
     return hasattr(value, "load") and hasattr(value, "save")
+
+
+def _is_state_store(value: Any) -> bool:
+    return _is_cursor_store(value) and hasattr(value, "delete")
 
 
 def _import_yaml():

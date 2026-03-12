@@ -1,0 +1,19 @@
+app:
+  name: cli-demo-yaml
+  config:
+    service_name: yaml-demo
+
+connectors:
+  tick:
+    type: interval
+    seconds: 3600
+    immediate: true
+    overlap: skip
+    payload:
+      job: sync-users
+
+tasks:
+  - name: sync_users
+    source: tick
+    handler:
+      ref: example.cli_app:sync_users

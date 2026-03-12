@@ -15,7 +15,7 @@
 - `Sink`: publish processed data
 - `Delivery`: a single fetched item with `ack/retry/fail`
 
-The current V1 alpha surface includes:
+The current `1.0.0` alpha line (`1.0.0a3` at the time of writing) keeps the V1 surface intentionally small:
 
 - `MemoryQueue`
 - `MySQLConnector.table_queue(...)`
@@ -49,7 +49,7 @@ Common extras:
 
 ## Upgrading from 0.5.x
 
-`1.0.0a2` is a runtime rewrite. Projects built on the legacy `step` and
+The `1.0.0` alpha line is a runtime rewrite. Projects built on the legacy `step` and
 `*Broker` APIs should treat the upgrade as a migration, not a drop-in package
 bump.
 
@@ -153,6 +153,8 @@ Currently supported YAML resource types:
 - `webhook`
 - `rabbitmq`
 - `rabbitmq_queue`
+- `sqs`
+- `sqs_queue`
 - `mysql`
 - `mysql_state_store`
 - `mysql_cursor_store`
@@ -160,14 +162,33 @@ Currently supported YAML resource types:
 - `mysql_incremental`
 - `mysql_table_sink`
 
-A runnable example lives in:
+YAML apps can also bind app-level state explicitly:
+
+```yaml
+app:
+  name: billing-sync
+  state: app_state
+
+connectors:
+  app_state:
+    type: mysql_state_store
+    connector: db
+    table: onestep_state
+```
+
+The named state resource must support `load/save/delete`; `mysql_state_store`
+and `mysql_cursor_store` both work.
+
+Runnable examples live in:
 
 - `example/cli_app.py`
+- `example/cli_app.yaml`
 
 Run it locally with:
 
 ```bash
 PYTHONPATH=src onestep check example.cli_app:app
+onestep check example/cli_app.yaml
 SYNC_INTERVAL_SECONDS=5 PYTHONPATH=src onestep run example.cli_app:app
 ```
 
@@ -263,8 +284,11 @@ Quick local demo:
 
 1. Start `onestep-control-plane`:
 
+   If the control plane repo is checked out next to this one:
+
 ```bash
-/Users/miclon/development/onestep-control-plane/scripts/start-local.sh
+cd ../onestep-control-plane
+./scripts/start-local.sh
 ```
 
 2. Start a long-running OneStep reporter demo:

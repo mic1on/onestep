@@ -329,7 +329,7 @@ def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_pat
     assert seen == [{"value": 42}]
 
 
-def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, tmp_path) -> None:
+def test_yaml_target_builds_mysql_rabbitmq_sqs_and_state_resources_via_refs(monkeypatch, tmp_path) -> None:
     class FakeCursorStore:
         def __init__(self, *, connector, kwargs):
             self.connector = connector
@@ -339,6 +339,10 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
             return None
 
         async def save(self, key: str, value):
+            return None
+
+    class FakeStateStore(FakeCursorStore):
+        async def delete(self, key: str):
             return None
 
     class FakeSource(Source):
@@ -377,11 +381,25 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
         def queue(self, name: str, **kwargs):
             return FakeQueue(name, connector=self, kind="rabbitmq_queue", kwargs=kwargs)
 
+    class FakeSQSConnector:
+        def __init__(self, region_name: str | None = None, options=None):
+            self.region_name = region_name
+            self.options = options
+
+        def queue(self, url: str, **kwargs):
+            return FakeQueue(url, connector=self, kind="sqs_queue", kwargs=kwargs)
+
     class FakeMySQLConnector:
         def __init__(self, dsn: str, **engine_options):
             self.dsn = dsn
             self.engine_options = engine_options
             self.cursor_stores = []
+            self.state_stores = []
+
+        def state_store(self, **kwargs):
+            store = FakeStateStore(connector=self, kwargs=kwargs)
+            self.state_stores.append(store)
+            return store
 
         def cursor_store(self, **kwargs):
             store = FakeCursorStore(connector=self, kwargs=kwargs)
@@ -395,13 +413,18 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
             return FakeSink(f"mysql.table_sink:{kwargs['table']}", connector=self, kind="mysql_table_sink", kwargs=kwargs)
 
     monkeypatch.setattr(config_module, "RabbitMQConnector", FakeRabbitMQConnector)
+    monkeypatch.setattr(config_module, "SQSConnector", FakeSQSConnector, raising=False)
     monkeypatch.setattr(config_module, "MySQLConnector", FakeMySQLConnector)
 
     config_path = tmp_path / "advanced.yaml"
     config_path.write_text(
         json.dumps(
             {
-                "name": "yaml-advanced",
+                "app": {
+                    "name": "yaml-advanced",
+                    "state": "app_state",
+                    "config": {"environment": "test"},
+                },
                 "connectors": {
                     "rmq": {
                         "type": "rabbitmq",
@@ -420,6 +443,11 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
                         "type": "mysql",
                         "dsn": "mysql+pymysql://root:root@localhost:3306/app",
                         "engine_options": {"pool_recycle": 3600},
+                    },
+                    "app_state": {
+                        "type": "mysql_state_store",
+                        "connector": "db",
+                        "table": "app_state",
                     },
                     "cursor": {
                         "type": "mysql_cursor_store",
@@ -443,18 +471,43 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
                         "mode": "upsert",
                         "keys": ["id"],
                     },
+                    "sqs": {
+                        "type": "sqs",
+                        "region_name": "ap-southeast-1",
+                        "options": {"endpoint_url": "http://localstack:4566"},
+                    },
+                    "jobs_sqs_in": {
+                        "type": "sqs_queue",
+                        "connector": "sqs",
+                        "url": "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs.fifo",
+                        "message_group_id": "workers",
+                        "heartbeat_interval_s": 15,
+                        "heartbeat_visibility_timeout": 60,
+                    },
+                    "jobs_sqs_out": {
+                        "type": "sqs_queue",
+                        "connector": "sqs",
+                        "url": "https://sqs.ap-southeast-1.amazonaws.com/123456789/processed.fifo",
+                        "message_group_id": "workers",
+                        "delete_batch_size": 5,
+                    },
                 },
                 "tasks": [
                     {
                         "name": "sync_users",
                         "source": "users",
                         "handler": "testsupport_yaml_advanced:sync_users",
-                        "emit": ["processed"],
+                        "emit": ["processed", "jobs_sqs_out"],
                     },
                     {
                         "name": "ingest_jobs",
                         "source": "jobs_in",
                         "handler": "testsupport_yaml_advanced:ingest_jobs",
+                    },
+                    {
+                        "name": "ingest_sqs_jobs",
+                        "source": "jobs_sqs_in",
+                        "handler": "testsupport_yaml_advanced:ingest_sqs_jobs",
                     },
                 ],
             }
@@ -468,16 +521,24 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
     async def ingest_jobs(ctx, item):
         return None
 
+    async def ingest_sqs_jobs(ctx, item):
+        return None
+
     with registered_yaml_module(), registered_module(
         "testsupport_yaml_advanced",
         sync_users=sync_users,
         ingest_jobs=ingest_jobs,
+        ingest_sqs_jobs=ingest_sqs_jobs,
     ):
         app = OneStepApp.load(str(config_path))
 
     sync_task = app.tasks[0]
     ingest_task = app.tasks[1]
+    ingest_sqs_task = app.tasks[2]
 
+    assert app.config == {"environment": "test", "config_path": str(config_path)}
+    assert app.state is sync_task.source.connector.state_stores[0]
+    assert app.state.kwargs["table"] == "app_state"
     assert sync_task.source.kind == "mysql_incremental"
     assert sync_task.source.kwargs["cursor"] == ("updated_at", "id")
     assert sync_task.source.kwargs["state"] is sync_task.source.connector.cursor_stores[0]
@@ -485,12 +546,21 @@ def test_yaml_target_builds_mysql_and_rabbitmq_resources_via_refs(monkeypatch, t
     assert sync_task.source.connector.engine_options == {"pool_recycle": 3600}
     assert sync_task.sinks[0].kind == "mysql_table_sink"
     assert sync_task.sinks[0].connector is sync_task.source.connector
+    assert sync_task.sinks[1].kind == "sqs_queue"
+    assert sync_task.sinks[1].connector.region_name == "ap-southeast-1"
+    assert sync_task.sinks[1].connector.options == {"endpoint_url": "http://localstack:4566"}
+    assert sync_task.sinks[1].kwargs["message_group_id"] == "workers"
+    assert sync_task.sinks[1].kwargs["delete_batch_size"] == 5
     assert ingest_task.source.kind == "rabbitmq_queue"
     assert ingest_task.source.name == "incoming_jobs"
     assert ingest_task.source.connector.url == "amqp://guest:guest@localhost/"
     assert ingest_task.source.connector.options == {"client_properties": {"connection_name": "yaml-worker"}}
     assert ingest_task.source.kwargs["exchange"] == "jobs.events"
     assert ingest_task.source.kwargs["prefetch"] == 50
+    assert ingest_sqs_task.source.kind == "sqs_queue"
+    assert ingest_sqs_task.source.name == "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs.fifo"
+    assert ingest_sqs_task.source.kwargs["heartbeat_interval_s"] == 15
+    assert ingest_sqs_task.source.kwargs["heartbeat_visibility_timeout"] == 60
 
 
 def test_yaml_target_builds_webhook_auth_and_response(tmp_path) -> None:
