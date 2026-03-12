@@ -45,9 +45,12 @@ export function ServiceTasksList({
             lookback_minutes: lookbackMinutes,
           })}
         >
-          <div>
+          <div className="list-row-copy">
             <strong>{task.task_name}</strong>
-            <p>{task.description ?? task.source_name ?? t("common.noSourceSnapshot")}</p>
+            <p className="list-row-description">
+              <span className="list-row-label">{t("taskDetail.description")}</span>
+              <span>{task.description ?? t("common.notAvailable")}</span>
+            </p>
           </div>
           <div className="row-metrics">
             <StatusBadge

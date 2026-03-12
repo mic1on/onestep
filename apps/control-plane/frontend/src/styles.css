@@ -388,11 +388,31 @@ button {
   display: block;
 }
 
+.list-row-copy {
+  min-width: 0;
+}
+
 .list-row p,
 .event-row p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.list-row-description {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.list-row-label {
+  color: var(--accent-strong);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .row-metrics {
