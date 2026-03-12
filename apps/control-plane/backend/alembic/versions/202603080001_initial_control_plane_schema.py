@@ -87,6 +87,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("service_id", sa.Uuid(), nullable=False),
         sa.Column("task_name", sa.String(length=255), nullable=False),
+        sa.Column("description", sa.Text(), nullable=True),
         sa.Column("source_name", sa.String(length=255), nullable=True),
         sa.Column("source_kind", sa.String(length=128), nullable=True),
         sa.Column("source_config_json", json_type, nullable=True),

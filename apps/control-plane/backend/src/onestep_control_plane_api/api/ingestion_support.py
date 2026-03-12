@@ -73,6 +73,7 @@ def build_task_definition_payload(
     topology_hash: str,
 ) -> dict[str, object]:
     return {
+        "description": task.description,
         "source_name": task.source.name if task.source is not None else None,
         "source_kind": task.source.kind if task.source is not None else None,
         "source_config_json": task.source.config if task.source is not None else None,

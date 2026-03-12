@@ -143,6 +143,7 @@ def seed_task_definition(
     task_name: str,
     source_name: str,
     source_kind: str,
+    description: str | None = None,
     source_config_json: dict[str, object] | None = None,
     emit_json: list[dict[str, object]] | None = None,
     concurrency: int | None = None,
@@ -153,6 +154,7 @@ def seed_task_definition(
     task_definition = TaskDefinition(
         service=service,
         task_name=task_name,
+        description=description,
         source_name=source_name,
         source_kind=source_kind,
         source_config_json=source_config_json,
@@ -555,6 +557,7 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
         db_session,
         service,
         task_name="sync_users",
+        description="Continuously reconcile billing users into the downstream warehouse.",
         source_name="interval:3600s",
         source_kind="interval",
         source_config_json={"seconds": 3600, "immediate": False, "overlap": "skip"},
@@ -574,6 +577,7 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
         db_session,
         service,
         task_name="cleanup_orphans",
+        description="Handle orphan cleanup tasks that still emit lifecycle events.",
         source_name="rabbitmq:orders",
         source_kind="rabbitmq_queue",
         source_config_json={"queue": "orders", "prefetch": 100},
@@ -587,6 +591,7 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
         db_session,
         service,
         task_name="nightly_reconcile",
+        description="Run the full nightly reconciliation pass for dormant records.",
         source_name="interval:86400s",
         source_kind="interval",
         source_config_json={"seconds": 86400},
@@ -700,6 +705,10 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
     by_task_name = {item["task_name"]: item for item in payload["items"]}
 
     sync_users = by_task_name["sync_users"]
+    assert (
+        sync_users["description"]
+        == "Continuously reconcile billing users into the downstream warehouse."
+    )
     assert sync_users["source_name"] == "interval:3600s"
     assert sync_users["source_kind"] == "interval"
     assert sync_users["source_config"] == {
@@ -740,6 +749,10 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
     }
 
     cleanup_orphans = by_task_name["cleanup_orphans"]
+    assert (
+        cleanup_orphans["description"]
+        == "Handle orphan cleanup tasks that still emit lifecycle events."
+    )
     assert cleanup_orphans["source_kind"] == "rabbitmq_queue"
     assert cleanup_orphans["emit"] == []
     assert cleanup_orphans["retry_policy"] == {"kind": "no_retry", "config": {}}
@@ -755,6 +768,10 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
 
     nightly_reconcile = by_task_name["nightly_reconcile"]
     assert nightly_reconcile["metric_window_count"] == 0
+    assert (
+        nightly_reconcile["description"]
+        == "Run the full nightly reconciliation pass for dormant records."
+    )
     assert nightly_reconcile["event_counts"] == {
         "failed": 0,
         "retried": 0,
@@ -792,6 +809,7 @@ def test_get_service_task_detail_returns_summary_windows_and_events(client, db_s
         db_session,
         service,
         task_name="sync_users",
+        description="Continuously reconcile billing users into the downstream warehouse.",
         source_name="interval:3600s",
         source_kind="interval",
         source_config_json={"seconds": 3600},
@@ -884,6 +902,10 @@ def test_get_service_task_detail_returns_summary_windows_and_events(client, db_s
     assert payload["summary"]["timeouts"] == 1
     assert payload["summary"]["weighted_avg_duration_ms"] == 160.0
     assert payload["summary"]["max_p95_duration_ms"] == 320.0
+    assert (
+        payload["summary"]["description"]
+        == "Continuously reconcile billing users into the downstream warehouse."
+    )
     assert payload["summary"]["source_name"] == "interval:3600s"
     assert payload["summary"]["emit"] == [
         {

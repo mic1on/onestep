@@ -242,6 +242,7 @@ def apply_task_definition_to_summary(
     summary: TaskDashboardSummary,
     task_definition: TaskDefinition,
 ) -> None:
+    summary.description = task_definition.description
     summary.source_name = task_definition.source_name
     summary.source_kind = task_definition.source_kind
     summary.source_config = task_definition.source_config_json

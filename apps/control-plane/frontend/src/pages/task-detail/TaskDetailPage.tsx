@@ -80,6 +80,10 @@ export function TaskDetailPage() {
             <Panel title={t("taskDetail.configurationTitle")} subtitle={t("taskDetail.configurationSubtitle")}>
               <dl className="definition-grid">
                 <div>
+                  <dt>{t("taskDetail.description")}</dt>
+                  <dd>{summary.description ?? t("common.notAvailable")}</dd>
+                </div>
+                <div>
                   <dt>{t("taskDetail.source")}</dt>
                   <dd>{summary.source_name ?? t("common.notAvailable")}</dd>
                 </div>

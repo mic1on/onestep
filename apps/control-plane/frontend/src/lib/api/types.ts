@@ -136,6 +136,7 @@ export interface TaskMetricWindowSummary {
 
 export interface TaskDashboardSummary {
   task_name: string;
+  description: string | null;
   source_name: string | null;
   source_kind: string | null;
   source_config: JsonObject | null;

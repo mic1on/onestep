@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import onestep_control_plane_api.api.common as common
+from onestep_control_plane_api.api.schemas import ServiceDescriptor
 from onestep_control_plane_api.db.models import (
     Instance,
     Service,
@@ -9,7 +10,6 @@ from onestep_control_plane_api.db.models import (
     TaskEvent,
     TaskMetricWindow,
 )
-from onestep_control_plane_api.api.schemas import ServiceDescriptor
 from sqlalchemy import select
 
 
@@ -47,6 +47,9 @@ def make_sync_payload(
             or [
                 {
                     "name": "sync_users",
+                    "description": (
+                        "Sync billing users from the source of record into the warehouse."
+                    ),
                     "source": {
                         "kind": "interval",
                         "name": "interval:3600s",
@@ -79,6 +82,7 @@ def make_sync_payload(
                 },
                 {
                     "name": "process_orders",
+                    "description": "Consume queued orders and push downstream fulfillment updates.",
                     "source": {
                         "kind": "rabbitmq_queue",
                         "name": "rabbitmq:orders",
@@ -486,6 +490,10 @@ def test_sync_implicitly_creates_service_instance_and_task_definitions(
         for task_definition in task_definitions
         if task_definition.task_name == "sync_users"
     )
+    assert (
+        sync_users.description
+        == "Sync billing users from the source of record into the warehouse."
+    )
     assert sync_users.source_kind == "interval"
     assert sync_users.source_config_json == {
         "seconds": 3600,
@@ -563,6 +571,7 @@ def test_sync_out_of_order_payload_does_not_rollback_instance_snapshot(
         tasks=[
             {
                 "name": "sync_users",
+                "description": "Sync users with the faster retry profile.",
                 "source": {
                     "kind": "interval",
                     "name": "interval:1800s",
@@ -631,6 +640,7 @@ def test_sync_out_of_order_payload_does_not_rollback_instance_snapshot(
     assert updated_instance.last_sync_sent_at == datetime(2026, 3, 8, 17, 31, 6, tzinfo=UTC)
 
     assert [task_definition.task_name for task_definition in task_definitions] == ["sync_users"]
+    assert task_definitions[0].description == "Sync users with the faster retry profile."
     assert task_definitions[0].source_name == "interval:1800s"
     assert task_definitions[0].concurrency == 64
     assert task_definitions[0].topology_hash == "sha256:new-topology"
@@ -649,6 +659,7 @@ def test_sync_updates_task_definitions_when_topology_changes(
         tasks=[
             {
                 "name": "sync_users",
+                "description": "Sync users with the updated topology definition.",
                 "source": {
                     "kind": "interval",
                     "name": "interval:1800s",
@@ -664,6 +675,7 @@ def test_sync_updates_task_definitions_when_topology_changes(
             },
             {
                 "name": "cleanup_orphans",
+                "description": "Sweep orphaned records after the primary sync completes.",
                 "source": {
                     "kind": "interval",
                     "name": "interval:86400s",
@@ -701,6 +713,7 @@ def test_sync_updates_task_definitions_when_topology_changes(
         if task_definition.task_name == "sync_users"
     )
     assert sync_users.source_name == "interval:1800s"
+    assert sync_users.description == "Sync users with the updated topology definition."
     assert sync_users.concurrency == 64
     assert sync_users.timeout_s == 45.0
     assert sync_users.emit_json == []
@@ -716,6 +729,10 @@ def test_sync_then_query_tasks_returns_topology_data(client, auth_headers) -> No
 
     payload = response.json()
     by_task_name = {item["task_name"]: item for item in payload["items"]}
+    assert (
+        by_task_name["sync_users"]["description"]
+        == "Sync billing users from the source of record into the warehouse."
+    )
     assert by_task_name["sync_users"]["source_name"] == "interval:3600s"
     assert by_task_name["sync_users"]["source_kind"] == "interval"
     assert by_task_name["sync_users"]["emit"] == [

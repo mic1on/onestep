@@ -123,6 +123,7 @@ class TaskDefinition(Base):
         nullable=False,
     )
     task_name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(sa.Text)
     source_name: Mapped[str | None] = mapped_column(sa.String(255))
     source_kind: Mapped[str | None] = mapped_column(sa.String(128))
     source_config_json: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)

@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202603100002"
+HEAD_REVISION = "202603120001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -72,6 +72,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "id",
         "service_id",
         "task_name",
+        "description",
         "source_name",
         "source_kind",
         "source_config_json",
@@ -231,6 +232,57 @@ def test_alembic_upgrade_head_reconciles_missing_service_sync_column(tmp_path) -
     inspector = inspect(upgraded_engine)
 
     assert "latest_sync_at" in {column["name"] for column in inspector.get_columns("services")}
+
+    with upgraded_engine.connect() as connection:
+        version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    assert version == HEAD_REVISION
+    upgraded_engine.dispose()
+
+
+def test_alembic_upgrade_head_reconciles_missing_task_description_column(tmp_path) -> None:
+    db_path = tmp_path / "missing-task-description.db"
+    database_url = f"sqlite:///{db_path}"
+    engine = create_engine(database_url)
+
+    metadata = sa.MetaData()
+    sa.Table(
+        "task_definitions",
+        metadata,
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("service_id", sa.Uuid(), nullable=False),
+        sa.Column("task_name", sa.String(length=255), nullable=False),
+        sa.Column("source_name", sa.String(length=255), nullable=True),
+        sa.Column("source_kind", sa.String(length=128), nullable=True),
+        sa.Column("source_config_json", sa.JSON(), nullable=True),
+        sa.Column("emit_json", sa.JSON(), nullable=True),
+        sa.Column("concurrency", sa.Integer(), nullable=True),
+        sa.Column("timeout_s", sa.Float(), nullable=True),
+        sa.Column("retry_policy", sa.JSON(), nullable=True),
+        sa.Column("topology_hash", sa.String(length=255), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    sa.Table(
+        "alembic_version",
+        metadata,
+        sa.Column("version_num", sa.String(length=32), nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:version_num)"),
+            {"version_num": "202603100002"},
+        )
+    engine.dispose()
+
+    command.upgrade(make_alembic_config(database_url), "head")
+
+    upgraded_engine = create_engine(database_url)
+    inspector = inspect(upgraded_engine)
+
+    assert "description" in {
+        column["name"] for column in inspector.get_columns("task_definitions")
+    }
 
     with upgraded_engine.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()

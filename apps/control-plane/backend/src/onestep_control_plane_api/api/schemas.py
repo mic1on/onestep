@@ -116,6 +116,7 @@ class EventsIngestRequest(IngestionEnvelope):
 
 class TaskTopologyIngest(APIModel):
     name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
     source: ConnectorDescriptor | None = None
     emit: list[ConnectorDescriptor] = Field(default_factory=list)
     concurrency: int | None = Field(default=None, ge=1)
@@ -297,6 +298,7 @@ class TaskEventListResponse(PaginatedResponse):
 
 class TaskDashboardSummary(APIModel):
     task_name: str
+    description: str | None = None
     source_name: str | None = None
     source_kind: str | None = None
     source_config: dict[str, Any] | None = None

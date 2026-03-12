@@ -44,10 +44,10 @@ export function ServiceTasksList({
             environment,
             lookback_minutes: lookbackMinutes,
           })}
-          >
+        >
           <div>
             <strong>{task.task_name}</strong>
-            <p>{task.source_name ?? t("common.noSourceSnapshot")}</p>
+            <p>{task.description ?? task.source_name ?? t("common.noSourceSnapshot")}</p>
           </div>
           <div className="row-metrics">
             <StatusBadge
