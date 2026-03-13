@@ -1,4 +1,3 @@
-
 <div align=center><img src="https://onestep.code05.com/logo-3.svg" width="300"></div>
 <div align=center>
 <a href="https://github.com/mic1on/onestep/actions/workflows/test.yml?query=event%3Apush+branch%3Amain" target="_blank">
@@ -23,11 +22,16 @@
 - [x] WebHookBroker
 - [x] RabbitMQBroker
 - [x] RedisBroker
-- [ ] KafkaBroker
+    - [x] RedisStreamBroker
+    - [x] RedisPubSubBroker 
+- [x] SQSBroker
+- [x] MysqlBroker
 
-## example
+## 😋example
 
 ```python
+# example.py
+
 from onestep import step, WebHookBroker
 
 
@@ -41,12 +45,26 @@ if __name__ == '__main__':
     step.start(block=True)
 ```
 
+also, you can use `onestep` command to start, like this:
+
+```bash
+$ onestep example
+```
+
+then, you can send a message to webhook:
+
+```bash
+$ curl -X POST -H "Content-Type: application/json" -d '{"a": 1}' http://localhost:8090/push
+```
+
+## 🤩 other brokers
+
 ```python
 from onestep import step, CronBroker
 
 
 # 每3秒触发一次任务
-@step(from_broker=CronBroker("* * * * * */3", a=1))
+@step(from_broker=CronBroker("* * * * * */3", body={"a": 1}))
 def cron_task(message):
     assert message.body == {"a": 1}
     return message
@@ -56,4 +74,4 @@ if __name__ == '__main__':
     step.start(block=True)
 ```
 
-更多例子请参阅：[examples](example)
+🤔more examples: [examples](example)

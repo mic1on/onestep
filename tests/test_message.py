@@ -30,10 +30,10 @@ def test_message_set_exception():
     msg = Message(body={'key': 'value'}, extra={'task_id': '123', 'publish_time': 1234567890.123, 'failure_count': 0})
     try:
         raise ValueError('test')
-    except Exception as e:
+    except Exception:
         msg.set_exception()
     # msg.set_exception(ValueError('test'))
     assert str(msg.exception) == 'test'
-    assert msg.exception.exc_type == ValueError
+    assert msg.exception.exc_type is ValueError
     assert msg.failure_count == 1
     print(msg.to_json(True))

@@ -14,10 +14,10 @@ class MyMiddleware(BaseMiddleware):
     def after_send(self, step, message, *args, **kwargs):
         pass
 
-    def before_receive(self, step, message, *args, **kwargs):
+    def before_consume(self, step, message, *args, **kwargs):
         pass
 
-    def after_receive(self, step, message, *args, **kwargs):
+    def after_consume(self, step, message, *args, **kwargs):
         pass
 
 

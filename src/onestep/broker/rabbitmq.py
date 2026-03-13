@@ -1,54 +1,124 @@
 import json
 import threading
 from queue import Queue
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
-import amqpstorm
+try:
+    import amqpstorm  # type: ignore[import-untyped]
+    from use_rabbitmq import useRabbitMQ as RabbitMQStore
+except ImportError:
+    amqpstorm = None
+    RabbitMQStore = None
 
 from .base import BaseBroker, BaseConsumer
-from usepy_plugin_rabbitmq import useRabbitMQ as RabbitMQStore
 from ..message import Message
 
 
-class RabbitMQBroker(BaseBroker):
+class _RabbitMQMessage(Message):
 
-    def __init__(self, queue_name, params: Optional[Dict] = None, prefetch: Optional[int] = 1, auto_create=True, *args,
-                 **kwargs):
+    @classmethod
+    def from_broker(cls, broker_message: Any):
+        try:
+            message = json.loads(broker_message.body)
+        except json.JSONDecodeError:
+            message = {"body": broker_message.body}
+        if not isinstance(message, dict):
+            message = {"body": message}
+        if "body" not in message:
+            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
+            message = {"body": message}
+
+        return cls(body=message.get("body"), extra=message.get("extra"), message=broker_message)
+
+
+class RabbitMQBroker(BaseBroker):
+    message_cls = _RabbitMQMessage
+
+    def __init__(
+        self,
+        queue_name,
+        params: Optional[Dict] = None,
+        prefetch: Optional[int] = 1,
+        auto_create: Optional[bool]=True,
+        queue_params: Optional[Dict]=None,
+        *args,
+        **kwargs
+        ):
+        """
+        Initializes the RabbitMQ broker.
+
+        Args:
+            queue_name (str): The name of the queue.
+            params (Optional[Dict], optional): Parameters for RabbitMQStore. Defaults to None.
+            prefetch (Optional[int], optional): Number of messages to prefetch. Defaults to 1.
+            auto_create (Optional[bool], optional): Whether to automatically create the queue. Defaults to True.
+            queue_params (Optional[Dict], optional): Parameters for queue declaration. Defaults to None.
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+
+        Attributes:
+            queue_name (str): The name of the queue.
+            queue (Queue): The queue instance.
+            client (RabbitMQStore): The RabbitMQ client instance.
+            prefetch (int): Number of messages to prefetch.
+            threads (list): List of threads.
+        """
+        
+        if RabbitMQStore is None:
+            raise ImportError("RabbitMQ dependencies not installed. Please install 'use-rabbitmq' package.")
+        
         super().__init__(*args, **kwargs)
         self.queue_name = queue_name
-        self.queue = Queue()
+        self.queue: Queue = Queue()
         params = params or {}
         self.client = RabbitMQStore(**params)
         if auto_create:
-            self.client.declare_queue(self.queue_name)
+            self.client.declare_queue(self.queue_name, **(queue_params or {}))
         self.prefetch = prefetch
-        self.threads = []
+        self.threads: List[threading.Thread] = []
+        self._consuming_started = False
+        self._consume_lock = threading.Lock()
 
     def _consume(self, *args, **kwargs):
-        def callback(message: amqpstorm.Message):
-            self.queue.put(message)
+        def callback(message: Any) -> None:
+            if self.queue is not None:
+                self.queue.put(message)
 
         prefetch = kwargs.pop("prefetch", self.prefetch)
         self.client.start_consuming(queue_name=self.queue_name, callback=callback, prefetch=prefetch, **kwargs)
 
     def consume(self, *args, **kwargs):
         daemon = kwargs.pop('daemon', True)
-        thread = threading.Thread(target=self._consume, *args, **kwargs)
-        thread.daemon = daemon
-        thread.start()
-        self.threads.append(thread)
-        return RabbitMQConsumer(self.queue)
+        with self._consume_lock:
+            if not self._consuming_started:
+                thread = threading.Thread(target=self._consume, args=args, kwargs=kwargs)
+                thread.daemon = daemon
+                thread.start()
+                self.threads.append(thread)
+                self._consuming_started = True
+        return RabbitMQConsumer(self)
 
-    def publish(self, message: Any):
-        self.client.send(self.queue_name, message)
+    def publish(self, message: Any, properties: Optional[dict] = None, **kwargs):
+        """发布消息"""
+        self.client.send(self.queue_name, message, properties=properties, **kwargs)
 
     def confirm(self, message: Message):
         """确认消息"""
-        message.msg.ack()
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "ack"):
+            broker_msg.ack()
+        else:
+            # 无可确认的原始消息，忽略确认
+            return
 
     def reject(self, message: Message):
         """拒绝消息"""
-        message.msg.reject(requeue=False)
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "reject"):
+            broker_msg.reject(requeue=False)
+        else:
+            # 无法拒绝（无原始消息对象），忽略
+            return
 
     def requeue(self, message: Message, is_source=False):
         """
@@ -57,28 +127,28 @@ class RabbitMQBroker(BaseBroker):
         :param message: 消息
         :param is_source: 是否是原始消息，True: 使用原始消息重入当前队列，False: 使用消息的最新数据重入当前队列
         """
-        if is_source:
-            message.msg.reject(requeue=True)
+        broker_msg = getattr(message, "message", None)
+        if broker_msg is not None and hasattr(broker_msg, "reject"):
+            if is_source:
+                broker_msg.reject(requeue=True)
+            else:
+                broker_msg.reject(requeue=False)
+                self.send(message)
         else:
-            message.msg.reject(requeue=False)
-            self.send(message)
+            # 没有原始消息控制能力，回退为直接发送当前消息状态
+            if is_source and broker_msg is not None and hasattr(broker_msg, "body"):
+                # 尝试使用原始消息体重入队列
+                self.client.send(self.queue_name, broker_msg.body)
+            else:
+                self.send(message)
 
     def shutdown(self):
         self.client.shutdown()
         for thread in self.threads:
             thread.join()
+        self._consuming_started = False
+        self.threads = []
 
 
 class RabbitMQConsumer(BaseConsumer):
-    def _to_message(self, data: amqpstorm.Message):
-        try:
-            message = json.loads(data.body)
-        except json.JSONDecodeError:
-            message = {"body": data.body}
-        if not isinstance(message, dict):
-            message = {"body": message}
-        if "body" not in message:
-            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
-            message = {"body": message}
-
-        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)
+    ...

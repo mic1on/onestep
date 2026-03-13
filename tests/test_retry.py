@@ -1,6 +1,6 @@
 from pytest import fixture
 from onestep.message import Message
-from onestep import NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, RetryViaQueue
+from onestep import NeverRetry, AlwaysRetry, TimesRetry, RetryIfException, RetryInQueue
 from onestep.retry import RetryStatus, AdvancedRetry
 
 
@@ -30,7 +30,7 @@ def test_exception_retry2(message):
     retry_class = RetryIfException((ZeroDivisionError,))
     try:
         1 / 0
-    except Exception as e:
+    except Exception:
         message.set_exception()
         assert RetryStatus.CONTINUE is retry_class(message)
 
@@ -39,14 +39,14 @@ def test_AdvancedRetry(message):
     retry_class = AdvancedRetry(times=3)
     try:
         1 / 0
-    except Exception as e:
+    except Exception:
         message.set_exception()
     assert RetryStatus.END_WITH_CALLBACK is retry_class(message)
 
     retry_class = AdvancedRetry(times=3, exceptions=(ZeroDivisionError,))
     try:
         1 / 0
-    except Exception as e:
+    except Exception:
         message.set_exception()
     assert RetryStatus.CONTINUE is retry_class(message)
     message.failure_count = 4
@@ -56,8 +56,8 @@ def test_AdvancedRetry(message):
     message.failure_count = 1
     assert RetryStatus.CONTINUE is retry_class(message)
     try:
-        raise RetryViaQueue()
-    except Exception as e:
+        raise RetryInQueue()
+    except Exception:
         message.set_exception()
     assert message.failure_count == 2
     assert RetryStatus.END_IGNORE_CALLBACK is retry_class(message)

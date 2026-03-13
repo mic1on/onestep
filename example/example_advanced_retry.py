@@ -1,11 +1,9 @@
-import logging
+from loguru import logger
 
 from onestep import step
-from onestep.broker import MemoryBroker, RabbitMQBroker
-from onestep.exception import RetryViaLocal, RetryViaQueue
+from onestep.broker import MemoryBroker
+from onestep.exception import RetryInQueue
 from onestep.retry import AdvancedRetry
-
-from loguru import logger
 
 todo_broker = MemoryBroker()
 
@@ -67,7 +65,7 @@ def do_something(message):
     # if message.body.get("id") == 1:
     #     raise RetryViaLocal("Invalid id")
     if message.body.get("id") == 2:
-        raise RetryViaQueue("Invalid id", times=2)
+        raise RetryInQueue("Invalid id", times=2)
     # elif message.body.get("id") == 3:
     #     raise ValueError("Invalid id")
     else:

@@ -132,6 +132,9 @@ dmypy.json
 # pycharm
 .idea
 poetry.lock
+uv.lock
 
 # Ignore dynaconf secret files
 *.secrets.*
+node_modules/
+.DS_Store

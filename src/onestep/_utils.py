@@ -13,7 +13,7 @@ def catch_error(return_val=None):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                logging.debug(e)
+                logging.error(e)
                 return return_val
 
         return wrapper

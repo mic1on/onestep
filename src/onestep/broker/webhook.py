@@ -1,9 +1,10 @@
 import logging
 import threading
 import collections
+from typing import Dict, List, DefaultDict, Any
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .base import BaseLocalBroker, BaseLocalConsumer
+from .memory import MemoryBroker, MemoryConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +12,7 @@ Server = collections.namedtuple("Server", ["path", "queue"])
 
 
 class WebHookServer(BaseHTTPRequestHandler):
-    servers = collections.defaultdict(list)
+    servers: DefaultDict[Any, List[Server]] = collections.defaultdict(list)
 
     def do_POST(self):
         """
@@ -34,8 +35,8 @@ class WebHookServer(BaseHTTPRequestHandler):
         self.wfile.write(b'{ "status": "ok" }')
 
 
-class WebHookBroker(BaseLocalBroker):
-    _servers = {}
+class WebHookBroker(MemoryBroker):
+    _servers: Dict[tuple, ThreadingHTTPServer] = {}
 
     def __init__(self,
                  path: str,
@@ -47,10 +48,7 @@ class WebHookBroker(BaseLocalBroker):
         self.host = host
         self.port = port
         self.path = path
-        self.threads = []
-
-        self._create_server()
-        logger.debug(f"WebHookBroker: {self.host}:{self.port}{self.path}")
+        self.threads: List[threading.Thread] = []
 
     def _create_server(self):
 
@@ -60,24 +58,28 @@ class WebHookBroker(BaseLocalBroker):
                 WebHookServer
             )
             self._servers[(self.host, self.port)] = hs
+            # 只有在创建新服务器时才启动线程
+            thread = threading.Thread(target=hs.serve_forever)
+            thread.daemon = True
+            thread.start()
+            self.threads.append(thread)
         else:
             hs = self._servers[(self.host, self.port)]
 
         WebHookServer.servers[(self.host, self.port)].append(Server(self.path, self.queue))
-        thread = threading.Thread(target=hs.serve_forever)
-        thread.start()
-        self.threads.append(thread)
 
     def consume(self, *args, **kwargs):
-        return WebHookConsumer(self.queue, *args, **kwargs)
+        self._create_server()
+        logger.debug(f"WebHookBroker: {self.host}:{self.port}{self.path}")
+        return WebHookConsumer(self, *args, **kwargs)
 
     def shutdown(self):
-        hs = self._servers[(self.host, self.port)]
+        hs = self._servers.get((self.host, self.port))
         if hs:
             hs.shutdown()
         for thread in self.threads:
             thread.join()
 
 
-class WebHookConsumer(BaseLocalConsumer):
+class WebHookConsumer(MemoryConsumer):
     ...

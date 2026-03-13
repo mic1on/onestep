@@ -1,39 +1,90 @@
 # -*- coding: utf-8 -*-
 import abc
-import json
 import logging
-from queue import Queue, Empty, Full as FullException
-from typing import Any, AnyStr
+import time
+from queue import Queue, Empty
+from typing import Any, Optional, List, Callable, Type
 
-from ..exception import StopMiddleware
-from ..message import Message
+from onestep.middleware import BaseMiddleware
+from onestep.exception import StopMiddleware
+from onestep.message import Message
 
 logger = logging.getLogger(__name__)
 
 
 class BaseBroker:
+    message_cls: Type[Message] = Message
 
-    def __init__(self, name=None, queue=None, middlewares=None):
+    def __init__(self,
+                 name: Optional[str] = None,
+                 queue: Optional[Queue] = None,
+                 middlewares: Optional[List[BaseMiddleware]] = None,
+                 once: bool = False,
+                 cancel_consume: Optional[Callable] = None,
+                 send_retry_times: int = 3,
+                 send_retry_delay: float = 1.0):
+        """
+        @param name: broker name
+        @param queue: broker queue name
+        @param middlewares: broker middlewares
+        @param once: just run once
+            if once is True, when broker receive a message, it will shutdown
+        @param cancel_consume: cancel consume
+            cancel_consume(message) -> bool
+            if cancel_consume return True, broker will shutdown
+        @param send_retry_times: message send retry times (default: 3)
+        @param send_retry_delay: message send retry delay in seconds (default: 1.0)
+        """
         self.queue = queue
         self.name = name or "broker"
-        self.middlewares = []
+        self.middlewares: List[BaseMiddleware] = []
+        self.once = once
+        self.cancel_consume = cancel_consume
+        self.send_retry_times = send_retry_times
+        self.send_retry_delay = send_retry_delay
 
         if middlewares:
             for middleware in middlewares:
                 self.add_middleware(middleware)
 
-    def add_middleware(self, middleware):
+    def add_middleware(self, middleware: BaseMiddleware):
+        if not isinstance(middleware, BaseMiddleware):
+            raise TypeError(f"middleware must be BaseMiddleware instance, not {type(middleware)}")
         self.middlewares.append(middleware)
 
-    def send(self, message):
+    def send(self, message, *args, **kwargs):
         """对消息进行预处理，然后再发送"""
+        step = kwargs.pop("step", None)
         if not isinstance(message, Message):
-            message = Message(body=message)
-        # TODO: 对消息发送进行N次重试，确保消息发送成功。
-        return self.publish(message.to_json())
+            message = self.message_cls(body=message)
+        self.before_emit("send", message=message, step=step)
+
+        # 消息发送重试机制
+        result = None
+        for attempt in range(self.send_retry_times):
+            try:
+                result = self.publish(message.to_json(), *args, **kwargs)
+                break  # 发送成功，退出重试
+            except Exception as e:
+                if attempt < self.send_retry_times - 1:
+                    # 使用指数退避策略
+                    delay = self.send_retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Message send failed (attempt {attempt + 1}/{self.send_retry_times}), "
+                        f"retrying in {delay}s: {e}"
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"Message send failed after {self.send_retry_times} attempts: {e}"
+                    )
+                    raise
+
+        self.after_emit("send", message=message, step=step)
+        return result
 
     @abc.abstractmethod
-    def publish(self, message: Any):
+    def publish(self, message: Any, *args, **kwargs):
         """
         将消息原样发布到 broker 中。如果当前Broker是Job的to_broker, 则必须实现此方法
         """
@@ -65,20 +116,23 @@ class BaseBroker:
         """
         raise NotImplementedError('Please implement in subclasses.')
 
-    def before_emit(self, signal, *args, **kwargs):
+    def before_emit(self, signal, **kwargs):
         signal = "before_" + signal
-        self._emit(signal, *args, **kwargs)
+        self._emit(signal, **kwargs)
 
-    def after_emit(self, signal, *args, **kwargs):
+    def after_emit(self, signal, **kwargs):
         signal = "after_" + signal
-        self._emit(signal, *args, **kwargs)
+        self._emit(signal, **kwargs)
 
-    def _emit(self, signal, *args, **kwargs):
+    def _emit(self, signal, **kwargs):
         for middleware in self.middlewares:
             if not hasattr(middleware, signal):
                 continue
             try:
-                getattr(middleware, signal)(self, *args, **kwargs)
+                params = dict(kwargs)
+                params.setdefault("broker", self)
+                params.setdefault("step", None)
+                getattr(middleware, signal)(**params)
             except StopMiddleware:
                 break
 
@@ -94,80 +148,25 @@ class BaseBroker:
 
 class BaseConsumer:
 
-    def __init__(self, queue: Queue, *args, **kwargs):
-        self.queue = queue
+    def __init__(self, broker: BaseBroker, *args, **kwargs):
+        self.queue = broker.queue
+        self.message_cls: Type[Message] = broker.message_cls if broker.message_cls else Message
         self.timeout = kwargs.pop("timeout", 1000)
-
-    @abc.abstractmethod
-    def _to_message(self, data: Any):
-        """
-        转换消息内容到 Message , 则必须实现此方法
-        """
-        raise NotImplementedError('Please implement in subclasses.')
 
     def __next__(self):
         try:
-            data = self.queue.get(timeout=self.timeout / 1000)
-            return self._to_message(data)
-        except Empty:
+            q = self.queue
+            if q is None:
+                return None
+            timeout_ms = self.timeout
+            if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
+                data = q.get(timeout=timeout_ms / 1000.0)
+            else:
+                # 当超时为0、负数或非数字时，使用非阻塞获取以避免ValueError
+                data = q.get_nowait()
+            return self.message_cls.from_broker(broker_message=data)
+        except (Empty, ValueError):
             return None
 
     def __iter__(self):
         return self
-
-
-class BaseLocalBroker(BaseBroker):
-
-    def __init__(self, maxsize=0, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.queue = Queue(maxsize)
-
-    def publish(self, message: Any):
-        try:
-            self.queue.put_nowait(message)
-        except FullException:
-            logger.warning("CronBroker queue is full, skip this task, "
-                           "you can increase maxsize with `maxsize` argument")
-
-    def consume(self, *args, **kwargs):
-        return BaseLocalConsumer(self.queue, *args, **kwargs)
-
-    def confirm(self, message: Message):
-        """确认消息"""
-        pass
-
-    def reject(self, message: Message):
-        """拒绝消息"""
-        pass
-
-    def requeue(self, message: Message, is_source=False):
-        """重发消息：先拒绝 再 重入"""
-        if is_source:
-            self.publish(message.msg)
-        else:
-            self.send(message)
-
-    def __repr__(self):
-        return f"<{self.__class__.__name__} {self.name}>"
-
-    def __str__(self):
-        return self.name
-
-
-class BaseLocalConsumer(BaseConsumer):
-
-    def _to_message(self, data: Any):
-        if isinstance(data, (str, bytes, bytearray)):
-            try:
-                message = json.loads(data)
-            except json.JSONDecodeError:
-                message = {"body": data}
-        else:
-            message = data
-        if not isinstance(message, dict):
-            message = {"body": message}
-        if "body" not in message:
-            # 来自 外部的消息 可能没有 body, 故直接认为都是 message.body
-            message = {"body": message}
-
-        return Message(body=message.get("body"), extra=message.get("extra"), msg=data)

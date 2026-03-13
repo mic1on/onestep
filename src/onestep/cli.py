@@ -1,0 +1,93 @@
+import argparse
+import importlib
+import logging
+import sys
+from onestep import step, __version__
+
+LOGFORMAT = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
+
+
+def setup_logging():
+    # 设置全局日志级别为INFO，避免第三方库的DEBUG日志输出
+    logging.basicConfig(level=logging.INFO, format=LOGFORMAT, stream=sys.stdout)
+
+    # exclude amqpstorm logs
+    logging.getLogger("amqpstorm").setLevel(logging.CRITICAL)
+    
+    # 获取onestep的logger并设置为DEBUG级别以便调试
+    onestep_logger = logging.getLogger("onestep")
+    onestep_logger.setLevel(logging.DEBUG)
+    
+    return onestep_logger
+
+
+logger = setup_logging()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='run onestep'
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "step", nargs='?',
+        help="the run step",
+    )
+    parser.add_argument(
+        "--group", "-G", default=None,
+        help="the run group",
+        type=str
+    )
+    parser.add_argument(
+        "--print",
+        action="store_true",
+        help="enable printing")
+    parser.add_argument(
+        "--path", "-P", default=".", nargs="*", type=str,
+        help="the step import path (default: current running directory)"
+    )
+    group.add_argument(
+        "--cron",
+        help="the cron expression to test",
+        type=str
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    for path in args.path:
+        sys.path.insert(0, path)
+    if args.cron:
+        from croniter import croniter  # type: ignore[import-untyped]
+        from datetime import datetime
+        cron = croniter(args.cron, datetime.now())
+        for _ in range(10):
+            print(cron.get_next(datetime))
+        return 0
+
+    logger.info(f"OneStep {__version__} is start up.")
+    try:
+        importlib.import_module(args.step)
+        step.start(group=args.group, block=True, print_jobs=args.print)
+        return 0
+    except ModuleNotFoundError as e:
+        if getattr(e, "name", None) == args.step:
+            logger.error(f"step module not found: {args.step}")
+            return 2
+        logger.error(f"failed to import step module: {args.step}")
+        logger.error(f"caused by missing dependency: {e!r}")
+        logger.exception("import traceback")
+        return 1
+    except Exception as e:
+        logger.error(f"failed to import step module: {args.step}")
+        logger.error(f"import error: {e!r}")
+        logger.exception("import traceback")
+        return 1
+    except KeyboardInterrupt:
+        step.shutdown()
+        return 130
+
+
+if __name__ == '__main__':
+    sys.exit(main())
