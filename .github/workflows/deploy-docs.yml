@@ -1,45 +1,111 @@
-name: docs
+name: Docs
 
 on:
-  # 手动触发部署
+  push:
+    branches:
+      - main
+      - docs
+    paths:
+      - ".github/workflows/deploy-docs.yml"
+      - "docs/**"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  docs:
+  detect:
+    name: Detect docs site
     runs-on: ubuntu-latest
+    outputs:
+      has_docs: ${{ steps.detect.outputs.has_docs }}
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect VitePress docs
+        id: detect
+        run: |
+          if [ -f docs/package.json ]; then
+            echo "has_docs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_docs=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_docs == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          # “最近更新时间” 等 git 日志相关信息，需要拉取全部提交记录
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          # 选择要使用的 node 版本
-          node-version: '18.8.0'
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 7.17.0
-      # 如果缓存没有命中，安装依赖
-      - name: Install dependencies
-        run: pnpm install --dir docs
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
 
-      # 运行构建脚本
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install docs dependencies
+        working-directory: docs
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+
       - name: Build VitePress site
-        run: cd docs && pnpm run build-no-prefetch
+        working-directory: docs
+        run: pnpm run build
 
-      # 查看 workflow 的文档来获取更多信息
-      # @see https://github.com/crazy-max/ghaction-github-pages
-      - name: Deploy to GitHub Pages
-        uses: crazy-max/ghaction-github-pages@v2
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          # 部署到 gh-pages 分支
-          target_branch: gh-pages
-          # 部署目录为 VuePress 的默认输出目录
-          build_dir: ./docs/.vitepress/dist
-        env:
-          # @see https://docs.github.com/cn/actions/reference/authentication-in-a-workflow#about-the-github_token-secret
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          path: docs/.vitepress/dist
+
+  deploy:
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    needs:
+      - detect
+      - build
+    if: needs.detect.outputs.has_docs == 'true'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  no-docs:
+    name: Skip docs deploy
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_docs != 'true'
+
+    steps:
+      - name: No docs directory present
+        run: echo "docs/ is not present yet. Skipping docs deployment."

@@ -1,23 +1,14 @@
-install: ## Run `uv sync`
-	uv sync
+.PHONY: integration-up integration-env integration-test integration-down
 
-lint:
-	uv run ruff .
-	uv run ruff check .
+integration-up:
+	docker compose -f docker-compose.integration.yml up -d
+	@echo "Run: eval "$$(./scripts/setup-integration-env.sh)""
 
-format: ## Formats your code with Ruff
-	uv run ruff . --fix
-	uv run ruff check . --fix
+integration-env:
+	./scripts/setup-integration-env.sh
 
-test:
-	uv run pytest -v tests
+integration-test:
+	./scripts/run-integration-tests.sh
 
-publish:
-	uv build
-	uv publish
-
-dev-install: ## Install with dev dependencies
-	uv sync --extra dev
-
-test-install: ## Install with test dependencies
-	uv sync --extra test
+integration-down:
+	docker compose -f docker-compose.integration.yml down --remove-orphans
