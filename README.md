@@ -24,6 +24,7 @@ The V1 stable surface includes:
 - `MySQLConnector.state_store(...)`
 - `MySQLConnector.cursor_store(...)`
 - `RabbitMQConnector.queue(...)`
+- `RedisConnector.stream(...)`
 - `SQSConnector.queue(...)`
 - `IntervalSource.every(...)`
 - `CronSource(...)`
@@ -42,6 +43,7 @@ Common extras:
 - `pip install 'onestep[yaml]'`
 - `pip install 'onestep[mysql]'`
 - `pip install 'onestep[rabbitmq]'`
+- `pip install 'onestep[redis]'`
 - `pip install 'onestep[sqs]'`
 - `pip install 'onestep[all]'`
 
@@ -157,6 +159,8 @@ Currently supported YAML resource types:
 - `webhook`
 - `rabbitmq`
 - `rabbitmq_queue`
+- `redis`
+- `redis_stream`
 - `sqs`
 - `sqs_queue`
 - `mysql`
@@ -592,6 +596,38 @@ async def process_job(ctx, item):
 
 Install with `pip install '.[rabbitmq]'`.
 
+## Redis Streams
+
+Use Redis Streams for lightweight, reliable message queuing with consumer groups.
+
+```python
+from onestep import OneStepApp, RedisConnector
+
+app = OneStepApp("redis-demo")
+redis = RedisConnector("redis://localhost:6379")
+source = redis.stream(
+    "jobs",
+    group="workers",
+    batch_size=100,
+    poll_interval_s=0.5,
+)
+out = redis.stream("processed")
+
+
+@app.task(source=source, emit=out, concurrency=8)
+async def process_job(ctx, item):
+    return {"job": item["job"], "status": "done"}
+```
+
+Key features:
+
+- **Consumer groups**: Multiple consumers share message processing
+- **Message acknowledgment**: `XACK` for reliable processing
+- **Pending messages**: Unacked messages stay in PEL for retry via `XCLAIM`
+- **Stream trimming**: `maxlen` option to limit stream size
+
+Install with `pip install '.[redis]'`.
+
 ## SQS Queue
 
 ```python
@@ -631,6 +667,7 @@ Common entrypoints:
 - `example/cli_app.py`
 - `example/runtime_showcase.py`
 - `example/mysql_incremental.py`
+- `example/redis_stream.py`
 - `example/webhook_source.py`
 
 
