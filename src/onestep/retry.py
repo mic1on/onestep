@@ -1,118 +1,93 @@
-from abc import ABC, abstractmethod
+from __future__ import annotations
+
+import inspect
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple, Union, Type, List
+from typing import Protocol
 
-from .exception import RetryInLocal, RetryInQueue
-from .message import Message
-
-
-class RetryStatus(Enum):
-    CONTINUE = 1  # 继续（执行重试）
-    END_WITH_CALLBACK = 2  # 结束（执行回调）
-    END_IGNORE_CALLBACK = 3  # 结束（忽略回调）
+from .envelope import Envelope
 
 
-class BaseRetry(ABC):
-
-    @abstractmethod
-    def __call__(self, *args, **kwargs) -> Optional[RetryStatus]:
-        pass
-
-
-class NeverRetry(BaseRetry):
-
-    def __call__(self, message) -> Optional[RetryStatus]:
-        return RetryStatus.END_WITH_CALLBACK
+class FailureKind(str, Enum):
+    ERROR = "error"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
 
 
-class AlwaysRetry(BaseRetry):
+@dataclass(frozen=True)
+class FailureInfo:
+    kind: FailureKind
+    exception_type: str
+    message: str
 
-    def __call__(self, message) -> Optional[RetryStatus]:
-        return RetryStatus.CONTINUE
+    @classmethod
+    def from_exception(cls, exc: BaseException, *, kind: FailureKind) -> "FailureInfo":
+        return cls(
+            kind=kind,
+            exception_type=type(exc).__name__,
+            message=str(exc),
+        )
 
-
-class AllRetry(BaseRetry):
-    def __init__(self, *retries: BaseRetry):
-        self.retries: Tuple[BaseRetry, ...] = retries
-
-    def __call__(self, message: Message) -> Optional[RetryStatus]:
-        for retry in self.retries:
-            status = retry(message)
-            if status != RetryStatus.CONTINUE:
-                return status
-        return RetryStatus.CONTINUE
-
-
-class AnyRetry(BaseRetry):
-    def __init__(self, *retries: BaseRetry):
-        self.retries: Tuple[BaseRetry, ...] = retries
-
-    def __call__(self, message: Message) -> Optional[RetryStatus]:
-        for retry in self.retries:
-            status = retry(message)
-            if status == RetryStatus.CONTINUE:
-                return RetryStatus.CONTINUE
-        return RetryStatus.END_WITH_CALLBACK
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "kind": self.kind.value,
+            "exception_type": self.exception_type,
+            "message": self.message,
+        }
 
 
-class TimesRetry(BaseRetry):
-
-    def __init__(self, times: int = 3):
-        self.times = times
-
-    def __call__(self, message) -> Optional[RetryStatus]:
-        if message.failure_count < self.times:
-            return RetryStatus.CONTINUE
-        return RetryStatus.END_WITH_CALLBACK
+class RetryDecision(str, Enum):
+    RETRY = "retry"
+    FAIL = "fail"
 
 
-class RetryIfException(BaseRetry):
-
-    def __init__(self, exceptions: Union[Type[Exception], Tuple[Type[Exception], ...]] = Exception):
-        self.exceptions = (exceptions,) if not isinstance(exceptions, tuple) else exceptions
-
-    def __call__(self, message) -> Optional[RetryStatus]:
-        if isinstance(message.exception.exc_value, self.exceptions):
-            return RetryStatus.CONTINUE
-        return RetryStatus.END_WITH_CALLBACK
+@dataclass
+class RetryAction:
+    decision: RetryDecision
+    delay_s: float | None = None
 
 
-class AdvancedRetry(TimesRetry):
-    """高级重试策略
-
-    1. 本地重试：如果异常是 RetryInLocal 或 指定异常，且重试次数未达到上限，则本地重试，不回调
-    2. 队列重试：如果异常是 RetryInQueue，且重试次数未达到上限，则入队重试，不回调
-    3. 其他异常：如果异常不是 RetryInLocal 或 RetryInQueue 或 指定异常，则不重试，回调
-    注：待重试的异常若继承自 RetryException，则可单独指定重试次数，否则默认为 3 次
-    """
-
-    def __init__(self, times: int = 3, exceptions: Union[None, Type[Exception], Tuple[Type[Exception], ...]] = None):
-        super().__init__(times=times)
-        exceptions_tuple = (exceptions,) if exceptions is not None and not isinstance(exceptions, tuple) else exceptions
-        self.exceptions = (RetryInLocal, RetryInQueue) + (exceptions_tuple or ())
-
-    def __call__(self, message: Message) -> Optional[RetryStatus]:
-        if message.exception is not None and isinstance(message.exception.exc_value, self.exceptions):
-            max_retry_times = getattr(message.exception.exc_value, "times", None) or self.times
-            if message.failure_count < max_retry_times:
-                if isinstance(message.exception.exc_value, RetryInQueue):
-                    return RetryStatus.END_IGNORE_CALLBACK
-                return RetryStatus.CONTINUE
-            else:
-                return RetryStatus.END_WITH_CALLBACK
-        else:
-            return RetryStatus.END_WITH_CALLBACK
+class RetryPolicy(Protocol):
+    def on_error(self, envelope: Envelope, exc: Exception, failure: FailureInfo) -> RetryAction: ...
 
 
-# error callback
-class BaseErrorCallback(ABC):
-
-    @abstractmethod
-    def __call__(self, *args, **kwargs):
-        pass
+class NoRetry:
+    def on_error(self, envelope: Envelope, exc: Exception, failure: FailureInfo) -> RetryAction:
+        return RetryAction(RetryDecision.FAIL)
 
 
-class NackErrorCallBack(BaseErrorCallback):
+class MaxAttempts:
+    def __init__(self, max_attempts: int = 3, delay_s: float | None = None) -> None:
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be >= 1")
+        self.max_attempts = max_attempts
+        self.delay_s = delay_s
 
-    def __call__(self, message):
-        message.reject()
+    def on_error(self, envelope: Envelope, exc: Exception, failure: FailureInfo) -> RetryAction:
+        next_attempt = envelope.attempts + 1
+        if next_attempt < self.max_attempts:
+            return RetryAction(RetryDecision.RETRY, delay_s=self.delay_s)
+        return RetryAction(RetryDecision.FAIL)
+
+
+def resolve_retry_action(
+    policy: RetryPolicy,
+    envelope: Envelope,
+    exc: Exception,
+    failure: FailureInfo,
+) -> RetryAction:
+    on_error = policy.on_error
+    try:
+        signature = inspect.signature(on_error)
+    except (TypeError, ValueError):
+        return on_error(envelope, exc, failure)
+
+    positional = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    has_varargs = any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in signature.parameters.values())
+    if has_varargs or len(positional) >= 3:
+        return on_error(envelope, exc, failure)
+    return on_error(envelope, exc)
