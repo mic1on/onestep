@@ -485,6 +485,7 @@ def get_service_topology_hashes(
     db: Session,
     *,
     service_id: UUID,
+    cutoff: datetime,
 ) -> list[str]:
     return list(
         db.scalars(
@@ -492,6 +493,8 @@ def get_service_topology_hashes(
             .where(
                 Instance.service_id == service_id,
                 Instance.last_topology_hash.is_not(None),
+                Instance.last_seen_at.is_not(None),
+                Instance.last_seen_at >= cutoff,
             )
             .distinct()
             .order_by(Instance.last_topology_hash)

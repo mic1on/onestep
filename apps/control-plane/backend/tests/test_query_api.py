@@ -526,12 +526,61 @@ def test_service_dashboard_returns_instance_and_task_overview(client, db_session
     }
     assert payload["task_count"] == 2
     assert payload["failing_task_count"] == 1
-    assert payload["topology_hashes"] == ["sha256:topology-a", "sha256:topology-b"]
-    assert payload["topology_consistent"] is False
+    assert payload["topology_hashes"] == ["sha256:topology-a"]
+    assert payload["topology_consistent"] is True
     assert [event["event_id"] for event in payload["recent_events"]] == [
         "evt_dashboard_succeeded",
         "evt_dashboard_failed",
     ]
+
+
+def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(client, db_session) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(
+        db_session,
+        name="billing-sync",
+        environment="prod",
+        latest_topology_hash="sha256:topology-b",
+        latest_sync_at=now - timedelta(seconds=10),
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-online-a",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=20),
+        last_sync_at=now - timedelta(seconds=15),
+        last_topology_hash="sha256:topology-a",
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-online-b",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=25),
+        last_sync_at=now - timedelta(seconds=12),
+        last_topology_hash="sha256:topology-b",
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-offline",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=10),
+        last_sync_at=now - timedelta(minutes=2),
+        last_topology_hash="sha256:topology-c",
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/billing-sync/dashboard",
+        params={"environment": "prod"},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["topology_hashes"] == ["sha256:topology-a", "sha256:topology-b"]
+    assert payload["topology_consistent"] is False
 
 
 def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) -> None:

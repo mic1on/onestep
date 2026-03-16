@@ -165,7 +165,7 @@ def get_service_dashboard(
         .order_by(TaskEvent.occurred_at.desc(), TaskEvent.event_id)
         .limit(recent_event_limit)
     ).all()
-    topology_hashes = get_service_topology_hashes(db, service_id=service.id)
+    topology_hashes = get_service_topology_hashes(db, service_id=service.id, cutoff=cutoff)
 
     return ServiceDashboardResponse(
         service=service_summary,
