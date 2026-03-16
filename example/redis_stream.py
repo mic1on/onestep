@@ -5,6 +5,9 @@ Requires: pip install 'onestep[redis]'
 
 Run with:
     PYTHONPATH=src python example/redis_stream.py
+    
+Or with YAML:
+    PYTHONPATH=src onestep run example/redis_stream.yaml
 """
 import asyncio
 import os
@@ -26,11 +29,17 @@ incoming = redis.stream(
 processed = redis.stream("onestep:processed")
 
 
+# Handler function that can be referenced from YAML
+async def handle_job(ctx, item):
+    """Process a job - can be used as YAML handler ref."""
+    print(f"Processing: {item}")
+    return {"job": item.get("job"), "status": "done", "processed_at": ctx.current.meta.get("received_at")}
+
+
 @app.task(source=incoming, emit=processed, concurrency=4)
 async def process_job(ctx, item):
     """Process jobs from Redis Streams."""
-    print(f"Processing: {item}")
-    return {"job": item.get("job"), "status": "done"}
+    return await handle_job(ctx, item)
 
 
 @app.on_startup

@@ -12,6 +12,7 @@ from .connectors.base import Sink, Source
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
+from .connectors.redis import RedisConnector
 from .connectors.schedule import CronSource, IntervalSource
 from .connectors.sqs import SQSConnector
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
@@ -225,6 +226,28 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             poll_interval_s=spec.get("poll_interval_s", 1.0),
             publisher_confirms=spec.get("publisher_confirms", True),
             persistent=spec.get("persistent", True),
+        )
+    if resource_type == "redis":
+        return RedisConnector(
+            _require_string(spec, "url"),
+            options=_mapping_value(spec.get("options"), field=f"resources.{name}.options"),
+        )
+    if resource_type == "redis_stream":
+        connector = _resolve_dependency(resolve, spec, "connector")
+        if not hasattr(connector, "stream"):
+            raise TypeError(f"resource {spec['connector']!r} cannot build redis_stream")
+        stream_name = _resource_name(spec, fallback=name, key="stream")
+        return connector.stream(
+            stream_name,
+            group=spec.get("group", "onestep"),
+            consumer=spec.get("consumer"),
+            batch_size=spec.get("batch_size", 100),
+            poll_interval_s=spec.get("poll_interval_s", 1.0),
+            block_ms=spec.get("block_ms"),
+            start_id=spec.get("start_id", "$"),
+            create_group=spec.get("create_group", True),
+            maxlen=spec.get("maxlen"),
+            approximate_trim=spec.get("approximate_trim", True),
         )
     if resource_type == "sqs":
         return SQSConnector(

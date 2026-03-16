@@ -7,6 +7,7 @@ Requires Redis running at REDIS_URL (default: redis://localhost:6379)
 """
 import os
 import pytest
+import pytest_asyncio
 
 from onestep import OneStepApp
 from onestep.connectors.redis import RedisConnector
@@ -17,7 +18,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 pytest.importorskip("redis", reason="redis package not installed")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def redis_connector():
     """Create Redis connector for testing."""
     connector = RedisConnector(REDIS_URL)
@@ -25,7 +26,7 @@ async def redis_connector():
     await connector.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def redis_client():
     """Create raw Redis client for cleanup."""
     from redis.asyncio import Redis
