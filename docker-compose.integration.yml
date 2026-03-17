@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: onestep-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   rabbitmq:
     image: rabbitmq:4-management
     container_name: onestep-rabbitmq

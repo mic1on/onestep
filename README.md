@@ -674,7 +674,7 @@ Common entrypoints:
 ## Integration Tests
 
 Optional live tests are under `tests/integration/`.
-The local stack now includes RabbitMQ, LocalStack SQS, and MySQL.
+The local stack now includes Redis, RabbitMQ, LocalStack SQS, and MySQL.
 
 Install the live-test dependencies:
 
@@ -702,6 +702,7 @@ make integration-test
 
 You can also run one test file manually after loading the environment:
 
+- `PYTHONPATH=src python3 -m pytest tests/integration/test_redis_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_rabbitmq_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_sqs_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_mysql_live.py -q`
@@ -713,7 +714,7 @@ Set `KEEP_INTEGRATION_SERVICES=1` to keep containers running after `make integra
 The test suite is now intentionally split by responsibility:
 
 - `tests/contract/`: runtime contract tests that lock task execution semantics
-- `tests/integration/`: live infrastructure tests for RabbitMQ, SQS, and MySQL
+- `tests/integration/`: live infrastructure tests for Redis, RabbitMQ, SQS, and MySQL
 - `tests/test_*.py`: connector-focused unit tests
 
 ## End-to-End Demo
