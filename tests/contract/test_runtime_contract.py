@@ -358,17 +358,16 @@ def test_failure_classification_and_dead_letter_payload() -> None:
 
         assert len(policy.failures) == 1
         assert policy.failures[0].kind is FailureKind.TIMEOUT
+        assert policy.failures[0].traceback is not None
+        assert "TimeoutError" in policy.failures[0].traceback
 
         dead_batch = await dead.fetch(1)
         assert len(dead_batch) == 1
-        assert dead_batch[0].payload == {
-            "payload": {"value": 1},
-            "failure": {
-                "kind": "timeout",
-                "exception_type": "TimeoutError",
-                "message": "",
-            },
-        }
+        assert dead_batch[0].payload["payload"] == {"value": 1}
+        assert dead_batch[0].payload["failure"]["kind"] == "timeout"
+        assert dead_batch[0].payload["failure"]["exception_type"] == "TimeoutError"
+        assert dead_batch[0].payload["failure"]["message"] == ""
+        assert "TimeoutError" in dead_batch[0].payload["failure"]["traceback"]
         assert dead_batch[0].envelope.meta == {
             "app": "dlq-app",
             "task": "slow",

@@ -375,7 +375,7 @@ async def consume(ctx, item):
 If a task ends in a terminal failure and `dead_letter` is configured, the dead-letter sink receives:
 
 - `body["payload"]`: the original payload
-- `body["failure"]`: `{kind, exception_type, message}`
+- `body["failure"]`: `{kind, exception_type, message, traceback?}`
 - `meta["original_meta"]`: the original envelope metadata
 
 You can inspect metrics in-process:
