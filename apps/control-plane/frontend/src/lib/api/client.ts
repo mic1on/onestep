@@ -1,4 +1,8 @@
 import type {
+  AgentCommandKind,
+  AgentCommandListResponse,
+  AgentCommandSummary,
+  AgentSessionListResponse,
   ConsoleSessionResponse,
   Environment,
   InstanceDetailResponse,
@@ -113,6 +117,24 @@ export function listServiceInstances(serviceName: string, environment: Environme
   });
 }
 
+export function listServiceCommands(serviceName: string, environment: Environment) {
+  return request<AgentCommandListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/commands`, {
+    query: {
+      environment,
+      limit: 20,
+    },
+  });
+}
+
+export function listServiceSessions(serviceName: string, environment: Environment) {
+  return request<AgentSessionListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/sessions`, {
+    query: {
+      environment,
+      limit: 20,
+    },
+  });
+}
+
 export function getTaskDetail(
   serviceName: string,
   taskName: string,
@@ -149,6 +171,32 @@ export function getInstanceDetail(
       },
     },
   );
+}
+
+export function listInstanceCommands(instanceId: string) {
+  return request<AgentCommandListResponse>(`/api/v1/instances/${encodeURIComponent(instanceId)}/commands`, {
+    query: {
+      limit: 20,
+    },
+  });
+}
+
+export function createInstanceCommand(
+  instanceId: string,
+  payload: {
+    kind: AgentCommandKind;
+    args?: Record<string, unknown>;
+    timeout_s?: number;
+  },
+) {
+  return request<AgentCommandSummary>(`/api/v1/instances/${encodeURIComponent(instanceId)}/commands`, {
+    method: "POST",
+    body: {
+      kind: payload.kind,
+      args: payload.args ?? {},
+      timeout_s: payload.timeout_s ?? 10,
+    },
+  });
 }
 
 export function getConsoleSession() {

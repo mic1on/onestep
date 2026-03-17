@@ -365,11 +365,23 @@ button {
   color: var(--text);
 }
 
+.button-danger {
+  border-color: rgba(188, 89, 67, 0.22);
+  background: rgba(255, 231, 226, 0.84);
+  color: var(--danger);
+}
+
 .button-secondary:hover,
 .button-link:hover,
 .segmented-option.active {
   border-color: transparent;
   background: var(--accent);
+  color: white;
+}
+
+.button-danger:hover {
+  border-color: transparent;
+  background: var(--danger);
   color: white;
 }
 
@@ -686,6 +698,80 @@ button {
   align-items: flex-start;
 }
 
+.command-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.command-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.command-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.command-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.command-card-block {
+  display: grid;
+  gap: 8px;
+}
+
+.command-inline-text {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.command-chip-grid,
+.command-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.command-action-grid .button-secondary {
+  min-width: 8.8rem;
+}
+
+.command-panel-actions {
+  margin-top: 18px;
+}
+
+.inline-feedback {
+  margin-top: 14px;
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 0.92rem;
+}
+
+.inline-feedback-success {
+  background: rgba(223, 255, 240, 0.9);
+  color: #0d4e49;
+}
+
+.inline-feedback-error {
+  background: rgba(255, 225, 219, 0.9);
+  color: #842e20;
+}
+
 .list-row strong,
 .event-row strong {
   display: block;
@@ -1000,7 +1086,8 @@ button {
 
   .service-card-topline,
   .list-row,
-  .event-row {
+  .event-row,
+  .command-card-header {
     flex-direction: column;
     align-items: flex-start;
   }

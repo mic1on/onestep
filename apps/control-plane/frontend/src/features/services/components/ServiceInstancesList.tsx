@@ -55,6 +55,7 @@ export function ServiceInstancesList({
             </p>
           </div>
           <div className="row-metrics">
+            {instance.active_session ? <StatusBadge value={instance.active_session.status} /> : null}
             <StatusBadge value={instance.connectivity} />
             <StatusBadge value={instance.status} />
           </div>

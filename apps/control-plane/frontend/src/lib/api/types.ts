@@ -1,6 +1,18 @@
 export type Environment = "dev" | "staging" | "prod";
 export type HealthStatus = "ok" | "degraded" | "error" | "starting" | "unknown";
 export type InstanceConnectivity = "online" | "offline" | "never_reported";
+export type AgentCommandKind = "ping" | "shutdown" | "sync_now" | "flush_metrics" | "flush_events";
+export type AgentCommandAckStatus = "accepted" | "rejected";
+export type AgentCommandStatus =
+  | "pending"
+  | "dispatched"
+  | "accepted"
+  | "rejected"
+  | "succeeded"
+  | "failed"
+  | "timeout"
+  | "cancelled";
+export type AgentSessionStatus = "active" | "disconnected" | "superseded";
 export type TaskEventKind =
   | "failed"
   | "retried"
@@ -47,6 +59,78 @@ export interface ConsoleSessionResponse {
   username: string | null;
 }
 
+export interface AgentCommandSummary {
+  command_id: string;
+  instance_id: string;
+  node_name: string | null;
+  session_id: string | null;
+  kind: AgentCommandKind;
+  args: JsonObject;
+  timeout_s: number;
+  status: AgentCommandStatus;
+  ack_status: AgentCommandAckStatus | null;
+  result: JsonObject | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  dispatched_at: string | null;
+  acked_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+}
+
+export interface AgentCommandListResponse {
+  items: AgentCommandSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AgentCommandStatusCounts {
+  pending: number;
+  dispatched: number;
+  accepted: number;
+  rejected: number;
+  succeeded: number;
+  failed: number;
+  timeout: number;
+  cancelled: number;
+  in_flight: number;
+  total: number;
+}
+
+export interface AgentCommandOverview {
+  statuses: AgentCommandStatusCounts;
+  active_session_count: number;
+  last_command_at: string | null;
+  last_completed_at: string | null;
+}
+
+export interface AgentSessionSummary {
+  session_id: string;
+  instance_id: string;
+  node_name: string | null;
+  hostname: string | null;
+  status: AgentSessionStatus;
+  protocol_version: string;
+  capabilities: string[];
+  accepted_capabilities: string[];
+  connected_at: string;
+  last_hello_at: string;
+  last_message_at: string;
+  superseded_at: string | null;
+  disconnected_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentSessionListResponse {
+  items: AgentSessionSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface InstanceConnectivityCounts {
   total: number;
   online: number;
@@ -78,6 +162,7 @@ export interface InstanceSummary {
   last_seen_at: string | null;
   status: HealthStatus;
   connectivity: InstanceConnectivity;
+  active_session: AgentSessionSummary | null;
   created_at: string;
   updated_at: string;
 }
@@ -200,6 +285,7 @@ export interface ServiceDashboardResponse {
   instance_statuses: InstanceStatusCounts;
   task_count: number;
   failing_task_count: number;
+  command_overview: AgentCommandOverview;
   topology_hashes: string[];
   topology_consistent: boolean;
   recent_events: TaskEventSummary[];

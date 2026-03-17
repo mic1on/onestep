@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.common import (
@@ -9,8 +10,8 @@ from onestep_control_plane_api.api.common import (
     as_utc,
     build_insert_statement,
     dedupe_by_key,
-    ensure_instance_stub,
     ensure_instance_identity_matches,
+    ensure_instance_stub,
     ensure_service,
     is_newer_heartbeat,
     is_newer_sync,
@@ -31,27 +32,16 @@ from onestep_control_plane_api.api.schemas import (
     SyncAcceptedResponse,
     SyncIngestRequest,
 )
-from onestep_control_plane_api.api.security import require_ingest_token
 from onestep_control_plane_api.db.models import TaskEvent, TaskMetricWindow
-from onestep_control_plane_api.db.session import get_db_session
-
-router = APIRouter(
-    prefix="/api/v1/agents",
-    tags=["ingestion"],
-    dependencies=[Depends(require_ingest_token)],
-)
 
 
-@router.post(
-    "/sync",
-    response_model=SyncAcceptedResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def ingest_sync(
+def ingest_sync_request(
+    db: Session,
     request: SyncIngestRequest,
-    db: Session = Depends(get_db_session),
+    *,
+    received_at: datetime | None = None,
 ) -> SyncAcceptedResponse:
-    received_at = utcnow()
+    received_at = received_at or utcnow()
     sent_at = as_utc(request.sent_at)
     app_snapshot_json = request.app.model_dump(mode="json")
     service = ensure_service(db, request.service, update_existing_version=False)
@@ -74,10 +64,7 @@ def ingest_sync(
             sequence=request.sequence,
             received_at=received_at,
         )
-
-    # Refresh task definitions on every newer sync so metadata-only changes
-    # like task descriptions are not stranded behind an unchanged topology hash.
-    if apply_sync:
+        # Refresh definitions on each newer sync so metadata-only changes are persisted.
         sync_task_definitions(db, service=service, app=request.app)
 
     db.commit()
@@ -91,16 +78,13 @@ def ingest_sync(
     )
 
 
-@router.post(
-    "/heartbeat",
-    response_model=IngestionAcceptedResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def ingest_heartbeat(
+def ingest_heartbeat_request(
+    db: Session,
     request: HeartbeatIngestRequest,
-    db: Session = Depends(get_db_session),
+    *,
+    received_at: datetime | None = None,
 ) -> IngestionAcceptedResponse:
-    received_at = utcnow()
+    received_at = received_at or utcnow()
     sent_at = as_utc(request.sent_at)
     service = ensure_service(db, request.service, update_existing_version=False)
     instance = ensure_instance_stub(db, service=service, identity=request.service)
@@ -123,16 +107,13 @@ def ingest_heartbeat(
     return IngestionAcceptedResponse(received_at=received_at)
 
 
-@router.post(
-    "/metrics",
-    response_model=MetricsAcceptedResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def ingest_metrics(
+def ingest_metrics_request(
+    db: Session,
     request: MetricsIngestRequest,
-    db: Session = Depends(get_db_session),
+    *,
+    received_at: datetime | None = None,
 ) -> MetricsAcceptedResponse:
-    received_at = utcnow()
+    received_at = received_at or utcnow()
     service = ensure_service(db, request.service, update_existing_version=False)
     instance = ensure_instance_stub(db, service=service, identity=request.service)
     ensure_instance_identity_matches(instance, request.service)
@@ -166,16 +147,13 @@ def ingest_metrics(
     return MetricsAcceptedResponse(received_at=received_at, ingested_count=inserted_count)
 
 
-@router.post(
-    "/events",
-    response_model=EventsAcceptedResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def ingest_events(
+def ingest_events_request(
+    db: Session,
     request: EventsIngestRequest,
-    db: Session = Depends(get_db_session),
+    *,
+    received_at: datetime | None = None,
 ) -> EventsAcceptedResponse:
-    received_at = utcnow()
+    received_at = received_at or utcnow()
     service = ensure_service(db, request.service, update_existing_version=False)
     instance = ensure_instance_stub(db, service=service, identity=request.service)
     ensure_instance_identity_matches(instance, request.service)

@@ -2,7 +2,7 @@
 
 Monorepo for the OneStep control plane. This repository will host:
 
-- `backend`: telemetry ingestion API and query API for the monitoring console
+- `backend`: agent WS ingress and query API for the monitoring console
 - `frontend`: web console
 
 ## API skeleton
@@ -13,19 +13,21 @@ Current scope:
 - settings/config bootstrap
 - `/healthz` and `/readyz` endpoints
 - task-oriented SQLAlchemy data model for services, instances, task windows, and task events
-- bearer-protected ingestion endpoints under `/api/v1/agents/*`
+- bearer-protected agent WS endpoint at `/api/v1/agents/ws`
 - query endpoints under `/api/v1/services*` for the future UI
 - `frontend` monitoring console scaffold for service, task, and instance views
 
 ## Data model
 
-`backend` now defines five core tables:
+`backend` now defines these core tables:
 
 - `services`: logical service identity keyed by `(name, environment)`
 - `instances`: runtime instance snapshot keyed by `instance_id`
 - `task_definitions`: current service-level task topology/config snapshot
 - `task_metric_windows`: task-level aggregated metric windows
 - `task_events`: discrete task lifecycle events with idempotent `event_id`
+- `agent_sessions`: active and historical WS sessions per runtime instance
+- `agent_commands`: control commands and lifecycle state per runtime instance
 
 Production database configuration is supplied via `ONESTEP_CP_DATABASE_URL`, for example:
 
@@ -239,23 +241,10 @@ The script will:
 - start the API on `127.0.0.1:8080`
 - default `ONESTEP_CP_INGEST_TOKENS` to `dev-token` if not already set
 
-Example heartbeat call:
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/agents/heartbeat \
-  -H 'Authorization: Bearer dev-token' \
-  -H 'Content-Type: application/json' \
-  -d @heartbeat.json
-```
-
-Example topology sync call:
-
-```bash
-curl -X POST http://127.0.0.1:8080/api/v1/agents/sync \
-  -H 'Authorization: Bearer dev-token' \
-  -H 'Content-Type: application/json' \
-  -d @sync.json
-```
+Agent telemetry and control now enter only through `GET /api/v1/agents/ws`.
+The WS handshake uses the same ingest token configured by `ONESTEP_CP_INGEST_TOKENS`.
+Telemetry payloads still reuse the historical heartbeat/sync/metrics/events body shapes
+inside the WS `telemetry` envelope.
 
 Query API endpoints:
 

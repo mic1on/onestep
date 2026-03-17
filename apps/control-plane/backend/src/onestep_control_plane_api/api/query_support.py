@@ -7,8 +7,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
-from onestep_control_plane_api.api.constants import HEALTH_STATUS_VALUES, TASK_EVENT_KIND_VALUES
+from onestep_control_plane_api.api.constants import (
+    HEALTH_STATUS_VALUES,
+    TASK_EVENT_KIND_VALUES,
+)
 from onestep_control_plane_api.api.schemas import (
+    AgentCommandOverview,
+    AgentCommandStatusCounts,
+    AgentSessionSummary,
     ConnectorDescriptor,
     Environment,
     InstanceConnectivity,
@@ -24,6 +30,8 @@ from onestep_control_plane_api.api.schemas import (
 )
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
+    AgentCommand,
+    AgentSession,
     Instance,
     Service,
     TaskDefinition,
@@ -143,6 +151,49 @@ def build_service_summary(
     )
 
 
+def build_agent_session_summary(
+    session: AgentSession,
+    *,
+    instance: Instance | None = None,
+) -> AgentSessionSummary:
+    return AgentSessionSummary(
+        session_id=session.session_id,
+        instance_id=session.instance_id,
+        node_name=instance.node_name if instance is not None else None,
+        hostname=instance.hostname if instance is not None else None,
+        status=session.status,
+        protocol_version=session.protocol_version,
+        capabilities=session.capabilities_json,
+        accepted_capabilities=session.accepted_capabilities_json,
+        connected_at=session.connected_at,
+        last_hello_at=session.last_hello_at,
+        last_message_at=session.last_message_at,
+        superseded_at=session.superseded_at,
+        disconnected_at=session.disconnected_at,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+    )
+
+
+def get_active_sessions_by_instance_id(
+    db: Session,
+    *,
+    service_id: UUID,
+) -> dict[UUID, AgentSession]:
+    sessions = db.scalars(
+        select(AgentSession)
+        .where(
+            AgentSession.service_id == service_id,
+            AgentSession.status == "active",
+        )
+        .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
+    ).all()
+    active_by_instance_id: dict[UUID, AgentSession] = {}
+    for session in sessions:
+        active_by_instance_id.setdefault(session.instance_id, session)
+    return active_by_instance_id
+
+
 def get_instance_connectivity(
     instance: Instance,
     *,
@@ -159,6 +210,7 @@ def build_instance_summary(
     instance: Instance,
     *,
     cutoff: datetime,
+    active_session: AgentSessionSummary | None = None,
 ) -> InstanceSummary:
     return InstanceSummary(
         instance_id=instance.instance_id,
@@ -176,6 +228,7 @@ def build_instance_summary(
         last_seen_at=instance.last_seen_at,
         status=instance.status,
         connectivity=get_instance_connectivity(instance, cutoff=cutoff),
+        active_session=active_session,
         created_at=instance.created_at,
         updated_at=instance.updated_at,
     )
@@ -305,6 +358,61 @@ def build_instance_connectivity_counts(
         online=online,
         offline=offline,
         never_reported=never_reported,
+    )
+
+
+def build_command_status_counts(rows: list[tuple[str, int]]) -> AgentCommandStatusCounts:
+    counts = {status_value: 0 for status_value in AgentCommandStatusCounts.model_fields}
+    for status_value, count in rows:
+        if status_value in counts:
+            counts[status_value] = count
+    in_flight = counts["pending"] + counts["dispatched"] + counts["accepted"]
+    total = (
+        counts["pending"]
+        + counts["dispatched"]
+        + counts["accepted"]
+        + counts["rejected"]
+        + counts["succeeded"]
+        + counts["failed"]
+        + counts["timeout"]
+        + counts["cancelled"]
+    )
+    counts["in_flight"] = in_flight
+    counts["total"] = total
+    return AgentCommandStatusCounts(**counts)
+
+
+def get_service_command_overview(
+    db: Session,
+    *,
+    service_id: UUID,
+) -> AgentCommandOverview:
+    status_rows = db.execute(
+        select(AgentCommand.status, func.count(AgentCommand.id))
+        .where(AgentCommand.service_id == service_id)
+        .group_by(AgentCommand.status)
+    ).all()
+    last_command_at, last_completed_at = db.execute(
+        select(
+            func.max(AgentCommand.created_at),
+            func.max(AgentCommand.finished_at),
+        ).where(AgentCommand.service_id == service_id)
+    ).one()
+    active_session_count = db.scalar(
+        select(func.count())
+        .select_from(AgentSession)
+        .where(
+            AgentSession.service_id == service_id,
+            AgentSession.status == "active",
+        )
+    ) or 0
+    return AgentCommandOverview(
+        statuses=build_command_status_counts(
+            [(status_value, count) for status_value, count in status_rows]
+        ),
+        active_session_count=active_session_count,
+        last_command_at=last_command_at,
+        last_completed_at=last_completed_at,
     )
 
 

@@ -47,6 +47,14 @@ class Service(Base):
         back_populates="service",
         cascade="all, delete-orphan",
     )
+    agent_commands: Mapped[list[AgentCommand]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+    )
+    agent_sessions: Mapped[list[AgentSession]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+    )
     task_metric_windows: Mapped[list[TaskMetricWindow]] = relationship(
         back_populates="service",
         cascade="all, delete-orphan",
@@ -95,6 +103,16 @@ class Instance(Base):
     )
 
     service: Mapped[Service] = relationship(back_populates="instances")
+    agent_commands: Mapped[list[AgentCommand]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+        primaryjoin=lambda: Instance.instance_id == foreign(AgentCommand.instance_id),
+    )
+    agent_sessions: Mapped[list[AgentSession]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+        primaryjoin=lambda: Instance.instance_id == foreign(AgentSession.instance_id),
+    )
     task_metric_windows: Mapped[list[TaskMetricWindow]] = relationship(
         back_populates="instance",
         cascade="all, delete-orphan",
@@ -140,6 +158,105 @@ class TaskDefinition(Base):
     )
 
     service: Mapped[Service] = relationship(back_populates="task_definitions")
+
+
+class AgentSession(Base):
+    __tablename__ = "agent_sessions"
+    __table_args__ = (
+        sa.UniqueConstraint("session_id", name="uq_agent_sessions_session_id"),
+        sa.Index(
+            "ix_agent_sessions_instance_id_status_connected_at",
+            "instance_id",
+            "status",
+            "connected_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    session_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    service_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instance_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("instances.instance_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    protocol_version: Mapped[str] = mapped_column(sa.String(16), nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="active")
+    capabilities_json: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    accepted_capabilities_json: Mapped[list[str]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=list,
+    )
+    connected_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_hello_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_message_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    superseded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    disconnected_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    service: Mapped[Service] = relationship(back_populates="agent_sessions")
+    instance: Mapped[Instance] = relationship(
+        back_populates="agent_sessions",
+        primaryjoin=lambda: foreign(AgentSession.instance_id) == Instance.instance_id,
+    )
+
+
+class AgentCommand(Base):
+    __tablename__ = "agent_commands"
+    __table_args__ = (
+        sa.UniqueConstraint("command_id", name="uq_agent_commands_command_id"),
+        sa.Index(
+            "ix_agent_commands_instance_id_status_created_at",
+            "instance_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    command_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    service_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instance_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("instances.instance_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    session_id: Mapped[str | None] = mapped_column(sa.String(255))
+    kind: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    args_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    timeout_s: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
+    ack_status: Mapped[str | None] = mapped_column(sa.String(32))
+    result_json: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)
+    error_code: Mapped[str | None] = mapped_column(sa.String(128))
+    error_message: Mapped[str | None] = mapped_column(sa.Text)
+    dispatched_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    acked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    service: Mapped[Service] = relationship(back_populates="agent_commands")
+    instance: Mapped[Instance] = relationship(
+        back_populates="agent_commands",
+        primaryjoin=lambda: foreign(AgentCommand.instance_id) == Instance.instance_id,
+    )
 
 
 class TaskMetricWindow(Base):

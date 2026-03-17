@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from onestep_control_plane_api.db.models import (
+    AgentCommand,
+    AgentSession,
     Instance,
     Service,
     TaskDefinition,
@@ -104,6 +106,80 @@ def seed_metric_window(
     db_session.add(metric_window)
     db_session.flush()
     return metric_window
+
+
+def seed_agent_session(
+    db_session,
+    service: Service,
+    instance: Instance,
+    *,
+    status: str,
+    connected_at: datetime,
+    last_message_at: datetime | None = None,
+    session_id: str = "sess_test_active",
+) -> AgentSession:
+    resolved_last_message_at = last_message_at or connected_at
+    session = AgentSession(
+        session_id=session_id,
+        service=service,
+        instance_id=instance.instance_id,
+        protocol_version="1",
+        status=status,
+        capabilities_json=["telemetry.sync", "command.sync_now", "command.flush_metrics"],
+        accepted_capabilities_json=["telemetry.sync", "command.sync_now", "command.flush_metrics"],
+        connected_at=connected_at,
+        last_hello_at=connected_at,
+        last_message_at=resolved_last_message_at,
+        superseded_at=resolved_last_message_at if status == "superseded" else None,
+        disconnected_at=resolved_last_message_at if status != "active" else None,
+        created_at=connected_at,
+        updated_at=resolved_last_message_at,
+    )
+    db_session.add(session)
+    db_session.flush()
+    return session
+
+
+def seed_agent_command(
+    db_session,
+    service: Service,
+    instance: Instance,
+    *,
+    command_id: str,
+    kind: str,
+    status: str,
+    created_at: datetime,
+    session_id: str | None = None,
+    ack_status: str | None = None,
+    dispatched_at: datetime | None = None,
+    acked_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    result_json: dict[str, object] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> AgentCommand:
+    command = AgentCommand(
+        command_id=command_id,
+        service=service,
+        instance_id=instance.instance_id,
+        session_id=session_id,
+        kind=kind,
+        args_json={},
+        timeout_s=15,
+        status=status,
+        ack_status=ack_status,
+        result_json=result_json,
+        error_code=error_code,
+        error_message=error_message,
+        dispatched_at=dispatched_at,
+        acked_at=acked_at,
+        finished_at=finished_at,
+        created_at=created_at,
+        updated_at=finished_at or acked_at or dispatched_at or created_at,
+    )
+    db_session.add(command)
+    db_session.flush()
+    return command
 
 
 def seed_task_event(
@@ -592,6 +668,179 @@ def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(
     payload = response.json()
     assert payload["topology_hashes"] == ["sha256:topology-a", "sha256:topology-b"]
     assert payload["topology_consistent"] is False
+
+
+def test_service_dashboard_and_instance_detail_include_command_overview_and_active_session(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-prod-1",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+    )
+    active_session = seed_agent_session(
+        db_session,
+        service,
+        instance,
+        status="active",
+        connected_at=now - timedelta(minutes=2),
+        last_message_at=now - timedelta(seconds=6),
+        session_id="sess_live_vm_prod_1",
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_sync_now",
+        kind="sync_now",
+        status="accepted",
+        created_at=now - timedelta(seconds=40),
+        session_id=active_session.session_id,
+        ack_status="accepted",
+        dispatched_at=now - timedelta(seconds=39),
+        acked_at=now - timedelta(seconds=38),
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_ping",
+        kind="ping",
+        status="succeeded",
+        created_at=now - timedelta(minutes=4),
+        session_id=active_session.session_id,
+        ack_status="accepted",
+        dispatched_at=now - timedelta(minutes=4) + timedelta(seconds=1),
+        acked_at=now - timedelta(minutes=4) + timedelta(seconds=2),
+        finished_at=now - timedelta(minutes=4) + timedelta(seconds=3),
+        result_json={"ok": True},
+    )
+    db_session.commit()
+
+    dashboard_response = client.get(
+        "/api/v1/services/billing-sync/dashboard",
+        params={"environment": "prod"},
+    )
+    assert dashboard_response.status_code == 200
+    dashboard_payload = dashboard_response.json()
+    assert dashboard_payload["command_overview"]["active_session_count"] == 1
+    assert dashboard_payload["command_overview"]["statuses"]["accepted"] == 1
+    assert dashboard_payload["command_overview"]["statuses"]["succeeded"] == 1
+    assert dashboard_payload["command_overview"]["statuses"]["in_flight"] == 1
+    assert dashboard_payload["command_overview"]["statuses"]["total"] == 2
+
+    instance_response = client.get(
+        f"/api/v1/services/billing-sync/instances/{instance.instance_id}",
+        params={"environment": "prod"},
+    )
+    assert instance_response.status_code == 200
+    instance_payload = instance_response.json()
+    assert instance_payload["instance"]["active_session"]["session_id"] == "sess_live_vm_prod_1"
+    assert instance_payload["instance"]["active_session"]["status"] == "active"
+    assert instance_payload["instance"]["active_session"]["accepted_capabilities"] == [
+        "telemetry.sync",
+        "command.sync_now",
+        "command.flush_metrics",
+    ]
+
+
+def test_list_service_commands_and_sessions_filters(client, db_session) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    first_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-prod-1",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=5),
+    )
+    second_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-prod-2",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=3),
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        first_instance,
+        status="active",
+        connected_at=now - timedelta(minutes=3),
+        session_id="sess_active",
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        second_instance,
+        status="disconnected",
+        connected_at=now - timedelta(minutes=10),
+        last_message_at=now - timedelta(minutes=7),
+        session_id="sess_disconnected",
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        first_instance,
+        command_id="cmd_instance_one_sync",
+        kind="sync_now",
+        status="accepted",
+        created_at=now - timedelta(minutes=1),
+        session_id="sess_active",
+        ack_status="accepted",
+        dispatched_at=now - timedelta(minutes=1) + timedelta(seconds=1),
+        acked_at=now - timedelta(minutes=1) + timedelta(seconds=2),
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        second_instance,
+        command_id="cmd_instance_two_flush",
+        kind="flush_metrics",
+        status="failed",
+        created_at=now - timedelta(minutes=2),
+        session_id="sess_disconnected",
+        ack_status="accepted",
+        dispatched_at=now - timedelta(minutes=2) + timedelta(seconds=1),
+        acked_at=now - timedelta(minutes=2) + timedelta(seconds=2),
+        finished_at=now - timedelta(minutes=2) + timedelta(seconds=6),
+        error_code="runtime_error",
+        error_message="metric exporter is unavailable",
+    )
+    db_session.commit()
+
+    commands_response = client.get(
+        "/api/v1/services/billing-sync/commands",
+        params={"environment": "prod", "status": "failed"},
+    )
+    assert commands_response.status_code == 200
+    commands_payload = commands_response.json()
+    assert commands_payload["total"] == 1
+    assert commands_payload["items"][0]["command_id"] == "cmd_instance_two_flush"
+    assert commands_payload["items"][0]["node_name"] == "vm-prod-2"
+
+    filtered_by_instance = client.get(
+        "/api/v1/services/billing-sync/commands",
+        params={"environment": "prod", "instance_id": str(first_instance.instance_id)},
+    )
+    assert filtered_by_instance.status_code == 200
+    assert filtered_by_instance.json()["total"] == 1
+    assert filtered_by_instance.json()["items"][0]["command_id"] == "cmd_instance_one_sync"
+
+    sessions_response = client.get(
+        "/api/v1/services/billing-sync/sessions",
+        params={"environment": "prod", "status": "active"},
+    )
+    assert sessions_response.status_code == 200
+    sessions_payload = sessions_response.json()
+    assert sessions_payload["total"] == 1
+    assert sessions_payload["items"][0]["session_id"] == "sess_active"
+    assert sessions_payload["items"][0]["node_name"] == "vm-prod-1"
 
 
 def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) -> None:
@@ -1172,6 +1421,8 @@ def test_openapi_contains_query_paths(client) -> None:
     assert "/api/v1/services/{service_name}/dashboard" in payload["paths"]
     assert "/api/v1/services/{service_name}/instances" in payload["paths"]
     assert "/api/v1/services/{service_name}/instances/{instance_id}" in payload["paths"]
+    assert "/api/v1/services/{service_name}/commands" in payload["paths"]
+    assert "/api/v1/services/{service_name}/sessions" in payload["paths"]
     assert "/api/v1/services/{service_name}/tasks" in payload["paths"]
     assert "/api/v1/services/{service_name}/tasks/{task_name}" in payload["paths"]
     assert "/api/v1/services/{service_name}/metric-windows" in payload["paths"]

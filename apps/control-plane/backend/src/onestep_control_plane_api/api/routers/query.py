@@ -7,6 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from onestep_control_plane_api.api.agent_command_service import (
+    build_command_summary,
+    list_commands_for_service,
+)
 from onestep_control_plane_api.api.common import as_utc, utcnow
 from onestep_control_plane_api.api.constants import (
     DEFAULT_LOOKBACK_MINUTES,
@@ -22,11 +26,14 @@ from onestep_control_plane_api.api.query_support import (
     build_instance_status_counts,
     build_instance_summary,
     build_metric_window_summary,
+    build_agent_session_summary,
     build_service_stats_subquery,
     build_service_summary,
     build_task_event_summary,
     build_task_summary_map,
+    get_active_sessions_by_instance_id,
     get_service_instance_or_404,
+    get_service_command_overview,
     get_service_or_404,
     get_service_summary_data,
     get_service_topology_hashes,
@@ -35,6 +42,11 @@ from onestep_control_plane_api.api.query_support import (
     sort_task_summaries,
 )
 from onestep_control_plane_api.api.schemas import (
+    AgentCommandKind,
+    AgentCommandListResponse,
+    AgentCommandStatus,
+    AgentSessionListResponse,
+    AgentSessionStatus,
     Environment,
     HealthStatus,
     InstanceConnectivity,
@@ -52,7 +64,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskMetricWindowListResponse,
 )
 from onestep_control_plane_api.api.security import require_console_auth
-from onestep_control_plane_api.db.models import Instance, Service, TaskEvent, TaskMetricWindow
+from onestep_control_plane_api.db.models import AgentSession, Instance, Service, TaskEvent, TaskMetricWindow
 from onestep_control_plane_api.db.session import get_db_session
 
 router = APIRouter(
@@ -166,6 +178,7 @@ def get_service_dashboard(
         .limit(recent_event_limit)
     ).all()
     topology_hashes = get_service_topology_hashes(db, service_id=service.id, cutoff=cutoff)
+    command_overview = get_service_command_overview(db, service_id=service.id)
 
     return ServiceDashboardResponse(
         service=service_summary,
@@ -181,6 +194,7 @@ def get_service_dashboard(
             for task_summary in task_summaries
             if task_summary.event_counts.failed > 0 or task_summary.event_counts.dead_lettered > 0
         ),
+        command_overview=command_overview,
         topology_hashes=topology_hashes,
         topology_consistent=len(topology_hashes) <= 1,
         recent_events=[build_task_event_summary(event) for event in recent_events],
@@ -309,6 +323,7 @@ def list_service_instances(
 ) -> InstanceListResponse:
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     cutoff = online_cutoff(utcnow())
+    active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
     filters = [Instance.service_id == service.id]
 
     if instance_status is not None:
@@ -334,7 +349,18 @@ def list_service_instances(
         .limit(limit)
     ).all()
 
-    items = [build_instance_summary(instance, cutoff=cutoff) for instance in instances]
+    items = [
+        build_instance_summary(
+            instance,
+            cutoff=cutoff,
+            active_session=(
+                build_agent_session_summary(active_session, instance=instance)
+                if (active_session := active_sessions_by_instance_id.get(instance.instance_id)) is not None
+                else None
+            ),
+        )
+        for instance in instances
+    ]
     return InstanceListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -372,6 +398,7 @@ def get_service_instance_detail(
     cutoff = online_cutoff(now)
     lookback_started_at = now - timedelta(minutes=lookback_minutes)
     service_summary, _ = get_service_summary_data(db, service=service, cutoff=cutoff)
+    active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
 
     recent_metric_windows = db.scalars(
         select(TaskMetricWindow)
@@ -402,7 +429,15 @@ def get_service_instance_detail(
         service=service_summary,
         lookback_minutes=lookback_minutes,
         lookback_started_at=lookback_started_at,
-        instance=build_instance_summary(instance, cutoff=cutoff),
+        instance=build_instance_summary(
+            instance,
+            cutoff=cutoff,
+            active_session=(
+                build_agent_session_summary(active_session, instance=instance)
+                if (active_session := active_sessions_by_instance_id.get(instance.instance_id)) is not None
+                else None
+            ),
+        ),
         app_snapshot=instance.app_snapshot_json,
         recent_metric_windows=[
             build_metric_window_summary(metric_window) for metric_window in recent_metric_windows
@@ -493,3 +528,69 @@ def list_service_events(
 
     items = [build_task_event_summary(event) for event in events]
     return TaskEventListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/services/{service_name}/commands", response_model=AgentCommandListResponse)
+def list_service_commands(
+    service_name: str,
+    environment: Environment = Query(...),
+    instance_id: UUID | None = Query(default=None),
+    kind: AgentCommandKind | None = Query(default=None),
+    command_status: AgentCommandStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> AgentCommandListResponse:
+    service = get_service_or_404(db, service_name=service_name, environment=environment)
+    total, commands = list_commands_for_service(
+        db,
+        service_id=service.id,
+        instance_id=instance_id,
+        kind=kind,
+        status=command_status,
+        limit=limit,
+        offset=offset,
+    )
+    return AgentCommandListResponse(
+        items=[build_command_summary(command) for command in commands],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/services/{service_name}/sessions", response_model=AgentSessionListResponse)
+def list_service_sessions(
+    service_name: str,
+    environment: Environment = Query(...),
+    instance_id: UUID | None = Query(default=None),
+    session_status: AgentSessionStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> AgentSessionListResponse:
+    service = get_service_or_404(db, service_name=service_name, environment=environment)
+    filters = [AgentSession.service_id == service.id]
+    if instance_id is not None:
+        filters.append(AgentSession.instance_id == instance_id)
+    if session_status is not None:
+        filters.append(AgentSession.status == session_status)
+
+    total = db.scalar(select(func.count()).select_from(AgentSession).where(*filters)) or 0
+    rows = db.execute(
+        select(AgentSession, Instance)
+        .join(Instance, AgentSession.instance_id == Instance.instance_id)
+        .where(*filters)
+        .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return AgentSessionListResponse(
+        items=[
+            build_agent_session_summary(session, instance=instance)
+            for session, instance in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

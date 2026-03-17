@@ -12,5 +12,6 @@ export function useInstanceDetailQuery(
   return useQuery({
     queryKey: ["instance-detail", serviceName, instanceId, environment, lookbackMinutes],
     queryFn: () => getInstanceDetail(serviceName, instanceId, environment, lookbackMinutes),
+    refetchInterval: 5_000,
   });
 }

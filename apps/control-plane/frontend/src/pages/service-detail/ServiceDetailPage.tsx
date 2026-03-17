@@ -9,6 +9,12 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatCard } from "../../components/ui/StatCard";
 import { StatusBadge } from "../../components/ui/StatusBadge";
+import { CommandFeed } from "../../features/commands/components/CommandFeed";
+import { SessionList } from "../../features/commands/components/SessionList";
+import {
+  useServiceCommandsQuery,
+  useServiceSessionsQuery,
+} from "../../features/commands/queries";
 import { ServiceEventsFeed } from "../../features/services/components/ServiceEventsFeed";
 import { ServiceInstancesList } from "../../features/services/components/ServiceInstancesList";
 import { ServiceTasksList } from "../../features/services/components/ServiceTasksList";
@@ -18,6 +24,8 @@ import {
   useServiceTasksQuery,
 } from "../../features/services/queries";
 import type {
+  AgentCommandSummary,
+  AgentSessionSummary,
   Environment,
   InstanceSummary,
   ServiceDashboardResponse,
@@ -28,7 +36,7 @@ import { parseEnvironment, parseLookback } from "../../lib/params";
 import { servicePath } from "../../lib/routes";
 
 const LOOKBACK_OPTIONS = [15, 60, 360, 1440];
-const TAB_OPTIONS = ["overview", "tasks", "instances", "events"] as const;
+const TAB_OPTIONS = ["overview", "tasks", "instances", "events", "commands"] as const;
 type ServiceDetailTab = (typeof TAB_OPTIONS)[number];
 
 export function ServiceDetailPage() {
@@ -45,6 +53,7 @@ export function ServiceDetailPage() {
   const currentTab = parseTab(searchParams.get("tab"));
   const shouldFetchTasks = currentTab === "overview" || currentTab === "tasks";
   const shouldFetchInstances = currentTab === "overview" || currentTab === "instances";
+  const shouldFetchCommands = currentTab === "overview" || currentTab === "commands";
 
   const dashboardQuery = useServiceDashboardQuery(serviceName, environment, lookbackMinutes);
   const tasksQuery = useServiceTasksQuery(serviceName, environment, lookbackMinutes, {
@@ -52,6 +61,12 @@ export function ServiceDetailPage() {
   });
   const instancesQuery = useServiceInstancesQuery(serviceName, environment, {
     enabled: shouldFetchInstances,
+  });
+  const commandsQuery = useServiceCommandsQuery(serviceName, environment, {
+    enabled: shouldFetchCommands,
+  });
+  const sessionsQuery = useServiceSessionsQuery(serviceName, environment, {
+    enabled: shouldFetchCommands,
   });
 
   function updateParam(key: string, value: string) {
@@ -67,6 +82,14 @@ export function ServiceDetailPage() {
   const dashboard = dashboardQuery.data;
   const tasks = tasksQuery.data?.items ?? [];
   const instances = instancesQuery.data?.items ?? [];
+  const commands = commandsQuery.data?.items ?? [];
+  const sessions = sessionsQuery.data?.items ?? [];
+  const commandFailureCount = dashboard
+    ? dashboard.command_overview.statuses.failed +
+      dashboard.command_overview.statuses.rejected +
+      dashboard.command_overview.statuses.timeout +
+      dashboard.command_overview.statuses.cancelled
+    : 0;
 
   return (
     <div className="page-stack">
@@ -140,6 +163,24 @@ export function ServiceDetailPage() {
               tone={dashboard.failing_task_count > 0 ? "danger" : "default"}
             />
             <StatCard
+              label={t("serviceDetail.activeSessions")}
+              value={String(dashboard.command_overview.active_session_count)}
+              hint={t("common.totalHint", { count: dashboard.service.instance_count })}
+              tone={dashboard.command_overview.active_session_count > 0 ? "success" : "default"}
+            />
+            <StatCard
+              label={t("serviceDetail.commandsInFlight")}
+              value={String(dashboard.command_overview.statuses.in_flight)}
+              hint={t("common.totalHint", { count: dashboard.command_overview.statuses.total })}
+              tone={dashboard.command_overview.statuses.in_flight > 0 ? "warning" : "default"}
+            />
+            <StatCard
+              label={t("serviceDetail.commandFailures")}
+              value={String(commandFailureCount)}
+              hint={t("common.lastCommandInline", { time: formatDateTime(dashboard.command_overview.last_command_at) })}
+              tone={commandFailureCount > 0 ? "danger" : "default"}
+            />
+            <StatCard
               label={t("serviceDetail.topologyHashes")}
               value={String(dashboard.topology_hashes.length)}
               hint={
@@ -165,6 +206,12 @@ export function ServiceDetailPage() {
         instances,
         instancesError: instancesQuery.error,
         instancesLoading: instancesQuery.isPending,
+        commands,
+        commandsError: commandsQuery.error,
+        commandsLoading: commandsQuery.isPending,
+        sessions,
+        sessionsError: sessionsQuery.error,
+        sessionsLoading: sessionsQuery.isPending,
         serviceName,
         environment,
         lookbackMinutes,
@@ -191,6 +238,12 @@ type RenderTabContentProps = {
   instances: InstanceSummary[];
   instancesError: Error | null;
   instancesLoading: boolean;
+  commands: AgentCommandSummary[];
+  commandsError: Error | null;
+  commandsLoading: boolean;
+  sessions: AgentSessionSummary[];
+  sessionsError: Error | null;
+  sessionsLoading: boolean;
   serviceName: string;
   environment: Environment;
   lookbackMinutes: number;
@@ -207,6 +260,12 @@ function renderTabContent({
   instances,
   instancesError,
   instancesLoading,
+  commands,
+  commandsError,
+  commandsLoading,
+  sessions,
+  sessionsError,
+  sessionsLoading,
   serviceName,
   environment,
   lookbackMinutes,
@@ -301,6 +360,48 @@ function renderTabContent({
           ) : null}
         </Panel>
       )
+    );
+  }
+
+  if (currentTab === "commands") {
+    return (
+      <div className="two-column-grid">
+        <Panel title={t("serviceDetail.recentCommandsTitle")} subtitle={t("serviceDetail.recentCommandsSubtitle")}>
+          {commandsLoading ? <div className="loading-block">{t("serviceDetail.loadingCommandFeed")}</div> : null}
+          {!commandsLoading && commandsError ? (
+            <EmptyState
+              title={t("serviceDetail.loadErrorTitle")}
+              body={String(commandsError)}
+            />
+          ) : null}
+          {!commandsLoading && !commandsError ? (
+            <CommandFeed
+              commands={commands}
+              emptyBody={t("serviceDetail.noCommandsBody")}
+              emptyTitle={t("serviceDetail.noCommandsTitle")}
+              environment={environment}
+              lookbackMinutes={lookbackMinutes}
+              serviceName={serviceName}
+            />
+          ) : null}
+        </Panel>
+        <Panel title={t("serviceDetail.sessionsTitle")} subtitle={t("serviceDetail.sessionsSubtitle")}>
+          {sessionsLoading ? <div className="loading-block">{t("serviceDetail.loadingSessionFeed")}</div> : null}
+          {!sessionsLoading && sessionsError ? (
+            <EmptyState
+              title={t("serviceDetail.loadErrorTitle")}
+              body={String(sessionsError)}
+            />
+          ) : null}
+          {!sessionsLoading && !sessionsError ? (
+            <SessionList
+              emptyBody={t("serviceDetail.noSessionsBody")}
+              emptyTitle={t("serviceDetail.noSessionsTitle")}
+              sessions={sessions}
+            />
+          ) : null}
+        </Panel>
+      </div>
     );
   }
 
@@ -426,6 +527,69 @@ function renderTabContent({
           </div>
         </Panel>
       )}
+
+      <div className="two-column-grid">
+        <Panel title={t("serviceDetail.recentCommandsTitle")} subtitle={t("serviceDetail.recentCommandsSubtitle")}>
+          {commandsLoading ? <div className="loading-block">{t("serviceDetail.loadingCommandFeed")}</div> : null}
+          {!commandsLoading && commandsError ? (
+            <EmptyState
+              title={t("serviceDetail.loadErrorTitle")}
+              body={String(commandsError)}
+            />
+          ) : null}
+          {!commandsLoading && !commandsError ? (
+            <CommandFeed
+              commands={commands.slice(0, 6)}
+              emptyBody={t("serviceDetail.noCommandsBody")}
+              emptyTitle={t("serviceDetail.noCommandsTitle")}
+              environment={environment}
+              lookbackMinutes={lookbackMinutes}
+              serviceName={serviceName}
+            />
+          ) : null}
+          <div className="panel-footer">
+            <Link
+              className="button-link"
+              to={servicePath(serviceName, {
+                environment,
+                lookback_minutes: lookbackMinutes,
+                tab: "commands",
+              })}
+            >
+              {t("common.viewCommandFocus")}
+            </Link>
+          </div>
+        </Panel>
+
+        <Panel title={t("serviceDetail.sessionsTitle")} subtitle={t("serviceDetail.sessionsSubtitle")}>
+          {sessionsLoading ? <div className="loading-block">{t("serviceDetail.loadingSessionFeed")}</div> : null}
+          {!sessionsLoading && sessionsError ? (
+            <EmptyState
+              title={t("serviceDetail.loadErrorTitle")}
+              body={String(sessionsError)}
+            />
+          ) : null}
+          {!sessionsLoading && !sessionsError ? (
+            <SessionList
+              emptyBody={t("serviceDetail.noSessionsBody")}
+              emptyTitle={t("serviceDetail.noSessionsTitle")}
+              sessions={sessions.slice(0, 6)}
+            />
+          ) : null}
+          <div className="panel-footer">
+            <Link
+              className="button-link"
+              to={servicePath(serviceName, {
+                environment,
+                lookback_minutes: lookbackMinutes,
+                tab: "commands",
+              })}
+            >
+              {t("common.viewCommandFocus")}
+            </Link>
+          </div>
+        </Panel>
+      </div>
     </>
   );
 }

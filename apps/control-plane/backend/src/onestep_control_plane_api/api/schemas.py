@@ -31,6 +31,30 @@ Environment = Literal["dev", "staging", "prod"]
 HealthStatus = Literal["ok", "degraded", "error", "starting", "unknown"]
 TaskEventKind = Literal["failed", "retried", "dead_lettered", "cancelled", "succeeded"]
 InstanceConnectivity = Literal["online", "offline", "never_reported"]
+TelemetryChannel = Literal["sync", "heartbeat", "metrics", "events"]
+AgentCommandKind = Literal["ping", "shutdown", "sync_now", "flush_metrics", "flush_events"]
+AgentCommandAckStatus = Literal["accepted", "rejected"]
+AgentCommandResultStatus = Literal["succeeded", "failed", "timeout", "cancelled"]
+AgentCommandStatus = Literal[
+    "pending",
+    "dispatched",
+    "accepted",
+    "rejected",
+    "succeeded",
+    "failed",
+    "timeout",
+    "cancelled",
+]
+AgentSessionStatus = Literal["active", "disconnected", "superseded"]
+WsMessageType = Literal[
+    "hello",
+    "hello_ack",
+    "telemetry",
+    "command",
+    "command_ack",
+    "command_result",
+    "error",
+]
 
 
 class ServiceDescriptor(APIModel):
@@ -166,6 +190,114 @@ class SyncIngestRequest(IngestionEnvelope):
         return self
 
 
+class AgentHelloPayload(APIModel):
+    protocol_version: str = Field(min_length=1, max_length=16)
+    capabilities: list[str] = Field(default_factory=list)
+    service: ServiceDescriptor
+    runtime: RuntimeDescriptor
+
+
+class AgentHelloMessage(APIModel):
+    type: Literal["hello"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentHelloPayload
+
+
+class AgentHelloAckPayload(APIModel):
+    session_id: str = Field(min_length=1, max_length=255)
+    protocol_version: str = Field(min_length=1, max_length=16)
+    heartbeat_interval_s: int = Field(ge=1)
+    accepted_capabilities: list[str] = Field(default_factory=list)
+    server_time: datetime
+
+
+class AgentHelloAckMessage(APIModel):
+    type: Literal["hello_ack"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentHelloAckPayload
+
+
+class AgentTelemetryPayload(APIModel):
+    channel: TelemetryChannel
+    body: dict[str, Any]
+
+
+class AgentTelemetryMessage(APIModel):
+    type: Literal["telemetry"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentTelemetryPayload
+
+
+class AgentCommandPayload(APIModel):
+    command_id: str = Field(min_length=1, max_length=255)
+    kind: AgentCommandKind
+    args: dict[str, Any] = Field(default_factory=dict)
+    timeout_s: int = Field(ge=1)
+    created_at: datetime
+
+
+class AgentCommandMessage(APIModel):
+    type: Literal["command"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentCommandPayload
+
+
+class AgentCommandAckPayload(APIModel):
+    command_id: str = Field(min_length=1, max_length=255)
+    status: AgentCommandAckStatus
+    received_at: datetime
+    error_code: str | None = Field(default=None, max_length=128)
+    error_message: str | None = None
+
+
+class AgentCommandAckMessage(APIModel):
+    type: Literal["command_ack"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentCommandAckPayload
+
+
+class AgentCommandResultPayload(APIModel):
+    command_id: str = Field(min_length=1, max_length=255)
+    status: AgentCommandResultStatus
+    finished_at: datetime
+    result: dict[str, Any] | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    error_code: str | None = Field(default=None, max_length=128)
+    error_message: str | None = None
+
+
+class AgentCommandResultMessage(APIModel):
+    type: Literal["command_result"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentCommandResultPayload
+
+
+class AgentErrorPayload(APIModel):
+    code: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1)
+    close_connection: bool = False
+
+
+class AgentErrorMessage(APIModel):
+    type: Literal["error"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentErrorPayload
+
+
+class AgentWsEnvelope(APIModel):
+    type: WsMessageType
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: dict[str, Any]
+
+
 class IngestionAcceptedResponse(APIModel):
     status: Literal["accepted"] = "accepted"
     received_at: datetime
@@ -202,6 +334,78 @@ class PaginatedResponse(APIModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+
+
+class AgentCommandCreateRequest(APIModel):
+    kind: AgentCommandKind
+    args: dict[str, Any] = Field(default_factory=dict)
+    timeout_s: int = Field(default=10, ge=1)
+
+
+class AgentCommandSummary(APIModel):
+    command_id: str
+    instance_id: UUID
+    node_name: str | None = None
+    session_id: str | None = None
+    kind: AgentCommandKind
+    args: dict[str, Any] = Field(default_factory=dict)
+    timeout_s: int = Field(ge=1)
+    status: AgentCommandStatus
+    ack_status: AgentCommandAckStatus | None = None
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    dispatched_at: datetime | None = None
+    acked_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
+class AgentCommandListResponse(PaginatedResponse):
+    items: list[AgentCommandSummary]
+
+
+class AgentCommandStatusCounts(APIModel):
+    pending: int = Field(default=0, ge=0)
+    dispatched: int = Field(default=0, ge=0)
+    accepted: int = Field(default=0, ge=0)
+    rejected: int = Field(default=0, ge=0)
+    succeeded: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    timeout: int = Field(default=0, ge=0)
+    cancelled: int = Field(default=0, ge=0)
+    in_flight: int = Field(default=0, ge=0)
+    total: int = Field(default=0, ge=0)
+
+
+class AgentCommandOverview(APIModel):
+    statuses: AgentCommandStatusCounts
+    active_session_count: int = Field(default=0, ge=0)
+    last_command_at: datetime | None = None
+    last_completed_at: datetime | None = None
+
+
+class AgentSessionSummary(APIModel):
+    session_id: str
+    instance_id: UUID
+    node_name: str | None = None
+    hostname: str | None = None
+    status: AgentSessionStatus
+    protocol_version: str
+    capabilities: list[str] = Field(default_factory=list)
+    accepted_capabilities: list[str] = Field(default_factory=list)
+    connected_at: datetime
+    last_hello_at: datetime
+    last_message_at: datetime
+    superseded_at: datetime | None = None
+    disconnected_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentSessionListResponse(PaginatedResponse):
+    items: list[AgentSessionSummary]
 
 
 class ServiceSummary(APIModel):
@@ -252,6 +456,7 @@ class InstanceSummary(APIModel):
     last_seen_at: datetime | None = None
     status: HealthStatus
     connectivity: InstanceConnectivity
+    active_session: AgentSessionSummary | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -376,6 +581,7 @@ class ServiceDashboardResponse(APIModel):
     instance_statuses: InstanceStatusCounts
     task_count: int = Field(ge=0)
     failing_task_count: int = Field(ge=0)
+    command_overview: AgentCommandOverview
     topology_hashes: list[str] = Field(default_factory=list)
     topology_consistent: bool
     recent_events: list[TaskEventSummary]
