@@ -5,17 +5,11 @@ import { Link, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
-import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatCard } from "../../components/ui/StatCard";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useServicesQuery } from "../../features/services/queries";
 import { formatDateTime, formatIdentifierPreview, formatRelativeTime } from "../../lib/formatters";
 import { servicePath } from "../../lib/routes";
-import type { Environment } from "../../lib/api/types";
-
-type EnvironmentFilter = Environment | "all";
-
-const ENVIRONMENT_OPTIONS: EnvironmentFilter[] = ["prod", "staging", "dev", "all"];
 
 export function ServicesListPage() {
   const { t } = useTranslation();
@@ -85,16 +79,7 @@ export function ServicesListPage() {
       </section>
 
       <Panel title={t("servicesList.panelTitle")} subtitle={t("servicesList.panelSubtitle")}>
-        <div className="toolbar">
-          <SegmentedControl
-            ariaLabel={t("servicesList.filterScope")}
-            onChange={(value) => updateSearchParam("environment", value)}
-            options={ENVIRONMENT_OPTIONS.map((option) => ({
-              label: t(`environment.${option}`),
-              value: option,
-            }))}
-            value={selectedEnvironment}
-          />
+        <div className="toolbar toolbar-wide">
           <label className="search-field">
             <span>{t("common.search")}</span>
             <input
@@ -111,6 +96,10 @@ export function ServicesListPage() {
               value={search}
             />
           </label>
+          <div className="toolbar-note">
+            <span>{t("servicesList.filterScope")}</span>
+            <strong>{t(`environment.${selectedEnvironment}`)}</strong>
+          </div>
         </div>
 
         {error ? <EmptyState title={t("servicesList.loadErrorTitle")} body={String(error)} /> : null}
@@ -120,17 +109,17 @@ export function ServicesListPage() {
         ) : null}
 
         {!isPending && !error && filteredItems.length > 0 ? (
-          <div className="card-grid">
-            {filteredItems.map((service) => {
-              return (
-                <Link
-                  key={`${service.environment}:${service.name}`}
-                  className="service-card"
-                  to={servicePath(service.name, {
-                    environment: service.environment,
-                    lookback_minutes: 60,
-                  })}
-                >
+          <div className="service-directory">
+            {filteredItems.map((service) => (
+              <Link
+                key={`${service.environment}:${service.name}`}
+                className="service-directory-row"
+                to={servicePath(service.name, {
+                  environment: service.environment,
+                  lookback_minutes: 60,
+                })}
+              >
+                <div className="service-directory-copy">
                   <div className="service-card-topline">
                     <span className="service-name">{service.name}</span>
                     <StatusBadge
@@ -141,28 +130,47 @@ export function ServicesListPage() {
                       })}
                     />
                   </div>
-                  <div className="service-card-meta">
-                    <span>{t(`environment.${service.environment}`)}</span>
-                    <span>{service.latest_deployment_version}</span>
-                  </div>
                   <p className="service-card-copy">
                     {t("servicesList.cardBody", {
                       lastSeen: formatRelativeTime(service.last_seen_at),
                       lastSync: formatDateTime(service.latest_sync_at),
                     })}
                   </p>
-                  <div className="service-card-footer">
-                    <span title={service.latest_topology_hash ?? t("common.unset")}>
-                      {t("servicesList.topologyLine", {
-                        value: service.latest_topology_hash
-                          ? formatIdentifierPreview(service.latest_topology_hash)
-                          : t("common.unset"),
-                      })}
-                    </span>
-                  </div>
-                </Link>
-              );
-            })}
+                </div>
+
+                <div className="service-directory-meta">
+                  <span className="service-directory-line">{t(`environment.${service.environment}`)}</span>
+                  <span className="service-directory-line">{service.latest_deployment_version}</span>
+                  <span className="service-directory-line" title={service.latest_topology_hash ?? t("common.unset")}>
+                    {t("servicesList.topologyLine", {
+                      value: service.latest_topology_hash
+                        ? formatIdentifierPreview(service.latest_topology_hash)
+                        : t("common.unset"),
+                    })}
+                  </span>
+                </div>
+
+                <div className="service-directory-metrics">
+                  <StatusBadge
+                    value={
+                      service.instance_count > 0 && service.online_instance_count === service.instance_count
+                        ? "consistent"
+                        : "starting"
+                    }
+                    label={t("servicesList.onlineBadge", {
+                      online: service.online_instance_count,
+                      total: service.instance_count,
+                    })}
+                  />
+                  <span className="service-directory-line">{t("common.totalHint", { count: service.instance_count })}</span>
+                  <span className="service-directory-line">
+                    {t("common.lastSyncInline", {
+                      time: formatDateTime(service.latest_sync_at),
+                    })}
+                  </span>
+                </div>
+              </Link>
+            ))}
           </div>
         ) : null}
       </Panel>

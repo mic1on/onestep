@@ -82,13 +82,27 @@ export function ServiceDetailPage() {
             : t("serviceDetail.subtitleLoading")
         }
         actions={
-          <div className="page-actions-stack">
-            <SegmentedControl
-              ariaLabel={t("serviceDetail.sectionAriaLabel")}
-              onChange={(value) => updateParam("tab", value)}
-              options={TAB_OPTIONS.map((option) => ({ label: t(`tabs.${option}`), value: option }))}
-              value={currentTab}
-            />
+          <div className="page-actions-stack service-header-actions">
+            {dashboard ? (
+              <div className="service-header-meta">
+                <StatusBadge
+                  value={dashboard.topology_consistent ? "consistent" : "drift"}
+                  label={
+                    dashboard.topology_consistent
+                      ? t("serviceDetail.topologyAligned")
+                      : t("serviceDetail.topologyMismatch")
+                  }
+                />
+                <span
+                  className="code-chip"
+                  title={dashboard.service.latest_topology_hash ?? t("common.topologyUnavailable")}
+                >
+                  {dashboard.service.latest_topology_hash
+                    ? formatIdentifierPreview(dashboard.service.latest_topology_hash)
+                    : t("common.topologyUnavailable")}
+                </span>
+              </div>
+            ) : null}
             <SegmentedControl
               ariaLabel={t("serviceDetail.lookbackAriaLabel")}
               onChange={(value) => updateParam("lookback_minutes", String(value))}
@@ -106,32 +120,7 @@ export function ServiceDetailPage() {
 
       {dashboard ? (
         <>
-          <div className="hero-card">
-            <div>
-              <p className="eyebrow">{t("serviceDetail.currentLens")}</p>
-              <h3>
-                {dashboard.service.name} <span className="slash">/</span> {t(`environment.${dashboard.service.environment}`)}
-              </h3>
-              <p className="hero-copy">
-                {dashboard.topology_consistent
-                  ? t("serviceDetail.heroAligned")
-                  : t("serviceDetail.heroDrift")}
-              </p>
-            </div>
-            <div className="hero-tags">
-              <StatusBadge
-                value={dashboard.topology_consistent ? "consistent" : "drift"}
-                label={dashboard.topology_consistent ? t("serviceDetail.topologyAligned") : t("serviceDetail.topologyMismatch")}
-              />
-              <span className="code-chip" title={dashboard.service.latest_topology_hash ?? t("common.topologyUnavailable")}>
-                {dashboard.service.latest_topology_hash
-                  ? formatIdentifierPreview(dashboard.service.latest_topology_hash)
-                  : t("common.topologyUnavailable")}
-              </span>
-            </div>
-          </div>
-
-          <section className="stats-grid">
+          <section className="stats-grid stats-grid-quad">
             <StatCard
               label={t("serviceDetail.onlineInstances")}
               value={String(dashboard.instance_connectivity.online)}
@@ -223,6 +212,8 @@ function renderTabContent({
   lookbackMinutes,
   t,
 }: RenderTabContentProps) {
+  const showTopologyDriftPanel = Boolean(dashboard && dashboard.topology_hashes.length > 1);
+
   if (currentTab === "tasks") {
     return (
       <div className="two-column-grid">
@@ -279,7 +270,26 @@ function renderTabContent({
 
   if (currentTab === "events") {
     return (
-      <div className="two-column-grid">
+      showTopologyDriftPanel && dashboard ? (
+        <div className="two-column-grid">
+          <Panel title={t("serviceDetail.recentEventsTitle")} subtitle={t("serviceDetail.recentEventsSubtitle", { lookbackMinutes })}>
+            {dashboardLoading ? <div className="loading-block">{t("serviceDetail.loadingEventStream")}</div> : null}
+            {!dashboardLoading && dashboard ? (
+              <ServiceEventsFeed
+                emptyBody={t("serviceDetail.quietServiceBody")}
+                emptyTitle={t("serviceDetail.quietServiceTitle")}
+                events={dashboard.recent_events}
+              />
+            ) : null}
+          </Panel>
+          <Panel
+            title={t("serviceDetail.topologyDriftTitle")}
+            subtitle={t("serviceDetail.topologyDriftSubtitle", { count: dashboard.topology_hashes.length })}
+          >
+            <CodeBlock>{formatCompactJson(dashboard.topology_hashes)}</CodeBlock>
+          </Panel>
+        </div>
+      ) : (
         <Panel title={t("serviceDetail.recentEventsTitle")} subtitle={t("serviceDetail.recentEventsSubtitle", { lookbackMinutes })}>
           {dashboardLoading ? <div className="loading-block">{t("serviceDetail.loadingEventStream")}</div> : null}
           {!dashboardLoading && dashboard ? (
@@ -290,10 +300,7 @@ function renderTabContent({
             />
           ) : null}
         </Panel>
-        <Panel title={t("serviceDetail.topologyDriftTitle")} subtitle={t("serviceDetail.topologyDriftSubtitle")}>
-          {dashboard ? <CodeBlock>{formatCompactJson(dashboard.topology_hashes)}</CodeBlock> : <div className="loading-block">{t("serviceDetail.loadingTopologyView")}</div>}
-        </Panel>
-      </div>
+      )
     );
   }
 
@@ -363,7 +370,39 @@ function renderTabContent({
         </Panel>
       </div>
 
-      <div className="two-column-grid">
+      {showTopologyDriftPanel && dashboard ? (
+        <div className="two-column-grid">
+          <Panel title={t("serviceDetail.recentEventsTitle")} subtitle={t("serviceDetail.recentEventsSubtitle", { lookbackMinutes })}>
+            {dashboardLoading ? <div className="loading-block">{t("serviceDetail.loadingEventStream")}</div> : null}
+            {!dashboardLoading && dashboard ? (
+              <ServiceEventsFeed
+                emptyBody={t("serviceDetail.quietServiceBody")}
+                emptyTitle={t("serviceDetail.quietServiceTitle")}
+                events={dashboard.recent_events}
+              />
+            ) : null}
+            <div className="panel-footer">
+              <Link
+                className="button-link"
+                to={servicePath(serviceName, {
+                  environment,
+                  lookback_minutes: lookbackMinutes,
+                  tab: "events",
+                })}
+              >
+                {t("common.viewEventFocus")}
+              </Link>
+            </div>
+          </Panel>
+
+          <Panel
+            title={t("serviceDetail.topologyDriftTitle")}
+            subtitle={t("serviceDetail.topologyDriftSubtitle", { count: dashboard.topology_hashes.length })}
+          >
+            <CodeBlock>{formatCompactJson(dashboard.topology_hashes)}</CodeBlock>
+          </Panel>
+        </div>
+      ) : (
         <Panel title={t("serviceDetail.recentEventsTitle")} subtitle={t("serviceDetail.recentEventsSubtitle", { lookbackMinutes })}>
           {dashboardLoading ? <div className="loading-block">{t("serviceDetail.loadingEventStream")}</div> : null}
           {!dashboardLoading && dashboard ? (
@@ -386,11 +425,7 @@ function renderTabContent({
             </Link>
           </div>
         </Panel>
-
-        <Panel title={t("serviceDetail.topologyDriftTitle")} subtitle={t("serviceDetail.topologyDriftSubtitle")}>
-          {dashboard ? <CodeBlock>{formatCompactJson(dashboard.topology_hashes)}</CodeBlock> : <div className="loading-block">{t("serviceDetail.loadingTopologyView")}</div>}
-        </Panel>
-      </div>
+      )}
     </>
   );
 }
