@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -13,7 +14,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
-from urllib import error, request
 from uuid import UUID, uuid4
 
 from .events import TaskEvent, TaskEventKind
@@ -283,6 +283,12 @@ class _PreparedMetricsBatch:
 ReporterSender = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
+def _build_default_sender(config: ControlPlaneReporterConfig) -> ReporterSender:
+    from .control_plane_ws import ControlPlaneWsSender
+
+    return ControlPlaneWsSender(config)
+
+
 class ControlPlaneReporter:
     def __init__(
         self,
@@ -291,7 +297,7 @@ class ControlPlaneReporter:
         sender: ReporterSender | None = None,
     ) -> None:
         self.config = config
-        self._sender = sender or self._default_sender
+        self._sender = sender or _build_default_sender(config)
         self._app: OneStepApp | None = None
         self._logger = logging.getLogger("onestep.control_plane")
         self._attached = False
@@ -322,6 +328,12 @@ class ControlPlaneReporter:
         self._app = app
         if self._service_name is None:
             self._service_name = app.name
+        bind_app = getattr(self._sender, "bind_app", None)
+        if callable(bind_app):
+            bind_app(app)
+        bind_reporter = getattr(self._sender, "bind_reporter", None)
+        if callable(bind_reporter):
+            bind_reporter(self)
         app.on_startup(self.startup)
         app.on_shutdown(self.shutdown)
         app.on_event(self.handle_event)
@@ -358,6 +370,11 @@ class ControlPlaneReporter:
         self._rotate_metrics_window(_utcnow())
         await self._flush_metric_batches()
         await self._flush_event_batches()
+        close = getattr(self._sender, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
     def handle_event(self, event: TaskEvent) -> None:
         bucket = self._metrics_by_task.setdefault(event.task, _TaskMetricsState())
@@ -626,12 +643,25 @@ class ControlPlaneReporter:
             "tasks": tasks,
         }
 
-    async def _safe_send_sync(self) -> None:
+    async def send_sync_now(self) -> None:
+        await self._safe_send_sync(force=True)
+
+    async def send_heartbeat_now(self) -> None:
+        await self._safe_send_heartbeat()
+
+    async def flush_metrics_now(self) -> None:
+        self._rotate_metrics_window(_utcnow())
+        await self._flush_metric_batches()
+
+    async def flush_events_now(self) -> None:
+        await self._flush_event_batches()
+
+    async def _safe_send_sync(self, *, force: bool = False) -> None:
         if self._app is None:
             return
         app_payload = self._build_app_topology_descriptor()
         topology_hash = _stable_hash(app_payload)
-        if topology_hash == self._last_synced_topology_hash:
+        if not force and topology_hash == self._last_synced_topology_hash:
             return
         payload = {
             "service": self._service_descriptor(),
@@ -767,31 +797,5 @@ class ControlPlaneReporter:
     def _record_timeout(self, bucket: _TaskMetricsState, event: TaskEvent) -> None:
         if event.failure is not None and event.failure.kind is FailureKind.TIMEOUT:
             bucket.timeouts += 1
-
-    async def _default_sender(self, endpoint: str, payload: dict[str, Any]) -> None:
-        url = f"{self.config.base_url}{endpoint}"
-        body = json.dumps(payload, default=_json_default).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.config.token}",
-        }
-        await asyncio.to_thread(self._send_request, url, body, headers)
-
-    def _send_request(self, url: str, body: bytes, headers: dict[str, str]) -> None:
-        req = request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with request.urlopen(req, timeout=self.config.timeout_s) as response:
-                status_code = getattr(response, "status", response.getcode())
-                if status_code < 200 or status_code >= 300:
-                    raise RuntimeError(f"unexpected status code {status_code} from control plane")
-                response.read()
-        except error.HTTPError as exc:  # pragma: no cover - exercised via default sender integration
-            body_text = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"control plane request failed with status {exc.code}: {body_text}"
-            ) from exc
-        except error.URLError as exc:  # pragma: no cover - exercised via default sender integration
-            raise RuntimeError(f"control plane request failed: {exc.reason}") from exc
-
 
 __all__ = ["ControlPlaneReporter", "ControlPlaneReporterConfig"]

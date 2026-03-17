@@ -237,7 +237,8 @@ The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined
 
 ## Control Plane Reporter
 
-`onestep` can push runtime telemetry to `onestep-control-plane` without adding a new connector or changing task code.
+`onestep` can push runtime telemetry to `onestep-control-plane` over a single long-lived
+WebSocket session without adding a new connector or changing task code.
 
 Attach the reporter explicitly:
 
@@ -272,20 +273,21 @@ Common optional environment variables:
 - `ONESTEP_CONTROL_PLANE_EVENT_BATCH_SIZE`
 - `ONESTEP_CONTROL_PLANE_TIMEOUT_S`
 
-The reporter currently pushes:
+The reporter now uses:
 
-- `POST /api/v1/agents/sync`
-- `POST /api/v1/agents/heartbeat`
-- `POST /api/v1/agents/metrics`
-- `POST /api/v1/agents/events`
+- `GET /api/v1/agents/ws`
+- `hello` / `hello_ack`
+- `telemetry(sync|heartbeat|metrics|events)`
+- `command` / `command_ack` / `command_result`
 
 Behavior:
 
-- startup sends an initial heartbeat
-- startup also sends a topology sync built from the current app tasks
-- sync is retried on later heartbeat cycles until the current topology hash is accepted
+- startup opens a fresh WS session and negotiates capabilities
+- startup sends a topology sync built from the current app tasks, then heartbeat
+- sync is resent on later heartbeat cycles until the current topology hash converges
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
+- remote commands can trigger `ping`, `shutdown`, `sync_now`, `flush_metrics`, and `flush_events`
 - reporter failures are logged but do not stop task execution
 
 Quick local demo:
@@ -305,11 +307,14 @@ cd ../onestep-control-plane
 ./scripts/run-control-plane-demo.sh
 ```
 
-3. Inspect the control plane:
+3. Inspect the control plane. The demo cycles through `ok`, `retry_once`, `fail`, and `slow`
+   jobs so you can see successful runs, retries, terminal failures, timeouts, and dead-letter
+   events without changing any code:
 
 ```text
-http://127.0.0.1:8080/api/v1/services?environment=dev
-http://127.0.0.1:8080/openapi.json
+http://127.0.0.1:8080/services?environment=dev
+http://127.0.0.1:8080/services/control-plane-demo?environment=dev
+http://127.0.0.1:8080/services/control-plane-demo?environment=dev&tab=commands
 ```
 
 ## Runtime

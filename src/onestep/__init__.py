@@ -3,6 +3,14 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from .app import OneStepApp
 from .config import load_app_config, load_yaml_app
 from .context import TaskContext
+from .control_plane_ws import (
+    AgentHelloAck,
+    AgentProtocolError,
+    ControlPlaneWsSender,
+    ControlPlaneWsTransport,
+    build_control_plane_http_base_url,
+    build_control_plane_ws_url,
+)
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
@@ -37,11 +45,15 @@ except PackageNotFoundError:  # pragma: no cover - local source tree before inst
     __version__ = "dev"
 
 __all__ = [
+    "AgentHelloAck",
+    "AgentProtocolError",
     "BearerAuth",
     "CronSource",
     "CursorStore",
     "ControlPlaneReporter",
     "ControlPlaneReporterConfig",
+    "ControlPlaneWsSender",
+    "ControlPlaneWsTransport",
     "ConnectorErrorKind",
     "ConnectorOperation",
     "ConnectorOperationError",
@@ -77,6 +89,8 @@ __all__ = [
     "WebhookResponse",
     "WebhookSource",
     "__version__",
+    "build_control_plane_http_base_url",
+    "build_control_plane_ws_url",
     "load_app_config",
     "load_yaml_app",
 ]
