@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "1.0.0"
+version = "1.0.1"
 description = "Async task runtime for queue, polling, schedule, and webhook workloads."
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
