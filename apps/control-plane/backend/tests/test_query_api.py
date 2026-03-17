@@ -128,6 +128,11 @@ def seed_task_event(
         failure_kind="timeout" if kind == "failed" else None,
         exception_type="TimeoutError" if kind == "failed" else None,
         message="task exceeded timeout" if kind == "failed" else None,
+        traceback=(
+            "Traceback (most recent call last):\nTimeoutError: task exceeded timeout\n"
+            if kind == "failed"
+            else None
+        ),
         meta_json={"source": "interval:3600s"},
         received_at=occurred_at + timedelta(seconds=1),
     )
@@ -409,6 +414,10 @@ def test_list_service_events_filters_by_kind_and_time_order(client, db_session) 
     assert payload["total"] == 1
     assert payload["items"][0]["event_id"] == "evt_01JNXFAILED"
     assert payload["items"][0]["failure_kind"] == "timeout"
+    assert payload["items"][0]["traceback"] == (
+        "Traceback (most recent call last):\n"
+        "TimeoutError: task exceeded timeout\n"
+    )
 
     ordered = client.get("/api/v1/services/billing-sync/events", params={"environment": "prod"})
     assert ordered.status_code == 200
@@ -534,7 +543,9 @@ def test_service_dashboard_returns_instance_and_task_overview(client, db_session
     ]
 
 
-def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(client, db_session) -> None:
+def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(
+    client, db_session
+) -> None:
     now = datetime.now(UTC)
     service = seed_service(
         db_session,
@@ -978,6 +989,9 @@ def test_get_service_task_detail_returns_summary_windows_and_events(client, db_s
         "evt_task_detail_retried",
         "evt_task_detail_failed",
     ]
+    assert payload["recent_events"][1]["traceback"] == (
+        "Traceback (most recent call last):\nTimeoutError: task exceeded timeout\n"
+    )
 
 
 def test_get_service_task_detail_returns_404_for_unknown_task(client, db_session) -> None:

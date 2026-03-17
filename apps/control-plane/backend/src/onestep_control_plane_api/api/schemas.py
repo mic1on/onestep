@@ -113,6 +113,7 @@ class TaskFailureDescriptor(APIModel):
     kind: str = Field(min_length=1, max_length=64)
     exception_type: str | None = Field(default=None, max_length=255)
     message: str | None = None
+    traceback: str | None = None
 
 
 class TaskEventRecord(APIModel):
@@ -303,6 +304,7 @@ class TaskEventSummary(APIModel):
     failure_kind: str | None = None
     exception_type: str | None = None
     message: str | None = None
+    traceback: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
     received_at: datetime
     created_at: datetime

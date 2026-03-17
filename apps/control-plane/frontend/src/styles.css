@@ -682,6 +682,10 @@ button {
   background: rgba(255, 255, 255, 0.45);
 }
 
+.event-row {
+  align-items: flex-start;
+}
+
 .list-row strong,
 .event-row strong {
   display: block;
@@ -706,6 +710,92 @@ button {
 .row-metrics {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.event-failure {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  min-width: min(100%, 34rem);
+}
+
+.failure-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+  width: min(100%, 46rem);
+  min-width: 0;
+}
+
+.failure-copy {
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.failure-copy span:last-child {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.traceback-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(188, 89, 67, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(188, 89, 67, 0.08);
+  color: var(--danger);
+  box-shadow: 0 10px 24px rgba(188, 89, 67, 0.12);
+  transition:
+    transform 140ms ease,
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.traceback-toggle:hover {
+  transform: translateY(-1px);
+  background: rgba(188, 89, 67, 0.14);
+  border-color: rgba(188, 89, 67, 0.3);
+}
+
+.traceback-toggle:focus-visible {
+  outline: 2px solid rgba(188, 89, 67, 0.35);
+  outline-offset: 2px;
+}
+
+.traceback-toggle.is-active {
+  background: rgba(188, 89, 67, 0.16);
+  border-color: rgba(188, 89, 67, 0.34);
+  box-shadow: 0 14px 28px rgba(188, 89, 67, 0.18);
+}
+
+.traceback-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.traceback-panel {
+  width: min(100%, 46rem);
+}
+
+.traceback-block {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(21, 111, 105, 0.14);
+  background: rgba(18, 44, 47, 0.06);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 20rem;
 }
 
 .status-badge {
@@ -880,6 +970,19 @@ button {
 
   .row-metrics {
     justify-content: flex-start;
+  }
+
+  .event-failure {
+    justify-items: stretch;
+    min-width: 0;
+  }
+
+  .failure-summary {
+    justify-content: space-between;
+  }
+
+  .traceback-panel {
+    width: 100%;
   }
 }
 

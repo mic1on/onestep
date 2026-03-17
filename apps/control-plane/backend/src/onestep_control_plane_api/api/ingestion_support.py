@@ -62,6 +62,7 @@ def build_task_event_payload(
         "failure_kind": event.failure.kind if event.failure is not None else None,
         "exception_type": event.failure.exception_type if event.failure is not None else None,
         "message": event.failure.message if event.failure is not None else None,
+        "traceback": event.failure.traceback if event.failure is not None else None,
         "meta_json": event.meta,
         "received_at": received_at,
     }

@@ -6,6 +6,7 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
 import { StatCard } from "../../components/ui/StatCard";
 import { StatusBadge } from "../../components/ui/StatusBadge";
+import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { useInstanceDetailQuery } from "../../features/instances/queries";
 import {
   formatCompactJson,
@@ -160,10 +161,7 @@ export function InstanceDetailPage() {
                           {t(`eventKind.${event.kind}`, { defaultValue: event.kind })} · {formatDateTime(event.occurred_at)}
                         </p>
                       </div>
-                      <div className="row-metrics">
-                        <span>{event.failure_kind ?? t("common.taskEvent")}</span>
-                        <span>{event.message ?? t("common.noMessage")}</span>
-                      </div>
+                      <TaskEventFailureDetails event={event} />
                     </article>
                   ))}
                 </div>
