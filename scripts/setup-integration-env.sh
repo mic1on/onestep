@@ -6,6 +6,7 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.integration.yml"
 LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://127.0.0.1:4566}"
 RABBITMQ_URL="${ONESTEP_RABBITMQ_URL:-amqp://guest:guest@127.0.0.1:5672/}"
 RABBITMQ_QUEUE="${ONESTEP_RABBITMQ_QUEUE:-onestep.integration}"
+REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}"
 AWS_REGION_VALUE="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 SQS_QUEUE_NAME="${ONESTEP_SQS_QUEUE_NAME:-onestep-integration.fifo}"
 SQS_GROUP_ID_VALUE="${ONESTEP_SQS_GROUP_ID:-workers}"
@@ -89,6 +90,28 @@ raise SystemExit(f"Timed out waiting for MySQL: {last_error}")
 PY
 }
 
+wait_for_redis() {
+  REDIS_URL="$REDIS_URL" "$PYTHON_BIN" - <<'PY'
+import os
+import time
+
+import redis
+
+url = os.environ["REDIS_URL"]
+last_error = None
+for _ in range(60):
+    try:
+        client = redis.Redis.from_url(url)
+        client.ping()
+        client.close()
+        raise SystemExit(0)
+    except Exception as exc:  # pragma: no cover - shell retry path
+        last_error = exc
+        time.sleep(2)
+raise SystemExit(f"Timed out waiting for Redis: {last_error}")
+PY
+}
+
 ensure_sqs_queue() {
   "$PYTHON_BIN" - <<'PY'
 import boto3
@@ -121,6 +144,7 @@ fi
 wait_for_url "$LOCALSTACK_ENDPOINT/_localstack/health" "LocalStack"
 wait_for_rabbitmq
 wait_for_mysql
+wait_for_redis
 
 SQS_QUEUE_JSON="$(LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" AWS_REGION_VALUE="$AWS_REGION_VALUE" SQS_QUEUE_NAME="$SQS_QUEUE_NAME" ensure_sqs_queue)"
 SQS_QUEUE_URL="$(printf '%s' "$SQS_QUEUE_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["QueueUrl"])')"
@@ -135,6 +159,7 @@ export AWS_SECRET_ACCESS_KEY="test"
 export AWS_ENDPOINT_URL="$LOCALSTACK_ENDPOINT"
 export ONESTEP_RABBITMQ_URL="$RABBITMQ_URL"
 export ONESTEP_RABBITMQ_QUEUE="$RABBITMQ_QUEUE"
+export REDIS_URL="$REDIS_URL"
 export ONESTEP_SQS_QUEUE_URL="$SQS_QUEUE_URL"
 export ONESTEP_SQS_GROUP_ID="$SQS_GROUP_ID_VALUE"
 export ONESTEP_MYSQL_DSN="$MYSQL_DSN"

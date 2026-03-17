@@ -4,6 +4,7 @@ import copy
 import importlib
 import inspect
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -12,12 +13,59 @@ from .connectors.base import Sink, Source
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
+from .connectors.redis import RedisConnector
 from .connectors.schedule import CronSource, IntervalSource
 from .connectors.sqs import SQSConnector
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
 from .retry import MaxAttempts, NoRetry, RetryPolicy
 
 _YAML_SUFFIXES = (".yaml", ".yml")
+
+# Pattern for ${VAR} or ${VAR:-default} or ${VAR:default}
+_ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
+
+
+def _expand_env_var(match: re.Match[str]) -> str:
+    """Expand a single environment variable reference.
+    
+    Supports:
+    - ${VAR} - use VAR from environment, empty if not set
+    - ${VAR:-default} - use VAR from environment, or default if not set
+    - ${VAR:default} - use VAR from environment, or default if not set
+    """
+    content = match.group(1)
+    
+    # Check for default value with :- syntax
+    if ":-" in content:
+        var_name, default = content.split(":-", 1)
+        return os.environ.get(var_name, default)
+    
+    # Check for default value with : syntax
+    if ":" in content:
+        var_name, default = content.split(":", 1)
+        return os.environ.get(var_name, default)
+    
+    # No default, just the variable name
+    return os.environ.get(content, "")
+
+
+def _expand_env_vars_in_string(value: str) -> str:
+    """Expand all environment variable references in a string."""
+    return _ENV_VAR_PATTERN.sub(_expand_env_var, value)
+
+
+def _expand_env_vars(value: Any) -> Any:
+    """Recursively expand environment variables in a configuration value.
+    
+    Supports ${VAR}, ${VAR:-default}, ${VAR:default} syntax in strings.
+    """
+    if isinstance(value, str):
+        return _expand_env_vars_in_string(value)
+    if isinstance(value, Mapping):
+        return {k: _expand_env_vars(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_vars(item) for item in value]
+    return value
 
 
 def is_yaml_target(target: str) -> bool:
@@ -31,7 +79,9 @@ def load_yaml_app(path: str) -> OneStepApp:
         loaded = yaml.safe_load(handle) or {}
     if not isinstance(loaded, Mapping):
         raise TypeError("YAML app config must be a mapping at the top level")
-    return load_app_config(loaded, source_path=resolved_path)
+    # Expand environment variables in the loaded config
+    expanded = _expand_env_vars(loaded)
+    return load_app_config(expanded, source_path=resolved_path)
 
 
 def load_app_config(config: Mapping[str, Any], *, source_path: str | None = None) -> OneStepApp:
@@ -225,6 +275,28 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             poll_interval_s=spec.get("poll_interval_s", 1.0),
             publisher_confirms=spec.get("publisher_confirms", True),
             persistent=spec.get("persistent", True),
+        )
+    if resource_type == "redis":
+        return RedisConnector(
+            _require_string(spec, "url"),
+            options=_mapping_value(spec.get("options"), field=f"resources.{name}.options"),
+        )
+    if resource_type == "redis_stream":
+        connector = _resolve_dependency(resolve, spec, "connector")
+        if not hasattr(connector, "stream"):
+            raise TypeError(f"resource {spec['connector']!r} cannot build redis_stream")
+        stream_name = _resource_name(spec, fallback=name, key="stream")
+        return connector.stream(
+            stream_name,
+            group=spec.get("group", "onestep"),
+            consumer=spec.get("consumer"),
+            batch_size=spec.get("batch_size", 100),
+            poll_interval_s=spec.get("poll_interval_s", 1.0),
+            block_ms=spec.get("block_ms"),
+            start_id=spec.get("start_id", "$"),
+            create_group=spec.get("create_group", True),
+            maxlen=spec.get("maxlen"),
+            approximate_trim=spec.get("approximate_trim", True),
         )
     if resource_type == "sqs":
         return SQSConnector(

@@ -26,6 +26,7 @@ from .connectors.base import Delivery, Sink, Source
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
+from .connectors.redis import RedisConnector
 from .connectors.schedule import CronSource, IntervalSource
 from .connectors.sqs import SQSConnector
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
@@ -58,6 +59,7 @@ __all__ = [
     "NoRetry",
     "OneStepApp",
     "RabbitMQConnector",
+    "RedisConnector",
     "RetryAction",
     "RetryDecision",
     "RetryPolicy",

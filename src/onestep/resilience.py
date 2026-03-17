@@ -23,6 +23,11 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     sa = None
 
+try:  # pragma: no cover - optional dependency
+    import redis.exceptions as redis_exceptions
+except ImportError:  # pragma: no cover - optional dependency
+    redis_exceptions = None
+
 
 class ConnectorErrorKind(str, Enum):
     DISCONNECTED = "disconnected"
@@ -177,6 +182,67 @@ def classify_sqlalchemy_error(exc: BaseException) -> ConnectorErrorKind | None:
     return None
 
 
+def classify_redis_error(exc: BaseException) -> ConnectorErrorKind | None:
+    """Classify Redis errors for proper error handling and retry logic."""
+    # Standard Python errors
+    if isinstance(exc, (ConnectionError, OSError, TimeoutError)):
+        return ConnectorErrorKind.DISCONNECTED
+    
+    if redis_exceptions is None:
+        return None
+    
+    # Connection-related errors
+    disconnected_types = []
+    for name in ("ConnectionError", "TimeoutError", "ConnectionPoolExhaustedError"):
+        error_type = getattr(redis_exceptions, name, None)
+        if isinstance(error_type, type):
+            disconnected_types.append(error_type)
+    if disconnected_types and isinstance(exc, tuple(disconnected_types)):
+        return ConnectorErrorKind.DISCONNECTED
+    
+    # Authentication/permission errors
+    misconfigured_types = []
+    for name in ("AuthenticationError", "NoPermissionError"):
+        error_type = getattr(redis_exceptions, name, None)
+        if isinstance(error_type, type):
+            misconfigured_types.append(error_type)
+    if misconfigured_types and isinstance(exc, tuple(misconfigured_types)):
+        return ConnectorErrorKind.MISCONFIGURED
+    
+    # Redis-specific errors
+    response_error = getattr(redis_exceptions, "ResponseError", None)
+    if isinstance(response_error, type) and isinstance(exc, response_error):
+        msg = str(exc).lower()
+        # Authentication failures
+        if any(token in msg for token in ("auth", "noauth", "wrongpass", "invalid password")):
+            return ConnectorErrorKind.MISCONFIGURED
+        # Permission denied
+        if "permission" in msg or "denied" in msg:
+            return ConnectorErrorKind.MISCONFIGURED
+        # Transient errors
+        if any(token in msg for token in ("busy", "loading", "master down", "can't sync")):
+            return ConnectorErrorKind.TRANSIENT
+        # Unknown response error - treat as transient for safety
+        return ConnectorErrorKind.TRANSIENT
+    
+    # Busy loading or other transient states
+    busy_error = getattr(redis_exceptions, "BusyLoadingError", None)
+    if isinstance(busy_error, type) and isinstance(exc, busy_error):
+        return ConnectorErrorKind.TRANSIENT
+    
+    # Read-only error (during failover)
+    read_only_error = getattr(redis_exceptions, "ReadOnlyError", None)
+    if isinstance(read_only_error, type) and isinstance(exc, read_only_error):
+        return ConnectorErrorKind.TRANSIENT
+    
+    # Master down error
+    master_down_error = getattr(redis_exceptions, "MasterDownError", None)
+    if isinstance(master_down_error, type) and isinstance(exc, master_down_error):
+        return ConnectorErrorKind.TRANSIENT
+    
+    return None
+
+
 def as_connector_operation_error(
     *,
     backend: str,
@@ -189,6 +255,7 @@ def as_connector_operation_error(
         "rabbitmq": classify_rabbitmq_error,
         "sqs": classify_sqs_error,
         "mysql": classify_sqlalchemy_error,
+        "redis": classify_redis_error,
     }.get(backend)
     if classifier is None:
         return None
