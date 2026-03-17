@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from json import JSONDecodeError
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -21,6 +23,7 @@ class Settings(BaseSettings):
     console_auth_password: str = ""
     console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    api_response_timezone: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",
@@ -62,6 +65,14 @@ class Settings(BaseSettings):
     @property
     def console_auth_configured(self) -> bool:
         return bool(self.console_auth_username.strip() and self.console_auth_password.strip())
+
+    @property
+    def effective_api_response_timezone(self) -> ZoneInfo:
+        candidate = self.api_response_timezone.strip() or os.environ.get("TZ", "").strip() or "UTC"
+        try:
+            return ZoneInfo(candidate)
+        except ZoneInfoNotFoundError:
+            return ZoneInfo("UTC")
 
 
 settings = Settings()

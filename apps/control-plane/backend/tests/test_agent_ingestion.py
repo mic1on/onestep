@@ -10,7 +10,7 @@ from onestep_control_plane_api.db.models import (
     TaskEvent,
     TaskMetricWindow,
 )
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 
 def make_service_payload(
@@ -559,6 +559,62 @@ def test_sync_retry_with_same_instance_and_topology_hash_is_idempotent(
     assert updated_instance.last_sync_at is not None
     assert first_last_sync_at is not None
     assert updated_instance.last_sync_at >= first_last_sync_at
+
+
+def test_sync_refreshes_task_definitions_for_newer_payload_with_same_topology_hash(
+    client,
+    auth_headers,
+    db_session,
+) -> None:
+    first = client.post("/api/v1/agents/sync", headers=auth_headers, json=make_sync_payload())
+    assert first.status_code == 202
+
+    service = db_session.scalar(
+        select(Service).where(Service.name == "billing-sync", Service.environment == "prod")
+    )
+    assert service is not None
+
+    db_session.execute(
+        update(TaskDefinition)
+        .where(
+            TaskDefinition.service_id == service.id,
+            TaskDefinition.task_name == "sync_users",
+        )
+        .values(description=None)
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    refreshed_payload = make_sync_payload()
+    refreshed_payload["sent_at"] = "2026-03-08T17:31:06Z"
+    refreshed_payload["sequence"] = 6
+    second = client.post("/api/v1/agents/sync", headers=auth_headers, json=refreshed_payload)
+    assert second.status_code == 202
+
+    db_session.expire_all()
+    sync_users = db_session.scalar(
+        select(TaskDefinition).where(
+            TaskDefinition.service_id == service.id,
+            TaskDefinition.task_name == "sync_users",
+        )
+    )
+    instance = db_session.scalar(
+        select(Instance).where(
+            Instance.instance_id == UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df")
+        )
+    )
+
+    assert sync_users is not None
+    assert (
+        sync_users.description
+        == "Sync billing users from the source of record into the warehouse."
+    )
+    assert sync_users.topology_hash == "sha256:6d5b0d1f"
+
+    assert instance is not None
+    assert instance.last_topology_hash == "sha256:6d5b0d1f"
+    assert instance.last_sync_sequence == 6
+    assert instance.last_sync_sent_at == datetime(2026, 3, 8, 17, 31, 6, tzinfo=UTC)
 
 
 def test_sync_out_of_order_payload_does_not_rollback_instance_snapshot(

@@ -1,14 +1,30 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+
+from onestep_control_plane_api.core.settings import settings
+
+
+def _serialize_datetime_for_api(value: datetime) -> str:
+    if value.tzinfo is None:
+        normalized = value.replace(tzinfo=UTC)
+    else:
+        normalized = value.astimezone(UTC)
+    return normalized.astimezone(settings.effective_api_response_timezone).isoformat()
 
 
 class APIModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    @field_serializer("*", when_used="json", check_fields=False)
+    def serialize_datetime_fields(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return _serialize_datetime_for_api(value)
+        return value
 
 
 Environment = Literal["dev", "staging", "prod"]

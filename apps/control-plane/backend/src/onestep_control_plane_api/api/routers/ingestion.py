@@ -59,8 +59,6 @@ def ingest_sync(
     ensure_instance_identity_matches(instance, request.service)
 
     apply_sync = is_newer_sync(instance, sent_at=sent_at, sequence=request.sequence)
-    topology_changed = instance.last_topology_hash != request.app.topology_hash
-
     if apply_sync:
         service.latest_deployment_version = request.service.deployment_version
         service.latest_topology_hash = request.app.topology_hash
@@ -77,7 +75,9 @@ def ingest_sync(
             received_at=received_at,
         )
 
-    if apply_sync and topology_changed:
+    # Refresh task definitions on every newer sync so metadata-only changes
+    # like task descriptions are not stranded behind an unchanged topology hash.
+    if apply_sync:
         sync_task_definitions(db, service=service, app=request.app)
 
     db.commit()
