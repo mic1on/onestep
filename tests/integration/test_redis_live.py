@@ -150,6 +150,75 @@ class TestRedisStreamLive:
 
         await stream.close()
 
+    async def test_retry_redelivers_pending_message(self, redis_connector, redis_client):
+        """Retry should make the same message available on the next fetch."""
+        stream_name = "test:retry-redelivery"
+        group = "test-group-retry-redelivery"
+
+        await redis_client.delete(stream_name)
+        try:
+            await redis_client.xgroup_destroy(stream_name, group)
+        except Exception:
+            pass
+
+        stream = redis_connector.stream(
+            stream_name,
+            group=group,
+            consumer="retry-consumer",
+        )
+
+        await stream.publish({"job": "retry-redelivery"})
+
+        first = await stream.fetch(10)
+        assert len(first) == 1
+        assert first[0].payload == {"job": "retry-redelivery"}
+
+        await first[0].retry()
+
+        second = await stream.fetch(10)
+        assert len(second) == 1
+        assert second[0].payload == {"job": "retry-redelivery"}
+
+        await second[0].ack()
+
+        third = await stream.fetch(10)
+        assert third == []
+
+        await stream.close()
+
+    async def test_fail_acknowledges_message_and_prevents_redelivery(self, redis_connector, redis_client):
+        """Fail should remove the message from PEL so it does not reappear."""
+        stream_name = "test:fail"
+        group = "test-group-fail"
+
+        await redis_client.delete(stream_name)
+        try:
+            await redis_client.xgroup_destroy(stream_name, group)
+        except Exception:
+            pass
+
+        stream = redis_connector.stream(
+            stream_name,
+            group=group,
+            consumer="fail-consumer",
+        )
+
+        await stream.publish({"job": "fail-once"})
+
+        deliveries = await stream.fetch(10)
+        assert len(deliveries) == 1
+        assert deliveries[0].payload == {"job": "fail-once"}
+
+        await deliveries[0].fail(RuntimeError("boom"))
+
+        pending = await redis_client.xpending(stream_name, group)
+        assert pending["pending"] == 0
+
+        redelivered = await stream.fetch(10)
+        assert redelivered == []
+
+        await stream.close()
+
     async def test_batch_fetch(self, redis_connector, redis_client):
         """Should fetch messages in batches."""
         stream_name = "test:batch"

@@ -285,9 +285,10 @@ class RedisStreamQueue(Source, Sink):
                 count=fetch_limit,
                 block=0,  # Non-blocking for pending check
             )
-            
-            if pending_messages:
-                return self._process_messages(pending_messages)
+
+            pending_deliveries = self._process_messages(pending_messages)
+            if pending_deliveries:
+                return pending_deliveries
             
             # No pending messages, fetch new ones
             # XREADGROUP GROUP group consumer COUNT n BLOCK ms STREAMS stream >
@@ -301,7 +302,7 @@ class RedisStreamQueue(Source, Sink):
             
             if not messages:
                 return []
-            
+
             return self._process_messages(messages)
         except ConnectorOperationError:
             raise
