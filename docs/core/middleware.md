@@ -1,94 +1,190 @@
 ---
+title: Middleware | 核心
 outline: deep
-title: Middleware
 ---
 
-## Middleware
+# Middleware
 
-中间件在`@step`中是一个可选的组件，它可以在任务执行前后做一些事情。
+onestep 1.0.0 使用**事件钩子**替代传统的中间件模式，提供更清晰的生命周期控制。
 
-其中内置四个方法来hook任务执行中的行为：
+## 事件钩子
 
-- `before_send`：消息发送之前
-- `after_send`：消息发送之后
-- `before_consume`：消费消息之前
-- `after_consume`：消费消息之后
+使用 `@app.on_event` 注册事件处理器：
 
 ```python
-class BaseMiddleware:
+from onestep import InMemoryMetrics, OneStepApp, StructuredEventLogger
 
-    def before_send(self, step, message, *args, **kwargs):
-        """消息发送之前"""
+app = OneStepApp("demo")
+metrics = InMemoryMetrics()
 
-    def after_send(self, step, message, *args, **kwargs):
-        """消息发送之后"""
+# 注册内置的事件处理器
+app.on_event(metrics)
+app.on_event(StructuredEventLogger())
 
-    def before_consume(self, step, message, *args, **kwargs):
-        """消费消息之前"""
 
-    def after_consume(self, step, message, *args, **kwargs):
-        """消费消息之后"""
+@app.task(source=...)
+async def my_task(ctx, item):
+    return item
 ```
 
+## 执行事件
 
-## 跳过后续中间件
+任务执行过程中会发出以下事件：
 
-当你想在中间件中判断某些条件，如果满足条件则跳过后续中间件，可以直接抛出`StopMiddleware`异常。
+| 事件 | 触发时机 |
+|------|----------|
+| `fetched` | 从 Source 获取消息 |
+| `started` | 开始执行任务 |
+| `succeeded` | 任务执行成功 |
+| `retried` | 任务重试 |
+| `failed` | 任务最终失败 |
+| `dead_lettered` | 消息进入死信队列 |
+| `cancelled` | 任务被取消 |
+
+## 自定义事件处理器
+
+实现自定义事件处理器：
 
 ```python
-from onestep import BaseMiddleware, StopMiddleware
+from onestep import TaskEvent, EventHandler
 
+class MyEventHandler(EventHandler):
+    def on_event(self, event: TaskEvent):
+        if event.kind == "succeeded":
+            print(f"任务成功: {event.task_name}, 耗时: {event.duration_s:.2f}s")
+        elif event.kind == "failed":
+            print(f"任务失败: {event.task_name}, 原因: {event.failure.message}")
+        
+    def on_error(self, error: Exception):
+        # 处理事件处理器本身的错误
+        print(f"事件处理器错误: {error}")
+
+
+app.on_event(MyEventHandler())
+```
+
+## 内置事件处理器
+
+### InMemoryMetrics
+
+内存指标收集器：
+
+```python
+from onestep import InMemoryMetrics
+
+metrics = InMemoryMetrics()
+app.on_event(metrics)
+
+# 获取指标快照
+snapshot = metrics.snapshot()
+print(snapshot["kinds"])  # 各类事件计数
+```
+
+### StructuredEventLogger
+
+结构化日志输出：
+
+```python
+from onestep import StructuredEventLogger
+
+app.on_event(StructuredEventLogger())
+```
+
+输出包含字段：`event_kind`, `app_name`, `task_name`, `source_name`, `attempts`, `duration_s`, `failure_kind`
+
+## 生命周期钩子
+
+### @app.on_startup
+
+应用启动时执行：
+
+```python
+@app.on_startup
+async def bootstrap(app):
+    print("应用启动")
+    # 初始化资源、预发布消息等
+```
+
+### @app.on_shutdown
+
+应用关闭时执行：
+
+```python
+@app.on_shutdown
+async def cleanup(app):
+    print("应用关闭")
+    # 清理资源
+```
+
+## 任务状态
+
+每个任务可以维护独立的状态：
+
+```python
+from onestep import InMemoryStateStore, OneStepApp
+
+app = OneStepApp("state-demo", state=InMemoryStateStore())
+
+
+@app.task(source=...)
+async def track_runs(ctx, item):
+    # 获取状态
+    runs = await ctx.state.get("runs", 0)
+    
+    # 更新状态
+    await ctx.state.set("runs", runs + 1)
+    
+    print(f"已处理 {runs + 1} 条消息")
+```
+
+## 配置访问
+
+通过 `ctx.config` 访问应用配置：
+
+```python
+app = OneStepApp("demo", config={"region": "cn", "debug": True})
+
+
+@app.task(source=...)
+async def my_task(ctx, item):
+    region = ctx.config["region"]
+    debug = ctx.config.get("debug", False)
+    ...
+```
+
+## 从 0.5.x 迁移
+
+旧版中间件：
+
+```python
+# 0.5.x
 class MyMiddleware(BaseMiddleware):
-
     def before_consume(self, step, message, *args, **kwargs):
-        raise StopMiddleware()
-```
-
-
-## 丢弃消息
-
-当你想在中间件中判断某些条件，如果满足条件则丢弃消息，可以直接抛出`DropMessage`异常。
-
-内置`UniqueMiddleware`就是这样的一个[中间件](https://github.com/mic1on/onestep/blob/main/src/onestep/middleware/unique.py)，它会判断消息是否已经被消费过，如果已经被消费过则丢弃消息。
-
-
-```python{7}
-class UniqueMiddleware(BaseMiddleware):
-    default_hash_func = hash_func()
-
-    def before_consume(self, step, message, *args, **kwargs):
-        message_hash = self.default_hash_func(message.body)
-        if self.has_seen(message_hash):
-            raise DropMessage(f"Message<{message}> has been seen before")
-```
-
-
-## 自定义中间件
-
-::: warning ⚠️继承关系
-自定义中间件必须继承自`BaseMiddleware`
-:::
-
-你可以在任务的流转过程中，自定义中间件来做一些事情。
-
-```python
-from onestep import BaseMiddleware
-
-class MyMiddleware(BaseMiddleware):
-
-    def before_consume(self, step, message, *args, **kwargs):
-        print("before consume")
-
-    def after_consume(self, step, message, *args, **kwargs):
-        print("after consume")
-```
-
-然后在`@step`中使用`middlewares`参数来指定中间件。
-
-```python
-from onestep import step
+        ...
 
 @step(from_broker=..., middlewares=[MyMiddleware()])
-def my_task(message):
-    print("my task")
+def task(message):
+    ...
 ```
+
+新版事件钩子：
+
+```python
+# 1.0.0
+class MyEventHandler(EventHandler):
+    def on_event(self, event: TaskEvent):
+        if event.kind == "started":
+            # 相当于 before_consume
+            ...
+        elif event.kind == "succeeded":
+            # 相当于 after_consume
+            ...
+
+app.on_event(MyEventHandler())
+
+@app.task(source=...)
+async def task(ctx, item):
+    ...
+```
+
+消息去重逻辑现在应该在任务处理器中实现，或使用数据库的唯一约束。

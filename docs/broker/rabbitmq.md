@@ -1,81 +1,244 @@
 ---
+title: RabbitMQ | Broker
 outline: deep
-title: RabbitMQBroker
 ---
 
+# RabbitMQ
 
-## RabbitMQBroker
+RabbitMQ 是最常用的分布式消息队列，onestep 提供完整的支持。
 
-`RabbitMQBroker` 是基于 [RabbitMQ](https://www.rabbitmq.com/) 消息队列中间件的 MQ 服务。
-
-这也是分布式任务中最为核心的broker。利用此broker，可以搭建一个分布式任务调度平台，实现任务的异步分发、执行与调度。
-
-在使用前请先确保已正确安装RabbitMQ服务，并正确配置了RabbitMQ的连接信息。
-
-为了方便，我们在本地使用 **docker** 快速搭建一个 RabbitMQ 服务。
+## 安装
 
 ```bash
-docker run -d --name rabbitmq  --restart=always -p 5672:5672 -p 15672:15672 --hostname rabbitmq -e RABBITMQ_DEFAULT_VHOST=/ -e RABBITMQ_DEFAULT_USER="admin" -e RABBITMQ_DEFAULT_PASS="admin" rabbitmq:3-management
+pip install 'onestep[rabbitmq]'
 ```
 
-启动成功后，可以在浏览器中访问 `http://localhost:15672` 登录 RabbitMQ 管理界面，默认用户名和密码均为 `admin`。
+## 快速开始
 
+### 启动 RabbitMQ
+
+使用 Docker 快速启动：
+
+```bash
+docker run -d --name rabbitmq \
+  --restart=always \
+  -p 5672:5672 \
+  -p 15672:15672 \
+  -e RABBITMQ_DEFAULT_USER=admin \
+  -e RABBITMQ_DEFAULT_PASS=admin \
+  rabbitmq:3-management
+```
+
+管理界面：http://localhost:15672（用户名/密码：admin/admin）
+
+### 基本使用
 
 ```python
-from onestep import RabbitMQBroker
+from onestep import OneStepApp, RabbitMQConnector
 
-rmq_broker = RabbitMQBroker(
-    "test_queue",
-    {
-        "username": "admin",
-        "password": "admin",
+app = OneStepApp("rabbitmq-demo")
+
+# 创建连接
+rmq = RabbitMQConnector("amqp://admin:admin@localhost/")
+
+# 创建队列作为 Source
+source = rmq.queue(
+    "incoming_jobs",
+    exchange="jobs.events",
+    routing_key="jobs.created",
+    prefetch=50,
+)
+
+# 创建队列作为 Sink
+sink = rmq.queue(
+    "processed_jobs",
+    exchange="jobs.events",
+    routing_key="jobs.done",
+)
+
+
+@app.task(source=source, emit=sink, concurrency=8)
+async def process_job(ctx, item):
+    print(f"处理任务: {item}")
+    return {"job": item["job"], "status": "done"}
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+## 队列配置
+
+### 基本参数
+
+```python
+source = rmq.queue(
+    queue="my_queue",           # 队列名称
+    exchange="my_exchange",     # 交换机名称
+    routing_key="my.key",       # 路由键
+    prefetch=50,                # 预取数量（并发控制）
+)
+```
+
+### Exchange 类型
+
+```python
+# Direct Exchange（默认）
+rmq.queue("queue", exchange="direct_exchange", routing_key="exact.match")
+
+# Topic Exchange
+rmq.queue("queue", exchange="topic_exchange", routing_key="jobs.*")
+
+# Fanout Exchange
+rmq.queue("queue", exchange="fanout_exchange")  # 无需 routing_key
+```
+
+### 队列声明选项
+
+```python
+source = rmq.queue(
+    "my_queue",
+    queue_args={
+        "x-message-ttl": 60000,      # 消息 TTL (毫秒)
+        "x-max-length": 10000,        # 队列最大长度
+        "x-dead-letter-exchange": "dlx",  # 死信交换机
     }
 )
-@step(from_broker=rmq_broker)
-def do_some_thing(message):
-    print("do_some_thing", message.body)
-
-step.start(block=True)
 ```
 
-::: tip
-您不必担心MQ服务中还未申明`test_queue`队列，当
-`RabbitMQBroker`实例化时，会自动创建队列。
-:::
+## 发布消息
 
-此时我们可以在RabbitMQ管理界面中看到一个名为`test_queue`的队列。尝试在这个队列手动模拟发送一条消息，并查看是否被`do_some_thing`消费。
+### 通过 Sink 发布
 
-![](https://miclon-job.oss-cn-hangzhou.aliyuncs.com/img/20230810083326.png)
-
-![](https://miclon-job.oss-cn-hangzhou.aliyuncs.com/img/20230810083246.png)
-
-> 消息还附带一些元信息，大部分情况下您都不必关心它们的存在。
-
-通常，在接收到消息后，我们需要对消息进行处理，并返回处理结果。
-
-可能这个结果会交给下游的MQ继续处理，也可能是插入到数据库中，也可能是返回给用户。
-
-接下来我继续在`@step`装饰器上做点文章，在`do_some_thing`函数中，我使用`return`/`yield` 将处理结果返回给下游的MQ。
+任务返回值自动发布：
 
 ```python
-
-# return的消息将发往to_broker
-@step(from_broker=rmq_broker, to_broker=rmq_broker2)
-def build_todo_list(message):
-    print("do_some_thing", message.body)
-    message.body = "I am done."
-    return message
-
-
-# 监控rmq_broker2
-@step(from_broker=rmq_broker2)
-def finish_job(message):
-    print("finish_job", message.body)
-    return message
+@app.task(source=..., emit=sink)
+async def process(ctx, item):
+    return {"result": "data"}  # 自动发布到 sink
 ```
 
-控制台输出：
+### 手动发布
+
+```python
+import asyncio
+
+async def main():
+    sink = rmq.queue("my_queue")
+    
+    # 发布单条
+    await sink.publish({"job": "data"})
+    
+    # 发布多条
+    for i in range(100):
+        await sink.publish({"id": i})
+
+asyncio.run(main())
 ```
-do_some_thing Hello MICLON!
-finish_job I am done.
+
+## 确认机制
+
+RabbitMQ 消息在任务成功完成后自动确认（ack）：
+
+- **成功**: 自动 ack
+- **重试**: 不 ack，消息重新入队
+- **失败**: nack（可选择是否重新入队）
+
+```python
+@app.task(
+    source=source,
+    retry=MaxAttempts(max_attempts=3),
+)
+async def process(ctx, item):
+    # 失败 3 次后，消息会被 nack
+    raise Exception("处理失败")
+```
+
+## 多消费者
+
+同一队列可以启动多个消费者，实现负载均衡：
+
+```python
+# 在多台机器上运行相同代码
+# RabbitMQ 会自动分配消息
+@app.task(source=source, concurrency=4)
+async def process(ctx, item):
+    ...
+```
+
+## YAML 配置
+
+```yaml
+connectors:
+  rmq:
+    type: rabbitmq
+    url: "amqp://admin:admin@localhost/"
+  
+  jobs:
+    type: rabbitmq_queue
+    connector: rmq
+    queue: "jobs"
+    prefetch: 50
+  
+  results:
+    type: rabbitmq_queue
+    connector: rmq
+    queue: "results"
+
+tasks:
+  - name: process_jobs
+    source: jobs
+    emit: results
+    concurrency: 8
+```
+
+## 最佳实践
+
+### 1. 预取数量
+
+根据任务处理时间和内存调整：
+
+```python
+# I/O 密集型任务：较大 prefetch
+source = rmq.queue("io_tasks", prefetch=100)
+
+# CPU 密集型任务：较小 prefetch
+source = rmq.queue("cpu_tasks", prefetch=4)
+```
+
+### 2. 死信队列
+
+配置死信队列处理失败消息：
+
+```python
+# 死信队列
+dead_letter = rmq.queue("dead_letter")
+
+# 主队列配置死信
+source = rmq.queue(
+    "main_queue",
+    queue_args={
+        "x-dead-letter-exchange": "",
+        "x-dead-letter-routing-key": "dead_letter",
+    }
+)
+
+@app.task(source=source, dead_letter=dead_letter)
+async def process(ctx, item):
+    ...
+```
+
+### 3. 消息持久化
+
+```python
+source = rmq.queue(
+    "important_queue",
+    durable=True,  # 队列持久化
+)
+```
+
+发布时也可以指定：
+
+```python
+await sink.publish({"data": "..."}, meta={"delivery_mode": 2})  # 持久化消息
 ```

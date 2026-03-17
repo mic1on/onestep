@@ -4,85 +4,237 @@ title: 入门教程 | 指南
 
 # 入门教程
 
-### 定时任务
+本教程将帮助你快速上手 onestep 1.0.0。
 
-这里将演示一个最简单的场景，我们需要定时执行任务，然后将数据保存到队列中。
+## 核心概念
+
+onestep 1.0.0 围绕四个核心概念构建：
+
+- **OneStepApp**: 任务注册和生命周期管理器
+- **Source**: 从队列或轮询后端获取数据
+- **Sink**: 发布处理后的数据
+- **Delivery**: 单个获取的消息项，支持 `ack/retry/fail`
+
+## 基础示例：内存队列
+
+最简单的例子，使用内存队列：
 
 ```python
-from onestep import step
-from onestep.broker import CronBroker, RabbitMQBroker
+from onestep import MemoryQueue, OneStepApp
 
-# 定义任务的输入来自定时任务
-cron_broker = CronBroker("* * * * * */3")
-# 定义任务的结果输出至队列
-result_broker = RabbitMQBroker("result")
+app = OneStepApp("demo")
+source = MemoryQueue("incoming")
+sink = MemoryQueue("processed")
 
-# 使用装饰器定义任务
-@step(from_broker=cron_broker, to_broker=result_broker)
-def cron_job(message):
-    # to do something
-    return random.randint(1, 100)
 
-# 启动任务
-step.start(block=True)
+@app.task(source=source, emit=sink, concurrency=4)
+async def double(ctx, item):
+    return {"value": item["value"] * 2}
+
+
+async def main():
+    await source.publish({"value": 21})
+    await app.serve()
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 ```
 
-启动任务后，`cron_job`函数将会每3秒执行一次，并且将结果保存到队列中。
+## 定时任务
 
-
-### 爬虫
-
-在爬虫中，抓取列表页，然后进入详情页，再抓取详情页中的数据是一个十分常见的场景。
+使用 `IntervalSource` 实现定时执行：
 
 ```python
-from onestep import step
-from onestep.broker import MemoryBroker, RabbitMQBroker
-from onestep.middleware import MemoryUniqueMiddleware
+from onestep import IntervalSource, OneStepApp
 
-# 定义任务的数据持久化
-page_broker = MemoryBroker()
-list_broker = RabbitMQBroker("spider.list")
-detail_broker = RabbitMQBroker("spider.detail")
+app = OneStepApp("billing-sync")
 
-# 定义列表抓取，使用10线程来抓取，将抓取的url交给详情
-@step(from_broker=page_broker, to_broker=list_broker, workers=2)
-async def crawl_list(message):
+
+@app.task(source=IntervalSource.every(hours=1, immediate=True, overlap="skip"))
+async def sync_billing(ctx, _):
+    print("syncing billing data")
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+`overlap` 参数控制上次执行仍在进行时的行为：
+- `allow`: 立即开始另一次执行
+- `skip`: 跳过错过的触发
+- `queue`: 将错过的触发排队，依次执行
+
+## Cron 定时任务
+
+使用 `CronSource` 基于墙钟时间调度：
+
+```python
+from onestep import CronSource, OneStepApp
+
+app = OneStepApp("hourly-sync")
+
+
+@app.task(source=CronSource("0 * * * *", timezone="Asia/Shanghai", overlap="skip"))
+async def sync_hourly(ctx, _):
+    print("running at:", ctx.current.meta["scheduled_at"])
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+支持标准 5 字段 cron 表达式和别名：`@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`
+
+## Webhook 接收
+
+使用 `WebhookSource` 接收外部 HTTP 请求：
+
+```python
+from onestep import BearerAuth, MemoryQueue, OneStepApp, WebhookSource
+
+app = OneStepApp("webhook-demo")
+jobs = MemoryQueue("jobs")
+
+
+@app.task(
+    source=WebhookSource(
+        path="/webhooks/github",
+        methods=("POST",),
+        host="127.0.0.1",
+        port=8080,
+        auth=BearerAuth("your-secret-token"),
+    ),
+    emit=jobs,
+)
+async def ingest_github(ctx, event):
+    return {
+        "event": event["headers"].get("x-github-event"),
+        "payload": event["body"],
+    }
+
+
+if __name__ == "__main__":
+    app.run()
+```
+
+## 爬虫示例：多阶段处理
+
+展示列表页 -> 详情页的爬虫场景：
+
+```python
+import httpx
+from onestep import MemoryQueue, OneStepApp
+
+app = OneStepApp("spider-demo")
+
+# 定义队列
+page_queue = MemoryQueue("pages")
+list_queue = MemoryQueue("list")
+detail_queue = MemoryQueue("detail")
+
+
+@app.task(source=page_queue, emit=list_queue, concurrency=2)
+async def crawl_list(ctx, page):
+    """抓取列表页，提取 URL"""
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"https://httpbin.org/anything/{message.body}")
+        resp = await client.get(f"https://httpbin.org/anything/{page}")
         url = resp.json().get("url")
         return url
 
 
-# 定义详情抓取，将抓取的结果保存到队列。
-@step(from_broker=list_broker, to_broker=detail_broker,
-      middlewares=[MemoryUniqueMiddleware()])
-async def crawl_detail(message):
+@app.task(source=list_queue, emit=detail_queue, concurrency=4)
+async def crawl_detail(ctx, url):
+    """抓取详情页"""
     async with httpx.AsyncClient() as client:
-        resp = await client.get(message.body)
+        resp = await client.get(url)
         return resp.json()
 
-if __name__ == '__main__':
-    step.set_debugging()
-    step.start(block=True)
+
+async def main():
+    # 模拟 10 个页面任务
+    for i in range(1, 11):
+        await page_queue.publish(i)
+    
+    await app.serve()
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 ```
 
-我们模拟是内存page_broker来生成任务的，所以我们需要模拟投递10个页面。有两种方式：
+## 使用 CLI 运行
+
+推荐使用 CLI 作为部署入口点：
 
 ```python
-@step(to_broker=page_broker)
-def build_task():
-    """模拟创建10个任务"""
-    yield from range(1, 11)
+# tasks.py
+from onestep import IntervalSource, OneStepApp
+
+app = OneStepApp("billing-sync")
+
+
+@app.task(source=IntervalSource.every(hours=1, immediate=True))
+async def sync_billing(ctx, _):
+    print("syncing billing data")
 ```
 
-或者，直接对broker进行消息publish
-```python
-for i in range(1, 11):
-    page_broker.publish(i)
+运行：
+
+```bash
+# 检查配置
+onestep check tasks:app
+
+# 运行应用
+onestep run tasks:app
+
+# 或简写
+onestep tasks:app
 ```
 
-这样，`crawl_list`收到页码负责抓列表，它采用2个线程并发抓取，抓取到url后，将url交给`crawl_detail`，`crawl_detail`收到后访问详情，将结果保存到队列。
+## YAML 配置
 
-值得注意的是：`crawl_detail`使用了`MemoryUniqueMiddleware`，它是一个中间件，用于保证队列中不重复。这是一个基于本地内存的去重，如果有更高的需求可以采用redis或者布隆过滤器等等...
+支持使用 YAML 文件定义应用：
 
-有了MQ的加持，`crawl_list`和`crawl_detail`可以在任何能连接MQ的设备上分布式运行，你完全可以在A机器上运行`crawl_list`，在B机器上运行`crawl_detail`。
+```yaml
+# worker.yaml
+app:
+  name: billing-sync
+
+connectors:
+  tick:
+    type: interval
+    minutes: 5
+    immediate: true
+  processed:
+    type: memory
+
+tasks:
+  - name: sync_billing
+    source: tick
+    handler:
+      ref: your_package.handlers:sync_billing
+      params:
+        region: cn
+    emit: [processed]
+    retry:
+      type: max_attempts
+      max_attempts: 3
+      delay_s: 10
+```
+
+运行：
+
+```bash
+onestep check worker.yaml
+onestep run worker.yaml
+```
+
+## 下一步
+
+- [功能特性](/guide/features) - 了解所有支持的特性
+- [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
+- [MySQL](/broker/mysql) - 数据库表队列和增量同步
+- [CLI 部署](/guide/deploy) - 生产环境部署指南
