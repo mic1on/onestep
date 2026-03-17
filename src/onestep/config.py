@@ -4,6 +4,7 @@ import copy
 import importlib
 import inspect
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -20,6 +21,52 @@ from .retry import MaxAttempts, NoRetry, RetryPolicy
 
 _YAML_SUFFIXES = (".yaml", ".yml")
 
+# Pattern for ${VAR} or ${VAR:-default} or ${VAR:default}
+_ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
+
+
+def _expand_env_var(match: re.Match[str]) -> str:
+    """Expand a single environment variable reference.
+    
+    Supports:
+    - ${VAR} - use VAR from environment, empty if not set
+    - ${VAR:-default} - use VAR from environment, or default if not set
+    - ${VAR:default} - use VAR from environment, or default if not set
+    """
+    content = match.group(1)
+    
+    # Check for default value with :- syntax
+    if ":-" in content:
+        var_name, default = content.split(":-", 1)
+        return os.environ.get(var_name, default)
+    
+    # Check for default value with : syntax
+    if ":" in content:
+        var_name, default = content.split(":", 1)
+        return os.environ.get(var_name, default)
+    
+    # No default, just the variable name
+    return os.environ.get(content, "")
+
+
+def _expand_env_vars_in_string(value: str) -> str:
+    """Expand all environment variable references in a string."""
+    return _ENV_VAR_PATTERN.sub(_expand_env_var, value)
+
+
+def _expand_env_vars(value: Any) -> Any:
+    """Recursively expand environment variables in a configuration value.
+    
+    Supports ${VAR}, ${VAR:-default}, ${VAR:default} syntax in strings.
+    """
+    if isinstance(value, str):
+        return _expand_env_vars_in_string(value)
+    if isinstance(value, Mapping):
+        return {k: _expand_env_vars(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_vars(item) for item in value]
+    return value
+
 
 def is_yaml_target(target: str) -> bool:
     return target.lower().endswith(_YAML_SUFFIXES)
@@ -32,7 +79,9 @@ def load_yaml_app(path: str) -> OneStepApp:
         loaded = yaml.safe_load(handle) or {}
     if not isinstance(loaded, Mapping):
         raise TypeError("YAML app config must be a mapping at the top level")
-    return load_app_config(loaded, source_path=resolved_path)
+    # Expand environment variables in the loaded config
+    expanded = _expand_env_vars(loaded)
+    return load_app_config(expanded, source_path=resolved_path)
 
 
 def load_app_config(config: Mapping[str, Any], *, source_path: str | None = None) -> OneStepApp:

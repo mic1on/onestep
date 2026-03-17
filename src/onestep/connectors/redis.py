@@ -253,7 +253,11 @@ class RedisStreamQueue(Source, Sink):
     async def fetch(self, limit: int) -> list[Delivery]:
         """Fetch messages using XREADGROUP.
         
-        Uses id=">" to get new messages not yet delivered to any consumer.
+        Strategy:
+        1. First, check for pending messages (id="0") - messages in PEL
+        2. If no pending messages, fetch new messages (id=">")
+        
+        This ensures retried/failed messages get reprocessed.
         """
         try:
             await self.open()
@@ -262,6 +266,20 @@ class RedisStreamQueue(Source, Sink):
             
             fetch_limit = max(1, min(limit, self.batch_size))
             
+            # First, try to fetch pending messages (in PEL)
+            # XREADGROUP GROUP group consumer COUNT n STREAMS stream 0
+            pending_messages = await self._redis.xreadgroup(
+                groupname=self.group,
+                consumername=self.consumer,
+                streams={self.name: "0"},  # "0" = pending messages
+                count=fetch_limit,
+                block=0,  # Non-blocking for pending check
+            )
+            
+            if pending_messages:
+                return self._process_messages(pending_messages)
+            
+            # No pending messages, fetch new ones
             # XREADGROUP GROUP group consumer COUNT n BLOCK ms STREAMS stream >
             messages = await self._redis.xreadgroup(
                 groupname=self.group,
@@ -274,34 +292,7 @@ class RedisStreamQueue(Source, Sink):
             if not messages:
                 return []
             
-            # xreadgroup returns: [[stream_name, [(id, data), ...]]]
-            deliveries: list[Delivery] = []
-            for stream_name, stream_messages in messages:
-                for message_id, message_data in stream_messages:
-                    # message_data is dict of field -> value
-                    # We expect {"body": json_encoded_envelope}
-                    body = message_data.get(b"body") or message_data.get("body")
-                    if body is None:
-                        # Skip malformed messages
-                        continue
-                    
-                    try:
-                        envelope = decode_envelope(body)
-                    except Exception:
-                        # Skip messages we can't decode
-                        continue
-                    
-                    deliveries.append(
-                        RedisStreamDelivery(
-                            redis=self._redis,
-                            stream=self.name,
-                            group=self.group,
-                            message_id=message_id,
-                            envelope=envelope,
-                        )
-                    )
-            
-            return deliveries
+            return self._process_messages(messages)
         except ConnectorOperationError:
             raise
         except Exception as exc:
@@ -316,6 +307,37 @@ class RedisStreamQueue(Source, Sink):
                 raise
             await self._reset_transport_state()
             raise connector_error from exc
+
+    def _process_messages(self, messages: list) -> list[Delivery]:
+        """Process raw xreadgroup response into Delivery objects."""
+        # xreadgroup returns: [[stream_name, [(id, data), ...]]]
+        deliveries: list[Delivery] = []
+        for stream_name, stream_messages in messages:
+            for message_id, message_data in stream_messages:
+                # message_data is dict of field -> value
+                # We expect {"body": json_encoded_envelope}
+                body = message_data.get(b"body") or message_data.get("body")
+                if body is None:
+                    # Skip malformed messages
+                    continue
+                
+                try:
+                    envelope = decode_envelope(body)
+                except Exception:
+                    # Skip messages we can't decode
+                    continue
+                
+                deliveries.append(
+                    RedisStreamDelivery(
+                        redis=self._redis,
+                        stream=self.name,
+                        group=self.group,
+                        message_id=message_id,
+                        envelope=envelope,
+                    )
+                )
+        
+        return deliveries
 
     async def send(self, envelope: Envelope) -> None:
         """Send message using XADD."""
