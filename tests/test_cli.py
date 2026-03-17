@@ -382,7 +382,7 @@ def test_yaml_target_builds_mysql_rabbitmq_sqs_and_state_resources_via_refs(monk
             return FakeQueue(name, connector=self, kind="rabbitmq_queue", kwargs=kwargs)
 
     class FakeSQSConnector:
-        def __init__(self, region_name: str | None = None, options=None):
+        def __init__(self, region_name=None, options=None):
             self.region_name = region_name
             self.options = options
 
