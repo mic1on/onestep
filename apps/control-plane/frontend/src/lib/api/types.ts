@@ -108,6 +108,7 @@ export interface TaskEventSummary {
   failure_kind: string | null;
   exception_type: string | null;
   message: string | null;
+  traceback: string | null;
   meta: JsonObject;
   received_at: string;
   created_at: string;

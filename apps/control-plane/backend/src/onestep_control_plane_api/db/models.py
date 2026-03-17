@@ -223,6 +223,7 @@ class TaskEvent(Base):
     failure_kind: Mapped[str | None] = mapped_column(sa.String(64))
     exception_type: Mapped[str | None] = mapped_column(sa.String(255))
     message: Mapped[str | None] = mapped_column(sa.Text)
+    traceback: Mapped[str | None] = mapped_column(sa.Text)
     meta_json: Mapped[dict[str, object]] = mapped_column(
         JSON_TYPE,
         nullable=False,

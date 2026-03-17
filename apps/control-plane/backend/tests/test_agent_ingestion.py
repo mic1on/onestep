@@ -925,6 +925,10 @@ def test_events_retry_with_same_event_id_is_idempotent(client, auth_headers, db_
                     "kind": "timeout",
                     "exception_type": "TimeoutError",
                     "message": "task exceeded timeout",
+                    "traceback": (
+                        "Traceback (most recent call last):\n"
+                        "TimeoutError: task exceeded timeout\n"
+                    ),
                 },
                 "meta": {
                     "source": "interval:3600s",
@@ -946,6 +950,10 @@ def test_events_retry_with_same_event_id_is_idempotent(client, auth_headers, db_
     assert events[0].event_id == "evt_01JNXABCDEF"
     assert events[0].failure_kind == "timeout"
     assert events[0].message == "task exceeded timeout"
+    assert events[0].traceback == (
+        "Traceback (most recent call last):\n"
+        "TimeoutError: task exceeded timeout\n"
+    )
 
 
 def test_ensure_service_recovers_when_row_appears_after_initial_lookup(

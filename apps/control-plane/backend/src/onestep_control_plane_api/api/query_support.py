@@ -216,6 +216,7 @@ def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
         failure_kind=event.failure_kind,
         exception_type=event.exception_type,
         message=event.message,
+        traceback=event.traceback,
         meta=event.meta_json,
         received_at=event.received_at,
         created_at=event.created_at,

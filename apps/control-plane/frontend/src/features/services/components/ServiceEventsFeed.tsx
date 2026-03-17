@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { TaskEventFailureDetails } from "../../../components/ui/TaskEventFailureDetails";
 import type { TaskEventSummary } from "../../../lib/api/types";
 import { formatDateTime, formatRelativeTime } from "../../../lib/formatters";
 
@@ -35,10 +36,7 @@ export function ServiceEventsFeed({
               })}
             </p>
           </div>
-          <div className="row-metrics">
-            <span>{event.failure_kind ?? t("common.taskEvent")}</span>
-            <span>{event.message ?? t("common.noMessage")}</span>
-          </div>
+          <TaskEventFailureDetails event={event} />
         </article>
       ))}
     </div>
