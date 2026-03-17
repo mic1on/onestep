@@ -40,18 +40,28 @@ class RedisStreamDelivery(Delivery):
         await self._redis.xack(self._stream, self._group, self._message_id)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
-        """Retry message: leave in PEL for redelivery via XCLAIM or XREADGROUP id='0'"""
+        """Retry message: leave in PEL for redelivery via next fetch().
+        
+        The message stays in PEL (Pending Entries List) and will be
+        retrieved again on the next fetch() call (which checks pending first).
+        """
         if delay_s:
             await asyncio.sleep(delay_s)
-        # Message remains in PEL (Pending Entries List)
-        # It can be reclaimed via:
-        # - XREADGROUP with id="0" to get pending messages
-        # - XCLAIM/XAUTOCLAIM after idle timeout
+        # Message remains in PEL - fetch() will pick it up on next cycle
 
     async def fail(self, exc: Exception | None = None) -> None:
-        """Fail message: leave in PEL for later inspection/retry"""
-        # Don't ack - message stays in PEL for XCLAIM/XAUTOCLAIM
-        pass
+        """Fail message: acknowledge to remove from PEL.
+        
+        Called when a message should not be retried:
+        - NoRetry policy exhausted
+        - RetryDecision.FAIL
+        - After successful dead-letter delivery
+        
+        We XACK the message to remove it from PEL, preventing infinite
+        reprocessing loops. If dead-letter was configured, the message
+        has already been sent there before fail() is called.
+        """
+        await self._redis.xack(self._stream, self._group, self._message_id)
 
 
 @dataclass
