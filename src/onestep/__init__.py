@@ -6,6 +6,7 @@ from .context import TaskContext
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .reporter_websocket import WebSocketReporter, WebSocketReporterConfig, AgentCommand, AgentState
 from .resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
@@ -37,6 +38,8 @@ except PackageNotFoundError:  # pragma: no cover - local source tree before inst
     __version__ = "dev"
 
 __all__ = [
+    "AgentCommand",
+    "AgentState",
     "BearerAuth",
     "CronSource",
     "CursorStore",
@@ -74,6 +77,8 @@ __all__ = [
     "TaskEvent",
     "TaskEventKind",
     "TaskContext",
+    "WebSocketReporter",
+    "WebSocketReporterConfig",
     "WebhookResponse",
     "WebhookSource",
     "__version__",
