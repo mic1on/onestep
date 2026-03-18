@@ -18,7 +18,7 @@ const SERVICE_CATALOG_LIMIT = 10;
 const ENVIRONMENT_OPTIONS = ["prod", "staging", "dev", "all"] as const;
 
 type SidebarEnvironment = Environment | "all";
-type ServiceSection = "overview" | "tasks" | "instances" | "events" | "commands";
+type ServiceSection = "overview" | "tasks";
 
 export function AppShell() {
   const { i18n, t } = useTranslation();
@@ -135,7 +135,7 @@ export function AppShell() {
                 ) : null}
               </div>
               <div className="sidebar-link-stack">
-                {(["overview", "tasks", "instances", "events", "commands"] as ServiceSection[]).map((section) => (
+                {(["overview", "tasks"] as ServiceSection[]).map((section) => (
                   <Link
                     key={section}
                     className={activeSection === section ? "sidebar-subnav-link active" : "sidebar-subnav-link"}
@@ -251,12 +251,8 @@ function getActiveServiceSection(pathname: string, tab: string | null): ServiceS
     return "tasks";
   }
 
-  if (pathname.includes("/instances/")) {
-    return "instances";
-  }
-
-  if (tab === "tasks" || tab === "instances" || tab === "events" || tab === "commands") {
-    return tab;
+  if (tab === "tasks") {
+    return "tasks";
   }
 
   return "overview";

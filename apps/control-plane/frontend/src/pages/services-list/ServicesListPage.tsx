@@ -58,22 +58,25 @@ export function ServicesListPage() {
         }
       />
 
-      <section className="stats-grid">
+      <section className="stats-grid stats-grid-compact">
         <StatCard
           label={t("servicesList.visibleServices")}
           value={String(filteredItems.length)}
           hint={t("common.afterFilters")}
+          size="compact"
         />
         <StatCard
           label={t("servicesList.fullyOnline")}
           value={String(onlineHeavyCount)}
           hint={t("common.allInstancesReporting")}
+          size="compact"
           tone="success"
         />
         <StatCard
           label={t("servicesList.filterScope")}
           value={t(`environment.${selectedEnvironment}`)}
           hint={t("common.environmentLens")}
+          size="compact"
           tone={selectedEnvironment === "prod" ? "warning" : "default"}
         />
       </section>
