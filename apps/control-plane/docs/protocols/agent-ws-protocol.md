@@ -22,7 +22,7 @@ Current intent:
 
 - Replacing query APIs with WS
 - Supporting hot task graph mutation in v1
-- Supporting pause/resume/drain semantics before runtime primitives exist
+- Supporting broader task-level pause/resume semantics before runtime primitives exist
 
 ## 4. Endpoint
 
@@ -186,6 +186,13 @@ Idempotency:
 
 - same structure as historical `POST /api/v1/agents/heartbeat`
 - periodic even if WS ping/pong is healthy
+- `health.task_controls` may carry the latest per-task intake-control state for
+  controllable source tasks
+- each `task_controls` entry currently includes:
+  `task_name`, `supported_commands`, `pause_requested`, `paused`,
+  `accepting_new_work`,
+  `runner_count`, `parked_runner_count`, `fetching_runner_count`, and
+  `inflight_task_count`
 
 Idempotency:
 
@@ -221,6 +228,12 @@ Initial supported `kind` values:
 
 - `ping`
 - `shutdown`
+- `restart`
+- `drain`
+- `pause_task`
+- `resume_task`
+- `discard_dead_letters`
+- `replay_dead_letters`
 - `sync_now`
 - `flush_metrics`
 - `flush_events`
@@ -230,6 +243,9 @@ Rules:
 - commands target exactly one `instance_id`
 - the server may only send a command to an active session for that instance
 - on reconnect, unsatisfied commands may be redelivered if not expired
+- `pause_task` and `resume_task` must include `args.task_name`
+- `discard_dead_letters` and `replay_dead_letters` must include `args.task_name`
+- `discard_dead_letters` and `replay_dead_letters` may include `args.limit`
 
 ## 15. `command_ack`
 
@@ -257,6 +273,24 @@ Required payload fields:
 - `command_id`
 - `status`
 - `finished_at`
+
+Result payload conventions:
+
+- `result` remains command-specific and optional
+- maintenance commands should return enough structured data to distinguish
+  complete vs partial outcomes
+- `restart` should report that shutdown was requested and whether external
+  supervisor handoff is still required
+- `drain` should report whether intake stopped and whether inflight work fully
+  drained
+- task-level controls should report the target `task_name` and whether that task
+  is still accepting new work
+- `discard_dead_letters` should report `requested_limit`, how many dead letters
+  were attempted, how many were discarded successfully, and whether the outcome
+  was complete or partial
+- `replay_dead_letters` should report `requested_limit`, how many dead letters
+  were attempted, how many were replayed successfully, and whether the outcome
+  was complete or partial
 
 If terminal state is not `succeeded`, include:
 

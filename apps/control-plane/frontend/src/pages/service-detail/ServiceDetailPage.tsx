@@ -10,6 +10,7 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatCard } from "../../components/ui/StatCard";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
+import { ServiceCommandFanout } from "../../features/commands/components/ServiceCommandFanout";
 import { SessionList } from "../../features/commands/components/SessionList";
 import {
   useServiceCommandsQuery,
@@ -52,7 +53,8 @@ export function ServiceDetailPage() {
   const lookbackMinutes = parseLookback(searchParams, 60);
   const currentTab = parseTab(searchParams.get("tab"));
   const shouldFetchTasks = currentTab === "overview" || currentTab === "tasks";
-  const shouldFetchInstances = currentTab === "overview" || currentTab === "instances";
+  const shouldFetchInstances =
+    currentTab === "overview" || currentTab === "instances" || currentTab === "commands";
   const shouldFetchCommands = currentTab === "overview" || currentTab === "commands";
 
   const dashboardQuery = useServiceDashboardQuery(serviceName, environment, lookbackMinutes);
@@ -86,6 +88,7 @@ export function ServiceDetailPage() {
   const sessions = sessionsQuery.data?.items ?? [];
   const commandFailureCount = dashboard
     ? dashboard.command_overview.statuses.failed +
+      dashboard.command_overview.statuses.expired +
       dashboard.command_overview.statuses.rejected +
       dashboard.command_overview.statuses.timeout +
       dashboard.command_overview.statuses.cancelled
@@ -365,42 +368,61 @@ function renderTabContent({
 
   if (currentTab === "commands") {
     return (
-      <div className="two-column-grid">
-        <Panel title={t("serviceDetail.recentCommandsTitle")} subtitle={t("serviceDetail.recentCommandsSubtitle")}>
-          {commandsLoading ? <div className="loading-block">{t("serviceDetail.loadingCommandFeed")}</div> : null}
-          {!commandsLoading && commandsError ? (
+      <div className="page-stack">
+        <Panel title={t("serviceDetail.serviceControlsTitle")} subtitle={t("serviceDetail.serviceControlsSubtitle")}>
+          {instancesLoading ? <div className="loading-block">{t("serviceDetail.loadingInstanceSnapshots")}</div> : null}
+          {!instancesLoading && instancesError ? (
             <EmptyState
-              title={t("serviceDetail.loadErrorTitle")}
-              body={String(commandsError)}
+              title={t("serviceDetail.instanceLoadErrorTitle")}
+              body={String(instancesError)}
             />
           ) : null}
-          {!commandsLoading && !commandsError ? (
-            <CommandFeed
-              commands={commands}
-              emptyBody={t("serviceDetail.noCommandsBody")}
-              emptyTitle={t("serviceDetail.noCommandsTitle")}
+          {!instancesLoading && !instancesError ? (
+            <ServiceCommandFanout
               environment={environment}
-              lookbackMinutes={lookbackMinutes}
+              instances={instances}
               serviceName={serviceName}
             />
           ) : null}
         </Panel>
-        <Panel title={t("serviceDetail.sessionsTitle")} subtitle={t("serviceDetail.sessionsSubtitle")}>
-          {sessionsLoading ? <div className="loading-block">{t("serviceDetail.loadingSessionFeed")}</div> : null}
-          {!sessionsLoading && sessionsError ? (
-            <EmptyState
-              title={t("serviceDetail.loadErrorTitle")}
-              body={String(sessionsError)}
-            />
-          ) : null}
-          {!sessionsLoading && !sessionsError ? (
-            <SessionList
-              emptyBody={t("serviceDetail.noSessionsBody")}
-              emptyTitle={t("serviceDetail.noSessionsTitle")}
-              sessions={sessions}
-            />
-          ) : null}
-        </Panel>
+
+        <div className="two-column-grid">
+          <Panel title={t("serviceDetail.recentCommandsTitle")} subtitle={t("serviceDetail.recentCommandsSubtitle")}>
+            {commandsLoading ? <div className="loading-block">{t("serviceDetail.loadingCommandFeed")}</div> : null}
+            {!commandsLoading && commandsError ? (
+              <EmptyState
+                title={t("serviceDetail.loadErrorTitle")}
+                body={String(commandsError)}
+              />
+            ) : null}
+            {!commandsLoading && !commandsError ? (
+              <CommandFeed
+                commands={commands}
+                emptyBody={t("serviceDetail.noCommandsBody")}
+                emptyTitle={t("serviceDetail.noCommandsTitle")}
+                environment={environment}
+                lookbackMinutes={lookbackMinutes}
+                serviceName={serviceName}
+              />
+            ) : null}
+          </Panel>
+          <Panel title={t("serviceDetail.sessionsTitle")} subtitle={t("serviceDetail.sessionsSubtitle")}>
+            {sessionsLoading ? <div className="loading-block">{t("serviceDetail.loadingSessionFeed")}</div> : null}
+            {!sessionsLoading && sessionsError ? (
+              <EmptyState
+                title={t("serviceDetail.loadErrorTitle")}
+                body={String(sessionsError)}
+              />
+            ) : null}
+            {!sessionsLoading && !sessionsError ? (
+              <SessionList
+                emptyBody={t("serviceDetail.noSessionsBody")}
+                emptyTitle={t("serviceDetail.noSessionsTitle")}
+                sessions={sessions}
+              />
+            ) : null}
+          </Panel>
+        </div>
       </div>
     );
   }

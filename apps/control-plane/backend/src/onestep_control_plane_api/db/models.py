@@ -233,12 +233,20 @@ class AgentCommand(Base):
         nullable=False,
     )
     session_id: Mapped[str | None] = mapped_column(sa.String(255))
+    created_by: Mapped[str | None] = mapped_column(sa.String(255))
+    reason: Mapped[str | None] = mapped_column(sa.Text)
+    source_surface: Mapped[str] = mapped_column(
+        sa.String(64),
+        nullable=False,
+        default="unknown",
+    )
     kind: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     args_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
     timeout_s: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
     ack_status: Mapped[str | None] = mapped_column(sa.String(32))
     result_json: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)
+    duration_ms: Mapped[int | None] = mapped_column(sa.Integer)
     error_code: Mapped[str | None] = mapped_column(sa.String(128))
     error_message: Mapped[str | None] = mapped_column(sa.Text)
     dispatched_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

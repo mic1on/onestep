@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import { CodeBlock } from "../../../components/ui/CodeBlock";
 import { EmptyState } from "../../../components/ui/EmptyState";
@@ -8,6 +9,7 @@ import type { AgentCommandSummary, Environment } from "../../../lib/api/types";
 import {
   formatCompactJson,
   formatDateTime,
+  formatDurationMs,
   formatIdentifierPreview,
   formatRelativeTime,
 } from "../../../lib/formatters";
@@ -41,6 +43,11 @@ export function CommandFeed({
       {commands.map((command) => {
         const canLinkToInstance =
           serviceName !== undefined && environment !== undefined && lookbackMinutes !== undefined;
+        const statusLabel =
+          command.status === "pending" && command.session_id === null
+            ? t("commands.statusLabel.queued")
+            : t(`status.${command.status}`);
+        const statusHint = getCommandStatusHint(command, t);
 
         return (
           <article className="command-card" key={command.command_id}>
@@ -72,12 +79,17 @@ export function CommandFeed({
                 </div>
               </div>
               <div className="row-metrics">
-                <StatusBadge value={command.status} />
+                <StatusBadge label={statusLabel} value={command.status} />
+                {command.duration_ms !== null ? (
+                  <span className="code-chip">{formatDurationMs(command.duration_ms)}</span>
+                ) : null}
                 {command.session_id ? (
                   <span className="code-chip">{formatIdentifierPreview(command.session_id)}</span>
                 ) : null}
               </div>
             </div>
+
+            {statusHint ? <p className="command-status-note">{statusHint}</p> : null}
 
             {Object.keys(command.args).length > 0 ? (
               <div className="command-card-block">
@@ -90,6 +102,40 @@ export function CommandFeed({
               <div className="command-card-block">
                 <span className="list-row-label">{t("commands.resultLabel")}</span>
                 <CodeBlock>{formatCompactJson(command.result)}</CodeBlock>
+              </div>
+            ) : null}
+
+            {command.duration_ms !== null ? (
+              <div className="command-card-block">
+                <span className="list-row-label">{t("commands.durationLabel")}</span>
+                <p className="command-inline-text">{formatDurationMs(command.duration_ms)}</p>
+              </div>
+            ) : null}
+
+            {command.created_by || command.reason || command.source_surface !== "unknown" ? (
+              <div className="command-card-block">
+                <span className="list-row-label">{t("commands.auditLabel")}</span>
+                <p className="command-inline-text">
+                  {command.created_by
+                    ? t("commands.auditMeta", {
+                        createdBy: command.created_by,
+                        sourceSurface: t(`sourceSurface.${command.source_surface}`, {
+                          defaultValue: command.source_surface,
+                        }),
+                      })
+                    : t("commands.auditMetaNoActor", {
+                        sourceSurface: t(`sourceSurface.${command.source_surface}`, {
+                          defaultValue: command.source_surface,
+                        }),
+                      })}
+                </p>
+              </div>
+            ) : null}
+
+            {command.reason ? (
+              <div className="command-card-block">
+                <span className="list-row-label">{t("commands.reasonLabel")}</span>
+                <p className="command-inline-text">{command.reason}</p>
               </div>
             ) : null}
 
@@ -107,4 +153,23 @@ export function CommandFeed({
       })}
     </div>
   );
+}
+
+function getCommandStatusHint(
+  command: AgentCommandSummary,
+  t: TFunction,
+) {
+  if (command.status === "pending" && command.session_id === null) {
+    return t("commands.statusHint.queued");
+  }
+  if (command.status === "dispatched") {
+    return t("commands.statusHint.dispatched");
+  }
+  if (command.status === "expired") {
+    return t("commands.statusHint.expired");
+  }
+  if (command.status === "timeout") {
+    return t("commands.statusHint.timeout");
+  }
+  return null;
 }

@@ -23,17 +23,19 @@ from onestep_control_plane_api.api.constants import (
     MAX_TASK_ACTIVITY_LIMIT,
 )
 from onestep_control_plane_api.api.query_support import (
+    build_agent_session_summary,
     build_instance_status_counts,
     build_instance_summary,
     build_metric_window_summary,
-    build_agent_session_summary,
     build_service_stats_subquery,
     build_service_summary,
+    build_task_control_summary,
     build_task_event_summary,
     build_task_summary_map,
     get_active_sessions_by_instance_id,
-    get_service_instance_or_404,
+    get_latest_session_for_instance,
     get_service_command_overview,
+    get_service_instance_or_404,
     get_service_or_404,
     get_service_summary_data,
     get_service_topology_hashes,
@@ -64,7 +66,13 @@ from onestep_control_plane_api.api.schemas import (
     TaskMetricWindowListResponse,
 )
 from onestep_control_plane_api.api.security import require_console_auth
-from onestep_control_plane_api.db.models import AgentSession, Instance, Service, TaskEvent, TaskMetricWindow
+from onestep_control_plane_api.db.models import (
+    AgentSession,
+    Instance,
+    Service,
+    TaskEvent,
+    TaskMetricWindow,
+)
 from onestep_control_plane_api.db.session import get_db_session
 
 router = APIRouter(
@@ -276,6 +284,16 @@ def get_service_task_detail(
     ).get(task_name)
     if summary is None:
         summary = TaskDashboardSummary(task_name=task_name, event_counts=TaskEventCounts())
+    active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
+    task_control_instances = db.scalars(
+        select(Instance)
+        .where(Instance.service_id == service.id)
+        .order_by(
+            Instance.last_seen_at.is_(None),
+            Instance.last_seen_at.desc(),
+            Instance.instance_id,
+        )
+    ).all()
 
     recent_metric_windows = db.scalars(
         select(TaskMetricWindow)
@@ -304,6 +322,12 @@ def get_service_task_detail(
         lookback_minutes=lookback_minutes,
         lookback_started_at=lookback_started_at,
         summary=summary,
+        task_control=build_task_control_summary(
+            task_control_instances,
+            active_sessions_by_instance_id=active_sessions_by_instance_id,
+            task_name=task_name,
+            cutoff=cutoff,
+        ),
         recent_metric_windows=[
             build_metric_window_summary(metric_window) for metric_window in recent_metric_windows
         ],
@@ -355,7 +379,10 @@ def list_service_instances(
             cutoff=cutoff,
             active_session=(
                 build_agent_session_summary(active_session, instance=instance)
-                if (active_session := active_sessions_by_instance_id.get(instance.instance_id)) is not None
+                if (
+                    active_session := active_sessions_by_instance_id.get(instance.instance_id)
+                )
+                is not None
                 else None
             ),
         )
@@ -399,6 +426,7 @@ def get_service_instance_detail(
     lookback_started_at = now - timedelta(minutes=lookback_minutes)
     service_summary, _ = get_service_summary_data(db, service=service, cutoff=cutoff)
     active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
+    latest_session = get_latest_session_for_instance(db, instance_id=instance.instance_id)
 
     recent_metric_windows = db.scalars(
         select(TaskMetricWindow)
@@ -434,9 +462,17 @@ def get_service_instance_detail(
             cutoff=cutoff,
             active_session=(
                 build_agent_session_summary(active_session, instance=instance)
-                if (active_session := active_sessions_by_instance_id.get(instance.instance_id)) is not None
+                if (
+                    active_session := active_sessions_by_instance_id.get(instance.instance_id)
+                )
+                is not None
                 else None
             ),
+        ),
+        latest_session=(
+            build_agent_session_summary(latest_session, instance=instance)
+            if latest_session is not None
+            else None
         ),
         app_snapshot=instance.app_snapshot_json,
         recent_metric_windows=[

@@ -593,11 +593,20 @@ button {
 }
 
 .search-field input,
-.auth-field input {
+.auth-field input,
+.dialog-field textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 14px;
   background: rgba(255, 255, 255, 0.72);
+}
+
+.dialog-field textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 7.5rem;
+  font: inherit;
+  color: var(--text);
 }
 
 .service-directory {
@@ -740,15 +749,273 @@ button {
   word-break: break-word;
 }
 
-.command-chip-grid,
-.command-action-grid {
+.command-chip-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
 
-.command-action-grid .button-secondary {
-  min-width: 8.8rem;
+.command-actions-stack,
+.command-delivery-mode-section {
+  display: grid;
+  gap: 10px;
+}
+
+.command-action-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+.command-action-item {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.command-action-item .button-secondary {
+  min-width: 0;
+  width: 100%;
+}
+
+.command-action-reason,
+.command-actions-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.command-actions-note {
+  grid-column: 1 / -1;
+}
+
+.command-status-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.task-command-number-field {
+  display: grid;
+  gap: 8px;
+  max-width: 12rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.task-command-number-field input {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  font: inherit;
+}
+
+.fanout-control-stack,
+.fanout-result-stack,
+.fanout-result-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.fanout-section {
+  display: grid;
+  gap: 10px;
+}
+
+.fanout-section-header,
+.fanout-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.fanout-inline-actions {
+  justify-content: flex-start;
+}
+
+.fanout-inline-actions .button-link {
+  padding: 8px 12px;
+}
+
+.fanout-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.fanout-instance-grid,
+.fanout-summary-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.fanout-instance-grid {
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.fanout-instance-option,
+.fanout-summary-card,
+.fanout-result-group,
+.fanout-result-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.fanout-instance-option {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.fanout-instance-option.active {
+  border-color: rgba(21, 111, 105, 0.28);
+  background: rgba(218, 241, 236, 0.68);
+}
+
+.fanout-instance-option input {
+  margin: 0;
+}
+
+.fanout-instance-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.fanout-instance-copy p,
+.fanout-summary-card p,
+.fanout-result-item p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.fanout-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+}
+
+.fanout-summary-card,
+.fanout-result-group,
+.fanout-result-item {
+  padding: 14px;
+}
+
+.fanout-summary-card {
+  display: grid;
+  gap: 6px;
+}
+
+.fanout-summary-card strong {
+  color: var(--accent-strong);
+}
+
+.fanout-summary-card p {
+  font-size: 1.4rem;
+  color: var(--text);
+}
+
+.fanout-result-group {
+  display: grid;
+  gap: 12px;
+}
+
+.fanout-result-group h4 {
+  margin: 0;
+}
+
+.fanout-result-list {
+  display: grid;
+  gap: 10px;
+}
+
+.task-control-instance-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.task-control-instance-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.task-control-instance-card.active {
+  border-color: rgba(21, 111, 105, 0.28);
+  background: rgba(218, 241, 236, 0.68);
+}
+
+.task-control-instance-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-control-instance-header input {
+  margin: 0;
+}
+
+.task-control-instance-title {
+  display: grid;
+  gap: 4px;
+}
+
+.task-control-instance-state {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(19, 29, 33, 0.38);
+  backdrop-filter: blur(10px);
+}
+
+.dialog-card {
+  width: min(100%, 32rem);
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid rgba(21, 111, 105, 0.16);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 250, 244, 0.96);
+  box-shadow: 0 18px 44px rgba(33, 56, 60, 0.18);
+}
+
+.dialog-copy,
+.dialog-field,
+.dialog-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.dialog-copy h3,
+.dialog-copy p {
+  margin: 0;
+}
+
+.dialog-copy p,
+.dialog-field span {
+  color: var(--muted);
+}
+
+.dialog-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .command-panel-actions {

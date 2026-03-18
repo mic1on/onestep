@@ -98,6 +98,10 @@ def ingest_heartbeat_request(
             identity=request.service,
             runtime=request.runtime,
             status_value=request.health.status,
+            task_controls_json=[
+                task_control.model_dump(mode="json")
+                for task_control in request.health.task_controls
+            ],
             sent_at=sent_at,
             sequence=request.sequence,
             received_at=received_at,

@@ -1,3 +1,7 @@
+import logging
+from collections.abc import Iterator
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import (
@@ -9,11 +13,27 @@ from fastapi.responses import JSONResponse
 
 from onestep_control_plane_api import __version__
 from onestep_control_plane_api.api import router
+from onestep_control_plane_api.api.agent_session_service import disconnect_active_sessions
 from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.core import settings
+from onestep_control_plane_api.db.session import SessionLocal
+
+logger = logging.getLogger("onestep_control_plane_api.startup")
 
 
 def create_app() -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> Iterator[None]:
+        session_factory = getattr(app.state, "session_factory", SessionLocal)
+        with session_factory() as session:
+            disconnected_count = disconnect_active_sessions(session)
+        if disconnected_count > 0:
+            logger.warning(
+                "marked stale active agent sessions as disconnected on startup",
+                extra={"disconnected_session_count": disconnected_count},
+            )
+        yield
+
     app = FastAPI(
         title="OneStep Control Plane API",
         version=__version__,
@@ -21,7 +41,9 @@ def create_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
+    app.state.session_factory = SessionLocal
     if settings.cors_allow_origins:
         app.add_middleware(
             CORSMiddleware,

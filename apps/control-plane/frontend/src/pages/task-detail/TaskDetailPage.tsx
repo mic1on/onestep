@@ -7,6 +7,9 @@ import { Panel } from "../../components/ui/Panel";
 import { StatCard } from "../../components/ui/StatCard";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
+import { CommandFeed } from "../../features/commands/components/CommandFeed";
+import { useServiceCommandsQuery } from "../../features/commands/queries";
+import { TaskCommandControls } from "../../features/tasks/components/TaskCommandControls";
 import { useTaskDetailQuery } from "../../features/tasks/queries";
 import {
   formatCompactJson,
@@ -29,6 +32,7 @@ export function TaskDetailPage() {
   const environment = parseEnvironment(searchParams);
   const lookbackMinutes = parseLookback(searchParams, 60);
   const query = useTaskDetailQuery(serviceName, taskName, environment, lookbackMinutes);
+  const commandsQuery = useServiceCommandsQuery(serviceName, environment);
 
   if (query.error) {
     return <EmptyState title={t("taskDetail.loadErrorTitle")} body={String(query.error)} />;
@@ -36,6 +40,12 @@ export function TaskDetailPage() {
 
   const payload = query.data;
   const summary = payload?.summary;
+  const taskCommands =
+    commandsQuery.data?.items.filter(
+      (command) =>
+        (command.kind === "pause_task" || command.kind === "resume_task") &&
+        command.args.task_name === taskName,
+    ) ?? [];
 
   return (
     <div className="page-stack">
@@ -76,6 +86,15 @@ export function TaskDetailPage() {
             />
             <StatCard label={t("taskDetail.maxP95")} value={formatDurationMs(summary.max_p95_duration_ms)} />
           </section>
+
+          <Panel title={t("taskDetail.controlsTitle")} subtitle={t("taskDetail.controlsSubtitle")}>
+            <TaskCommandControls
+              environment={environment}
+              serviceName={serviceName}
+              taskName={taskName}
+              taskControl={payload.task_control}
+            />
+          </Panel>
 
           <div className="two-column-grid">
             <Panel title={t("taskDetail.configurationTitle")} subtitle={t("taskDetail.configurationSubtitle")}>
@@ -206,6 +225,21 @@ export function TaskDetailPage() {
               )}
             </Panel>
           </div>
+
+          <Panel title={t("taskDetail.recentCommandsTitle")} subtitle={t("taskDetail.recentCommandsSubtitle")}>
+            {commandsQuery.error ? (
+              <EmptyState title={t("taskDetail.recentCommandsTitle")} body={String(commandsQuery.error)} />
+            ) : (
+              <CommandFeed
+                commands={taskCommands.slice(0, 5)}
+                emptyBody={t("taskDetail.noCommandsBody")}
+                emptyTitle={t("taskDetail.noCommandsTitle")}
+                environment={environment}
+                lookbackMinutes={lookbackMinutes}
+                serviceName={serviceName}
+              />
+            )}
+          </Panel>
         </>
       ) : null}
     </div>

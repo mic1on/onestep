@@ -1,4 +1,5 @@
 import type {
+  AgentCommandDeliveryMode,
   AgentCommandKind,
   AgentCommandListResponse,
   AgentCommandSummary,
@@ -7,8 +8,12 @@ import type {
   Environment,
   InstanceDetailResponse,
   InstanceListResponse,
+  ServiceCommandFanoutResponse,
+  ServiceCommandOfflineBehavior,
+  ServiceCommandTargetMode,
   ServiceDashboardResponse,
   ServiceListResponse,
+  TaskCommandKind,
   TaskDashboardListResponse,
   TaskDetailResponse,
 } from "./types";
@@ -24,7 +29,7 @@ type RequestOptions = {
   redirectOnUnauthorized?: boolean;
 };
 
-function buildUrl(path: string, query: Record<string, QueryValue> = {}) {
+export function buildApiUrl(path: string, query: Record<string, QueryValue> = {}) {
   const url = /^https?:\/\//.test(API_BASE_URL)
     ? new URL(`${API_BASE_URL}${path}`)
     : new URL(`${API_BASE_URL}${path}`, window.location.origin);
@@ -58,7 +63,7 @@ function redirectToLogin() {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const response = await fetch(buildUrl(path, options.query), {
+  const response = await fetch(buildApiUrl(path, options.query), {
     method: options.method ?? "GET",
     credentials: "include",
     headers: {
@@ -187,6 +192,8 @@ export function createInstanceCommand(
     kind: AgentCommandKind;
     args?: Record<string, unknown>;
     timeout_s?: number;
+    delivery_mode?: AgentCommandDeliveryMode;
+    reason?: string;
   },
 ) {
   return request<AgentCommandSummary>(`/api/v1/instances/${encodeURIComponent(instanceId)}/commands`, {
@@ -195,8 +202,73 @@ export function createInstanceCommand(
       kind: payload.kind,
       args: payload.args ?? {},
       timeout_s: payload.timeout_s ?? 10,
+      delivery_mode: payload.delivery_mode ?? "dispatch_now_only",
+      reason: payload.reason ?? null,
     },
   });
+}
+
+export function createServiceCommandFanout(
+  serviceName: string,
+  environment: Environment,
+  payload: {
+    kind: Exclude<AgentCommandKind, "shutdown">;
+    args?: Record<string, unknown>;
+    timeout_s?: number;
+    reason: string;
+    target_mode: ServiceCommandTargetMode;
+    target_instance_ids?: string[];
+    offline_behavior: ServiceCommandOfflineBehavior;
+  },
+) {
+  return request<ServiceCommandFanoutResponse>(
+    `/api/v1/services/${encodeURIComponent(serviceName)}/commands`,
+    {
+      method: "POST",
+      query: { environment },
+      body: {
+        kind: payload.kind,
+        args: payload.args ?? {},
+        timeout_s: payload.timeout_s ?? 10,
+        reason: payload.reason,
+        target_mode: payload.target_mode,
+        target_instance_ids: payload.target_instance_ids ?? [],
+        offline_behavior: payload.offline_behavior,
+      },
+    },
+  );
+}
+
+export function createTaskCommandFanout(
+  serviceName: string,
+  taskName: string,
+  environment: Environment,
+  payload: {
+    kind: TaskCommandKind;
+    args?: Record<string, unknown>;
+    timeout_s?: number;
+    reason: string;
+    target_mode?: ServiceCommandTargetMode;
+    target_instance_ids?: string[];
+    offline_behavior?: ServiceCommandOfflineBehavior;
+  },
+) {
+  return request<ServiceCommandFanoutResponse>(
+    `/api/v1/services/${encodeURIComponent(serviceName)}/tasks/${encodeURIComponent(taskName)}/commands`,
+    {
+      method: "POST",
+      query: { environment },
+      body: {
+        kind: payload.kind,
+        args: payload.args ?? {},
+        timeout_s: payload.timeout_s ?? 10,
+        reason: payload.reason,
+        target_mode: payload.target_mode ?? "all_online",
+        target_instance_ids: payload.target_instance_ids ?? [],
+        offline_behavior: payload.offline_behavior ?? "skip",
+      },
+    },
+  );
 }
 
 export function getConsoleSession() {

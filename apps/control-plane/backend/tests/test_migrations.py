@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202603170003"
+HEAD_REVISION = "202603180001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -93,12 +93,16 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "service_id",
         "instance_id",
         "session_id",
+        "created_by",
+        "reason",
+        "source_surface",
         "kind",
         "args_json",
         "timeout_s",
         "status",
         "ack_status",
         "result_json",
+        "duration_ms",
         "error_code",
         "error_message",
         "dispatched_at",
@@ -137,6 +141,8 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert isinstance(agent_session_columns["accepted_capabilities_json"]["type"], sa.JSON)
     assert isinstance(agent_command_columns["args_json"]["type"], sa.JSON)
     assert isinstance(agent_command_columns["result_json"]["type"], sa.JSON)
+    assert isinstance(agent_command_columns["duration_ms"]["type"], sa.Integer)
+    assert isinstance(agent_command_columns["source_surface"]["type"], sa.String)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {

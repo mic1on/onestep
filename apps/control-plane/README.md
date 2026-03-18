@@ -245,6 +245,11 @@ Agent telemetry and control now enter only through `GET /api/v1/agents/ws`.
 The WS handshake uses the same ingest token configured by `ONESTEP_CP_INGEST_TOKENS`.
 Telemetry payloads still reuse the historical heartbeat/sync/metrics/events body shapes
 inside the WS `telemetry` envelope.
+On API startup, previously persisted `agent_sessions.status=active` rows are reconciled
+to `disconnected` before new agents reconnect, so stale sessions from an earlier process
+do not stay eligible for dashboards or command dispatch.
+
+WS rollout and cutover notes live in `docs/migrations/ws-agent-cutover.md`.
 
 Query API endpoints:
 
@@ -257,6 +262,9 @@ Query API endpoints:
 - `GET /api/v1/services/{service_name}/tasks/{task_name}?environment=prod`
 - `GET /api/v1/services/{service_name}/metric-windows?environment=prod`
 - `GET /api/v1/services/{service_name}/events?environment=prod`
+- `GET /api/v1/services/{service_name}/commands?environment=prod`
+- `GET /api/v1/services/{service_name}/sessions?environment=prod`
+- `GET /api/v1/instances/{instance_id}/commands`
 
 `GET /api/v1/services/{service_name}/tasks` now returns both runtime aggregates and the
 latest service-level topology snapshot from `task_definitions`. `GET /api/v1/services/{service_name}/dashboard`

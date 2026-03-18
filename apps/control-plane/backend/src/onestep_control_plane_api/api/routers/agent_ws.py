@@ -13,8 +13,10 @@ from sqlalchemy.orm import Session
 from onestep_control_plane_api.api.agent_command_service import (
     build_command_message,
     get_command_by_id,
-    list_pending_commands_for_instance,
+    get_command_capability,
+    list_redeliverable_commands_for_instance,
     mark_command_dispatched,
+    reject_redelivery_for_unsupported_capability,
 )
 from onestep_control_plane_api.api.agent_connection_registry import agent_connection_registry
 from onestep_control_plane_api.api.agent_ingestion_service import (
@@ -23,7 +25,12 @@ from onestep_control_plane_api.api.agent_ingestion_service import (
     ingest_metrics_request,
     ingest_sync_request,
 )
-from onestep_control_plane_api.api.common import as_utc, ensure_instance_stub, ensure_service, utcnow
+from onestep_control_plane_api.api.common import (
+    as_utc,
+    ensure_instance_stub,
+    ensure_service,
+    utcnow,
+)
 from onestep_control_plane_api.api.schemas import (
     AgentCommandAckMessage,
     AgentCommandResultMessage,
@@ -39,7 +46,11 @@ from onestep_control_plane_api.api.schemas import (
     MetricsIngestRequest,
     SyncIngestRequest,
 )
-from onestep_control_plane_api.api.security import WebSocketIngestAuth, require_websocket_ingest_token
+from onestep_control_plane_api.api.security import (
+    WebSocketIngestAuth,
+    require_websocket_ingest_token,
+)
+from onestep_control_plane_api.api.ui_event_stream import publish_ui_stream_event
 from onestep_control_plane_api.db.models import AgentCommand, AgentSession
 from onestep_control_plane_api.db.session import get_db_session
 
@@ -54,6 +65,12 @@ SUPPORTED_CAPABILITIES = frozenset(
         "telemetry.events",
         "command.ping",
         "command.shutdown",
+        "command.restart",
+        "command.drain",
+        "command.pause_task",
+        "command.resume_task",
+        "command.discard_dead_letters",
+        "command.replay_dead_letters",
         "command.sync_now",
         "command.flush_metrics",
         "command.flush_events",
@@ -168,6 +185,7 @@ def _handle_hello(
         )
     )
     db.commit()
+    publish_ui_stream_event("sessions")
 
     return AgentHelloAckMessage(
         type="hello_ack",
@@ -220,14 +238,25 @@ async def _enqueue_pending_commands(
     *,
     instance_id: UUID,
     session_id: str,
+    accepted_capabilities: list[str],
     send_queue: asyncio.Queue[dict[str, object]],
 ) -> None:
-    for command in list_pending_commands_for_instance(db, instance_id=instance_id):
+    for command in list_redeliverable_commands_for_instance(db, instance_id=instance_id):
+        required_capability = get_command_capability(command.kind)
+        if required_capability not in accepted_capabilities:
+            reject_redelivery_for_unsupported_capability(
+                db,
+                command=command,
+                capability=required_capability,
+            )
+            publish_ui_stream_event("commands")
+            continue
         command = mark_command_dispatched(
             db,
             command=command,
             session_id=session_id,
         )
+        publish_ui_stream_event("commands")
         await send_queue.put(build_command_message(command).model_dump(mode="json"))
 
 
@@ -257,6 +286,8 @@ def _handle_command_ack(
     )
     if command is None:
         return False
+    if command.finished_at is not None or command.ack_status is not None:
+        return True
 
     command.session_id = context.session_id
     command.ack_status = message.payload.status
@@ -270,6 +301,7 @@ def _handle_command_ack(
         command.error_code = message.payload.error_code
         command.error_message = message.payload.error_message
     db.commit()
+    publish_ui_stream_event("commands")
     return True
 
 
@@ -294,6 +326,7 @@ def _handle_command_result(
     command.status = message.payload.status
     command.finished_at = as_utc(message.payload.finished_at)
     command.result_json = message.payload.result
+    command.duration_ms = message.payload.duration_ms
     command.error_code = message.payload.error_code
     command.error_message = message.payload.error_message
     if command.ack_status is None:
@@ -301,6 +334,7 @@ def _handle_command_result(
         command.acked_at = received_at
     command.updated_at = received_at
     db.commit()
+    publish_ui_stream_event("commands")
     return "ok"
 
 
@@ -364,6 +398,7 @@ async def agent_ws(
                     db,
                     instance_id=context.instance_id,
                     session_id=context.session_id,
+                    accepted_capabilities=hello_ack.payload.accepted_capabilities,
                     send_queue=send_queue,
                 )
                 continue
@@ -406,7 +441,10 @@ async def agent_ws(
                         await _send_error(
                             websocket,
                             code="invalid_telemetry_channel",
-                            message=f"telemetry channel {telemetry.payload.channel} is not supported",
+                            message=(
+                                "telemetry channel "
+                                f"{telemetry.payload.channel} is not supported"
+                            ),
                             close_connection=False,
                         )
                         continue
@@ -433,7 +471,12 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                if not _handle_command_ack(db, context=context, message=command_ack, received_at=now):
+                if not _handle_command_ack(
+                    db,
+                    context=context,
+                    message=command_ack,
+                    received_at=now,
+                ):
                     await _send_error(
                         websocket,
                         code="unknown_command",
@@ -455,7 +498,12 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                result = _handle_command_result(db, context=context, message=command_result, received_at=now)
+                result = _handle_command_result(
+                    db,
+                    context=context,
+                    message=command_result,
+                    received_at=now,
+                )
                 if result == "unknown":
                     await _send_error(
                         websocket,
@@ -468,7 +516,10 @@ async def agent_ws(
                     await _send_error(
                         websocket,
                         code="duplicate_command_result",
-                        message=f"command_id={command_result.payload.command_id} already has a terminal result",
+                        message=(
+                            f"command_id={command_result.payload.command_id} already has "
+                            "a terminal result"
+                        ),
                         close_connection=False,
                     )
                     continue
@@ -495,3 +546,4 @@ async def agent_ws(
                 session_id=context.session_id,
             )
             _close_session(db, context.session_id, disconnected_at=utcnow())
+            publish_ui_stream_event("sessions")

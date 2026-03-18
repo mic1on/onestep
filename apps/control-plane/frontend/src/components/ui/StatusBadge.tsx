@@ -6,6 +6,7 @@ type BadgeValue =
   | "cancelled"
   | "disconnected"
   | "dispatched"
+  | "expired"
   | "failed"
   | "online"
   | "offline"
@@ -34,6 +35,7 @@ const BADGE_CLASS_MAP: Record<BadgeValue, string> = {
   cancelled: "badge-warning",
   disconnected: "badge-muted",
   dispatched: "badge-accent",
+  expired: "badge-warning",
   failed: "badge-danger",
   online: "badge-success",
   ok: "badge-success",

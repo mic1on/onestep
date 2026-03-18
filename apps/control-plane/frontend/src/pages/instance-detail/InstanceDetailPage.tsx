@@ -9,10 +9,17 @@ import { StatCard } from "../../components/ui/StatCard";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
+import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
 import { CommandQuickActions } from "../../features/commands/components/CommandQuickActions";
+import {
+  commandRequiresReason,
+  commandSupportsQueueing,
+  getCommandCapability,
+  hasCommandCapability,
+} from "../../features/commands/capabilities";
 import { useCreateInstanceCommandMutation, useInstanceCommandsQuery } from "../../features/commands/queries";
 import { useInstanceDetailQuery } from "../../features/instances/queries";
-import type { AgentCommandKind } from "../../lib/api/types";
+import type { AgentCommandDeliveryMode, AgentCommandKind } from "../../lib/api/types";
 import {
   formatCompactJson,
   formatCount,
@@ -29,6 +36,8 @@ export function InstanceDetailPage() {
   const [searchParams] = useSearchParams();
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [reasonDialogKind, setReasonDialogKind] = useState<AgentCommandKind | null>(null);
+  const [deliveryModeOverride, setDeliveryModeOverride] = useState<AgentCommandDeliveryMode | null>(null);
 
   if (!serviceName || !instanceId) {
     return <EmptyState title={t("instanceDetail.missingTitle")} body={t("instanceDetail.missingBody")} />;
@@ -47,24 +56,72 @@ export function InstanceDetailPage() {
   const payload = query.data;
   const instance = payload?.instance;
   const activeSession = instance?.active_session;
+  const latestSession = payload?.latest_session;
+  const deliveryMode =
+    deliveryModeOverride ?? (activeSession ? "dispatch_now_only" : "queue_until_reconnect");
 
-  async function handleCommandSubmit(kind: AgentCommandKind) {
+  async function dispatchCommand(kind: AgentCommandKind, reason?: string) {
     setSubmitError(null);
     setSubmitMessage(null);
+    const capabilitySource = deliveryMode === "queue_until_reconnect" ? latestSession : activeSession;
+
+    if (deliveryMode === "dispatch_now_only" && !activeSession) {
+      const message = t("commands.disabledReason.noSession");
+      setSubmitError(message);
+      throw new Error(message);
+    }
+
+    if (deliveryMode === "queue_until_reconnect" && !commandSupportsQueueing(kind)) {
+      const message = t("commands.disabledReason.queueUnavailable", {
+        kind: t(`commandKind.${kind}`, { defaultValue: kind }),
+      });
+      setSubmitError(message);
+      throw new Error(message);
+    }
+
+    if (deliveryMode === "queue_until_reconnect" && !latestSession) {
+      const message = t("commands.disabledReason.noKnownSession");
+      setSubmitError(message);
+      throw new Error(message);
+    }
+
+    if (!capabilitySource || !hasCommandCapability(kind, capabilitySource.accepted_capabilities)) {
+      const message = t("commands.disabledReason.missingCapability", {
+        capability: getCommandCapability(kind),
+      });
+      setSubmitError(message);
+      throw new Error(message);
+    }
+
     try {
-      await createCommandMutation.mutateAsync({
+      const response = await createCommandMutation.mutateAsync({
         kind,
         args: kind === "ping" ? { nonce: Date.now() } : {},
-        timeout_s: kind === "shutdown" ? 30 : 10,
+        timeout_s: resolveCommandTimeoutSeconds(kind),
+        delivery_mode: deliveryMode,
+        reason,
       });
       setSubmitMessage(
-        t("instanceDetail.commandDispatchOk", {
-          kind: t(`commandKind.${kind}`, { defaultValue: kind }),
-        }),
+        response.status === "pending" && response.session_id === null
+          ? t("instanceDetail.commandQueuedOk", {
+              kind: t(`commandKind.${kind}`, { defaultValue: kind }),
+            })
+          : t("instanceDetail.commandDispatchOk", {
+              kind: t(`commandKind.${kind}`, { defaultValue: kind }),
+            }),
       );
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
+      throw error;
     }
+  }
+
+  async function handleCommandSubmit(kind: AgentCommandKind) {
+    if (commandRequiresReason(kind)) {
+      setReasonDialogKind(kind);
+      return;
+    }
+    await dispatchCommand(kind);
   }
 
   return (
@@ -192,6 +249,41 @@ export function InstanceDetailPage() {
                     </div>
                   ) : null}
                 </>
+              ) : latestSession ? (
+                <>
+                  <div className="badge-row">
+                    <StatusBadge value={latestSession.status} />
+                    <span className="code-chip">{formatIdentifierPreview(latestSession.session_id)}</span>
+                  </div>
+                  <p className="command-inline-text">{t("instanceDetail.latestControlSessionHint")}</p>
+                  <dl className="definition-grid">
+                    <div>
+                      <dt>{t("instanceDetail.controlConnection")}</dt>
+                      <dd>{formatDateTime(latestSession.connected_at)}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("instanceDetail.lastSeen")}</dt>
+                      <dd>{formatRelativeTime(latestSession.last_message_at)}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("instanceDetail.latestControlDisconnect")}</dt>
+                      <dd>{formatDateTime(latestSession.disconnected_at)}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("instanceDetail.controlCapabilities")}</dt>
+                      <dd>{formatCount(latestSession.accepted_capabilities.length)}</dd>
+                    </div>
+                  </dl>
+                  {latestSession.accepted_capabilities.length ? (
+                    <div className="command-chip-grid">
+                      {latestSession.accepted_capabilities.map((capability) => (
+                        <span className="code-chip" key={capability}>
+                          {capability}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <EmptyState
                   title={t("instanceDetail.controlIdleTitle")}
@@ -201,8 +293,13 @@ export function InstanceDetailPage() {
 
               <div className="command-panel-actions">
                 <CommandQuickActions
-                  disabled={!activeSession}
+                  activeAcceptedCapabilities={activeSession?.accepted_capabilities ?? []}
+                  deliveryMode={deliveryMode}
+                  hasActiveSession={activeSession !== undefined && activeSession !== null}
+                  hasKnownSession={latestSession !== undefined && latestSession !== null}
                   isSubmitting={createCommandMutation.isPending}
+                  latestAcceptedCapabilities={latestSession?.accepted_capabilities ?? []}
+                  onDeliveryModeChange={setDeliveryModeOverride}
                   onSubmit={handleCommandSubmit}
                 />
               </div>
@@ -271,6 +368,39 @@ export function InstanceDetailPage() {
           </div>
         </>
       ) : null}
+
+      <CommandReasonDialog
+        description={
+          reasonDialogKind
+            ? t(`commandReasonDialog.instanceBody.${reasonDialogKind}`)
+            : ""
+        }
+        isSubmitting={createCommandMutation.isPending}
+        onCancel={() => setReasonDialogKind(null)}
+        onConfirm={async (reason) => {
+          if (!reasonDialogKind) {
+            return;
+          }
+          await dispatchCommand(reasonDialogKind, reason);
+          setReasonDialogKind(null);
+        }}
+        open={reasonDialogKind !== null}
+        title={
+          reasonDialogKind
+            ? t(`commandReasonDialog.instanceTitle.${reasonDialogKind}`)
+            : ""
+        }
+      />
     </div>
   );
+}
+
+function resolveCommandTimeoutSeconds(kind: AgentCommandKind) {
+  if (kind === "shutdown" || kind === "restart") {
+    return 30;
+  }
+  if (kind === "drain") {
+    return 120;
+  }
+  return 10;
 }

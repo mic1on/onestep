@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-import pytest
 import onestep_control_plane_api.api.common as common
+import pytest
 from fastapi import HTTPException
 from onestep_control_plane_api.api.agent_ingestion_service import (
     ingest_events_request,
@@ -47,6 +47,7 @@ def make_heartbeat_payload(
     sent_at: str = "2026-03-08T17:31:00Z",
     deployment_version: str = "1.0.0a0+c435c99",
     onestep_version: str = "1.0.0a0",
+    task_controls: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "service": {
@@ -64,6 +65,7 @@ def make_heartbeat_payload(
             "status": status,
             "uptime_s": 70,
             "inflight_tasks": 3,
+            "task_controls": task_controls or [],
         },
         "sent_at": sent_at,
         "sequence": sequence,
@@ -296,6 +298,46 @@ def test_stale_heartbeat_does_not_roll_back_instance_snapshot(db_session) -> Non
     assert instance.last_seen_at == latest_seen
 
 
+def test_heartbeat_task_controls_merge_into_instance_snapshot(db_session) -> None:
+    ingest_sync(db_session, make_sync_payload())
+    ingest_heartbeat(
+        db_session,
+        make_heartbeat_payload(
+            task_controls=[
+                {
+                    "task_name": "sync_users",
+                    "pause_requested": True,
+                    "paused": True,
+                    "accepting_new_work": False,
+                    "runner_count": 2,
+                    "parked_runner_count": 2,
+                    "fetching_runner_count": 0,
+                    "inflight_task_count": 0,
+                }
+            ]
+        ),
+    )
+    db_session.expire_all()
+
+    instance = db_session.scalar(select(Instance))
+    assert instance is not None
+    assert instance.app_snapshot_json is not None
+    assert instance.app_snapshot_json["topology_hash"] == "sha256:6d5b0d1f"
+    assert instance.app_snapshot_json["task_control_states"] == [
+        {
+            "task_name": "sync_users",
+            "supported_commands": [],
+            "pause_requested": True,
+            "paused": True,
+            "accepting_new_work": False,
+            "runner_count": 2,
+            "parked_runner_count": 2,
+            "fetching_runner_count": 0,
+            "inflight_task_count": 0,
+        }
+    ]
+
+
 def test_conflicting_service_cannot_reuse_existing_instance_id(db_session) -> None:
     ingest_heartbeat(
         db_session,
@@ -387,7 +429,9 @@ def test_sync_ingestion_creates_service_instance_and_task_definitions(db_session
     ]
 
 
-def test_sync_refreshes_task_definitions_for_newer_payload_with_same_topology_hash(db_session) -> None:
+def test_sync_refreshes_task_definitions_for_newer_payload_with_same_topology_hash(
+    db_session,
+) -> None:
     ingest_sync(db_session, make_sync_payload())
     service = db_session.scalar(
         select(Service).where(Service.name == "billing-sync", Service.environment == "prod")
