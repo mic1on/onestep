@@ -756,11 +756,7 @@ class ControlPlaneReporter:
             "meta": meta,
         }
         if event.failure is not None:
-            payload["failure"] = {
-                "kind": event.failure.kind.value,
-                "exception_type": event.failure.exception_type,
-                "message": event.failure.message,
-            }
+            payload["failure"] = event.failure.as_dict()
         return payload
 
     def _record_duration(self, bucket: _TaskMetricsState, event: TaskEvent) -> None:

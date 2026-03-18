@@ -24,6 +24,7 @@ The V1 stable surface includes:
 - `MySQLConnector.state_store(...)`
 - `MySQLConnector.cursor_store(...)`
 - `RabbitMQConnector.queue(...)`
+- `RedisConnector.stream(...)`
 - `SQSConnector.queue(...)`
 - `IntervalSource.every(...)`
 - `CronSource(...)`
@@ -42,6 +43,7 @@ Common extras:
 - `pip install 'onestep[yaml]'`
 - `pip install 'onestep[mysql]'`
 - `pip install 'onestep[rabbitmq]'`
+- `pip install 'onestep[redis]'`
 - `pip install 'onestep[sqs]'`
 - `pip install 'onestep[all]'`
 
@@ -157,6 +159,8 @@ Currently supported YAML resource types:
 - `webhook`
 - `rabbitmq`
 - `rabbitmq_queue`
+- `redis`
+- `redis_stream`
 - `sqs`
 - `sqs_queue`
 - `mysql`
@@ -371,7 +375,7 @@ async def consume(ctx, item):
 If a task ends in a terminal failure and `dead_letter` is configured, the dead-letter sink receives:
 
 - `body["payload"]`: the original payload
-- `body["failure"]`: `{kind, exception_type, message}`
+- `body["failure"]`: `{kind, exception_type, message, traceback?}`
 - `meta["original_meta"]`: the original envelope metadata
 
 You can inspect metrics in-process:
@@ -592,6 +596,38 @@ async def process_job(ctx, item):
 
 Install with `pip install '.[rabbitmq]'`.
 
+## Redis Streams
+
+Use Redis Streams for lightweight, reliable message queuing with consumer groups.
+
+```python
+from onestep import OneStepApp, RedisConnector
+
+app = OneStepApp("redis-demo")
+redis = RedisConnector("redis://localhost:6379")
+source = redis.stream(
+    "jobs",
+    group="workers",
+    batch_size=100,
+    poll_interval_s=0.5,
+)
+out = redis.stream("processed")
+
+
+@app.task(source=source, emit=out, concurrency=8)
+async def process_job(ctx, item):
+    return {"job": item["job"], "status": "done"}
+```
+
+Key features:
+
+- **Consumer groups**: Multiple consumers share message processing
+- **Message acknowledgment**: `XACK` for reliable processing
+- **Pending messages**: Unacked messages stay in PEL for retry via `XCLAIM`
+- **Stream trimming**: `maxlen` option to limit stream size
+
+Install with `pip install '.[redis]'`.
+
 ## SQS Queue
 
 ```python
@@ -631,13 +667,14 @@ Common entrypoints:
 - `example/cli_app.py`
 - `example/runtime_showcase.py`
 - `example/mysql_incremental.py`
+- `example/redis_stream.py`
 - `example/webhook_source.py`
 
 
 ## Integration Tests
 
 Optional live tests are under `tests/integration/`.
-The local stack now includes RabbitMQ, LocalStack SQS, and MySQL.
+The local stack now includes Redis, RabbitMQ, LocalStack SQS, and MySQL.
 
 Install the live-test dependencies:
 
@@ -665,6 +702,7 @@ make integration-test
 
 You can also run one test file manually after loading the environment:
 
+- `PYTHONPATH=src python3 -m pytest tests/integration/test_redis_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_rabbitmq_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_sqs_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_mysql_live.py -q`
@@ -676,7 +714,7 @@ Set `KEEP_INTEGRATION_SERVICES=1` to keep containers running after `make integra
 The test suite is now intentionally split by responsibility:
 
 - `tests/contract/`: runtime contract tests that lock task execution semantics
-- `tests/integration/`: live infrastructure tests for RabbitMQ, SQS, and MySQL
+- `tests/integration/`: live infrastructure tests for Redis, RabbitMQ, SQS, and MySQL
 - `tests/test_*.py`: connector-focused unit tests
 
 ## End-to-End Demo

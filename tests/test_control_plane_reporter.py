@@ -192,6 +192,10 @@ def test_reporter_flushes_metrics_and_events() -> None:
                     kind=FailureKind.TIMEOUT,
                     exception_type="TimeoutError",
                     message="task exceeded timeout",
+                    traceback=(
+                        "Traceback (most recent call last):\n"
+                        "TimeoutError: task exceeded timeout\n"
+                    ),
                 ),
                 meta={"trace_id": "trace-1"},
             )
@@ -241,6 +245,10 @@ def test_reporter_flushes_metrics_and_events() -> None:
         "kind": "timeout",
         "exception_type": "TimeoutError",
         "message": "task exceeded timeout",
+        "traceback": (
+            "Traceback (most recent call last):\n"
+            "TimeoutError: task exceeded timeout\n"
+        ),
     }
     assert event_payload["meta"] == {
         "trace_id": "trace-1",

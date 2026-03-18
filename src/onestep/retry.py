@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import traceback as traceback_module
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -19,21 +20,31 @@ class FailureInfo:
     kind: FailureKind
     exception_type: str
     message: str
+    traceback: str | None = None
 
     @classmethod
     def from_exception(cls, exc: BaseException, *, kind: FailureKind) -> "FailureInfo":
+        traceback_text = None
+        if exc.__traceback__ is not None:
+            traceback_text = "".join(
+                traceback_module.format_exception(type(exc), exc, exc.__traceback__)
+            )
         return cls(
             kind=kind,
             exception_type=type(exc).__name__,
             message=str(exc),
+            traceback=traceback_text,
         )
 
     def as_dict(self) -> dict[str, str]:
-        return {
+        payload = {
             "kind": self.kind.value,
             "exception_type": self.exception_type,
             "message": self.message,
         }
+        if self.traceback is not None:
+            payload["traceback"] = self.traceback
+        return payload
 
 
 class RetryDecision(str, Enum):

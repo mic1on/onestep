@@ -1,0 +1,42 @@
+# Redis Streams YAML Example
+# Run with: onestep run example/redis_stream.yaml
+
+app:
+  name: redis-yaml-demo
+  shutdown_timeout_s: 10.0
+
+connectors:
+  # Redis connection
+  redis:
+    type: redis
+    url: "${REDIS_URL:redis://localhost:6379}"
+  
+  # Source stream
+  jobs:
+    type: redis_stream
+    connector: redis
+    stream: onestep:jobs
+    group: workers
+    batch_size: 10
+    poll_interval_s: 0.5
+  
+  # Output stream
+  processed:
+    type: redis_stream
+    connector: redis
+    stream: onestep:processed
+    group: output
+    maxlen: 10000
+
+tasks:
+  - name: process_job
+    description: Process jobs from Redis Streams
+    source: jobs
+    emit: [processed]
+    concurrency: 4
+    retry:
+      type: max_attempts
+      max_attempts: 3
+      delay_s: 5
+    handler:
+      ref: example.redis_stream:handle_job
