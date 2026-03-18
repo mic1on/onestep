@@ -155,4 +155,3 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 - [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
 - [Redis Streams](/broker/redis) - 轻量级消息队列
 - [MySQL](/broker/mysql) - 数据库集成
-- [Control Plane](/core/control-plane) - 集中监控和管理
