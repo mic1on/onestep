@@ -25,13 +25,58 @@ class TaskRunner:
         self.app = app
         self.task = task
         self._inflight: set[asyncio.Task[None]] = set()
+        self._fetching = False
+        self._drain_parked = False
+        self._pause_parked = False
         self._logger = logging.getLogger(f"onestep.{app.name}.{task.name}")
+
+    @property
+    def inflight_count(self) -> int:
+        return len(self._inflight)
+
+    @property
+    def is_fetching(self) -> bool:
+        return self._fetching
+
+    @property
+    def is_drain_parked(self) -> bool:
+        return self._drain_parked
+
+    @property
+    def is_pause_parked(self) -> bool:
+        return self._pause_parked
 
     async def run(self) -> None:
         if self.task.source is None:
             return
         try:
             while not self.app.is_stopping:
+                if self.app.is_draining:
+                    if self._inflight:
+                        await self._wait_for_inflight(timeout=self.task.source.poll_interval_s)
+                        continue
+                    self._set_pause_parked(False)
+                    self._set_drain_parked(True)
+                    await self.app.wait_for_shutdown()
+                    break
+
+                if self.app.is_task_paused(self.task.name):
+                    if self._inflight:
+                        await self._wait_for_inflight(timeout=self.task.source.poll_interval_s)
+                        continue
+                    self._set_drain_parked(False)
+                    self._set_pause_parked(True)
+                    try:
+                        await asyncio.wait_for(
+                            self.app.wait_for_shutdown(),
+                            timeout=self.task.source.poll_interval_s,
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+                    break
+
+                self._set_drain_parked(False)
+                self._set_pause_parked(False)
                 available = self.task.concurrency - len(self._inflight)
                 if available <= 0:
                     await self._wait_for_inflight(timeout=self.task.source.poll_interval_s)
@@ -50,9 +95,11 @@ class TaskRunner:
 
                 for delivery in deliveries:
                     pending = asyncio.create_task(self._handle_delivery(delivery))
-                    self._inflight.add(pending)
-                    pending.add_done_callback(self._inflight.discard)
+                    self._track_inflight(pending)
         finally:
+            self._set_drain_parked(False)
+            self._set_pause_parked(False)
+            self._set_fetching(False)
             await self._drain_inflight()
 
     async def _wait_for_inflight(self, timeout: float | None) -> None:
@@ -61,15 +108,25 @@ class TaskRunner:
         await asyncio.wait(self._inflight, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
 
     async def _fetch_deliveries(self, limit: int) -> list["Delivery"]:
-        if self.task.source is None or self.app.is_stopping:
+        if (
+            self.task.source is None
+            or self.app.is_stopping
+            or self.app.is_draining
+            or self.app.is_task_paused(self.task.name)
+        ):
             return []
+        self._set_fetching(True)
         fetch_task = asyncio.create_task(self.task.source.fetch(limit))
-        shutdown_task = asyncio.create_task(self.app.wait_for_shutdown())
+        stop_fetching_task = asyncio.create_task(self.app.wait_for_stop_fetching(self.task.name))
         done, pending = await asyncio.wait(
-            {fetch_task, shutdown_task},
+            {fetch_task, stop_fetching_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
         try:
+            if stop_fetching_task in done:
+                fetch_task.cancel()
+                await asyncio.gather(fetch_task, return_exceptions=True)
+                return []
             if fetch_task in done:
                 try:
                     return fetch_task.result()
@@ -82,9 +139,37 @@ class TaskRunner:
             await asyncio.gather(fetch_task, return_exceptions=True)
             return []
         finally:
+            self._set_fetching(False)
             for pending_task in pending:
                 pending_task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    def _track_inflight(self, task: asyncio.Task[None]) -> None:
+        self._inflight.add(task)
+        self.app.notify_runner_state_changed()
+        task.add_done_callback(self._handle_inflight_done)
+
+    def _handle_inflight_done(self, task: asyncio.Task[None]) -> None:
+        self._inflight.discard(task)
+        self.app.notify_runner_state_changed()
+
+    def _set_fetching(self, value: bool) -> None:
+        if self._fetching == value:
+            return
+        self._fetching = value
+        self.app.notify_runner_state_changed()
+
+    def _set_drain_parked(self, value: bool) -> None:
+        if self._drain_parked == value:
+            return
+        self._drain_parked = value
+        self.app.notify_runner_state_changed()
+
+    def _set_pause_parked(self, value: bool) -> None:
+        if self._pause_parked == value:
+            return
+        self._pause_parked = value
+        self.app.notify_runner_state_changed()
 
     async def _handle_source_fetch_error(self, exc: ConnectorOperationError) -> None:
         fallback_s = self.task.source.poll_interval_s if self.task.source is not None else 1.0

@@ -527,7 +527,13 @@ class ControlPlaneReporter:
             "status": status,
             "uptime_s": max(0, int((_utcnow() - self._started_at).total_seconds())),
             "inflight_tasks": inflight_tasks,
+            "task_controls": self._build_task_control_states(),
         }
+
+    def _build_task_control_states(self) -> list[dict[str, Any]]:
+        if self._app is None:
+            return []
+        return [dict(state) for state in self._app.task_control_snapshots()]
 
     def _build_retry_descriptor(self, policy: Any) -> dict[str, Any]:
         kind = _kind_name(policy)

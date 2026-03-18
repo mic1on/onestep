@@ -11,6 +11,7 @@ from onestep import (
     ControlPlaneReporterConfig,
     ControlPlaneWsSender,
     ControlPlaneWsTransport,
+    MemoryQueue,
     OneStepApp,
     build_control_plane_http_base_url,
     build_control_plane_ws_url,
@@ -204,6 +205,116 @@ def test_ws_sender_buffers_initial_heartbeat_until_sync() -> None:
     assert heartbeat_body["health"]["status"] == "ok"
 
 
+def test_ws_sender_advertises_restart_and_drain_only_after_binding_runtime() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.shutdown",
+                        "command.restart",
+                        "command.drain",
+                        "command.pause_task",
+                        "command.resume_task",
+                        "command.sync_now",
+                        "command.flush_metrics",
+                        "command.flush_events",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    hello_message = connection.sent_messages[0]
+    assert hello_message["type"] == "hello"
+    capabilities = hello_message["payload"]["capabilities"]
+    assert "command.restart" in capabilities
+    assert "command.drain" in capabilities
+    assert "command.pause_task" in capabilities
+    assert "command.resume_task" in capabilities
+    assert "command.replay_dead_letters" not in capabilities
+
+
+def test_ws_sender_advertises_dead_letter_replay_only_for_compatible_tasks() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.replay_dead_letters",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    app = OneStepApp("billing-sync")
+    source = MemoryQueue("sync-users.incoming", batch_size=1, poll_interval_s=0.01)
+    dead = MemoryQueue("sync-users.dead", batch_size=1, poll_interval_s=0.01)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    @app.task(name="sync_users", source=source, dead_letter=dead)
+    async def sync_users(ctx, item):
+        return item
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    hello_message = connection.sent_messages[0]
+    capabilities = hello_message["payload"]["capabilities"]
+    assert "command.replay_dead_letters" in capabilities
+
+
 def test_ws_sender_executes_sync_now_command_over_active_session() -> None:
     connection = FakeWsConnection(
         initial_messages=[
@@ -277,6 +388,399 @@ def test_ws_sender_executes_sync_now_command_over_active_session() -> None:
     assert result_message["payload"]["status"] == "succeeded"
     assert result_message["payload"]["result"] == {"synced": True}
     assert isinstance(result_message["payload"]["duration_ms"], int)
+
+
+def test_ws_sender_executes_restart_command_and_reports_partial_completion() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.restart",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    app = OneStepApp("billing-sync")
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_restart",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "command_id": "cmd_restart",
+                    "kind": "restart",
+                    "args": {},
+                    "timeout_s": 10,
+                    "created_at": "2026-03-17T12:00:02Z",
+                },
+            }
+        )
+        await asyncio.sleep(0.05)
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    ack_message = next(message for message in connection.sent_messages if message["type"] == "command_ack")
+    result_message = next(
+        message for message in connection.sent_messages if message["type"] == "command_result"
+    )
+    assert ack_message["payload"]["status"] == "accepted"
+    assert result_message["payload"]["status"] == "succeeded"
+    assert result_message["payload"]["result"] == {
+        "operation": "restart",
+        "requested": True,
+        "completion": "partial",
+        "restart_requested": True,
+        "shutdown_requested": True,
+        "supervisor_handoff_required": True,
+    }
+
+
+def test_ws_sender_executes_drain_command_and_reports_complete_when_idle() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.drain",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    app = OneStepApp("billing-sync")
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_drain",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "command_id": "cmd_drain",
+                    "kind": "drain",
+                    "args": {},
+                    "timeout_s": 10,
+                    "created_at": "2026-03-17T12:00:02Z",
+                },
+            }
+        )
+        await asyncio.sleep(0.05)
+        app.request_shutdown()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    ack_message = next(message for message in connection.sent_messages if message["type"] == "command_ack")
+    result_message = next(
+        message for message in connection.sent_messages if message["type"] == "command_result"
+    )
+    assert ack_message["payload"]["status"] == "accepted"
+    assert result_message["payload"]["status"] == "succeeded"
+    assert result_message["payload"]["result"] == {
+        "operation": "drain",
+        "requested": True,
+        "completion": "complete",
+        "drained": True,
+        "accepting_new_work": False,
+        "runner_count": 0,
+        "parked_runner_count": 0,
+        "fetching_runner_count": 0,
+        "inflight_task_count": 0,
+    }
+
+
+def test_ws_sender_executes_pause_task_and_resume_task_commands() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.pause_task",
+                        "command.resume_task",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    app = OneStepApp("billing-sync")
+    source = MemoryQueue("sync-users.incoming", batch_size=1, poll_interval_s=0.01)
+    sink = MemoryQueue("sync-users.processed", batch_size=1, poll_interval_s=0.01)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    @app.task(name="sync_users", source=source, emit=sink, concurrency=1)
+    async def sync_users(ctx, item):
+        if item["value"] == 1:
+            started.set()
+            await release.wait()
+        if item["value"] == 2:
+            ctx.app.request_shutdown()
+        return {"value": item["value"]}
+
+    async def scenario() -> None:
+        await source.publish({"value": 1})
+        await source.publish({"value": 2})
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_pause_task",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "command_id": "cmd_pause_task",
+                    "kind": "pause_task",
+                    "args": {"task_name": "sync_users"},
+                    "timeout_s": 30,
+                    "created_at": "2026-03-17T12:00:02Z",
+                },
+            }
+        )
+        await asyncio.sleep(0.02)
+        release.set()
+        for _ in range(50):
+            if any(
+                message["type"] == "command_result"
+                and message["payload"]["command_id"] == "cmd_pause_task"
+                for message in connection.sent_messages
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("pause_task command_result was not sent")
+
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_resume_task",
+                "sent_at": "2026-03-17T12:00:03Z",
+                "payload": {
+                    "command_id": "cmd_resume_task",
+                    "kind": "resume_task",
+                    "args": {"task_name": "sync_users"},
+                    "timeout_s": 30,
+                    "created_at": "2026-03-17T12:00:03Z",
+                },
+            }
+        )
+        await asyncio.wait_for(serve_task, timeout=1.0)
+
+    asyncio.run(scenario())
+
+    pause_result = next(
+        message
+        for message in connection.sent_messages
+        if message["type"] == "command_result"
+        and message["payload"]["command_id"] == "cmd_pause_task"
+    )
+    resume_result = next(
+        message
+        for message in connection.sent_messages
+        if message["type"] == "command_result"
+        and message["payload"]["command_id"] == "cmd_resume_task"
+    )
+    assert pause_result["payload"]["status"] == "succeeded"
+    assert pause_result["payload"]["result"] == {
+        "operation": "pause_task",
+        "task_name": "sync_users",
+        "requested": True,
+        "completion": "complete",
+        "paused": True,
+        "accepting_new_work": False,
+        "runner_count": 1,
+        "parked_runner_count": 1,
+        "fetching_runner_count": 0,
+        "inflight_task_count": 0,
+    }
+    assert resume_result["payload"]["status"] == "succeeded"
+    assert resume_result["payload"]["result"]["operation"] == "resume_task"
+    assert resume_result["payload"]["result"]["task_name"] == "sync_users"
+    assert resume_result["payload"]["result"]["requested"] is True
+    assert resume_result["payload"]["result"]["completion"] == "complete"
+    assert resume_result["payload"]["result"]["paused"] is False
+    assert resume_result["payload"]["result"]["accepting_new_work"] is True
+    assert resume_result["payload"]["result"]["runner_count"] == 1
+    assert resume_result["payload"]["result"]["parked_runner_count"] == 0
+
+
+def test_ws_sender_executes_replay_dead_letters_command() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.replay_dead_letters",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    app = OneStepApp("billing-sync")
+    source = MemoryQueue("sync-users.incoming", batch_size=1, poll_interval_s=0.01)
+    dead = MemoryQueue("sync-users.dead", batch_size=1, poll_interval_s=0.01)
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+    replayed_batch: list[object] = []
+
+    @app.task(name="sync_users", source=source, dead_letter=dead)
+    async def sync_users(ctx, item):
+        return item
+
+    async def scenario() -> None:
+        await app.startup()
+        await dead.publish(
+            {
+                "payload": {"value": 1},
+                "failure": {
+                    "kind": "error",
+                    "exception_type": "RuntimeError",
+                    "message": "boom",
+                    "traceback": "Traceback",
+                },
+            },
+            meta={"original_meta": {"trace_id": "abc"}, "original_attempts": 2},
+        )
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_replay_dead_letters",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "command_id": "cmd_replay_dead_letters",
+                    "kind": "replay_dead_letters",
+                    "args": {"task_name": "sync_users", "limit": 5},
+                    "timeout_s": 30,
+                    "created_at": "2026-03-17T12:00:02Z",
+                },
+            }
+        )
+        for _ in range(50):
+            if any(
+                message["type"] == "command_result"
+                and message["payload"]["command_id"] == "cmd_replay_dead_letters"
+                for message in connection.sent_messages
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("replay_dead_letters command_result was not sent")
+        replayed_batch.extend(await source.fetch(1))
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    replay_result = next(
+        message
+        for message in connection.sent_messages
+        if message["type"] == "command_result"
+        and message["payload"]["command_id"] == "cmd_replay_dead_letters"
+    )
+    assert replay_result["payload"]["status"] == "succeeded"
+    assert replay_result["payload"]["result"] == {
+        "operation": "replay_dead_letters",
+        "task_name": "sync_users",
+        "requested": True,
+        "completion": "complete",
+        "requested_limit": 5,
+        "attempted_count": 1,
+        "replayed_count": 1,
+        "failed_count": 0,
+        "empty": False,
+    }
+
+    assert len(replayed_batch) == 1
+    assert replayed_batch[0].payload == {"value": 1}
+    assert replayed_batch[0].envelope.meta == {"trace_id": "abc"}
+    assert replayed_batch[0].envelope.attempts == 2
 
 
 def test_ws_transport_reports_timeout_for_slow_command() -> None:

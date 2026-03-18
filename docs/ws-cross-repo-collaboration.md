@@ -98,6 +98,7 @@ Agent-Control Plane WS 协议文档只保留一份，建议放在 `onestep-contr
 - 命令状态机
 - 协议版本策略
 - capabilities 约定
+- `heartbeat.health.task_controls` 这类运行时状态字段
 
 ### 5.3 协议版本要求
 
@@ -117,6 +118,11 @@ Agent-Control Plane WS 协议文档只保留一份，建议放在 `onestep-contr
     "telemetry.metrics",
     "telemetry.events",
     "command.shutdown",
+    "command.restart",
+    "command.drain",
+    "command.pause_task",
+    "command.resume_task",
+    "command.replay_dead_letters",
     "command.sync_now",
     "command.flush_metrics",
     "command.flush_events"
@@ -203,11 +209,17 @@ Agent-Control Plane WS 协议文档只保留一份，建议放在 `onestep-contr
 - `command_ack`
 - `command_result`
 - 一期命令执行器
+- `heartbeat` 中的 task control state 上报
 
 一期命令建议仅支持：
 
 - `ping`
 - `shutdown`
+- `restart`
+- `drain`
+- `pause_task`
+- `resume_task`
+- `replay_dead_letters`
 - `sync_now`
 - `flush_metrics`
 - `flush_events`
@@ -217,6 +229,7 @@ Agent-Control Plane WS 协议文档只保留一份，建议放在 `onestep-contr
 - Agent 可稳定连入
 - 命令闭环可走通
 - 重连后可恢复上报
+- task 级 pause/resume 的当前状态可通过 heartbeat 反映到控制台
 
 ### 7.4 Phase 4: 联调
 

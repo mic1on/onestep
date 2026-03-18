@@ -291,7 +291,7 @@ Behavior:
 - sync is resent on later heartbeat cycles until the current topology hash converges
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
-- remote commands can trigger `ping`, `shutdown`, `sync_now`, `flush_metrics`, and `flush_events`
+- remote commands can trigger `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `sync_now`, `flush_metrics`, and `flush_events`
 - transport send failures reset the current session and reconnect with exponential backoff plus jitter
 - low-priority `metrics` and `events` buffers are bounded locally; if the control plane stays down, the oldest buffered telemetry is dropped first
 - reporter failures are logged but do not stop task execution

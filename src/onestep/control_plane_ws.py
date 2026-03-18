@@ -29,6 +29,18 @@ DEFAULT_AGENT_CAPABILITIES = [
     "command.flush_metrics",
     "command.flush_events",
 ]
+DEFAULT_COMMAND_CAPABILITIES = [
+    "command.ping",
+    "command.shutdown",
+    "command.restart",
+    "command.drain",
+    "command.pause_task",
+    "command.resume_task",
+    "command.replay_dead_letters",
+    "command.sync_now",
+    "command.flush_metrics",
+    "command.flush_events",
+]
 
 
 def _utcnow() -> datetime:
@@ -213,6 +225,9 @@ class ControlPlaneWsTransport:
     @property
     def hello_ack(self) -> AgentHelloAck | None:
         return self._hello_ack
+
+    def set_capabilities(self, capabilities: list[str]) -> None:
+        self._capabilities = list(capabilities)
 
     def set_command_handler(self, handler: AgentCommandHandler | None) -> None:
         self._command_handler = handler
@@ -606,7 +621,12 @@ class ControlPlaneWsSender:
     def supports_command(self, kind: str) -> bool:
         if kind == "ping":
             return True
-        if kind == "shutdown":
+        if kind == "replay_dead_letters":
+            return (
+                self._app is not None
+                and self._app.supports_dead_letter_replay_commands()
+            )
+        if kind in {"shutdown", "restart", "drain", "pause_task", "resume_task"}:
             return self._app is not None
         if kind in {"sync_now", "flush_metrics", "flush_events"}:
             return self._reporter is not None
@@ -619,7 +639,47 @@ class ControlPlaneWsSender:
             if self._app is None:
                 raise RuntimeError("app is not bound")
             self._app.request_shutdown()
-            return {"requested": True}
+            return {
+                "operation": "shutdown",
+                "requested": True,
+                "completion": "complete",
+                "shutdown_requested": True,
+            }
+        if command.kind == "restart":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            self._app.request_restart()
+            return {
+                "operation": "restart",
+                "requested": True,
+                "completion": "partial",
+                "restart_requested": True,
+                "shutdown_requested": True,
+                "supervisor_handoff_required": True,
+            }
+        if command.kind == "drain":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            self._app.request_drain()
+            return await self._app.wait_for_drain()
+        if command.kind == "pause_task":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            task_name = _require_task_name_arg(command)
+            self._app.request_task_pause(task_name)
+            return await self._app.wait_for_task_pause(task_name)
+        if command.kind == "resume_task":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            task_name = _require_task_name_arg(command)
+            self._app.request_task_resume(task_name)
+            return await self._app.wait_for_task_resume(task_name)
+        if command.kind == "replay_dead_letters":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            task_name = _require_task_name_arg(command)
+            replay_limit = _require_positive_int_arg(command, "limit", default=10)
+            return await self._app.replay_task_dead_letters(task_name, limit=replay_limit)
         if self._reporter is None:
             raise RuntimeError("reporter is not bound")
         if command.kind == "sync_now":
@@ -641,6 +701,19 @@ class ControlPlaneWsSender:
         if isinstance(runtime, dict):
             self._runtime_descriptor = dict(runtime)
 
+    def _advertised_capabilities(self) -> list[str]:
+        capabilities = [
+            "telemetry.sync",
+            "telemetry.heartbeat",
+            "telemetry.metrics",
+            "telemetry.events",
+        ]
+        for capability in DEFAULT_COMMAND_CAPABILITIES:
+            _, _, kind = capability.partition("command.")
+            if self.supports_command(kind):
+                capabilities.append(capability)
+        return capabilities
+
     async def _ensure_connected(self) -> None:
         if self._transport.connected:
             return
@@ -653,6 +726,9 @@ class ControlPlaneWsSender:
                 raise RuntimeError(
                     "WS sender requires service and runtime descriptors before opening a session"
                 )
+            set_capabilities = getattr(self._transport, "set_capabilities", None)
+            if callable(set_capabilities):
+                set_capabilities(self._advertised_capabilities())
             if self._reconnect_attempts > 0:
                 await asyncio.sleep(self._next_reconnect_delay_s())
             try:
@@ -689,6 +765,20 @@ class ControlPlaneWsSender:
                 await close()
             await self._ensure_connected()
             await self._transport.send_telemetry(channel, payload)
+
+
+def _require_task_name_arg(command: AgentCommand) -> str:
+    task_name = command.args.get("task_name")
+    if not isinstance(task_name, str) or not task_name.strip():
+        raise ValueError("command args.task_name must be a non-empty string")
+    return task_name.strip()
+
+
+def _require_positive_int_arg(command: AgentCommand, key: str, *, default: int | None = None) -> int:
+    value = command.args.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"command args.{key} must be a positive integer")
+    return value
 
 
 __all__ = [

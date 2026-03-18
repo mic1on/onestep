@@ -75,6 +75,7 @@ def test_reporter_startup_sends_heartbeat() -> None:
         "deployment_version": "1.0.0+c435c99",
     }
     assert heartbeat_payload["health"]["status"] == "ok"
+    assert heartbeat_payload["health"]["task_controls"] == []
     assert heartbeat_payload["sequence"] == 1
     assert heartbeat_payload["runtime"]["pid"] > 0
     assert sync_payload["app"] == {
@@ -154,6 +155,46 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
                     "delay_s": 10.0,
                 },
             },
+        }
+    ]
+
+
+def test_reporter_heartbeat_includes_task_control_states() -> None:
+    recorder = SenderRecorder()
+    source = MemoryQueue("incoming")
+    sink = MemoryQueue("processed")
+    app = OneStepApp("billing-sync")
+
+    @app.task(source=source, emit=sink)
+    async def sync_users(ctx, payload):
+        return payload
+
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        app.request_task_pause("sync_users")
+        await reporter.send_heartbeat_now()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    heartbeat_payload = [payload for channel, payload in recorder.calls if channel == "heartbeat"][-1]
+    assert heartbeat_payload["health"]["task_controls"] == [
+        {
+            "task_name": "sync_users",
+            "supported_commands": [
+                "pause_task",
+                "resume_task",
+            ],
+            "pause_requested": True,
+            "paused": True,
+            "accepting_new_work": False,
+            "runner_count": 0,
+            "parked_runner_count": 0,
+            "fetching_runner_count": 0,
+            "inflight_task_count": 0,
         }
     ]
 
