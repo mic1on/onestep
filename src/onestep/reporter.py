@@ -707,17 +707,23 @@ class ControlPlaneReporter:
         }
 
     async def send_sync_now(self) -> None:
-        await self._send_sync(force=True)
+        await self._send_sync(force=True, wait_for_delivery=True)
 
     async def send_heartbeat_now(self) -> None:
         await self._send_heartbeat()
 
     async def flush_metrics_now(self) -> None:
         self._rotate_metrics_window(_utcnow())
-        await self._flush_metric_batches(suppress_exceptions=False)
+        await self._flush_metric_batches(
+            suppress_exceptions=False,
+            wait_for_delivery=True,
+        )
 
     async def flush_events_now(self) -> None:
-        await self._flush_event_batches(suppress_exceptions=False)
+        await self._flush_event_batches(
+            suppress_exceptions=False,
+            wait_for_delivery=True,
+        )
 
     def _apply_event_backpressure(self) -> None:
         overflow = len(self._pending_events) - self.config.max_pending_events
@@ -753,7 +759,7 @@ class ControlPlaneReporter:
         except Exception:
             self._logger.exception("control plane sync failed")
 
-    async def _send_sync(self, *, force: bool = False) -> None:
+    async def _send_sync(self, *, force: bool = False, wait_for_delivery: bool = False) -> None:
         if self._app is None:
             return
         app_payload = self._build_app_topology_descriptor()
@@ -770,7 +776,7 @@ class ControlPlaneReporter:
             "sent_at": _utcnow(),
             "sequence": self._next_sequence(),
         }
-        await self._sender("sync", payload)
+        await self._send_via_sender("sync", payload, wait_for_delivery=wait_for_delivery)
         self._last_synced_topology_hash = topology_hash
 
     async def _safe_send_heartbeat(self) -> None:
@@ -830,7 +836,12 @@ class ControlPlaneReporter:
             self._apply_metric_backpressure()
         self._metrics_window_started_at = ended_at
 
-    async def _flush_metric_batches(self, *, suppress_exceptions: bool = True) -> None:
+    async def _flush_metric_batches(
+        self,
+        *,
+        suppress_exceptions: bool = True,
+        wait_for_delivery: bool = False,
+    ) -> None:
         while self._pending_metric_batches:
             batch = self._pending_metric_batches[0]
             payload = {
@@ -844,7 +855,11 @@ class ControlPlaneReporter:
                 "tasks": batch.tasks,
             }
             try:
-                await self._sender("metrics", payload)
+                await self._send_via_sender(
+                    "metrics",
+                    payload,
+                    wait_for_delivery=wait_for_delivery,
+                )
             except Exception:
                 if suppress_exceptions:
                     self._logger.exception("control plane metrics flush failed")
@@ -853,7 +868,12 @@ class ControlPlaneReporter:
                 return
             self._pending_metric_batches.pop(0)
 
-    async def _flush_event_batches(self, *, suppress_exceptions: bool = True) -> None:
+    async def _flush_event_batches(
+        self,
+        *,
+        suppress_exceptions: bool = True,
+        wait_for_delivery: bool = False,
+    ) -> None:
         while self._pending_events:
             batch = self._pending_events[: self.config.event_batch_size]
             payload = {
@@ -863,7 +883,11 @@ class ControlPlaneReporter:
                 "events": batch,
             }
             try:
-                await self._sender("events", payload)
+                await self._send_via_sender(
+                    "events",
+                    payload,
+                    wait_for_delivery=wait_for_delivery,
+                )
             except Exception:
                 if suppress_exceptions:
                     self._logger.exception("control plane event flush failed")
@@ -871,6 +895,22 @@ class ControlPlaneReporter:
                     raise
                 return
             del self._pending_events[: len(batch)]
+
+    async def _send_via_sender(
+        self,
+        channel: str,
+        payload: dict[str, Any],
+        *,
+        wait_for_delivery: bool = False,
+    ) -> None:
+        if wait_for_delivery:
+            send_and_wait = getattr(self._sender, "send_and_wait", None)
+            if callable(send_and_wait):
+                result = send_and_wait(channel, payload)
+                if inspect.isawaitable(result):
+                    await result
+                    return
+        await self._sender(channel, payload)
 
     def _build_event_payload(self, event: TaskEvent) -> dict[str, Any]:
         meta = dict(event.meta)

@@ -415,6 +415,133 @@ def test_reporter_direct_sync_raises_when_sender_fails() -> None:
         raise AssertionError("expected reporter.send_sync_now() to propagate sender failures")
 
 
+def test_reporter_send_sync_now_waits_for_sender_delivery() -> None:
+    class WaitableSender:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict]] = []
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, channel: str, payload: dict) -> None:
+            self.calls.append(("enqueue", channel, payload))
+
+        async def send_and_wait(self, channel: str, payload: dict) -> None:
+            self.calls.append(("wait", channel, payload))
+            self.started.set()
+            await self.release.wait()
+
+    sender = WaitableSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        wait_task = asyncio.create_task(reporter.send_sync_now())
+        await asyncio.wait_for(sender.started.wait(), timeout=0.1)
+        assert wait_task.done() is False
+        sender.release.set()
+        await asyncio.wait_for(wait_task, timeout=0.1)
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    assert any(kind == "wait" and channel == "sync" for kind, channel, _ in sender.calls)
+
+
+def test_reporter_flush_metrics_now_waits_for_sender_delivery() -> None:
+    class WaitableSender:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict]] = []
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, channel: str, payload: dict) -> None:
+            self.calls.append(("enqueue", channel, payload))
+
+        async def send_and_wait(self, channel: str, payload: dict) -> None:
+            self.calls.append(("wait", channel, payload))
+            self.started.set()
+            await self.release.wait()
+
+    sender = WaitableSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.FETCHED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=0,
+            )
+        )
+        reporter._rotate_metrics_window(datetime(2026, 3, 8, 17, 31, 0, tzinfo=timezone.utc))
+        wait_task = asyncio.create_task(reporter.flush_metrics_now())
+        await asyncio.wait_for(sender.started.wait(), timeout=0.1)
+        assert wait_task.done() is False
+        sender.release.set()
+        await asyncio.wait_for(wait_task, timeout=0.1)
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    assert any(kind == "wait" and channel == "metrics" for kind, channel, _ in sender.calls)
+
+
+def test_reporter_flush_events_now_waits_for_sender_delivery() -> None:
+    class WaitableSender:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict]] = []
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def __call__(self, channel: str, payload: dict) -> None:
+            self.calls.append(("enqueue", channel, payload))
+
+        async def send_and_wait(self, channel: str, payload: dict) -> None:
+            self.calls.append(("wait", channel, payload))
+            self.started.set()
+            await self.release.wait()
+
+    sender = WaitableSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.FAILED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=1,
+                failure=FailureInfo(
+                    kind=FailureKind.ERROR,
+                    exception_type="RuntimeError",
+                    message="boom",
+                    traceback="traceback",
+                ),
+            )
+        )
+        wait_task = asyncio.create_task(reporter.flush_events_now())
+        await asyncio.wait_for(sender.started.wait(), timeout=0.1)
+        assert wait_task.done() is False
+        sender.release.set()
+        await asyncio.wait_for(wait_task, timeout=0.1)
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    assert any(kind == "wait" and channel == "events" for kind, channel, _ in sender.calls)
+
+
 def test_reporter_config_from_env_uses_fallback_names(monkeypatch) -> None:
     monkeypatch.setenv("ONESTEP_CONTROL_URL", "https://control-plane.example.com")
     monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "secret-token")

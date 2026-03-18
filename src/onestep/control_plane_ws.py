@@ -5,7 +5,7 @@ import json
 import logging
 import random
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -134,10 +134,11 @@ class AgentCommand:
     created_at: datetime
 
 
-@dataclass(frozen=True)
+@dataclass
 class _QueuedTelemetry:
     channel: str
     payload: dict[str, Any]
+    waiters: list[asyncio.Future[None]] = field(default_factory=list)
 
 
 class AgentCommandHandler(Protocol):
@@ -581,10 +582,10 @@ class ControlPlaneWsSender:
             capabilities=capabilities,
         )
         self._config = config
-        self._pending_heartbeat: dict[str, Any] | None = None
-        self._pending_sync: dict[str, Any] | None = None
-        self._pending_metrics: deque[dict[str, Any]] = deque()
-        self._pending_events: deque[dict[str, Any]] = deque()
+        self._pending_heartbeat: _QueuedTelemetry | None = None
+        self._pending_sync: _QueuedTelemetry | None = None
+        self._pending_metrics: deque[_QueuedTelemetry] = deque()
+        self._pending_events: deque[_QueuedTelemetry] = deque()
         self._service_descriptor: dict[str, Any] | None = None
         self._runtime_descriptor: dict[str, Any] | None = None
         self._app: OneStepApp | None = None
@@ -617,29 +618,14 @@ class ControlPlaneWsSender:
     async def __call__(self, channel: str, payload: dict[str, Any]) -> None:
         if channel not in {"sync", "heartbeat", "metrics", "events"}:
             raise ValueError(f"unsupported control plane channel: {channel}")
-        await self.start()
-        state_lock = self._ensure_state_lock()
-        async with state_lock:
-            self._capture_identity(payload)
-            if channel == "sync":
-                self._pending_sync = payload
-            elif channel == "heartbeat":
-                self._pending_heartbeat = payload
-            elif channel == "metrics":
-                self._pending_metrics.append(payload)
-                self._apply_queue_backpressure(
-                    self._pending_metrics,
-                    limit=self._max_pending_metric_payloads,
-                    channel=channel,
-                )
-            else:
-                self._pending_events.append(payload)
-                self._apply_queue_backpressure(
-                    self._pending_events,
-                    limit=self._max_pending_event_payloads,
-                    channel=channel,
-                )
-        self._signal_worker()
+        await self._enqueue(channel, payload)
+
+    async def send_and_wait(self, channel: str, payload: dict[str, Any]) -> None:
+        if channel not in {"sync", "heartbeat", "metrics", "events"}:
+            raise ValueError(f"unsupported control plane channel: {channel}")
+        waiter = await self._enqueue(channel, payload, wait_for_delivery=True)
+        assert waiter is not None
+        await waiter
 
     async def close(self) -> None:
         self._stop_requested = True
@@ -667,6 +653,9 @@ class ControlPlaneWsSender:
         dropped_heartbeat = self._pending_heartbeat is not None
         dropped_metrics = len(self._pending_metrics)
         dropped_events = len(self._pending_events)
+        self._fail_all_pending_waiters(
+            RuntimeError("control plane telemetry sender closed before delivery"),
+        )
         self._pending_sync = None
         self._pending_heartbeat = None
         self._pending_metrics.clear()
@@ -821,9 +810,60 @@ class ControlPlaneWsSender:
     def _signal_worker(self) -> None:
         self._ensure_wake_event().set()
 
+    async def _enqueue(
+        self,
+        channel: str,
+        payload: dict[str, Any],
+        *,
+        wait_for_delivery: bool = False,
+    ) -> asyncio.Future[None] | None:
+        await self.start()
+        waiter = self._create_waiter() if wait_for_delivery else None
+        queued = _QueuedTelemetry(channel=channel, payload=payload)
+        if waiter is not None:
+            queued.waiters.append(waiter)
+        state_lock = self._ensure_state_lock()
+        async with state_lock:
+            self._capture_identity(payload)
+            if channel == "sync":
+                self._pending_sync = self._replace_latest(self._pending_sync, queued)
+            elif channel == "heartbeat":
+                self._pending_heartbeat = self._replace_latest(self._pending_heartbeat, queued)
+            elif channel == "metrics":
+                self._pending_metrics.append(queued)
+                self._apply_queue_backpressure(
+                    self._pending_metrics,
+                    limit=self._max_pending_metric_payloads,
+                    channel=channel,
+                )
+            else:
+                self._pending_events.append(queued)
+                self._apply_queue_backpressure(
+                    self._pending_events,
+                    limit=self._max_pending_event_payloads,
+                    channel=channel,
+                )
+        self._signal_worker()
+        return waiter
+
+    def _create_waiter(self) -> asyncio.Future[None]:
+        return asyncio.get_running_loop().create_future()
+
+    def _replace_latest(
+        self,
+        current: _QueuedTelemetry | None,
+        replacement: _QueuedTelemetry,
+    ) -> _QueuedTelemetry:
+        if current is None:
+            return replacement
+        if current.waiters:
+            replacement.waiters[:0] = current.waiters
+            current.waiters = []
+        return replacement
+
     def _apply_queue_backpressure(
         self,
-        queue: deque[dict[str, Any]],
+        queue: deque[_QueuedTelemetry],
         *,
         limit: int,
         channel: str,
@@ -832,7 +872,13 @@ class ControlPlaneWsSender:
         if overflow <= 0:
             return
         for _ in range(overflow):
-            queue.popleft()
+            dropped = queue.popleft()
+            self._fail_waiters(
+                dropped.waiters,
+                RuntimeError(
+                    f"control plane {channel} telemetry was dropped due to local backpressure"
+                ),
+            )
         self._logger.warning(
             "dropping control plane WS telemetry due to local sender backpressure",
             extra={
@@ -891,32 +937,36 @@ class ControlPlaneWsSender:
 
     def _peek_pending_telemetry(self) -> _QueuedTelemetry | None:
         if self._pending_sync is not None:
-            return _QueuedTelemetry("sync", self._pending_sync)
+            return self._pending_sync
         if self._pending_heartbeat is not None:
-            return _QueuedTelemetry("heartbeat", self._pending_heartbeat)
+            return self._pending_heartbeat
         if self._pending_metrics:
-            return _QueuedTelemetry("metrics", self._pending_metrics[0])
+            return self._pending_metrics[0]
         if self._pending_events:
-            return _QueuedTelemetry("events", self._pending_events[0])
+            return self._pending_events[0]
         return None
 
     async def _consume_sent_telemetry(self, queued: _QueuedTelemetry) -> None:
         state_lock = self._ensure_state_lock()
         async with state_lock:
             if queued.channel == "sync":
-                if self._pending_sync is queued.payload:
+                if self._pending_sync is queued:
                     self._pending_sync = None
+                self._resolve_waiters(queued.waiters)
                 return
             if queued.channel == "heartbeat":
-                if self._pending_heartbeat is queued.payload:
+                if self._pending_heartbeat is queued:
                     self._pending_heartbeat = None
+                self._resolve_waiters(queued.waiters)
                 return
             if queued.channel == "metrics":
-                if self._pending_metrics and self._pending_metrics[0] is queued.payload:
+                if self._pending_metrics and self._pending_metrics[0] is queued:
                     self._pending_metrics.popleft()
+                self._resolve_waiters(queued.waiters)
                 return
-            if self._pending_events and self._pending_events[0] is queued.payload:
+            if self._pending_events and self._pending_events[0] is queued:
                 self._pending_events.popleft()
+            self._resolve_waiters(queued.waiters)
 
     async def _ensure_connected_in_background(self) -> bool:
         if self._transport.connected:
@@ -946,6 +996,36 @@ class ControlPlaneWsSender:
             return False
         self._reconnect_attempts = 0
         return True
+
+    def _fail_all_pending_waiters(self, error: Exception) -> None:
+        if self._pending_sync is not None:
+            self._fail_waiters(self._pending_sync.waiters, error)
+            self._pending_sync.waiters = []
+        if self._pending_heartbeat is not None:
+            self._fail_waiters(self._pending_heartbeat.waiters, error)
+            self._pending_heartbeat.waiters = []
+        for queued in self._pending_metrics:
+            self._fail_waiters(queued.waiters, error)
+            queued.waiters = []
+        for queued in self._pending_events:
+            self._fail_waiters(queued.waiters, error)
+            queued.waiters = []
+
+    def _resolve_waiters(self, waiters: list[asyncio.Future[None]]) -> None:
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+        waiters.clear()
+
+    def _fail_waiters(
+        self,
+        waiters: list[asyncio.Future[None]],
+        error: Exception,
+    ) -> None:
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_exception(RuntimeError(str(error)))
+        waiters.clear()
 
 
 def _require_task_name_arg(command: AgentCommand) -> str:

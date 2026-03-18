@@ -1085,6 +1085,63 @@ def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -
     assert [attempt[0] for attempt in transport.send_attempts] == ["sync", "sync"]
 
 
+def test_ws_sender_send_and_wait_blocks_until_delivery() -> None:
+    @dataclass
+    class BlockingTransport:
+        connected: bool = False
+        connect_calls: int = 0
+        send_calls: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+        started: asyncio.Event = field(default_factory=asyncio.Event)
+        release: asyncio.Event = field(default_factory=asyncio.Event)
+
+        async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
+            self.connected = True
+            self.connect_calls += 1
+
+        async def send_telemetry(self, channel: str, body: dict[str, object]) -> None:
+            self.send_calls.append((channel, dict(body)))
+            self.started.set()
+            await self.release.wait()
+
+        async def close(self) -> None:
+            self.connected = False
+
+    transport = BlockingTransport()
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    payload = {
+        "service": {
+            "name": "billing-sync",
+            "environment": "prod",
+            "node_name": "vm-prod-3",
+            "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
+            "deployment_version": "1.0.0+c435c99",
+        },
+        "runtime": {
+            "onestep_version": "1.0.0",
+            "python_version": "3.12.3",
+            "hostname": "host-a",
+            "pid": 12345,
+            "started_at": datetime(2026, 3, 17, 11, 58, tzinfo=timezone.utc),
+        },
+        "app": {"name": "billing-sync", "shutdown_timeout_s": 30.0, "tasks": []},
+        "sent_at": datetime(2026, 3, 17, 12, 0, 0, tzinfo=timezone.utc),
+        "sequence": 2,
+    }
+
+    async def scenario() -> None:
+        wait_task = asyncio.create_task(sender.send_and_wait("sync", payload))
+        await asyncio.wait_for(transport.started.wait(), timeout=0.1)
+        assert wait_task.done() is False
+        transport.release.set()
+        await asyncio.wait_for(wait_task, timeout=0.1)
+        await sender.close()
+
+    asyncio.run(scenario())
+
+    assert transport.connect_calls == 1
+    assert [call[0] for call in transport.send_calls] == ["sync"]
+
+
 def test_ws_sender_startup_and_shutdown_do_not_block_when_connect_hangs() -> None:
     @dataclass
     class HangingTransport:
