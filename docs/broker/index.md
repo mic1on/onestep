@@ -26,6 +26,7 @@ Broker 是数据源的抽象，包括 Source（输入）和 Sink（输出）。
 
 | Broker | Source | Sink | 描述 |
 |--------|--------|------|------|
+| [Redis Streams](/broker/redis) | ✅ | ✅ | Redis Streams 消息队列 |
 | [RabbitMQ](/broker/rabbitmq) | ✅ | ✅ | RabbitMQ 队列 |
 | [AWS SQS](/broker/sqs) | ✅ | ✅ | AWS SQS 托管队列 |
 
