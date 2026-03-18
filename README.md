@@ -271,7 +271,11 @@ Common optional environment variables:
 - `ONESTEP_CONTROL_PLANE_METRICS_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_FLUSH_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_BATCH_SIZE`
+- `ONESTEP_CONTROL_PLANE_MAX_PENDING_EVENTS`
+- `ONESTEP_CONTROL_PLANE_MAX_PENDING_METRIC_BATCHES`
 - `ONESTEP_CONTROL_PLANE_TIMEOUT_S`
+- `ONESTEP_CONTROL_PLANE_RECONNECT_BASE_DELAY_S`
+- `ONESTEP_CONTROL_PLANE_RECONNECT_MAX_DELAY_S`
 
 The reporter now uses:
 
@@ -288,6 +292,8 @@ Behavior:
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
 - remote commands can trigger `ping`, `shutdown`, `sync_now`, `flush_metrics`, and `flush_events`
+- transport send failures reset the current session and reconnect with exponential backoff plus jitter
+- low-priority `metrics` and `events` buffers are bounded locally; if the control plane stays down, the oldest buffered telemetry is dropped first
 - reporter failures are logged but do not stop task execution
 
 Quick local demo:
@@ -307,7 +313,14 @@ cd ../onestep-control-plane
 ./scripts/run-control-plane-demo.sh
 ```
 
-3. Inspect the control plane. The demo cycles through `ok`, `retry_once`, `fail`, and `slow`
+3. Or run the end-to-end smoke script, which boots the local control plane, starts the
+   demo agent, dispatches a `ping`, and waits for a successful `command_result`:
+
+```bash
+./scripts/run-control-plane-smoke.sh
+```
+
+4. Inspect the control plane. The demo cycles through `ok`, `retry_once`, `fail`, and `slow`
    jobs so you can see successful runs, retries, terminal failures, timeouts, and dead-letter
    events without changing any code:
 

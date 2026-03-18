@@ -156,7 +156,11 @@ class ControlPlaneReporterConfig:
     metrics_interval_s: float = 30.0
     event_flush_interval_s: float = 5.0
     event_batch_size: int = 100
+    max_pending_events: int = 1000
+    max_pending_metric_batches: int = 120
     timeout_s: float = 5.0
+    reconnect_base_delay_s: float = 0.5
+    reconnect_max_delay_s: float = 30.0
 
     def __post_init__(self) -> None:
         self.base_url = _normalize_base_url(self.base_url)
@@ -178,7 +182,25 @@ class ControlPlaneReporterConfig:
             self.event_flush_interval_s,
         )
         self.event_batch_size = _coerce_positive_int("event_batch_size", self.event_batch_size)
+        self.max_pending_events = _coerce_positive_int(
+            "max_pending_events",
+            self.max_pending_events,
+        )
+        self.max_pending_metric_batches = _coerce_positive_int(
+            "max_pending_metric_batches",
+            self.max_pending_metric_batches,
+        )
         self.timeout_s = _coerce_positive_float("timeout_s", self.timeout_s)
+        self.reconnect_base_delay_s = _coerce_positive_float(
+            "reconnect_base_delay_s",
+            self.reconnect_base_delay_s,
+        )
+        self.reconnect_max_delay_s = _coerce_positive_float(
+            "reconnect_max_delay_s",
+            self.reconnect_max_delay_s,
+        )
+        if self.reconnect_max_delay_s < self.reconnect_base_delay_s:
+            raise ValueError("reconnect_max_delay_s must be >= reconnect_base_delay_s")
 
     @classmethod
     def from_env(cls, *, app_name: str | None = None) -> "ControlPlaneReporterConfig":
@@ -203,7 +225,17 @@ class ControlPlaneReporterConfig:
             _read_env("ONESTEP_CONTROL_PLANE_EVENT_FLUSH_INTERVAL_S") or 5.0
         )
         event_batch_size = int(_read_env("ONESTEP_CONTROL_PLANE_EVENT_BATCH_SIZE") or 100)
+        max_pending_events = int(_read_env("ONESTEP_CONTROL_PLANE_MAX_PENDING_EVENTS") or 1000)
+        max_pending_metric_batches = int(
+            _read_env("ONESTEP_CONTROL_PLANE_MAX_PENDING_METRIC_BATCHES") or 120
+        )
         timeout_s = float(_read_env("ONESTEP_CONTROL_PLANE_TIMEOUT_S") or 5.0)
+        reconnect_base_delay_s = float(
+            _read_env("ONESTEP_CONTROL_PLANE_RECONNECT_BASE_DELAY_S") or 0.5
+        )
+        reconnect_max_delay_s = float(
+            _read_env("ONESTEP_CONTROL_PLANE_RECONNECT_MAX_DELAY_S") or 30.0
+        )
         return cls(
             base_url=base_url,
             token=token,
@@ -216,7 +248,11 @@ class ControlPlaneReporterConfig:
             metrics_interval_s=metrics_interval_s,
             event_flush_interval_s=event_flush_interval_s,
             event_batch_size=event_batch_size,
+            max_pending_events=max_pending_events,
+            max_pending_metric_batches=max_pending_metric_batches,
             timeout_s=timeout_s,
+            reconnect_base_delay_s=reconnect_base_delay_s,
+            reconnect_max_delay_s=reconnect_max_delay_s,
         )
 
 
@@ -413,6 +449,7 @@ class ControlPlaneReporter:
             TaskEventKind.CANCELLED,
         }:
             self._pending_events.append(self._build_event_payload(event))
+            self._apply_event_backpressure()
             if (
                 self._event_flush_signal is not None
                 and len(self._pending_events) >= self.config.event_batch_size
@@ -644,19 +681,53 @@ class ControlPlaneReporter:
         }
 
     async def send_sync_now(self) -> None:
-        await self._safe_send_sync(force=True)
+        await self._send_sync(force=True)
 
     async def send_heartbeat_now(self) -> None:
-        await self._safe_send_heartbeat()
+        await self._send_heartbeat()
 
     async def flush_metrics_now(self) -> None:
         self._rotate_metrics_window(_utcnow())
-        await self._flush_metric_batches()
+        await self._flush_metric_batches(suppress_exceptions=False)
 
     async def flush_events_now(self) -> None:
-        await self._flush_event_batches()
+        await self._flush_event_batches(suppress_exceptions=False)
+
+    def _apply_event_backpressure(self) -> None:
+        overflow = len(self._pending_events) - self.config.max_pending_events
+        if overflow <= 0:
+            return
+        del self._pending_events[:overflow]
+        self._degraded_since_last_heartbeat = True
+        self._logger.warning(
+            "dropping control plane event telemetry due to local backpressure",
+            extra={
+                "dropped_events": overflow,
+                "retained_events": len(self._pending_events),
+            },
+        )
+
+    def _apply_metric_backpressure(self) -> None:
+        overflow = len(self._pending_metric_batches) - self.config.max_pending_metric_batches
+        if overflow <= 0:
+            return
+        del self._pending_metric_batches[:overflow]
+        self._degraded_since_last_heartbeat = True
+        self._logger.warning(
+            "dropping control plane metric telemetry due to local backpressure",
+            extra={
+                "dropped_metric_batches": overflow,
+                "retained_metric_batches": len(self._pending_metric_batches),
+            },
+        )
 
     async def _safe_send_sync(self, *, force: bool = False) -> None:
+        try:
+            await self._send_sync(force=force)
+        except Exception:
+            self._logger.exception("control plane sync failed")
+
+    async def _send_sync(self, *, force: bool = False) -> None:
         if self._app is None:
             return
         app_payload = self._build_app_topology_descriptor()
@@ -673,14 +744,16 @@ class ControlPlaneReporter:
             "sent_at": _utcnow(),
             "sequence": self._next_sequence(),
         }
-        try:
-            await self._sender("/api/v1/agents/sync", payload)
-        except Exception:
-            self._logger.exception("control plane sync failed")
-        else:
-            self._last_synced_topology_hash = topology_hash
+        await self._sender("sync", payload)
+        self._last_synced_topology_hash = topology_hash
 
     async def _safe_send_heartbeat(self) -> None:
+        try:
+            await self._send_heartbeat()
+        except Exception:
+            self._logger.exception("control plane heartbeat failed")
+
+    async def _send_heartbeat(self) -> None:
         payload = {
             "service": self._service_descriptor(),
             "runtime": self._build_runtime_descriptor(),
@@ -688,12 +761,8 @@ class ControlPlaneReporter:
             "sent_at": _utcnow(),
             "sequence": self._next_sequence(),
         }
-        try:
-            await self._sender("/api/v1/agents/heartbeat", payload)
-        except Exception:
-            self._logger.exception("control plane heartbeat failed")
-        else:
-            self._degraded_since_last_heartbeat = False
+        await self._sender("heartbeat", payload)
+        self._degraded_since_last_heartbeat = False
 
     def _rotate_metrics_window(self, ended_at: datetime) -> None:
         tasks: list[dict[str, Any]] = []
@@ -732,9 +801,10 @@ class ControlPlaneReporter:
                     tasks=tasks,
                 )
             )
+            self._apply_metric_backpressure()
         self._metrics_window_started_at = ended_at
 
-    async def _flush_metric_batches(self) -> None:
+    async def _flush_metric_batches(self, *, suppress_exceptions: bool = True) -> None:
         while self._pending_metric_batches:
             batch = self._pending_metric_batches[0]
             payload = {
@@ -748,13 +818,16 @@ class ControlPlaneReporter:
                 "tasks": batch.tasks,
             }
             try:
-                await self._sender("/api/v1/agents/metrics", payload)
+                await self._sender("metrics", payload)
             except Exception:
-                self._logger.exception("control plane metrics flush failed")
+                if suppress_exceptions:
+                    self._logger.exception("control plane metrics flush failed")
+                else:
+                    raise
                 return
             self._pending_metric_batches.pop(0)
 
-    async def _flush_event_batches(self) -> None:
+    async def _flush_event_batches(self, *, suppress_exceptions: bool = True) -> None:
         while self._pending_events:
             batch = self._pending_events[: self.config.event_batch_size]
             payload = {
@@ -764,9 +837,12 @@ class ControlPlaneReporter:
                 "events": batch,
             }
             try:
-                await self._sender("/api/v1/agents/events", payload)
+                await self._sender("events", payload)
             except Exception:
-                self._logger.exception("control plane event flush failed")
+                if suppress_exceptions:
+                    self._logger.exception("control plane event flush failed")
+                else:
+                    raise
                 return
             del self._pending_events[: len(batch)]
 

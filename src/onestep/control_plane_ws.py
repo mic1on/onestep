@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
@@ -207,7 +208,7 @@ class ControlPlaneWsTransport:
 
     @property
     def connected(self) -> bool:
-        return self._connection is not None
+        return self._connection is not None and self._hello_ack is not None
 
     @property
     def hello_ack(self) -> AgentHelloAck | None:
@@ -283,7 +284,7 @@ class ControlPlaneWsTransport:
             raise
 
     async def send_telemetry(self, channel: str, body: dict[str, Any]) -> None:
-        if self._connection is None:
+        if not self.connected:
             raise RuntimeError("WS transport must connect before sending telemetry")
         await self._send_message(
             self._build_message(
@@ -297,7 +298,10 @@ class ControlPlaneWsTransport:
 
     async def close(self) -> None:
         receive_task = self._receive_task
+        connection = self._connection
         self._receive_task = None
+        self._connection = None
+        self._hello_ack = None
         if receive_task is not None:
             receive_task.cancel()
             if receive_task is not asyncio.current_task():
@@ -305,32 +309,51 @@ class ControlPlaneWsTransport:
                     await receive_task
                 except asyncio.CancelledError:
                     pass
-        if self._connection is None:
-            self._hello_ack = None
+        if connection is None:
             return
         self._logger.info("closing control plane WS", extra={"ws_url": self._ws_url})
-        await self._connection.close()
-        self._connection = None
-        self._hello_ack = None
+        try:
+            await connection.close()
+        except Exception:
+            self._logger.warning(
+                "control plane WS close raised after disconnect",
+                extra={"ws_url": self._ws_url},
+                exc_info=True,
+            )
 
     async def _receive_loop(self) -> None:
         connection = self._connection
         if connection is None:
             return
-        while True:
-            try:
-                server_response = json.loads(await connection.recv())
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                return
-            message_type = server_response.get("type")
-            if message_type == "command":
-                await self._handle_command_message(server_response)
-            elif message_type == "error":
-                payload = server_response.get("payload", {})
-                if payload.get("close_connection"):
+        try:
+            while True:
+                try:
+                    server_response = json.loads(await connection.recv())
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._logger.warning(
+                        "control plane WS receive loop exited unexpectedly",
+                        extra={"ws_url": self._ws_url},
+                        exc_info=True,
+                    )
                     return
+                message_type = server_response.get("type")
+                if message_type == "command":
+                    await self._handle_command_message(server_response)
+                elif message_type == "error":
+                    payload = server_response.get("payload", {})
+                    if payload.get("close_connection"):
+                        self._logger.warning(
+                            "control plane WS server requested connection close",
+                            extra={
+                                "ws_url": self._ws_url,
+                                "error_code": payload.get("code"),
+                            },
+                        )
+                        return
+        finally:
+            await self._mark_disconnected(connection, close_connection=True)
 
     async def _handle_command_message(self, message: dict[str, Any]) -> None:
         payload = message.get("payload", {})
@@ -379,7 +402,33 @@ class ControlPlaneWsTransport:
     ) -> None:
         started_at = _utcnow()
         try:
-            result = await handler.handle_command(command)
+            result = await asyncio.wait_for(
+                handler.handle_command(command),
+                timeout=max(command.timeout_s, 0),
+            )
+        except asyncio.TimeoutError:
+            finished_at = _utcnow()
+            result_message = self._build_command_result_message(
+                command.command_id,
+                status="timeout",
+                finished_at=finished_at,
+                error_code="command_execution_timeout",
+                error_message=f"command exceeded timeout_s={command.timeout_s}",
+                duration_ms=max(int((finished_at - started_at).total_seconds() * 1000), 0),
+            )
+        except asyncio.CancelledError:
+            finished_at = _utcnow()
+            result_message = self._build_command_result_message(
+                command.command_id,
+                status="cancelled",
+                finished_at=finished_at,
+                error_code="command_execution_cancelled",
+                error_message="command execution was cancelled",
+                duration_ms=max(int((finished_at - started_at).total_seconds() * 1000), 0),
+            )
+            self._command_receipts.setdefault(command.command_id, {})["result"] = result_message
+            await self._send_message(result_message)
+            raise
         except Exception as exc:
             finished_at = _utcnow()
             result_message = self._build_command_result_message(
@@ -407,8 +456,13 @@ class ControlPlaneWsTransport:
             raise RuntimeError("WS transport is not connected")
         if self._send_lock is None:
             self._send_lock = asyncio.Lock()
+        connection = self._connection
         async with self._send_lock:
-            await self._connection.send(self._encode_message(message))
+            try:
+                await connection.send(self._encode_message(message))
+            except Exception:
+                await self._mark_disconnected(connection, close_connection=True)
+                raise
 
     def _build_command_ack_message(
         self,
@@ -466,17 +520,27 @@ class ControlPlaneWsTransport:
     def _encode_message(self, message: dict[str, Any]) -> str:
         return json.dumps(message, default=_json_default)
 
-
-def _endpoint_to_channel(endpoint: str) -> str:
-    if endpoint.endswith("/sync"):
-        return "sync"
-    if endpoint.endswith("/heartbeat"):
-        return "heartbeat"
-    if endpoint.endswith("/metrics"):
-        return "metrics"
-    if endpoint.endswith("/events"):
-        return "events"
-    raise ValueError(f"unsupported control plane endpoint: {endpoint}")
+    async def _mark_disconnected(
+        self,
+        connection: WsConnection,
+        *,
+        close_connection: bool,
+    ) -> None:
+        if self._connection is connection:
+            self._connection = None
+            self._hello_ack = None
+        if self._receive_task is asyncio.current_task():
+            self._receive_task = None
+        if not close_connection:
+            return
+        try:
+            await connection.close()
+        except Exception:
+            self._logger.warning(
+                "control plane WS cleanup close raised",
+                extra={"ws_url": self._ws_url},
+                exc_info=True,
+            )
 
 
 class ControlPlaneWsSender:
@@ -487,37 +551,47 @@ class ControlPlaneWsSender:
         capabilities: list[str] | None = None,
         transport: Any | None = None,
     ) -> None:
+        self._logger = logging.getLogger("onestep.control_plane.ws_sender")
         self._transport = transport or ControlPlaneWsTransport(
             base_url=config.base_url,
             token=config.token,
             capabilities=capabilities,
         )
+        self._config = config
         self._pending_heartbeat: dict[str, Any] | None = None
         self._service_descriptor: dict[str, Any] | None = None
         self._runtime_descriptor: dict[str, Any] | None = None
         self._app: OneStepApp | None = None
         self._reporter: ControlPlaneReporter | None = None
+        self._connect_lock: asyncio.Lock | None = None
+        self._send_lock: asyncio.Lock | None = None
+        self._reconnect_attempts = 0
         set_command_handler = getattr(self._transport, "set_command_handler", None)
         if callable(set_command_handler):
             set_command_handler(self)
 
-    async def __call__(self, endpoint: str, payload: dict[str, Any]) -> None:
-        channel = _endpoint_to_channel(endpoint)
-        self._capture_identity(payload)
+    async def __call__(self, channel: str, payload: dict[str, Any]) -> None:
+        if channel not in {"sync", "heartbeat", "metrics", "events"}:
+            raise ValueError(f"unsupported control plane channel: {channel}")
+        if self._send_lock is None:
+            self._send_lock = asyncio.Lock()
+        async with self._send_lock:
+            self._capture_identity(payload)
 
-        if channel == "heartbeat" and not self._transport.connected:
-            self._pending_heartbeat = payload
-            return
+            if channel == "heartbeat" and not self._transport.connected:
+                self._pending_heartbeat = payload
+                return
 
-        await self._ensure_connected()
-        await self._transport.send_telemetry(channel, payload)
+            await self._send_channel(channel, payload)
 
-        if channel == "sync" and self._pending_heartbeat is not None:
-            pending_heartbeat = self._pending_heartbeat
-            self._pending_heartbeat = None
-            await self._transport.send_telemetry("heartbeat", pending_heartbeat)
+            if channel == "sync" and self._pending_heartbeat is not None:
+                pending_heartbeat = self._pending_heartbeat
+                self._pending_heartbeat = None
+                await self._send_channel("heartbeat", pending_heartbeat)
 
     async def close(self) -> None:
+        self._pending_heartbeat = None
+        self._reconnect_attempts = 0
         close = getattr(self._transport, "close", None)
         if close is None:
             return
@@ -570,14 +644,51 @@ class ControlPlaneWsSender:
     async def _ensure_connected(self) -> None:
         if self._transport.connected:
             return
-        if self._service_descriptor is None or self._runtime_descriptor is None:
-            raise RuntimeError(
-                "WS sender requires service and runtime descriptors before opening a session"
+        if self._connect_lock is None:
+            self._connect_lock = asyncio.Lock()
+        async with self._connect_lock:
+            if self._transport.connected:
+                return
+            if self._service_descriptor is None or self._runtime_descriptor is None:
+                raise RuntimeError(
+                    "WS sender requires service and runtime descriptors before opening a session"
+                )
+            if self._reconnect_attempts > 0:
+                await asyncio.sleep(self._next_reconnect_delay_s())
+            try:
+                await self._transport.connect(
+                    service=self._service_descriptor,
+                    runtime=self._runtime_descriptor,
+                )
+            except Exception:
+                self._reconnect_attempts += 1
+                raise
+            else:
+                self._reconnect_attempts = 0
+
+    def _next_reconnect_delay_s(self) -> float:
+        base_delay = self._config.reconnect_base_delay_s
+        max_delay = self._config.reconnect_max_delay_s
+        backoff = min(max_delay, base_delay * (2 ** max(self._reconnect_attempts - 1, 0)))
+        jitter = 0.5 + random.random() * 0.5
+        return backoff * jitter
+
+    async def _send_channel(self, channel: str, payload: dict[str, Any]) -> None:
+        await self._ensure_connected()
+        try:
+            await self._transport.send_telemetry(channel, payload)
+        except Exception:
+            self._reconnect_attempts = max(self._reconnect_attempts, 1)
+            self._logger.warning(
+                "control plane WS send failed; reconnecting",
+                extra={"channel": channel},
+                exc_info=True,
             )
-        await self._transport.connect(
-            service=self._service_descriptor,
-            runtime=self._runtime_descriptor,
-        )
+            close = getattr(self._transport, "close", None)
+            if callable(close):
+                await close()
+            await self._ensure_connected()
+            await self._transport.send_telemetry(channel, payload)
 
 
 __all__ = [

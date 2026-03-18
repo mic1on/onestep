@@ -30,7 +30,11 @@ def _make_config() -> ControlPlaneReporterConfig:
         metrics_interval_s=3600.0,
         event_flush_interval_s=3600.0,
         event_batch_size=10,
+        max_pending_events=100,
+        max_pending_metric_batches=10,
         timeout_s=3.0,
+        reconnect_base_delay_s=0.01,
+        reconnect_max_delay_s=0.02,
     )
 
 
@@ -39,12 +43,12 @@ class FakeWsConnection:
     sent_messages: list[dict[str, object]] = field(default_factory=list)
     initial_messages: list[dict[str, object]] = field(default_factory=list)
     closed: bool = False
-    _recv_queue: asyncio.Queue[str] | None = field(init=False, default=None)
+    _recv_queue: asyncio.Queue[object] | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         return None
 
-    def _ensure_recv_queue(self) -> asyncio.Queue[str]:
+    def _ensure_recv_queue(self) -> asyncio.Queue[object]:
         if self._recv_queue is None:
             self._recv_queue = asyncio.Queue()
             for message in self.initial_messages:
@@ -56,13 +60,20 @@ class FakeWsConnection:
         self.sent_messages.append(json.loads(message))
 
     async def recv(self) -> str:
-        return await self._ensure_recv_queue().get()
+        message = await self._ensure_recv_queue().get()
+        if isinstance(message, Exception):
+            raise message
+        assert isinstance(message, str)
+        return message
 
     async def close(self) -> None:
         self.closed = True
 
     def queue_message(self, message: dict[str, object]) -> None:
         self._ensure_recv_queue().put_nowait(json.dumps(message))
+
+    def queue_error(self, error: Exception) -> None:
+        self._ensure_recv_queue().put_nowait(error)
 
 
 def test_build_control_plane_urls_handle_prefixed_ws_endpoints() -> None:
@@ -265,3 +276,195 @@ def test_ws_sender_executes_sync_now_command_over_active_session() -> None:
     assert ack_message["payload"]["status"] == "accepted"
     assert result_message["payload"]["status"] == "succeeded"
     assert result_message["payload"]["result"] == {"synced": True}
+    assert isinstance(result_message["payload"]["duration_ms"], int)
+
+
+def test_ws_transport_reports_timeout_for_slow_command() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": ["command.ping"],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    class SlowHandler:
+        def supports_command(self, kind: str) -> bool:
+            return kind == "ping"
+
+        async def handle_command(self, command) -> dict[str, object] | None:
+            await asyncio.sleep(0.05)
+            return {"ok": True}
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        assert url == "wss://control-plane.example.com/api/v1/agents/ws"
+        assert headers == {"Authorization": "Bearer secret-token"}
+        assert subprotocols == ["onestep-agent.v1"]
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+        command_handler=SlowHandler(),
+    )
+
+    async def scenario() -> None:
+        await transport.connect(
+            service={
+                "name": "billing-sync",
+                "environment": "prod",
+                "node_name": "vm-prod-3",
+                "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
+                "deployment_version": "1.0.0+c435c99",
+            },
+            runtime={
+                "onestep_version": "1.0.0",
+                "python_version": "3.12.3",
+                "hostname": "host-a",
+                "pid": 12345,
+                "started_at": datetime(2026, 3, 17, 11, 58, tzinfo=timezone.utc),
+            },
+        )
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_timeout",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "command_id": "cmd_timeout",
+                    "kind": "ping",
+                    "args": {},
+                    "timeout_s": 0,
+                    "created_at": "2026-03-17T12:00:02Z",
+                },
+            }
+        )
+        await asyncio.sleep(0.05)
+        await transport.close()
+
+    asyncio.run(scenario())
+
+    ack_message = next(message for message in connection.sent_messages if message["type"] == "command_ack")
+    result_message = next(
+        message for message in connection.sent_messages if message["type"] == "command_result"
+    )
+    assert ack_message["payload"]["status"] == "accepted"
+    assert result_message["payload"]["status"] == "timeout"
+    assert result_message["payload"]["error_code"] == "command_execution_timeout"
+    assert isinstance(result_message["payload"]["duration_ms"], int)
+
+
+def test_ws_transport_marks_itself_disconnected_after_receive_failure() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": ["telemetry.sync"],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+
+    async def scenario() -> None:
+        await transport.connect(
+            service={
+                "name": "billing-sync",
+                "environment": "prod",
+                "node_name": "vm-prod-3",
+                "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
+                "deployment_version": "1.0.0+c435c99",
+            },
+            runtime={
+                "onestep_version": "1.0.0",
+                "python_version": "3.12.3",
+                "hostname": "host-a",
+                "pid": 12345,
+                "started_at": datetime(2026, 3, 17, 11, 58, tzinfo=timezone.utc),
+            },
+        )
+        connection.queue_error(RuntimeError("socket closed"))
+        await asyncio.sleep(0.05)
+        assert transport.connected is False
+        assert transport.hello_ack is None
+        await transport.close()
+
+    asyncio.run(scenario())
+    assert connection.closed is True
+
+
+def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -> None:
+    @dataclass
+    class FlakyTransport:
+        connected: bool = False
+        connect_calls: int = 0
+        send_attempts: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+
+        async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
+            self.connected = True
+            self.connect_calls += 1
+
+        async def send_telemetry(self, channel: str, body: dict[str, object]) -> None:
+            self.send_attempts.append((channel, dict(body)))
+            if len(self.send_attempts) == 1:
+                self.connected = False
+                raise RuntimeError("broken pipe")
+
+        async def close(self) -> None:
+            self.connected = False
+
+    transport = FlakyTransport()
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    payload = {
+        "service": {
+            "name": "billing-sync",
+            "environment": "prod",
+            "node_name": "vm-prod-3",
+            "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
+            "deployment_version": "1.0.0+c435c99",
+        },
+        "runtime": {
+            "onestep_version": "1.0.0",
+            "python_version": "3.12.3",
+            "hostname": "host-a",
+            "pid": 12345,
+            "started_at": datetime(2026, 3, 17, 11, 58, tzinfo=timezone.utc),
+        },
+        "app": {"name": "billing-sync", "shutdown_timeout_s": 30.0, "tasks": []},
+        "sent_at": datetime(2026, 3, 17, 12, 0, 0, tzinfo=timezone.utc),
+        "sequence": 1,
+    }
+
+    async def scenario() -> None:
+        await sender("sync", payload)
+        await sender.close()
+
+    asyncio.run(scenario())
+
+    assert transport.connect_calls == 2
+    assert [attempt[0] for attempt in transport.send_attempts] == ["sync", "sync"]
