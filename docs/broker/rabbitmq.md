@@ -29,7 +29,7 @@ docker run -d --name rabbitmq \
   rabbitmq:3-management
 ```
 
-管理界面：http://localhost:15672（用户名/密码：admin/admin）
+管理界面：`http://localhost:15672`（用户名/密码：admin/admin）
 
 ### 基本使用
 
