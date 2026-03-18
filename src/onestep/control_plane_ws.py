@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
@@ -131,6 +132,12 @@ class AgentCommand:
     args: dict[str, Any]
     timeout_s: int
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class _QueuedTelemetry:
+    channel: str
+    payload: dict[str, Any]
 
 
 class AgentCommandHandler(Protocol):
@@ -575,39 +582,107 @@ class ControlPlaneWsSender:
         )
         self._config = config
         self._pending_heartbeat: dict[str, Any] | None = None
+        self._pending_sync: dict[str, Any] | None = None
+        self._pending_metrics: deque[dict[str, Any]] = deque()
+        self._pending_events: deque[dict[str, Any]] = deque()
         self._service_descriptor: dict[str, Any] | None = None
         self._runtime_descriptor: dict[str, Any] | None = None
         self._app: OneStepApp | None = None
         self._reporter: ControlPlaneReporter | None = None
-        self._connect_lock: asyncio.Lock | None = None
-        self._send_lock: asyncio.Lock | None = None
+        self._state_lock: asyncio.Lock | None = None
+        self._wake_event: asyncio.Event | None = None
+        self._worker_task: asyncio.Task[None] | None = None
+        self._stop_requested = False
         self._reconnect_attempts = 0
+        self._max_pending_metric_payloads = config.max_pending_metric_batches
+        self._max_pending_event_payloads = max(
+            1,
+            (config.max_pending_events + config.event_batch_size - 1) // config.event_batch_size,
+        )
         set_command_handler = getattr(self._transport, "set_command_handler", None)
         if callable(set_command_handler):
             set_command_handler(self)
 
+    async def start(self) -> None:
+        task = self._worker_task
+        if task is not None and not task.done():
+            return
+        self._stop_requested = False
+        self._ensure_wake_event()
+        self._worker_task = asyncio.create_task(
+            self._run(),
+            name="onestep-control-plane-ws-sender",
+        )
+
     async def __call__(self, channel: str, payload: dict[str, Any]) -> None:
         if channel not in {"sync", "heartbeat", "metrics", "events"}:
             raise ValueError(f"unsupported control plane channel: {channel}")
-        if self._send_lock is None:
-            self._send_lock = asyncio.Lock()
-        async with self._send_lock:
+        await self.start()
+        state_lock = self._ensure_state_lock()
+        async with state_lock:
             self._capture_identity(payload)
-
-            if channel == "heartbeat" and not self._transport.connected:
+            if channel == "sync":
+                self._pending_sync = payload
+            elif channel == "heartbeat":
                 self._pending_heartbeat = payload
-                return
-
-            await self._send_channel(channel, payload)
-
-            if channel == "sync" and self._pending_heartbeat is not None:
-                pending_heartbeat = self._pending_heartbeat
-                self._pending_heartbeat = None
-                await self._send_channel("heartbeat", pending_heartbeat)
+            elif channel == "metrics":
+                self._pending_metrics.append(payload)
+                self._apply_queue_backpressure(
+                    self._pending_metrics,
+                    limit=self._max_pending_metric_payloads,
+                    channel=channel,
+                )
+            else:
+                self._pending_events.append(payload)
+                self._apply_queue_backpressure(
+                    self._pending_events,
+                    limit=self._max_pending_event_payloads,
+                    channel=channel,
+                )
+        self._signal_worker()
 
     async def close(self) -> None:
+        self._stop_requested = True
+        self._signal_worker()
+        worker_task = self._worker_task
+        if worker_task is not None:
+            try:
+                await asyncio.wait_for(
+                    worker_task,
+                    timeout=self._config.shutdown_flush_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                self._logger.warning(
+                    "control plane WS sender shutdown timed out; dropping pending telemetry",
+                    extra={"timeout_s": self._config.shutdown_flush_timeout_s},
+                )
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
+            finally:
+                self._worker_task = None
+        dropped_sync = self._pending_sync is not None
+        dropped_heartbeat = self._pending_heartbeat is not None
+        dropped_metrics = len(self._pending_metrics)
+        dropped_events = len(self._pending_events)
+        self._pending_sync = None
         self._pending_heartbeat = None
+        self._pending_metrics.clear()
+        self._pending_events.clear()
+        self._wake_event = None
         self._reconnect_attempts = 0
+        if dropped_sync or dropped_heartbeat or dropped_metrics or dropped_events:
+            self._logger.warning(
+                "dropping pending control plane telemetry during sender shutdown",
+                extra={
+                    "dropped_sync": dropped_sync,
+                    "dropped_heartbeat": dropped_heartbeat,
+                    "dropped_metric_payloads": dropped_metrics,
+                    "dropped_event_payloads": dropped_events,
+                },
+            )
         close = getattr(self._transport, "close", None)
         if close is None:
             return
@@ -726,34 +801,6 @@ class ControlPlaneWsSender:
                 capabilities.append(capability)
         return capabilities
 
-    async def _ensure_connected(self) -> None:
-        if self._transport.connected:
-            return
-        if self._connect_lock is None:
-            self._connect_lock = asyncio.Lock()
-        async with self._connect_lock:
-            if self._transport.connected:
-                return
-            if self._service_descriptor is None or self._runtime_descriptor is None:
-                raise RuntimeError(
-                    "WS sender requires service and runtime descriptors before opening a session"
-                )
-            set_capabilities = getattr(self._transport, "set_capabilities", None)
-            if callable(set_capabilities):
-                set_capabilities(self._advertised_capabilities())
-            if self._reconnect_attempts > 0:
-                await asyncio.sleep(self._next_reconnect_delay_s())
-            try:
-                await self._transport.connect(
-                    service=self._service_descriptor,
-                    runtime=self._runtime_descriptor,
-                )
-            except Exception:
-                self._reconnect_attempts += 1
-                raise
-            else:
-                self._reconnect_attempts = 0
-
     def _next_reconnect_delay_s(self) -> float:
         base_delay = self._config.reconnect_base_delay_s
         max_delay = self._config.reconnect_max_delay_s
@@ -761,22 +808,144 @@ class ControlPlaneWsSender:
         jitter = 0.5 + random.random() * 0.5
         return backoff * jitter
 
-    async def _send_channel(self, channel: str, payload: dict[str, Any]) -> None:
-        await self._ensure_connected()
+    def _ensure_state_lock(self) -> asyncio.Lock:
+        if self._state_lock is None:
+            self._state_lock = asyncio.Lock()
+        return self._state_lock
+
+    def _ensure_wake_event(self) -> asyncio.Event:
+        if self._wake_event is None:
+            self._wake_event = asyncio.Event()
+        return self._wake_event
+
+    def _signal_worker(self) -> None:
+        self._ensure_wake_event().set()
+
+    def _apply_queue_backpressure(
+        self,
+        queue: deque[dict[str, Any]],
+        *,
+        limit: int,
+        channel: str,
+    ) -> None:
+        overflow = len(queue) - limit
+        if overflow <= 0:
+            return
+        for _ in range(overflow):
+            queue.popleft()
+        self._logger.warning(
+            "dropping control plane WS telemetry due to local sender backpressure",
+            extra={
+                "channel": channel,
+                "dropped_payloads": overflow,
+                "retained_payloads": len(queue),
+            },
+        )
+
+    async def _run(self) -> None:
         try:
-            await self._transport.send_telemetry(channel, payload)
-        except Exception:
-            self._reconnect_attempts = max(self._reconnect_attempts, 1)
+            while True:
+                queued = await self._wait_for_pending_telemetry()
+                if queued is None:
+                    return
+                if not await self._ensure_connected_in_background():
+                    continue
+                try:
+                    await self._transport.send_telemetry(queued.channel, queued.payload)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._reconnect_attempts = max(self._reconnect_attempts, 1)
+                    self._logger.warning(
+                        "control plane WS send failed; reconnecting in background",
+                        extra={"channel": queued.channel},
+                        exc_info=True,
+                    )
+                    close = getattr(self._transport, "close", None)
+                    if callable(close):
+                        try:
+                            await close()
+                        except Exception:
+                            self._logger.warning(
+                                "control plane WS close raised while recovering from send failure",
+                                exc_info=True,
+                            )
+                    continue
+                self._reconnect_attempts = 0
+                await self._consume_sent_telemetry(queued)
+        finally:
+            self._worker_task = None
+
+    async def _wait_for_pending_telemetry(self) -> _QueuedTelemetry | None:
+        while True:
+            state_lock = self._ensure_state_lock()
+            async with state_lock:
+                queued = self._peek_pending_telemetry()
+                if queued is not None:
+                    return queued
+                if self._stop_requested:
+                    return None
+            wake_event = self._ensure_wake_event()
+            await wake_event.wait()
+            wake_event.clear()
+
+    def _peek_pending_telemetry(self) -> _QueuedTelemetry | None:
+        if self._pending_sync is not None:
+            return _QueuedTelemetry("sync", self._pending_sync)
+        if self._pending_heartbeat is not None:
+            return _QueuedTelemetry("heartbeat", self._pending_heartbeat)
+        if self._pending_metrics:
+            return _QueuedTelemetry("metrics", self._pending_metrics[0])
+        if self._pending_events:
+            return _QueuedTelemetry("events", self._pending_events[0])
+        return None
+
+    async def _consume_sent_telemetry(self, queued: _QueuedTelemetry) -> None:
+        state_lock = self._ensure_state_lock()
+        async with state_lock:
+            if queued.channel == "sync":
+                if self._pending_sync is queued.payload:
+                    self._pending_sync = None
+                return
+            if queued.channel == "heartbeat":
+                if self._pending_heartbeat is queued.payload:
+                    self._pending_heartbeat = None
+                return
+            if queued.channel == "metrics":
+                if self._pending_metrics and self._pending_metrics[0] is queued.payload:
+                    self._pending_metrics.popleft()
+                return
+            if self._pending_events and self._pending_events[0] is queued.payload:
+                self._pending_events.popleft()
+
+    async def _ensure_connected_in_background(self) -> bool:
+        if self._transport.connected:
+            return True
+        if self._service_descriptor is None or self._runtime_descriptor is None:
             self._logger.warning(
-                "control plane WS send failed; reconnecting",
-                extra={"channel": channel},
+                "control plane WS sender is missing service/runtime descriptors; deferring connect"
+            )
+            await asyncio.sleep(self._next_reconnect_delay_s())
+            return False
+        set_capabilities = getattr(self._transport, "set_capabilities", None)
+        if callable(set_capabilities):
+            set_capabilities(self._advertised_capabilities())
+        if self._reconnect_attempts > 0:
+            await asyncio.sleep(self._next_reconnect_delay_s())
+        try:
+            await self._transport.connect(
+                service=self._service_descriptor,
+                runtime=self._runtime_descriptor,
+            )
+        except Exception:
+            self._logger.warning(
+                "control plane WS connect failed; will retry in background",
                 exc_info=True,
             )
-            close = getattr(self._transport, "close", None)
-            if callable(close):
-                await close()
-            await self._ensure_connected()
-            await self._transport.send_telemetry(channel, payload)
+            self._reconnect_attempts += 1
+            return False
+        self._reconnect_attempts = 0
+        return True
 
 
 def _require_task_name_arg(command: AgentCommand) -> str:

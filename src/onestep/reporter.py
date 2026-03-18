@@ -55,6 +55,12 @@ def _coerce_positive_float(name: str, value: float) -> float:
     return value
 
 
+def _coerce_non_negative_float(name: str, value: float) -> float:
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0")
+    return value
+
+
 def _coerce_positive_int(name: str, value: int) -> int:
     if value < 1:
         raise ValueError(f"{name} must be >= 1")
@@ -161,6 +167,7 @@ class ControlPlaneReporterConfig:
     timeout_s: float = 5.0
     reconnect_base_delay_s: float = 0.5
     reconnect_max_delay_s: float = 30.0
+    shutdown_flush_timeout_s: float = 0.5
 
     def __post_init__(self) -> None:
         self.base_url = _normalize_base_url(self.base_url)
@@ -199,6 +206,10 @@ class ControlPlaneReporterConfig:
             "reconnect_max_delay_s",
             self.reconnect_max_delay_s,
         )
+        self.shutdown_flush_timeout_s = _coerce_non_negative_float(
+            "shutdown_flush_timeout_s",
+            self.shutdown_flush_timeout_s,
+        )
         if self.reconnect_max_delay_s < self.reconnect_base_delay_s:
             raise ValueError("reconnect_max_delay_s must be >= reconnect_base_delay_s")
 
@@ -236,6 +247,9 @@ class ControlPlaneReporterConfig:
         reconnect_max_delay_s = float(
             _read_env("ONESTEP_CONTROL_PLANE_RECONNECT_MAX_DELAY_S") or 30.0
         )
+        shutdown_flush_timeout_s = float(
+            _read_env("ONESTEP_CONTROL_PLANE_SHUTDOWN_FLUSH_TIMEOUT_S") or 0.5
+        )
         return cls(
             base_url=base_url,
             token=token,
@@ -253,6 +267,7 @@ class ControlPlaneReporterConfig:
             timeout_s=timeout_s,
             reconnect_base_delay_s=reconnect_base_delay_s,
             reconnect_max_delay_s=reconnect_max_delay_s,
+            shutdown_flush_timeout_s=shutdown_flush_timeout_s,
         )
 
 
@@ -387,6 +402,11 @@ class ControlPlaneReporter:
         self._event_flush_signal = asyncio.Event()
         self._started_at = _utcnow()
         self._metrics_window_started_at = self._started_at
+        start = getattr(self._sender, "start", None)
+        if callable(start):
+            result = start()
+            if inspect.isawaitable(result):
+                await result
         await self._safe_send_heartbeat()
         await self._safe_send_sync()
         self._loop_tasks = [

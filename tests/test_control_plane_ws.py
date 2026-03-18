@@ -1073,9 +1073,51 @@ def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -
 
     async def scenario() -> None:
         await sender("sync", payload)
+        for _ in range(50):
+            if len(transport.send_attempts) >= 2:
+                break
+            await asyncio.sleep(0.01)
         await sender.close()
 
     asyncio.run(scenario())
 
     assert transport.connect_calls == 2
     assert [attempt[0] for attempt in transport.send_attempts] == ["sync", "sync"]
+
+
+def test_ws_sender_startup_and_shutdown_do_not_block_when_connect_hangs() -> None:
+    @dataclass
+    class HangingTransport:
+        connected: bool = False
+        connect_calls: int = 0
+        close_calls: int = 0
+        _connect_gate: asyncio.Event = field(default_factory=asyncio.Event)
+
+        async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
+            self.connect_calls += 1
+            await self._connect_gate.wait()
+            self.connected = True
+
+        async def send_telemetry(self, channel: str, body: dict[str, object]) -> None:
+            raise AssertionError("send_telemetry should not be reached while connect is hanging")
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            self.connected = False
+
+    config = _make_config()
+    config.shutdown_flush_timeout_s = 0.01
+    transport = HangingTransport()
+    app = OneStepApp("billing-sync")
+    sender = ControlPlaneWsSender(config, transport=transport)
+    reporter = ControlPlaneReporter(config, sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await asyncio.wait_for(app.startup(), timeout=0.1)
+        await asyncio.wait_for(app.shutdown(), timeout=0.1)
+
+    asyncio.run(scenario())
+
+    assert transport.connect_calls >= 1
+    assert transport.close_calls == 1
