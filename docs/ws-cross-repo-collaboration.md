@@ -122,6 +122,7 @@ Agent-Control Plane WS 协议文档只保留一份，建议放在 `onestep-contr
     "command.drain",
     "command.pause_task",
     "command.resume_task",
+    "command.discard_dead_letters",
     "command.replay_dead_letters",
     "command.sync_now",
     "command.flush_metrics",
@@ -219,6 +220,7 @@ Agent-Control Plane WS 协议文档只保留一份，建议放在 `onestep-contr
 - `drain`
 - `pause_task`
 - `resume_task`
+- `discard_dead_letters`
 - `replay_dead_letters`
 - `sync_now`
 - `flush_metrics`

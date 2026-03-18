@@ -36,6 +36,7 @@ DEFAULT_COMMAND_CAPABILITIES = [
     "command.drain",
     "command.pause_task",
     "command.resume_task",
+    "command.discard_dead_letters",
     "command.replay_dead_letters",
     "command.sync_now",
     "command.flush_metrics",
@@ -621,6 +622,11 @@ class ControlPlaneWsSender:
     def supports_command(self, kind: str) -> bool:
         if kind == "ping":
             return True
+        if kind == "discard_dead_letters":
+            return (
+                self._app is not None
+                and self._app.supports_dead_letter_discard_commands()
+            )
         if kind == "replay_dead_letters":
             return (
                 self._app is not None
@@ -674,6 +680,12 @@ class ControlPlaneWsSender:
             task_name = _require_task_name_arg(command)
             self._app.request_task_resume(task_name)
             return await self._app.wait_for_task_resume(task_name)
+        if command.kind == "discard_dead_letters":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            task_name = _require_task_name_arg(command)
+            discard_limit = _require_positive_int_arg(command, "limit", default=10)
+            return await self._app.discard_task_dead_letters(task_name, limit=discard_limit)
         if command.kind == "replay_dead_letters":
             if self._app is None:
                 raise RuntimeError("app is not bound")

@@ -260,6 +260,7 @@ def test_ws_sender_advertises_restart_and_drain_only_after_binding_runtime() -> 
     assert "command.drain" in capabilities
     assert "command.pause_task" in capabilities
     assert "command.resume_task" in capabilities
+    assert "command.discard_dead_letters" not in capabilities
     assert "command.replay_dead_letters" not in capabilities
 
 
@@ -277,6 +278,7 @@ def test_ws_sender_advertises_dead_letter_replay_only_for_compatible_tasks() -> 
                     "accepted_capabilities": [
                         "telemetry.sync",
                         "telemetry.heartbeat",
+                        "command.discard_dead_letters",
                         "command.replay_dead_letters",
                     ],
                     "server_time": "2026-03-17T12:00:00Z",
@@ -312,6 +314,7 @@ def test_ws_sender_advertises_dead_letter_replay_only_for_compatible_tasks() -> 
 
     hello_message = connection.sent_messages[0]
     capabilities = hello_message["payload"]["capabilities"]
+    assert "command.discard_dead_letters" in capabilities
     assert "command.replay_dead_letters" in capabilities
 
 
@@ -781,6 +784,110 @@ def test_ws_sender_executes_replay_dead_letters_command() -> None:
     assert replayed_batch[0].payload == {"value": 1}
     assert replayed_batch[0].envelope.meta == {"trace_id": "abc"}
     assert replayed_batch[0].envelope.attempts == 2
+
+
+def test_ws_sender_executes_discard_dead_letters_command() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.discard_dead_letters",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    app = OneStepApp("billing-sync")
+    source = MemoryQueue("sync-users.incoming", batch_size=1, poll_interval_s=0.01)
+    dead = MemoryQueue("sync-users.dead", batch_size=1, poll_interval_s=0.01)
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    @app.task(name="sync_users", source=source, dead_letter=dead)
+    async def sync_users(ctx, item):
+        return item
+
+    async def scenario() -> None:
+        await app.startup()
+        await dead.publish(
+            {
+                "payload": {"value": 1},
+                "failure": {
+                    "kind": "error",
+                    "exception_type": "RuntimeError",
+                    "message": "boom",
+                    "traceback": "Traceback",
+                },
+            },
+            meta={"original_meta": {"trace_id": "abc"}, "original_attempts": 2},
+        )
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_discard_dead_letters",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "command_id": "cmd_discard_dead_letters",
+                    "kind": "discard_dead_letters",
+                    "args": {"task_name": "sync_users", "limit": 5},
+                    "timeout_s": 30,
+                    "created_at": "2026-03-17T12:00:02Z",
+                },
+            }
+        )
+        for _ in range(50):
+            if any(
+                message["type"] == "command_result"
+                and message["payload"]["command_id"] == "cmd_discard_dead_letters"
+                for message in connection.sent_messages
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("discard_dead_letters command_result was not sent")
+        assert await dead.fetch(1) == []
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    discard_result = next(
+        message
+        for message in connection.sent_messages
+        if message["type"] == "command_result"
+        and message["payload"]["command_id"] == "cmd_discard_dead_letters"
+    )
+    assert discard_result["payload"]["status"] == "succeeded"
+    assert discard_result["payload"]["result"] == {
+        "operation": "discard_dead_letters",
+        "task_name": "sync_users",
+        "requested": True,
+        "completion": "complete",
+        "requested_limit": 5,
+        "attempted_count": 1,
+        "discarded_count": 1,
+        "failed_count": 0,
+        "empty": False,
+    }
 
 
 def test_ws_transport_reports_timeout_for_slow_command() -> None:

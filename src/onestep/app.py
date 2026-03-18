@@ -181,6 +181,51 @@ class OneStepApp:
             "empty": attempted_count == 0,
         }
 
+    async def discard_task_dead_letters(self, task_name: str, *, limit: int) -> dict[str, Any]:
+        if limit < 1:
+            raise ValueError("dead-letter discard limit must be >= 1")
+        task = self._require_dead_letter_discard_task(task_name)
+        dead_letter_source = task.dead_letter_sinks[0]
+        assert isinstance(dead_letter_source, Source)
+
+        attempted_count = 0
+        discarded_count = 0
+        failed_count = 0
+
+        for delivery in await dead_letter_source.fetch(limit):
+            attempted_count += 1
+            try:
+                await delivery.ack()
+            except Exception:
+                failed_count += 1
+                self._events_logger.exception(
+                    "dead-letter discard ack failed",
+                    extra={"task_name": task_name},
+                )
+                continue
+            discarded_count += 1
+
+        if attempted_count == 0:
+            completion = "complete"
+        elif failed_count == 0:
+            completion = "complete"
+        elif discarded_count > 0:
+            completion = "partial"
+        else:
+            completion = "failed"
+
+        return {
+            "operation": "discard_dead_letters",
+            "task_name": task_name,
+            "requested": True,
+            "completion": completion,
+            "requested_limit": limit,
+            "attempted_count": attempted_count,
+            "discarded_count": discarded_count,
+            "failed_count": failed_count,
+            "empty": attempted_count == 0,
+        }
+
     async def wait_for_shutdown(self) -> None:
         shutdown = self._ensure_shutdown_event()
         await shutdown.wait()
@@ -337,12 +382,17 @@ class OneStepApp:
     def task_supported_commands(self, task_name: str) -> list[str]:
         task = self._require_controllable_task(task_name)
         supported_commands = ["pause_task", "resume_task"]
+        if self._task_supports_dead_letter_discard(task):
+            supported_commands.append("discard_dead_letters")
         if self._task_supports_dead_letter_replay(task):
             supported_commands.append("replay_dead_letters")
         return supported_commands
 
     def supports_dead_letter_replay_commands(self) -> bool:
         return any(self._task_supports_dead_letter_replay(task) for task in self._tasks)
+
+    def supports_dead_letter_discard_commands(self) -> bool:
+        return any(self._task_supports_dead_letter_discard(task) for task in self._tasks)
 
     def task_resume_status(self, task_name: str) -> dict[str, Any]:
         status = self._task_runtime_status(task_name)
@@ -600,12 +650,22 @@ class OneStepApp:
             )
         return task
 
+    def _require_dead_letter_discard_task(self, task_name: str) -> TaskSpec:
+        task = self._require_controllable_task(task_name)
+        if not self._task_supports_dead_letter_discard(task):
+            raise ValueError(
+                f"task {task_name} does not support dead-letter discard with the configured dead-letter connectors"
+            )
+        return task
+
+    def _task_supports_dead_letter_discard(self, task: TaskSpec) -> bool:
+        return len(task.dead_letter_sinks) == 1 and isinstance(task.dead_letter_sinks[0], Source)
+
     def _task_supports_dead_letter_replay(self, task: TaskSpec) -> bool:
         return (
             task.source is not None
             and isinstance(task.source, Sink)
-            and len(task.dead_letter_sinks) == 1
-            and isinstance(task.dead_letter_sinks[0], Source)
+            and self._task_supports_dead_letter_discard(task)
         )
 
     def _build_dead_letter_replay_envelope(self, dead_letter_envelope: Envelope) -> Envelope:

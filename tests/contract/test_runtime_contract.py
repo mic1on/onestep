@@ -553,6 +553,56 @@ def test_replay_task_dead_letters_restores_original_payload_and_meta() -> None:
     asyncio.run(scenario())
 
 
+def test_discard_task_dead_letters_acknowledges_dead_letter_batch() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        dead = MemoryQueue("dead", poll_interval_s=0.01)
+        app = OneStepApp("dlq-discard-app")
+
+        @app.task(source=source, retry=NoRetry(), dead_letter=dead)
+        async def consume(ctx, item):
+            return item
+
+        await app.startup()
+        await dead.publish(
+            {
+                "payload": {"value": 11},
+                "failure": {
+                    "kind": "error",
+                    "exception_type": "RuntimeError",
+                    "message": "boom",
+                    "traceback": "Traceback",
+                },
+            },
+            meta={
+                "app": "dlq-discard-app",
+                "task": "consume",
+                "source": "incoming",
+                "original_meta": {"trace_id": "abc"},
+                "original_attempts": 1,
+            },
+        )
+
+        result = await app.discard_task_dead_letters("consume", limit=5)
+        remaining_dead = await dead.fetch(1)
+        await app.shutdown()
+
+        assert result == {
+            "operation": "discard_dead_letters",
+            "task_name": "consume",
+            "requested": True,
+            "completion": "complete",
+            "requested_limit": 5,
+            "attempted_count": 1,
+            "discarded_count": 1,
+            "failed_count": 0,
+            "empty": False,
+        }
+        assert remaining_dead == []
+
+    asyncio.run(scenario())
+
+
 def test_task_events_and_metrics_for_success_and_timeout_dead_letter() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming", poll_interval_s=0.01)
