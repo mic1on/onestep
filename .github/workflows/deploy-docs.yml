@@ -66,8 +66,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: pnpm
-          cache-dependency-path: docs/pnpm-lock.yaml
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
