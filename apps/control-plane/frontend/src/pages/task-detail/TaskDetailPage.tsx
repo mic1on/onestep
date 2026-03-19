@@ -88,22 +88,7 @@ export function TaskDetailPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow={t("taskDetail.eyebrow", { environment: t(`environment.${environment}`) })}
         title={taskName}
-        subtitle={
-          <span>
-            <Link
-              className="inline-link"
-              to={`/services/${serviceName}${createSearch({
-                environment,
-                lookback_minutes: lookbackMinutes,
-              })}`}
-            >
-              {serviceName}
-            </Link>{" "}
-            / {t("taskDetail.subtitleSuffix", { lookbackMinutes })}
-          </span>
-        }
       />
 
       {query.isPending ? <div className="loading-block hero-block">{t("taskDetail.loading")}</div> : null}

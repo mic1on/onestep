@@ -127,22 +127,7 @@ export function InstanceDetailPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow={t("instanceDetail.eyebrow", { environment: t(`environment.${environment}`) })}
         title={instance?.node_name ?? instanceId}
-        subtitle={
-          <span>
-            <Link
-              className="inline-link"
-              to={`/services/${serviceName}${createSearch({
-                environment,
-                lookback_minutes: lookbackMinutes,
-              })}`}
-            >
-              {serviceName}
-            </Link>{" "}
-            / {t("instanceDetail.subtitleSuffix", { lookbackMinutes })}
-          </span>
-        }
       />
 
       {query.isPending ? <div className="loading-block hero-block">{t("instanceDetail.loading")}</div> : null}
