@@ -61,38 +61,10 @@ export function AppShell() {
   const primaryItems = [
     {
       id: "services",
-      isStatic: false,
       label: t("app.servicesNav"),
       meta: t("app.fleetSummaryLabel"),
       visual: "01",
       href: `/services${createSearch({ environment: selectedEnvironment, q: searchParams.get("q") ?? undefined })}`,
-    },
-    {
-      id: "audit",
-      isStatic: true,
-      label: activeLanguage === "zh" ? "审计日志" : "Audit log",
-      meta: activeLanguage === "zh" ? "只读预留" : "reserved",
-      visual: "02",
-    },
-    {
-      id: "nodes",
-      isStatic: true,
-      label: activeLanguage === "zh" ? "拓扑图谱" : "Topology",
-      meta: activeLanguage === "zh" ? "只读预留" : "reserved",
-      visual: "03",
-    },
-  ] as const;
-
-  const managementItems = [
-    {
-      id: "agents",
-      label: activeLanguage === "zh" ? "Agent 会话" : "Agent sessions",
-      visual: "AG",
-    },
-    {
-      id: "settings",
-      label: activeLanguage === "zh" ? "系统设置" : "System settings",
-      visual: "CF",
     },
   ] as const;
 
@@ -112,29 +84,19 @@ export function AppShell() {
           <nav className="sidebar-section" aria-label={t("app.primaryNavAriaLabel")}>
             <p className="sidebar-section-label">{t("app.navigationLabel")}</p>
             <div className="sidebar-link-stack">
-              {primaryItems.map((item) =>
-                item.isStatic ? (
-                  <button className="sidebar-nav-link sidebar-nav-link-static" disabled key={item.id} type="button">
-                    <div className="sidebar-nav-copy">
-                      <span>{item.label}</span>
-                      <span className="sidebar-nav-meta">{item.meta}</span>
-                    </div>
-                    <span className="sidebar-nav-visual">{item.visual}</span>
-                  </button>
-                ) : (
-                  <NavLink
-                    className={({ isActive }) => (isActive ? "sidebar-nav-link active" : "sidebar-nav-link")}
-                    key={item.id}
-                    to={item.href}
-                  >
-                    <div className="sidebar-nav-copy">
-                      <span>{item.label}</span>
-                      <span className="sidebar-nav-meta">{item.meta}</span>
-                    </div>
-                    <span className="sidebar-nav-visual">{item.visual}</span>
-                  </NavLink>
-                ),
-              )}
+              {primaryItems.map((item) => (
+                <NavLink
+                  className={({ isActive }) => (isActive ? "sidebar-nav-link active" : "sidebar-nav-link")}
+                  key={item.id}
+                  to={item.href}
+                >
+                  <div className="sidebar-nav-copy">
+                    <span>{item.label}</span>
+                    <span className="sidebar-nav-meta">{item.meta}</span>
+                  </div>
+                  <span className="sidebar-nav-visual">{item.visual}</span>
+                </NavLink>
+              ))}
             </div>
           </nav>
 
@@ -160,23 +122,6 @@ export function AppShell() {
               </div>
             </section>
           ) : null}
-
-          <section className="sidebar-section">
-            <p className="sidebar-section-label">{activeLanguage === "zh" ? "资源管理" : "Management"}</p>
-            <div className="sidebar-link-stack">
-              {managementItems.map((item) => (
-                <button className="sidebar-nav-link sidebar-nav-link-static" disabled key={item.id} type="button">
-                  <div className="sidebar-nav-copy">
-                    <span>{item.label}</span>
-                    <span className="sidebar-nav-meta">
-                      {activeLanguage === "zh" ? "控制面预留" : "control-plane"}
-                    </span>
-                  </div>
-                  <span className="sidebar-nav-visual">{item.visual}</span>
-                </button>
-              ))}
-            </div>
-          </section>
 
           <section className="sidebar-section sidebar-grow">
             <div className="sidebar-section-head">

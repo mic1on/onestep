@@ -3895,6 +3895,121 @@ body::before {
   background: linear-gradient(180deg, rgba(255, 245, 244, 0.92), rgba(255, 251, 251, 0.98));
 }
 
+.task-history-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.task-history-chart {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(252, 253, 255, 0.96), rgba(246, 249, 252, 0.94)),
+    radial-gradient(circle at top right, rgba(21, 111, 105, 0.08), transparent 44%);
+}
+
+.task-history-chart-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.task-history-chart-range,
+.task-history-legend-item {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.task-history-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+
+.task-history-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-history-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.task-history-legend-swatch.is-success {
+  background: linear-gradient(180deg, rgba(47, 139, 105, 0.95), rgba(47, 139, 105, 0.76));
+}
+
+.task-history-legend-swatch.is-danger {
+  background: linear-gradient(180deg, rgba(188, 89, 67, 0.95), rgba(188, 89, 67, 0.76));
+}
+
+.task-history-legend-swatch.is-latency {
+  background: linear-gradient(180deg, rgba(13, 78, 73, 0.95), rgba(21, 111, 105, 0.72));
+}
+
+.task-history-chart-frame {
+  overflow-x: auto;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.task-history-chart-frame svg {
+  display: block;
+  width: 100%;
+  min-width: 680px;
+  height: auto;
+}
+
+.task-history-grid-line {
+  stroke: rgba(24, 34, 36, 0.1);
+  stroke-dasharray: 4 8;
+}
+
+.task-history-axis-label,
+.task-history-tick-label {
+  fill: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.task-history-bar-success {
+  fill: rgba(47, 139, 105, 0.9);
+}
+
+.task-history-bar-danger {
+  fill: rgba(188, 89, 67, 0.86);
+}
+
+.task-history-line {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.task-history-point {
+  fill: #ffffff;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+}
+
+.task-window-list {
+  gap: 8px;
+}
+
 .task-list-row {
   display: grid;
   align-items: stretch;
@@ -4076,6 +4191,249 @@ body::before {
 .sidebar-footer .api-chip {
   font-size: 11px;
   line-height: 1.3;
+}
+
+/* Flat console theme */
+:root {
+  --surface: #ffffff;
+  --surface-strong: #ffffff;
+  --surface-muted: #f3f6fa;
+  --sidebar-bg: #f5f7fb;
+  --border: rgba(20, 32, 43, 0.1);
+  --text: #14202b;
+  --muted: #677684;
+  --shadow: none;
+  --shadow-soft: none;
+  --shadow-strong: none;
+  --radius-xl: 20px;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+}
+
+body {
+  background: #edf2f7;
+}
+
+body::before,
+.sidebar-frame::before,
+.panel::before,
+.auth-panel::before,
+.service-command-tab::before {
+  display: none;
+}
+
+.page-shell,
+.page-header,
+.shell-topbar,
+.sidebar-frame,
+.sidebar-brand,
+.sidebar-context-card,
+.sidebar-health-card,
+.panel,
+.auth-panel,
+.fleet-table-panel,
+.fleet-table-row,
+.fleet-metric-card,
+.service-hero-strip,
+.service-hero-meta-card,
+.service-command-tab,
+.list-row,
+.event-row,
+.command-card,
+.fanout-instance-option,
+.fanout-summary-card,
+.fanout-result-group,
+.fanout-result-item,
+.task-control-instance-card,
+.capability-summary-card,
+.service-event-row,
+.task-history-chart,
+.dialog-card,
+.inspector-card,
+.task-detail-summary-grid .stat-card,
+.task-list-metric {
+  background: var(--surface-strong);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.page-shell,
+.page-header,
+.shell-topbar,
+.sidebar-frame,
+.sidebar-brand,
+.sidebar-context-card,
+.sidebar-health-card,
+.panel,
+.auth-panel,
+.fleet-table-panel,
+.fleet-table-row,
+.fleet-metric-card,
+.service-hero-strip,
+.service-hero-meta-card,
+.service-command-tab,
+.list-row,
+.event-row,
+.command-card,
+.fanout-instance-option,
+.fanout-summary-card,
+.fanout-result-group,
+.fanout-result-item,
+.task-control-instance-card,
+.capability-summary-card,
+.service-event-row,
+.task-history-chart,
+.dialog-card,
+.inspector-card,
+.task-detail-summary-grid .stat-card,
+.task-list-metric,
+.service-title-chip {
+  border-color: var(--border);
+}
+
+.page-shell,
+.page-header,
+.shell-topbar,
+.sidebar-frame,
+.sidebar-brand,
+.panel,
+.auth-panel,
+.dialog-card,
+.service-hero-strip,
+.service-command-tab {
+  border-radius: var(--radius-lg);
+}
+
+.button-secondary,
+.button-link,
+.segmented-option,
+.fleet-filter-select-header select {
+  border-radius: 10px;
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.button-secondary:hover,
+.button-link:hover,
+.segmented-option.active {
+  transform: none;
+  border-color: rgba(13, 78, 73, 0.2);
+  background: var(--surface-muted);
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+
+.segmented-control {
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-strong);
+}
+
+.service-command-tab.active,
+.task-detail-summary-grid .stat-card-success,
+.task-detail-summary-grid .stat-card-danger,
+.task-list-metric.is-danger,
+.fleet-metric-card,
+.service-hero-meta-card {
+  background: var(--surface-muted);
+  box-shadow: none;
+}
+
+.service-command-tab.active {
+  border-color: rgba(13, 78, 73, 0.22);
+}
+
+.task-detail-summary-grid .stat-card-success {
+  border-color: rgba(47, 139, 105, 0.22);
+}
+
+.task-detail-summary-grid .stat-card-danger,
+.task-list-metric.is-danger {
+  border-color: rgba(188, 89, 67, 0.24);
+}
+
+.service-title-chip,
+.sidebar-brand-mark,
+.status-badge,
+.api-chip,
+.code-chip {
+  background: var(--surface-strong);
+  box-shadow: none;
+}
+
+.sidebar-brand-mark,
+.service-title-chip {
+  border: 1px solid var(--border);
+}
+
+.fleet-metric-card::before,
+.stat-card::before {
+  width: 2px;
+}
+
+.task-history-chart-frame {
+  background: var(--surface-muted);
+}
+
+.dialog-overlay {
+  background: rgba(20, 32, 43, 0.2);
+  backdrop-filter: none;
+}
+
+.service-directory-row:hover,
+.list-row:hover,
+.event-row:hover,
+.fleet-table-row:hover,
+.sidebar-service-link:hover,
+.button-secondary:hover,
+.button-link:hover,
+.button-danger:hover,
+.traceback-toggle:hover,
+.sidebar-pill:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.button-danger:hover {
+  border-color: rgba(188, 89, 67, 0.24);
+  background: rgba(188, 89, 67, 0.08);
+  color: var(--danger);
+}
+
+.service-command-tab,
+.task-detail-summary-grid .stat-card,
+.task-list-metric,
+.fleet-metric-card,
+.service-hero-meta-card {
+  background-image: none;
+}
+
+@media (min-width: 961px) {
+  .sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .sidebar-brand-copy {
+    display: block;
+    min-width: 0;
+  }
+
+  .sidebar-brand .eyebrow,
+  .sidebar-brand .app-subtitle {
+    display: none;
+  }
+
+  .sidebar-brand-copy h1 {
+    font-size: 1.4rem;
+    line-height: 1.04;
+  }
 }
 
 @media (max-width: 1360px) {

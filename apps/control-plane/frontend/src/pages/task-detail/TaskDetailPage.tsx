@@ -1,5 +1,5 @@
-import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageHeader } from "../../components/ui/PageHeader";
@@ -13,6 +13,7 @@ import { useServiceCommandsQuery, useServiceSessionsQuery } from "../../features
 import { ServiceInstancesList } from "../../features/services/components/ServiceInstancesList";
 import { useServiceInstancesQuery } from "../../features/services/queries";
 import { TaskCommandControls } from "../../features/tasks/components/TaskCommandControls";
+import { TaskMetricHistoryChart } from "../../features/tasks/components/TaskMetricHistoryChart";
 import { useTaskDetailQuery } from "../../features/tasks/queries";
 import {
   formatCompactJson,
@@ -22,16 +23,17 @@ import {
   formatIdentifierPreview,
 } from "../../lib/formatters";
 import { createSearch, parseEnvironment, parseLookback } from "../../lib/params";
-import { taskPath } from "../../lib/routes";
+import { servicePath, taskPath } from "../../lib/routes";
 
 const TAB_OPTIONS = ["control", "events", "details"] as const;
 const READ_ONLY_TAB_OPTIONS = ["events", "details"] as const;
 type TaskDetailTab = (typeof TAB_OPTIONS)[number];
 
 export function TaskDetailPage() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { serviceName, taskName } = useParams<{ serviceName: string; taskName: string }>();
   const [searchParams] = useSearchParams();
+  const isZh = i18n.resolvedLanguage?.startsWith("zh");
 
   if (!serviceName || !taskName) {
     return <EmptyState title={t("taskDetail.missingTitle")} body={t("taskDetail.missingBody")} />;
@@ -88,6 +90,19 @@ export function TaskDetailPage() {
   return (
     <div className="page-stack">
       <PageHeader
+        actions={
+          <div className="page-actions-stack">
+            <Link
+              className="button-link"
+              to={servicePath(serviceName, {
+                environment,
+                lookback_minutes: lookbackMinutes,
+              })}
+            >
+              {isZh ? "返回任务列表" : "Back to task list"}
+            </Link>
+          </div>
+        }
         title={taskName}
       />
 
@@ -238,25 +253,28 @@ export function TaskDetailPage() {
 
                 <Panel className="panel-flat" title={t("taskDetail.recentWindowsTitle")} subtitle={t("taskDetail.recentWindowsSubtitle")}>
                   {payload.recent_metric_windows.length ? (
-                    <div className="stack-list">
-                      {payload.recent_metric_windows.map((window) => (
-                        <article className="event-row" key={window.window_id}>
-                          <div>
-                            <strong>{window.window_id}</strong>
-                            <p>
-                              {t("taskDetail.windowRange", {
-                                start: formatDateTime(window.window_started_at),
-                                end: formatDateTime(window.window_ended_at),
-                              })}
-                            </p>
-                          </div>
-                          <div className="row-metrics">
-                            <span>{t("metrics.ok", { value: formatCount(window.succeeded) })}</span>
-                            <span>{t("metrics.fail", { value: formatCount(window.failed) })}</span>
-                            <span>{t("metrics.p95", { value: formatDurationMs(window.p95_duration_ms) })}</span>
-                          </div>
-                        </article>
-                      ))}
+                    <div className="task-history-stack">
+                      <TaskMetricHistoryChart windows={payload.recent_metric_windows} />
+                      <div className="stack-list task-window-list">
+                        {payload.recent_metric_windows.map((window) => (
+                          <article className="event-row" key={window.window_id}>
+                            <div>
+                              <strong>{window.window_id}</strong>
+                              <p>
+                                {t("taskDetail.windowRange", {
+                                  start: formatDateTime(window.window_started_at),
+                                  end: formatDateTime(window.window_ended_at),
+                                })}
+                              </p>
+                            </div>
+                            <div className="row-metrics">
+                              <span>{t("metrics.ok", { value: formatCount(window.succeeded) })}</span>
+                              <span>{t("metrics.fail", { value: formatCount(window.failed + window.dead_lettered) })}</span>
+                              <span>{t("metrics.p95", { value: formatDurationMs(window.p95_duration_ms) })}</span>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
                     </div>
                   ) : (
                     <EmptyState title={t("taskDetail.noWindowsTitle")} body={t("taskDetail.noWindowsBody")} />
