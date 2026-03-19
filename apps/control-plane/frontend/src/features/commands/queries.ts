@@ -13,8 +13,11 @@ import type {
   AgentCommandKind,
   Environment,
   ServiceCommandOfflineBehavior,
+  ServiceCommandFanoutResponse,
   ServiceCommandTargetMode,
   TaskCommandKind,
+  TaskDetailResponse,
+  TaskInstanceControlState,
 } from "../../lib/api/types";
 
 type QueryOptions = {
@@ -22,6 +25,7 @@ type QueryOptions = {
 };
 
 const COMMAND_REFETCH_INTERVAL_MS = 5_000;
+const TASK_CONTROL_REVALIDATE_DELAY_MS = 1_500;
 
 export async function invalidateCommandStreamQueries(queryClient: QueryClient) {
   await Promise.all([
@@ -150,15 +154,82 @@ export function useCreateTaskCommandFanoutMutation(
       target_instance_ids?: string[];
       offline_behavior?: ServiceCommandOfflineBehavior;
     }) => createTaskCommandFanout(serviceName, taskName, environment, payload),
-    onSuccess: async () => {
+    onSuccess: async (response, payload) => {
+      patchTaskDetailQueries(queryClient, serviceName, taskName, environment, response, payload.kind);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["service-dashboard", serviceName, environment] }),
         queryClient.invalidateQueries({ queryKey: ["service-commands", serviceName, environment] }),
         queryClient.invalidateQueries({ queryKey: ["service-sessions", serviceName, environment] }),
         queryClient.invalidateQueries({ queryKey: ["service-instances", serviceName, environment] }),
         queryClient.invalidateQueries({ queryKey: ["service-tasks", serviceName, environment] }),
-        queryClient.invalidateQueries({ queryKey: ["task-detail", serviceName, taskName, environment] }),
       ]);
+      globalThis.setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ["task-detail", serviceName, taskName, environment] });
+      }, TASK_CONTROL_REVALIDATE_DELAY_MS);
     },
   });
+}
+
+function patchTaskDetailQueries(
+  queryClient: QueryClient,
+  serviceName: string,
+  taskName: string,
+  environment: Environment,
+  response: ServiceCommandFanoutResponse,
+  kind: TaskCommandKind,
+) {
+  if (kind !== "pause_task" && kind !== "resume_task") {
+    return;
+  }
+
+  const targetInstanceIds = new Set(
+    [...response.dispatched, ...response.queued].map((target) => target.instance_id),
+  );
+
+  if (targetInstanceIds.size === 0) {
+    return;
+  }
+
+  const queries = queryClient.getQueriesData<TaskDetailResponse>({
+    queryKey: ["task-detail", serviceName, taskName, environment],
+  });
+
+  for (const [queryKey, cached] of queries) {
+    if (!cached) {
+      continue;
+    }
+
+    queryClient.setQueryData<TaskDetailResponse>(queryKey, {
+      ...cached,
+      task_control: {
+        ...cached.task_control,
+        instances: cached.task_control.instances.map((state) =>
+          targetInstanceIds.has(state.instance_id) ? applyTaskControlStateTransition(state, kind) : state,
+        ),
+      },
+    });
+  }
+}
+
+function applyTaskControlStateTransition(
+  state: TaskInstanceControlState,
+  kind: Extract<TaskCommandKind, "pause_task" | "resume_task">,
+): TaskInstanceControlState {
+  if (kind === "pause_task") {
+    return {
+      ...state,
+      state_known: true,
+      pause_requested: false,
+      paused: true,
+      accepting_new_work: false,
+    };
+  }
+
+  return {
+    ...state,
+    state_known: true,
+    pause_requested: false,
+    paused: false,
+    accepting_new_work: true,
+  };
 }

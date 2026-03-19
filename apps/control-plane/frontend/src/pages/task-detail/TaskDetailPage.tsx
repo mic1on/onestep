@@ -95,7 +95,7 @@ export function TaskDetailPage() {
 
       {summary ? (
         <>
-          <section className="stats-grid stats-grid-quad stats-grid-compact">
+          <section className="stats-grid stats-grid-quad stats-grid-compact task-detail-summary-grid">
             <StatCard
               label={t("taskDetail.succeeded")}
               size="compact"

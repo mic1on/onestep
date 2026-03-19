@@ -38,18 +38,6 @@ export function AppShell() {
   const activeSection = getActiveServiceSection(location.pathname, searchParams.get("tab"));
   const catalogQuery = useServicesQuery(selectedEnvironment === "all" ? undefined : selectedEnvironment);
   const visibleServices = prioritizeActiveService(catalogQuery.data?.items ?? [], currentServiceName);
-  const catalogItems = catalogQuery.data?.items ?? [];
-  const healthyServiceCount = catalogItems.filter(
-    (service) => service.instance_count > 0 && service.online_instance_count === service.instance_count,
-  ).length;
-  const attentionServiceCount = catalogItems.filter(
-    (service) =>
-      service.online_instance_count < service.instance_count ||
-      service.latest_sync_at === null ||
-      isServiceStale(service.latest_sync_at),
-  ).length;
-  const searchQuery = searchParams.get("q")?.trim() ?? "";
-  const authenticated = Boolean(sessionQuery.data?.authenticated);
 
   async function handleLogout() {
     await logoutConsole();
@@ -66,7 +54,7 @@ export function AppShell() {
     return servicePath(service.name, {
       environment: service.environment,
       lookback_minutes: lookbackMinutes,
-      tab: activeSection === "overview" ? undefined : activeSection,
+      tab: activeSection === "tasks" ? undefined : activeSection,
     });
   }
 
@@ -269,82 +257,6 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
-
-      <aside className="app-inspector">
-        <div className="inspector-frame">
-          <section className="inspector-card">
-            <h3>{activeLanguage === "zh" ? "当前状态" : "Current status"}</h3>
-            <div className="inspector-metric-list">
-              <div className="inspector-metric-row">
-                <span>{activeLanguage === "zh" ? "操作员" : "Operator"}</span>
-                <strong>{authenticated ? (activeLanguage === "zh" ? "在线" : "Online") : activeLanguage === "zh" ? "未登录" : "Offline"}</strong>
-              </div>
-              <div className="inspector-metric-row">
-                <span>{activeLanguage === "zh" ? "环境范围" : "Environment"}</span>
-                <strong>{t(`environment.${selectedEnvironment}`)}</strong>
-              </div>
-              <div className="inspector-metric-row">
-                <span>{activeLanguage === "zh" ? "当前区段" : "Section"}</span>
-                <strong>{t(`tabs.${activeSection}`)}</strong>
-              </div>
-              <div className="inspector-metric-row">
-                <span>{activeLanguage === "zh" ? "观察窗口" : "Lookback"}</span>
-                <strong>{`${lookbackMinutes}m`}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section className="inspector-card">
-            <h3>{activeLanguage === "zh" ? "目录摘要" : "Catalog summary"}</h3>
-            <div className="inspector-chip-grid">
-              <span className="status-badge badge-accent">
-                {activeLanguage === "zh" ? `服务 ${catalogItems.length}` : `${catalogItems.length} services`}
-              </span>
-              <span className="status-badge badge-success">
-                {activeLanguage === "zh" ? `稳定 ${healthyServiceCount}` : `${healthyServiceCount} healthy`}
-              </span>
-              <span className={attentionServiceCount > 0 ? "status-badge badge-warning" : "status-badge badge-muted"}>
-                {activeLanguage === "zh" ? `关注 ${attentionServiceCount}` : `${attentionServiceCount} attention`}
-              </span>
-            </div>
-            <div className="inspector-metric-list">
-              <div className="inspector-metric-row">
-                <span>{activeLanguage === "zh" ? "已登录账号" : "Signed in as"}</span>
-                <strong>{sessionQuery.data?.username ?? (activeLanguage === "zh" ? "匿名" : "Guest")}</strong>
-              </div>
-              <div className="inspector-metric-row">
-                <span>{activeLanguage === "zh" ? "当前筛选" : "Search filter"}</span>
-                <strong>{searchQuery || (activeLanguage === "zh" ? "无" : "None")}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section className="inspector-card">
-            <h3>{activeLanguage === "zh" ? "当前焦点" : "Current focus"}</h3>
-            {currentServiceName ? (
-              <div className="inspector-focus-card">
-                <strong>{currentServiceName}</strong>
-                <p>
-                  {t(`environment.${environment}`)} · {t(`tabs.${activeSection}`)}
-                </p>
-                {params.taskName ? <span>{activeLanguage === "zh" ? `任务 ${params.taskName}` : `Task ${params.taskName}`}</span> : null}
-                {params.instanceId ? (
-                  <span>{activeLanguage === "zh" ? `实例 ${params.instanceId}` : `Instance ${params.instanceId}`}</span>
-                ) : null}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <h3>{activeLanguage === "zh" ? "尚未下钻服务" : "No service selected"}</h3>
-                <p>
-                  {activeLanguage === "zh"
-                    ? "先从左侧目录进入一个服务，再查看更细的运行上下文。"
-                    : "Open a service from the left catalog to inspect runtime context."}
-                </p>
-              </div>
-            )}
-          </section>
-        </div>
-      </aside>
     </div>
   );
 }
@@ -368,16 +280,13 @@ function getActiveServiceSection(pathname: string, tab: string | null): ServiceS
     return "tasks";
   }
 
-  if (tab === "tasks") {
+  if (tab === "overview") {
+    return "overview";
+  }
+
+  if (pathname.startsWith("/services/")) {
     return "tasks";
   }
 
   return "overview";
-}
-
-function isServiceStale(value: string | null) {
-  if (!value) {
-    return true;
-  }
-  return Date.now() - Date.parse(value) > 15 * 60 * 1000;
 }

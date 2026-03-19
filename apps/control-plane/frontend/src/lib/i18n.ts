@@ -915,9 +915,9 @@ const resources = {
         missingCapability: "当前没有在线实例声明 {{capability}} 能力。",
         stateLabel: "当前状态",
         summary: {
-          paused: "在线已暂停",
-          accepting: "在线接单中",
-          unknown: "在线状态未知",
+          paused: "已暂停",
+          accepting: "工作中",
+          unknown: "未知状态",
           offline: "离线实例",
         },
         recoverySettingsLabel: "恢复设置",
