@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS api
 
 WORKDIR /app

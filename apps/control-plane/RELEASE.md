@@ -69,6 +69,14 @@ IMAGE_REPOSITORY=xxx make docker-build-frontend-multi-arch
 IMAGE_REPOSITORY=xxx make docker-print-images
 ```
 
+多平台构建默认会按当前 Docker context 使用独立 builder，例如在 `orbstack` 下默认使用 `multiarch-builder-orbstack`，并在缺失时自动创建一个 `docker-container` 类型的 buildx builder。
+如果当前 shell 设置了 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 或 `NO_PROXY`，这些代理配置也会自动传给 buildx builder 和构建过程。
+如果需要指定其他 builder，可覆盖 `BUILDX_BUILDER`：
+
+```bash
+IMAGE_REPOSITORY=xxx BUILDX_BUILDER=my-builder make docker-build-multi-arch
+```
+
 ## 注意事项
 
 1. **必须构建多平台** - 使用 `docker-build-multi-arch`，不是 `docker-build`

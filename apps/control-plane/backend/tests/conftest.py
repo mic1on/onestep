@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.base import Base
-from onestep_control_plane_api.db.session import get_db_session
+from onestep_control_plane_api.db.session import SessionLocal, get_db_session
 from onestep_control_plane_api.main import app
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -54,9 +54,11 @@ def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, 
         yield from override_db_session(test_engine)
 
     app.dependency_overrides[get_db_session] = _override
+    app.state.session_factory = lambda: Session(test_engine)
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    app.state.session_factory = SessionLocal
 
 
 @pytest.fixture()

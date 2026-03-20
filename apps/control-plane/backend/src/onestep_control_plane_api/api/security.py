@@ -4,12 +4,15 @@ import hashlib
 import hmac
 import secrets
 import time
+from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import HTTPException, Request, Response, Security, status
+from fastapi import HTTPException, Request, Response, Security, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from onestep_control_plane_api.core.settings import settings
+
+AGENT_WS_SUBPROTOCOL = "onestep-agent.v1"
 
 bearer_scheme = HTTPBearer(
     scheme_name="IngestBearerAuth",
@@ -20,6 +23,28 @@ bearer_scheme = HTTPBearer(
 )
 
 CONSOLE_AUTH_COOKIE_NAME = "onestep_cp_console_session"
+
+
+@dataclass(frozen=True)
+class WebSocketIngestAuth:
+    token: str
+    accepted_subprotocol: str | None = None
+
+
+def _validate_ingest_token_value(token: str) -> bool:
+    for configured_token in settings.ingest_tokens:
+        if secrets.compare_digest(token, configured_token):
+            return True
+    return False
+
+
+def _extract_bearer_token(authorization_header: str | None) -> str | None:
+    if authorization_header is None:
+        return None
+    scheme, _, credentials = authorization_header.partition(" ")
+    if scheme.lower() != "bearer" or not credentials.strip():
+        return None
+    return credentials.strip()
 
 
 def require_ingest_token(
@@ -38,15 +63,52 @@ def require_ingest_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    for token in settings.ingest_tokens:
-        if secrets.compare_digest(credentials.credentials, token):
-            return credentials.credentials
+    if _validate_ingest_token_value(credentials.credentials):
+        return credentials.credentials
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="invalid bearer token",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def require_websocket_ingest_token(websocket: WebSocket) -> WebSocketIngestAuth:
+    if not settings.ingest_tokens:
+        raise WebSocketException(
+            code=status.WS_1011_INTERNAL_ERROR,
+            reason="ingestion authentication is not configured",
+        )
+
+    subprotocols = [
+        value.strip()
+        for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if value.strip()
+    ]
+    accepted_subprotocol = (
+        AGENT_WS_SUBPROTOCOL if AGENT_WS_SUBPROTOCOL in subprotocols else None
+    )
+
+    token = _extract_bearer_token(websocket.headers.get("authorization"))
+    if token is None:
+        for value in subprotocols:
+            if value.startswith("bearer.") and len(value) > len("bearer."):
+                token = value[len("bearer.") :]
+                break
+
+    if token is None:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="missing bearer token",
+        )
+
+    if not _validate_ingest_token_value(token):
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="invalid bearer token",
+        )
+
+    return WebSocketIngestAuth(token=token, accepted_subprotocol=accepted_subprotocol)
 
 
 def validate_console_login(username: str, password: str) -> bool:

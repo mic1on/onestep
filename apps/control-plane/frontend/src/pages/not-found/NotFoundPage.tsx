@@ -14,7 +14,7 @@ export function NotFoundPage() {
         body={t("notFound.emptyBody")}
       />
       <div className="panel-footer">
-        <Link className="button-link" to="/services?environment=prod">
+        <Link className="button-link" to="/services?environment=all">
           {t("notFound.backToServices")}
         </Link>
       </div>

@@ -7,8 +7,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
-from onestep_control_plane_api.api.constants import HEALTH_STATUS_VALUES, TASK_EVENT_KIND_VALUES
+from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
+from onestep_control_plane_api.api.constants import (
+    HEALTH_STATUS_VALUES,
+    TASK_EVENT_KIND_VALUES,
+)
 from onestep_control_plane_api.api.schemas import (
+    AgentCommandOverview,
+    AgentCommandStatusCounts,
+    AgentSessionSummary,
     ConnectorDescriptor,
     Environment,
     InstanceConnectivity,
@@ -17,13 +24,17 @@ from onestep_control_plane_api.api.schemas import (
     InstanceSummary,
     RetryDescriptor,
     ServiceSummary,
+    TaskControlStateSummary,
     TaskDashboardSummary,
     TaskEventCounts,
     TaskEventSummary,
+    TaskInstanceControlState,
     TaskMetricWindowSummary,
 )
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
+    AgentCommand,
+    AgentSession,
     Instance,
     Service,
     TaskDefinition,
@@ -143,6 +154,62 @@ def build_service_summary(
     )
 
 
+def build_agent_session_summary(
+    session: AgentSession,
+    *,
+    instance: Instance | None = None,
+) -> AgentSessionSummary:
+    return AgentSessionSummary(
+        session_id=session.session_id,
+        instance_id=session.instance_id,
+        node_name=instance.node_name if instance is not None else None,
+        hostname=instance.hostname if instance is not None else None,
+        status=session.status,
+        protocol_version=session.protocol_version,
+        capabilities=session.capabilities_json,
+        accepted_capabilities=session.accepted_capabilities_json,
+        connected_at=session.connected_at,
+        last_hello_at=session.last_hello_at,
+        last_message_at=session.last_message_at,
+        superseded_at=session.superseded_at,
+        disconnected_at=session.disconnected_at,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+    )
+
+
+def get_active_sessions_by_instance_id(
+    db: Session,
+    *,
+    service_id: UUID,
+) -> dict[UUID, AgentSession]:
+    sessions = db.scalars(
+        select(AgentSession)
+        .where(
+            AgentSession.service_id == service_id,
+            AgentSession.status == "active",
+        )
+        .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
+    ).all()
+    active_by_instance_id: dict[UUID, AgentSession] = {}
+    for session in sessions:
+        active_by_instance_id.setdefault(session.instance_id, session)
+    return active_by_instance_id
+
+
+def get_latest_session_for_instance(
+    db: Session,
+    *,
+    instance_id: UUID,
+) -> AgentSession | None:
+    return db.scalar(
+        select(AgentSession)
+        .where(AgentSession.instance_id == instance_id)
+        .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
+        .limit(1)
+    )
+
+
 def get_instance_connectivity(
     instance: Instance,
     *,
@@ -159,6 +226,7 @@ def build_instance_summary(
     instance: Instance,
     *,
     cutoff: datetime,
+    active_session: AgentSessionSummary | None = None,
 ) -> InstanceSummary:
     return InstanceSummary(
         instance_id=instance.instance_id,
@@ -176,6 +244,7 @@ def build_instance_summary(
         last_seen_at=instance.last_seen_at,
         status=instance.status,
         connectivity=get_instance_connectivity(instance, cutoff=cutoff),
+        active_session=active_session,
         created_at=instance.created_at,
         updated_at=instance.updated_at,
     )
@@ -202,6 +271,140 @@ def build_metric_window_summary(metric_window: TaskMetricWindow) -> TaskMetricWi
         received_at=metric_window.received_at,
         created_at=metric_window.created_at,
     )
+
+
+def build_task_control_summary(
+    instances: list[Instance],
+    *,
+    active_sessions_by_instance_id: dict[UUID, AgentSession],
+    task_name: str,
+    cutoff: datetime,
+) -> TaskControlStateSummary:
+    return TaskControlStateSummary(
+        task_name=task_name,
+        instances=[
+            build_task_instance_control_state(
+                instance,
+                active_session=active_sessions_by_instance_id.get(instance.instance_id),
+                task_name=task_name,
+                cutoff=cutoff,
+            )
+            for instance in instances
+        ],
+    )
+
+
+def build_task_instance_control_state(
+    instance: Instance,
+    *,
+    active_session: AgentSession | None,
+    task_name: str,
+    cutoff: datetime,
+) -> TaskInstanceControlState:
+    task_control_state = _extract_task_control_state(instance.app_snapshot_json, task_name)
+    supported_commands = _task_control_supported_commands(active_session, task_control_state)
+    return TaskInstanceControlState(
+        instance_id=instance.instance_id,
+        node_name=instance.node_name,
+        connectivity=get_instance_connectivity(instance, cutoff=cutoff),
+        status=instance.status,
+        last_seen_at=instance.last_seen_at,
+        supported_commands=supported_commands,
+        state_known=task_control_state is not None,
+        pause_requested=_coerce_bool(task_control_state, "pause_requested"),
+        paused=_coerce_bool(task_control_state, "paused"),
+        accepting_new_work=_coerce_bool(task_control_state, "accepting_new_work"),
+        runner_count=_coerce_non_negative_int(task_control_state, "runner_count"),
+        parked_runner_count=_coerce_non_negative_int(task_control_state, "parked_runner_count"),
+        fetching_runner_count=_coerce_non_negative_int(task_control_state, "fetching_runner_count"),
+        inflight_task_count=_coerce_non_negative_int(task_control_state, "inflight_task_count"),
+    )
+
+
+def _task_control_supported_commands(
+    active_session: AgentSession | None,
+    task_control_state: dict[str, object] | None,
+) -> list[str]:
+    if active_session is None:
+        return []
+    accepted_capabilities = set(active_session.accepted_capabilities_json)
+    capability_commands: list[str] = []
+    if "command.pause_task" in accepted_capabilities:
+        capability_commands.append("pause_task")
+    if "command.resume_task" in accepted_capabilities:
+        capability_commands.append("resume_task")
+    if "command.discard_dead_letters" in accepted_capabilities:
+        capability_commands.append("discard_dead_letters")
+    if "command.replay_dead_letters" in accepted_capabilities:
+        capability_commands.append("replay_dead_letters")
+
+    task_supported_commands = _extract_task_supported_commands(task_control_state)
+    if task_supported_commands is None:
+        return [
+            command_kind
+            for command_kind in capability_commands
+            if command_kind in {"pause_task", "resume_task"}
+        ]
+    return [
+        command_kind
+        for command_kind in capability_commands
+        if command_kind in task_supported_commands
+    ]
+
+
+def _extract_task_control_state(
+    app_snapshot_json: dict[str, object] | None,
+    task_name: str,
+) -> dict[str, object] | None:
+    if not isinstance(app_snapshot_json, dict):
+        return None
+    task_control_states = app_snapshot_json.get("task_control_states")
+    if not isinstance(task_control_states, list):
+        return None
+    for value in task_control_states:
+        if not isinstance(value, dict):
+            continue
+        if value.get("task_name") == task_name:
+            return dict(value)
+    return None
+
+
+def _extract_task_supported_commands(
+    task_control_state: dict[str, object] | None,
+) -> set[str] | None:
+    if task_control_state is None:
+        return None
+    raw_supported_commands = task_control_state.get("supported_commands")
+    if not isinstance(raw_supported_commands, list):
+        return None
+    supported_commands: set[str] = set()
+    for command_kind in raw_supported_commands:
+        if command_kind in {
+            "pause_task",
+            "resume_task",
+            "discard_dead_letters",
+            "replay_dead_letters",
+        }:
+            supported_commands.add(command_kind)
+    return supported_commands
+
+
+def _coerce_bool(payload: dict[str, object] | None, key: str) -> bool | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _coerce_non_negative_int(payload: dict[str, object] | None, key: str) -> int | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
 
 
 def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
@@ -305,6 +508,63 @@ def build_instance_connectivity_counts(
         online=online,
         offline=offline,
         never_reported=never_reported,
+    )
+
+
+def build_command_status_counts(rows: list[tuple[str, int]]) -> AgentCommandStatusCounts:
+    counts = {status_value: 0 for status_value in AgentCommandStatusCounts.model_fields}
+    for status_value, count in rows:
+        if status_value in counts:
+            counts[status_value] = count
+    in_flight = counts["pending"] + counts["dispatched"] + counts["accepted"]
+    total = (
+        counts["pending"]
+        + counts["dispatched"]
+        + counts["accepted"]
+        + counts["expired"]
+        + counts["rejected"]
+        + counts["succeeded"]
+        + counts["failed"]
+        + counts["timeout"]
+        + counts["cancelled"]
+    )
+    counts["in_flight"] = in_flight
+    counts["total"] = total
+    return AgentCommandStatusCounts(**counts)
+
+
+def get_service_command_overview(
+    db: Session,
+    *,
+    service_id: UUID,
+) -> AgentCommandOverview:
+    expire_stale_commands(db, service_id=service_id)
+    status_rows = db.execute(
+        select(AgentCommand.status, func.count(AgentCommand.id))
+        .where(AgentCommand.service_id == service_id)
+        .group_by(AgentCommand.status)
+    ).all()
+    last_command_at, last_completed_at = db.execute(
+        select(
+            func.max(AgentCommand.created_at),
+            func.max(AgentCommand.finished_at),
+        ).where(AgentCommand.service_id == service_id)
+    ).one()
+    active_session_count = db.scalar(
+        select(func.count())
+        .select_from(AgentSession)
+        .where(
+            AgentSession.service_id == service_id,
+            AgentSession.status == "active",
+        )
+    ) or 0
+    return AgentCommandOverview(
+        statuses=build_command_status_counts(
+            [(status_value, count) for status_value, count in status_rows]
+        ),
+        active_session_count=active_session_count,
+        last_command_at=last_command_at,
+        last_completed_at=last_completed_at,
     )
 
 

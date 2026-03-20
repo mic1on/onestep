@@ -7,7 +7,7 @@ import { useConsoleSessionQuery } from "./queries";
 
 function buildNextPath(pathname: string, search: string, hash: string) {
   const next = `${pathname}${search}${hash}`;
-  return next === "/" ? "/services?environment=prod" : next;
+  return next === "/" ? "/services?environment=all" : next;
 }
 
 export function RequireConsoleAuth() {

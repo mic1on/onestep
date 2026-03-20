@@ -15,10 +15,9 @@ import { StatusBadge } from "../ui/StatusBadge";
 
 const API_BASE_URL = getApiBaseUrl();
 const SERVICE_CATALOG_LIMIT = 10;
-const ENVIRONMENT_OPTIONS = ["prod", "staging", "dev", "all"] as const;
 
 type SidebarEnvironment = Environment | "all";
-type ServiceSection = "overview" | "tasks" | "instances" | "events";
+type ServiceSection = "overview" | "tasks";
 
 export function AppShell() {
   const { i18n, t } = useTranslation();
@@ -30,10 +29,11 @@ export function AppShell() {
   const sessionQuery = useConsoleSessionQuery();
   const activeLanguage = i18n.resolvedLanguage?.startsWith("zh") ? "zh" : "en";
   const isServicesIndex = location.pathname === "/services";
+  const rawEnvironment = searchParams.get("environment");
   const environment = parseEnvironment(searchParams);
   const currentServiceName = params.serviceName;
   const selectedEnvironment: SidebarEnvironment =
-    isServicesIndex && searchParams.get("environment") === "all" ? "all" : environment;
+    rawEnvironment === "all" || (isServicesIndex && rawEnvironment === null) ? "all" : environment;
   const lookbackMinutes = parseLookback(searchParams, 60);
   const activeSection = getActiveServiceSection(location.pathname, searchParams.get("tab"));
   const catalogQuery = useServicesQuery(selectedEnvironment === "all" ? undefined : selectedEnvironment);
@@ -46,75 +46,59 @@ export function AppShell() {
       authenticated: false,
       username: null,
     });
-    const next = `${location.pathname}${location.search}${location.hash}` || "/services?environment=prod";
+    const next = `${location.pathname}${location.search}${location.hash}` || "/services?environment=all";
     navigate(`/login?next=${encodeURIComponent(next)}`, { replace: true });
-  }
-
-  function buildEnvironmentHref(option: SidebarEnvironment) {
-    if (isServicesIndex) {
-      return `/services${createSearch({
-        environment: option,
-        q: searchParams.get("q") ?? undefined,
-      })}`;
-    }
-
-    if (!currentServiceName) {
-      return `/services${createSearch({ environment: option === "all" ? environment : option })}`;
-    }
-
-    return servicePath(currentServiceName, {
-      environment: option === "all" ? environment : option,
-      lookback_minutes: lookbackMinutes,
-      tab: activeSection === "overview" ? undefined : activeSection,
-    });
   }
 
   function buildCatalogHref(service: ServiceSummary) {
     return servicePath(service.name, {
       environment: service.environment,
       lookback_minutes: lookbackMinutes,
-      tab: activeSection === "overview" ? undefined : activeSection,
+      tab: activeSection === "tasks" ? undefined : activeSection,
     });
   }
+
+  const primaryItems = [
+    {
+      id: "services",
+      label: t("app.servicesNav"),
+      meta: t("app.fleetSummaryLabel"),
+      visual: "01",
+      href: `/services${createSearch({ environment: selectedEnvironment, q: searchParams.get("q") ?? undefined })}`,
+    },
+  ] as const;
 
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="sidebar-frame">
           <div className="sidebar-brand">
-            <p className="eyebrow">{t("app.brand")}</p>
-            <h1>{t("app.title")}</h1>
-            <p className="app-subtitle">{t("app.subtitle")}</p>
+            <div className="sidebar-brand-mark">OS</div>
+            <div className="sidebar-brand-copy">
+              <p className="eyebrow">{t("app.brand")}</p>
+              <h1>{t("app.title")}</h1>
+              <p className="app-subtitle">{t("app.subtitle")}</p>
+            </div>
           </div>
 
           <nav className="sidebar-section" aria-label={t("app.primaryNavAriaLabel")}>
             <p className="sidebar-section-label">{t("app.navigationLabel")}</p>
-            <NavLink
-              className={({ isActive }) => (isActive ? "sidebar-nav-link active" : "sidebar-nav-link")}
-              to={`/services${createSearch({ environment: selectedEnvironment })}`}
-            >
-              <span>{t("app.servicesNav")}</span>
-              <span className="sidebar-nav-meta">{t("app.fleetSummaryLabel")}</span>
-            </NavLink>
-          </nav>
-
-          <section className="sidebar-section">
-            <div className="sidebar-section-head">
-              <p className="sidebar-section-label">{t("app.environmentsLabel")}</p>
-              <span className="sidebar-inline-meta">{t("app.viewScopeLabel")}</span>
-            </div>
-            <div className="sidebar-pill-grid">
-              {ENVIRONMENT_OPTIONS.filter((option) => option !== "all" || isServicesIndex).map((option) => (
-                <Link
-                  key={option}
-                  className={selectedEnvironment === option ? "sidebar-pill active" : "sidebar-pill"}
-                  to={buildEnvironmentHref(option)}
+            <div className="sidebar-link-stack">
+              {primaryItems.map((item) => (
+                <NavLink
+                  className={({ isActive }) => (isActive ? "sidebar-nav-link active" : "sidebar-nav-link")}
+                  key={item.id}
+                  to={item.href}
                 >
-                  {t(`environment.${option}`)}
-                </Link>
+                  <div className="sidebar-nav-copy">
+                    <span>{item.label}</span>
+                    <span className="sidebar-nav-meta">{item.meta}</span>
+                  </div>
+                  <span className="sidebar-nav-visual">{item.visual}</span>
+                </NavLink>
               ))}
             </div>
-          </section>
+          </nav>
 
           {currentServiceName ? (
             <section className="sidebar-section">
@@ -131,24 +115,10 @@ export function AppShell() {
                   <span className="sidebar-context-meta">{t("app.currentTaskLabel", { name: params.taskName })}</span>
                 ) : null}
                 {params.instanceId ? (
-                  <span className="sidebar-context-meta">{t("app.currentInstanceLabel", { name: params.instanceId })}</span>
+                  <span className="sidebar-context-meta">
+                    {t("app.currentInstanceLabel", { name: params.instanceId })}
+                  </span>
                 ) : null}
-              </div>
-              <div className="sidebar-link-stack">
-                {(["overview", "tasks", "instances", "events"] as ServiceSection[]).map((section) => (
-                  <Link
-                    key={section}
-                    className={activeSection === section ? "sidebar-subnav-link active" : "sidebar-subnav-link"}
-                    to={servicePath(currentServiceName, {
-                      environment,
-                      lookback_minutes: lookbackMinutes,
-                      tab: section === "overview" ? undefined : section,
-                    })}
-                  >
-                    <span>{t(`tabs.${section}`)}</span>
-                    <span className="sidebar-nav-meta">{t("app.sectionJumpLabel")}</span>
-                  </Link>
-                ))}
               </div>
             </section>
           ) : null}
@@ -171,12 +141,10 @@ export function AppShell() {
               {!catalogQuery.isPending && !catalogQuery.error
                 ? visibleServices.slice(0, SERVICE_CATALOG_LIMIT).map((service) => (
                     <Link
-                      key={`${service.environment}:${service.name}`}
                       className={
-                        currentServiceName === service.name
-                          ? "sidebar-service-link active"
-                          : "sidebar-service-link"
+                        currentServiceName === service.name ? "sidebar-service-link active" : "sidebar-service-link"
                       }
+                      key={`${service.environment}:${service.name}`}
                       to={buildCatalogHref(service)}
                     >
                       <div className="sidebar-service-copy">
@@ -186,8 +154,8 @@ export function AppShell() {
                         </span>
                       </div>
                       <StatusBadge
-                        value={service.online_instance_count > 0 ? "online" : "offline"}
                         label={`${service.online_instance_count}/${service.instance_count}`}
+                        value={service.online_instance_count > 0 ? "online" : "offline"}
                       />
                     </Link>
                   ))
@@ -196,9 +164,15 @@ export function AppShell() {
           </section>
 
           <section className="sidebar-section sidebar-footer">
-            <div className="sidebar-section-head">
-              <p className="sidebar-section-label">{t("app.workspaceLabel")}</p>
-              <span className="sidebar-inline-meta">{API_BASE_URL}</span>
+            <div className="sidebar-health-card">
+              <div className="sidebar-health-row">
+                <div className="sidebar-brand-mark sidebar-brand-mark-small">CP</div>
+                <div className="sidebar-health-copy">
+                  <p>{activeLanguage === "zh" ? "控制面健康" : "Control plane health"}</p>
+                  <strong>{activeLanguage === "zh" ? "稳定运行中" : "Stable"}</strong>
+                </div>
+              </div>
+              <span className="sidebar-shell-meta">{API_BASE_URL}</span>
             </div>
             <SegmentedControl
               ariaLabel={t("app.languageAriaLabel")}
@@ -251,12 +225,12 @@ function getActiveServiceSection(pathname: string, tab: string | null): ServiceS
     return "tasks";
   }
 
-  if (pathname.includes("/instances/")) {
-    return "instances";
+  if (tab === "overview") {
+    return "overview";
   }
 
-  if (tab === "tasks" || tab === "instances" || tab === "events") {
-    return tab;
+  if (pathname.startsWith("/services/")) {
+    return "tasks";
   }
 
   return "overview";

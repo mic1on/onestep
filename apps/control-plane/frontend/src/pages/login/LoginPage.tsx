@@ -10,7 +10,7 @@ import { Panel } from "../../components/ui/Panel";
 
 function sanitizeNextPath(candidate: string | null) {
   if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
-    return "/services?environment=prod";
+    return "/services?environment=all";
   }
   return candidate;
 }

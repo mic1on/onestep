@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202603120001"
+HEAD_REVISION = "202603180001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -27,6 +27,8 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     inspector = inspect(engine)
 
     assert set(inspector.get_table_names()) == {
+        "agent_commands",
+        "agent_sessions",
         "instances",
         "services",
         "alembic_version",
@@ -68,6 +70,47 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
+    assert {column["name"] for column in inspector.get_columns("agent_sessions")} == {
+        "id",
+        "session_id",
+        "service_id",
+        "instance_id",
+        "protocol_version",
+        "status",
+        "capabilities_json",
+        "accepted_capabilities_json",
+        "connected_at",
+        "last_hello_at",
+        "last_message_at",
+        "superseded_at",
+        "disconnected_at",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("agent_commands")} == {
+        "id",
+        "command_id",
+        "service_id",
+        "instance_id",
+        "session_id",
+        "created_by",
+        "reason",
+        "source_surface",
+        "kind",
+        "args_json",
+        "timeout_s",
+        "status",
+        "ack_status",
+        "result_json",
+        "duration_ms",
+        "error_code",
+        "error_message",
+        "dispatched_at",
+        "acked_at",
+        "finished_at",
+        "created_at",
+        "updated_at",
+    }
     assert {column["name"] for column in inspector.get_columns("task_definitions")} == {
         "id",
         "service_id",
@@ -86,8 +129,20 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     task_definition_columns = {
         column["name"]: column for column in inspector.get_columns("task_definitions")
     }
+    agent_session_columns = {
+        column["name"]: column for column in inspector.get_columns("agent_sessions")
+    }
+    agent_command_columns = {
+        column["name"]: column for column in inspector.get_columns("agent_commands")
+    }
     instance_columns = {column["name"]: column for column in inspector.get_columns("instances")}
     assert isinstance(instance_columns["app_snapshot_json"]["type"], sa.JSON)
+    assert isinstance(agent_session_columns["capabilities_json"]["type"], sa.JSON)
+    assert isinstance(agent_session_columns["accepted_capabilities_json"]["type"], sa.JSON)
+    assert isinstance(agent_command_columns["args_json"]["type"], sa.JSON)
+    assert isinstance(agent_command_columns["result_json"]["type"], sa.JSON)
+    assert isinstance(agent_command_columns["duration_ms"]["type"], sa.Integer)
+    assert isinstance(agent_command_columns["source_surface"]["type"], sa.String)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {
@@ -125,6 +180,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "failure_kind",
         "exception_type",
         "message",
+        "traceback",
         "meta_json",
         "received_at",
         "created_at",
@@ -135,6 +191,12 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("instances")} == {
         "ix_instances_service_id_last_seen_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("agent_sessions")} == {
+        "ix_agent_sessions_instance_id_status_connected_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("agent_commands")} == {
+        "ix_agent_commands_instance_id_status_created_at",
     }
     assert {index["name"] for index in inspector.get_indexes("task_metric_windows")} == {
         "ix_task_metric_windows_service_id_task_name_window_ended_at",

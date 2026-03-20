@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterable
 from datetime import UTC, datetime
-from typing import Any
-from typing import TypeVar
+from typing import Any, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -229,6 +228,7 @@ def apply_heartbeat_snapshot(
     identity: ServiceDescriptor,
     runtime: RuntimeDescriptor,
     status_value: str,
+    task_controls_json: list[dict[str, object]],
     sent_at: datetime,
     sequence: int,
     received_at: datetime,
@@ -245,6 +245,10 @@ def apply_heartbeat_snapshot(
     instance.last_heartbeat_sequence = sequence
     instance.last_seen_at = received_at
     instance.status = status_value
+    instance.app_snapshot_json = _merge_task_control_states(
+        instance.app_snapshot_json,
+        task_controls_json,
+    )
 
 
 def apply_sync_snapshot(
@@ -269,9 +273,37 @@ def apply_sync_snapshot(
     instance.started_at = as_utc(runtime.started_at)
     instance.last_sync_at = received_at
     instance.last_topology_hash = topology_hash
-    instance.app_snapshot_json = app_snapshot_json
+    instance.app_snapshot_json = _merge_task_control_states(
+        app_snapshot_json,
+        _task_control_states_from_snapshot(instance.app_snapshot_json),
+    )
     instance.last_sync_sent_at = sent_at
     instance.last_sync_sequence = sequence
+
+
+def _task_control_states_from_snapshot(
+    app_snapshot_json: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    if not isinstance(app_snapshot_json, dict):
+        return []
+    task_control_states = app_snapshot_json.get("task_control_states")
+    if not isinstance(task_control_states, list):
+        return []
+
+    normalized: list[dict[str, object]] = []
+    for value in task_control_states:
+        if isinstance(value, dict):
+            normalized.append(dict(value))
+    return normalized
+
+
+def _merge_task_control_states(
+    app_snapshot_json: dict[str, object] | None,
+    task_control_states: list[dict[str, object]],
+) -> dict[str, object]:
+    merged_snapshot = dict(app_snapshot_json) if isinstance(app_snapshot_json, dict) else {}
+    merged_snapshot["task_control_states"] = task_control_states
+    return merged_snapshot
 
 
 def existing_metric_keys(

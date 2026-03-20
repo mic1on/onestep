@@ -12,6 +12,8 @@ type QueryOptions = {
   enabled?: boolean;
 };
 
+const LIVE_REFETCH_INTERVAL_MS = 5_000;
+
 export function useServicesQuery(environment?: Environment) {
   return useQuery({
     queryKey: ["services", environment ?? "all"],
@@ -23,6 +25,7 @@ export function useServiceDashboardQuery(serviceName: string, environment: Envir
   return useQuery({
     queryKey: ["service-dashboard", serviceName, environment, lookbackMinutes],
     queryFn: () => getServiceDashboard(serviceName, environment, lookbackMinutes),
+    refetchInterval: LIVE_REFETCH_INTERVAL_MS,
   });
 }
 
@@ -48,5 +51,6 @@ export function useServiceInstancesQuery(
     queryKey: ["service-instances", serviceName, environment],
     queryFn: () => listServiceInstances(serviceName, environment),
     enabled: options.enabled ?? true,
+    refetchInterval: LIVE_REFETCH_INTERVAL_MS,
   });
 }
