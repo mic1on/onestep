@@ -39,6 +39,8 @@ from onestep_control_plane_api.api.query_support import (
     get_service_or_404,
     get_service_summary_data,
     get_service_topology_hashes,
+    health_participation_cutoff,
+    instance_participates_in_health_expression,
     online_cutoff,
     service_has_task_data,
     sort_task_summaries,
@@ -89,7 +91,9 @@ def list_services(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db_session),
 ) -> ServiceListResponse:
-    cutoff = online_cutoff(utcnow())
+    now = utcnow()
+    online_scope_cutoff = online_cutoff(now)
+    health_scope_cutoff = health_participation_cutoff(now)
     filters = []
     if environment is not None:
         filters.append(Service.environment == environment)
@@ -99,7 +103,10 @@ def list_services(
         count_stmt = count_stmt.where(*filters)
     total = db.scalar(count_stmt) or 0
 
-    stats = build_service_stats_subquery(cutoff)
+    stats = build_service_stats_subquery(
+        online_cutoff=online_scope_cutoff,
+        health_cutoff=health_scope_cutoff,
+    )
     services_stmt = (
         select(
             Service,
@@ -135,8 +142,13 @@ def get_service_summary(
     db: Session = Depends(get_db_session),
 ) -> ServiceSummary:
     service = get_service_or_404(db, service_name=service_name, environment=environment)
-    cutoff = online_cutoff(utcnow())
-    service_summary, _ = get_service_summary_data(db, service=service, cutoff=cutoff)
+    now = utcnow()
+    service_summary, _ = get_service_summary_data(
+        db,
+        service=service,
+        online_cutoff=online_cutoff(now),
+        health_cutoff=health_participation_cutoff(now),
+    )
     return service_summary
 
 
@@ -154,17 +166,22 @@ def get_service_dashboard(
 ) -> ServiceDashboardResponse:
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     now = utcnow()
-    cutoff = online_cutoff(now)
+    online_scope_cutoff = online_cutoff(now)
+    health_scope_cutoff = health_participation_cutoff(now)
     lookback_started_at = now - timedelta(minutes=lookback_minutes)
 
     service_summary, instance_connectivity = get_service_summary_data(
         db,
         service=service,
-        cutoff=cutoff,
+        online_cutoff=online_scope_cutoff,
+        health_cutoff=health_scope_cutoff,
     )
     status_rows = db.execute(
         select(Instance.status, func.count(Instance.id))
-        .where(Instance.service_id == service.id)
+        .where(
+            Instance.service_id == service.id,
+            instance_participates_in_health_expression(health_scope_cutoff),
+        )
         .group_by(Instance.status)
     ).all()
     task_summaries = sort_task_summaries(
@@ -185,7 +202,11 @@ def get_service_dashboard(
         .order_by(TaskEvent.occurred_at.desc(), TaskEvent.event_id)
         .limit(recent_event_limit)
     ).all()
-    topology_hashes = get_service_topology_hashes(db, service_id=service.id, cutoff=cutoff)
+    topology_hashes = get_service_topology_hashes(
+        db,
+        service_id=service.id,
+        cutoff=online_scope_cutoff,
+    )
     command_overview = get_service_command_overview(db, service_id=service.id)
 
     return ServiceDashboardResponse(
@@ -273,9 +294,15 @@ def get_service_task_detail(
         )
 
     now = utcnow()
-    cutoff = online_cutoff(now)
+    online_scope_cutoff = online_cutoff(now)
+    health_scope_cutoff = health_participation_cutoff(now)
     lookback_started_at = now - timedelta(minutes=lookback_minutes)
-    service_summary, _ = get_service_summary_data(db, service=service, cutoff=cutoff)
+    service_summary, _ = get_service_summary_data(
+        db,
+        service=service,
+        online_cutoff=online_scope_cutoff,
+        health_cutoff=health_scope_cutoff,
+    )
 
     summary = build_task_summary_map(
         db,
@@ -326,7 +353,7 @@ def get_service_task_detail(
             task_control_instances,
             active_sessions_by_instance_id=active_sessions_by_instance_id,
             task_name=task_name,
-            cutoff=cutoff,
+            cutoff=online_scope_cutoff,
         ),
         recent_metric_windows=[
             build_metric_window_summary(metric_window) for metric_window in recent_metric_windows
@@ -422,9 +449,15 @@ def get_service_instance_detail(
     )
 
     now = utcnow()
-    cutoff = online_cutoff(now)
+    online_scope_cutoff = online_cutoff(now)
+    health_scope_cutoff = health_participation_cutoff(now)
     lookback_started_at = now - timedelta(minutes=lookback_minutes)
-    service_summary, _ = get_service_summary_data(db, service=service, cutoff=cutoff)
+    service_summary, _ = get_service_summary_data(
+        db,
+        service=service,
+        online_cutoff=online_scope_cutoff,
+        health_cutoff=health_scope_cutoff,
+    )
     active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
     latest_session = get_latest_session_for_instance(db, instance_id=instance.instance_id)
 
@@ -459,7 +492,7 @@ def get_service_instance_detail(
         lookback_started_at=lookback_started_at,
         instance=build_instance_summary(
             instance,
-            cutoff=cutoff,
+            cutoff=online_scope_cutoff,
             active_session=(
                 build_agent_session_summary(active_session, instance=instance)
                 if (

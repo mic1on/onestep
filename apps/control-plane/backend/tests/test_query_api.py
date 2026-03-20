@@ -711,6 +711,78 @@ def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(
     assert payload["topology_consistent"] is False
 
 
+def test_service_health_ages_out_stale_historical_instances(client, db_session) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    recent_online = seed_instance(
+        db_session,
+        service,
+        node_name="vm-online",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=20),
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-recent-offline",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=10),
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-stale-history",
+        status="degraded",
+        last_seen_at=now - timedelta(hours=3),
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/services", params={"environment": "prod"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["instance_count"] == 2
+    assert payload["items"][0]["online_instance_count"] == 1
+
+    dashboard = client.get(
+        "/api/v1/services/billing-sync/dashboard",
+        params={"environment": "prod"},
+    )
+    assert dashboard.status_code == 200
+    dashboard_payload = dashboard.json()
+    assert dashboard_payload["service"]["instance_count"] == 2
+    assert dashboard_payload["service"]["online_instance_count"] == 1
+    assert dashboard_payload["instance_connectivity"] == {
+        "total": 2,
+        "online": 1,
+        "offline": 1,
+        "never_reported": 0,
+    }
+    assert dashboard_payload["instance_statuses"] == {
+        "ok": 1,
+        "degraded": 1,
+        "error": 0,
+        "starting": 0,
+        "unknown": 0,
+    }
+
+    instances = client.get(
+        "/api/v1/services/billing-sync/instances",
+        params={"environment": "prod"},
+    )
+    assert instances.status_code == 200
+    instances_payload = instances.json()
+    assert instances_payload["total"] == 3
+    assert {item["node_name"] for item in instances_payload["items"]} == {
+        "vm-online",
+        "vm-recent-offline",
+        "vm-stale-history",
+    }
+    assert any(
+        item["instance_id"] == str(recent_online.instance_id)
+        for item in instances_payload["items"]
+    )
+
+
 def test_service_dashboard_and_instance_detail_include_command_overview_and_active_session(
     client,
     db_session,

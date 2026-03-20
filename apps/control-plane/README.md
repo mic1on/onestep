@@ -71,6 +71,44 @@ ingestion bearer auth is configured before hitting an ingestion endpoint.
 
 Instance online/offline status is derived server-side from `last_seen_at` with a default
 timeout of `90` seconds. Override it with `ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S` if needed.
+Service health summaries use a separate participation window so long-stale historical
+instances eventually stop counting toward fleet health; the default is `3600` seconds and
+can be overridden with `ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S`.
+
+## Environment Variables
+
+The table below centralizes the `ONESTEP_CP_*` variables used by the current backend,
+Docker Compose files, deploy flow, and `scripts/start-local.sh`.
+
+| Variable | Scope | Default / Example | Meaning |
+| --- | --- | --- | --- |
+| `ONESTEP_CP_APP_ENV` | Backend | `dev` | Runtime environment label. Also affects API auth cookie behavior, such as whether cookies are marked `Secure` in production. |
+| `ONESTEP_CP_DATABASE_URL` | Backend | `postgresql+psycopg://...` | SQLAlchemy DSN for the control plane database. In `.env.deploy`, leave it empty to use the bundled PostgreSQL container. |
+| `ONESTEP_CP_INGEST_TOKENS` | Backend ingress | empty | Bearer tokens accepted by ingestion endpoints and the agent WS endpoint. Supports a single token, comma-separated string, or JSON array. |
+| `ONESTEP_CP_CONSOLE_AUTH_USERNAME` | Backend auth | empty | Shared username for the monitoring console. Must be set together with `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. |
+| `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` | Backend auth | empty | Shared password for the monitoring console. Must be set together with `ONESTEP_CP_CONSOLE_AUTH_USERNAME`. |
+| `ONESTEP_CP_CONSOLE_AUTH_SESSION_TTL_S` | Backend auth | `604800` | Console session lifetime in seconds. Advanced option for login cookie expiry. |
+| `ONESTEP_CP_CORS_ALLOW_ORIGINS` | Backend CORS | empty | Browser origins allowed to call the query API. Use explicit origins instead of `*` when console auth is enabled across origins. |
+| `ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S` | Backend health | `90` | Threshold after which an instance with no fresh heartbeat is considered `offline`. |
+| `ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S` | Backend health | `3600` | How long a recently seen or recently synced instance stays in the service health denominator. Must be greater than or equal to `ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S`. |
+| `ONESTEP_CP_API_RESPONSE_TIMEZONE` | Backend API | unset | Explicit timezone for datetime fields returned by the API. If unset, the backend falls back to container `TZ`, then `UTC`. |
+| `ONESTEP_CP_DEBUG` | Backend API | `false` | Enables FastAPI debug mode. Advanced troubleshooting option. |
+| `ONESTEP_CP_TIMEZONE` | Compose / deploy helper | `Asia/Shanghai` | Compose-level helper used to set container `TZ`. This indirectly affects API timestamp rendering when `ONESTEP_CP_API_RESPONSE_TIMEZONE` is unset. |
+| `ONESTEP_CP_API_PORT` | Compose / deploy | `8000` | Host port bound to the raw API container. |
+| `ONESTEP_CP_FRONTEND_PORT` | Compose / deploy | `4173` | Host port bound to the packaged frontend container. |
+| `ONESTEP_CP_UI_API_BASE_URL` | Frontend runtime | `/` | Runtime API base path written into `/app-config.js` for the packaged frontend image. Not used by `pnpm dev`. |
+| `ONESTEP_CP_POSTGRES_DB` | Bundled PostgreSQL | `onestep_control_plane` | Database name for the bundled PostgreSQL container used by local/deploy Compose files. |
+| `ONESTEP_CP_POSTGRES_USER` | Bundled PostgreSQL | `postgres` | Database user for the bundled PostgreSQL container. |
+| `ONESTEP_CP_POSTGRES_PASSWORD` | Bundled PostgreSQL | `postgres` locally | Database password for the bundled PostgreSQL container. Change this in real deployments. |
+| `ONESTEP_CP_POSTGRES_PORT` | Bundled PostgreSQL | `5432` | Host port exposed for the bundled PostgreSQL container. If you change it locally, update `ONESTEP_CP_DATABASE_URL` to match. |
+| `ONESTEP_CP_API_IMAGE` | Deploy only | `registry.example.com/onestep-control-plane-api:latest` | API image reference used by `docker-compose.deploy.yml`. |
+| `ONESTEP_CP_FRONTEND_IMAGE` | Deploy only | `registry.example.com/onestep-control-plane-frontend:latest` | Frontend image reference used by `docker-compose.deploy.yml`. |
+| `ONESTEP_CP_HOST` | `scripts/start-local.sh` | `0.0.0.0` | Bind host used by the local helper script. |
+| `ONESTEP_CP_PORT` | `scripts/start-local.sh` | `8080` | Bind port used by the local helper script. |
+| `ONESTEP_CP_SQLITE_PATH` | `scripts/start-local.sh` | `.data/control-plane-dev.db` | SQLite file path used by the local helper script when `ONESTEP_CP_DATABASE_URL` is not set. |
+
+For Vite frontend development, `frontend/.env` uses `VITE_API_BASE_URL`, which is separate
+from the `ONESTEP_CP_*` runtime variables above.
 
 Schema changes are managed with Alembic:
 

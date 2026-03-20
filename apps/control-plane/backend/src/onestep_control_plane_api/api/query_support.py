@@ -47,6 +47,36 @@ def online_cutoff(now: datetime) -> datetime:
     return now - timedelta(seconds=settings.instance_offline_after_s)
 
 
+def health_participation_cutoff(now: datetime) -> datetime:
+    return now - timedelta(seconds=settings.instance_health_participation_window_s)
+
+
+def instance_last_activity_expression():
+    return case(
+        (
+            and_(Instance.last_seen_at.is_(None), Instance.last_sync_at.is_(None)),
+            Instance.created_at,
+        ),
+        (
+            Instance.last_seen_at.is_(None),
+            Instance.last_sync_at,
+        ),
+        (
+            Instance.last_sync_at.is_(None),
+            Instance.last_seen_at,
+        ),
+        (
+            Instance.last_seen_at >= Instance.last_sync_at,
+            Instance.last_seen_at,
+        ),
+        else_=Instance.last_sync_at,
+    )
+
+
+def instance_participates_in_health_expression(cutoff: datetime):
+    return instance_last_activity_expression() >= cutoff
+
+
 def get_service_by_name_and_environment(
     db: Session,
     *,
@@ -120,12 +150,49 @@ def online_instance_count_expression(cutoff: datetime):
     )
 
 
-def build_service_stats_subquery(cutoff: datetime):
+def health_participation_instance_count_expression(cutoff: datetime):
+    return func.coalesce(
+        func.sum(
+            case(
+                (
+                    instance_participates_in_health_expression(cutoff),
+                    1,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+
+
+def never_reported_instance_count_expression(cutoff: datetime):
+    return func.coalesce(
+        func.sum(
+            case(
+                (
+                    and_(
+                        Instance.last_seen_at.is_(None),
+                        instance_participates_in_health_expression(cutoff),
+                    ),
+                    1,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+
+
+def build_service_stats_subquery(
+    *,
+    online_cutoff: datetime,
+    health_cutoff: datetime,
+):
     return (
         select(
             Instance.service_id.label("service_id"),
-            func.count(Instance.id).label("instance_count"),
-            online_instance_count_expression(cutoff).label("online_instance_count"),
+            health_participation_instance_count_expression(health_cutoff).label("instance_count"),
+            online_instance_count_expression(online_cutoff).label("online_instance_count"),
             func.max(Instance.last_seen_at).label("last_seen_at"),
         )
         .group_by(Instance.service_id)
@@ -461,16 +528,14 @@ def get_service_summary_data(
     db: Session,
     *,
     service: Service,
-    cutoff: datetime,
+    online_cutoff: datetime,
+    health_cutoff: datetime,
 ) -> tuple[ServiceSummary, InstanceConnectivityCounts]:
     total, online, never_reported, last_seen_at = db.execute(
         select(
-            func.count(Instance.id),
-            online_instance_count_expression(cutoff),
-            func.coalesce(
-                func.sum(case((Instance.last_seen_at.is_(None), 1), else_=0)),
-                0,
-            ),
+            health_participation_instance_count_expression(health_cutoff),
+            online_instance_count_expression(online_cutoff),
+            never_reported_instance_count_expression(health_cutoff),
             func.max(Instance.last_seen_at),
         ).where(Instance.service_id == service.id)
     ).one()

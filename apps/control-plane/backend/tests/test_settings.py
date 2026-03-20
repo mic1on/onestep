@@ -1,6 +1,6 @@
 import pytest
-from pydantic import ValidationError
 from onestep_control_plane_api.core.settings import Settings
+from pydantic import ValidationError
 
 
 @pytest.mark.parametrize(
@@ -78,3 +78,13 @@ def test_settings_blank_console_auth_is_disabled(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.console_auth_configured is False
+
+
+def test_settings_reject_health_participation_window_shorter_than_offline_window(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S", "90")
+    monkeypatch.setenv("ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S", "30")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

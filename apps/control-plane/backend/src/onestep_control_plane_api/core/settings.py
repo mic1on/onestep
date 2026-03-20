@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     app_name: str = "onestep-control-plane-api"
     app_env: str = "dev"
     debug: bool = False
-    instance_offline_after_s: int = 90
+    instance_offline_after_s: int = Field(default=90, ge=1)
+    instance_health_participation_window_s: int = Field(default=3600, ge=1)
     database_url: str = (
         "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
     )
@@ -54,7 +55,13 @@ class Settings(BaseSettings):
         has_password = bool(self.console_auth_password.strip())
         if has_username != has_password:
             raise ValueError(
-                "ONESTEP_CP_CONSOLE_AUTH_USERNAME and ONESTEP_CP_CONSOLE_AUTH_PASSWORD must be set together"
+                "ONESTEP_CP_CONSOLE_AUTH_USERNAME and "
+                "ONESTEP_CP_CONSOLE_AUTH_PASSWORD must be set together"
+            )
+        if self.instance_health_participation_window_s < self.instance_offline_after_s:
+            raise ValueError(
+                "ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S must be greater than or equal "
+                "to ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S"
             )
         return self
 
