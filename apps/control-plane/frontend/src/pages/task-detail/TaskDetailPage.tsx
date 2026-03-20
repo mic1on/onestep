@@ -5,7 +5,6 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
 import { StatCard } from "../../components/ui/StatCard";
-import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
 import { SessionList } from "../../features/commands/components/SessionList";
@@ -46,6 +45,13 @@ export function TaskDetailPage() {
   const hasTaskDetailError = Boolean(query.error);
   const payload = query.data;
   const summary = payload?.summary;
+  const eventCountTotal = summary
+    ? summary.event_counts.failed +
+      summary.event_counts.retried +
+      summary.event_counts.dead_lettered +
+      summary.event_counts.cancelled +
+      summary.event_counts.succeeded
+    : 0;
   const taskControlStates = payload?.task_control.instances ?? [];
   const controllableInstances = taskControlStates.filter(isControllableInstance);
   const hasControllableInstances = controllableInstances.length > 0;
@@ -200,36 +206,64 @@ export function TaskDetailPage() {
 
           {currentTab === "events" ? (
             <div className="page-stack">
-              <Panel className="panel-flat panel-flat-compact" title={t("taskDetail.eventProfileTitle")} subtitle={t("taskDetail.eventProfileSubtitle")}>
-                <div className="badge-row">
-                  <StatusBadge
-                    value={summary.failed > 0 ? "drift" : "consistent"}
-                    label={t("taskDetail.failedBadge", { count: summary.event_counts.failed })}
-                  />
-                  <StatusBadge value="starting" label={t("taskDetail.retriedBadge", { count: summary.event_counts.retried })} />
-                  <StatusBadge
-                    value="consistent"
-                    label={t("taskDetail.succeededBadge", { count: summary.event_counts.succeeded })}
-                  />
+              <Panel
+                className="panel-flat panel-flat-compact"
+                title={t("taskDetail.activityOverviewTitle")}
+                subtitle={t("taskDetail.activityOverviewSubtitle")}
+              >
+                <p className="task-activity-intro">{t("taskDetail.activityOverviewNote")}</p>
+
+                <div className="task-activity-stack">
+                  <section className="task-activity-section">
+                    <div className="task-activity-section-head">
+                      <h3>{t("taskDetail.eventCountsTitle")}</h3>
+                      <p>{t("taskDetail.eventCountsSubtitle")}</p>
+                    </div>
+                    <dl className="definition-grid">
+                      <div>
+                        <dt>{t("taskDetail.eventTotal")}</dt>
+                        <dd>{formatCount(eventCountTotal)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("taskDetail.failedEvents")}</dt>
+                        <dd>{formatCount(summary.event_counts.failed)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("taskDetail.retriedEvents")}</dt>
+                        <dd>{formatCount(summary.event_counts.retried)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("taskDetail.deadLetteredEvents")}</dt>
+                        <dd>{formatCount(summary.event_counts.dead_lettered)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("taskDetail.succeededEvents")}</dt>
+                        <dd>{formatCount(summary.event_counts.succeeded)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("taskDetail.cancelledEvents")}</dt>
+                        <dd>{formatCount(summary.event_counts.cancelled)}</dd>
+                      </div>
+                    </dl>
+                  </section>
+
+                  <section className="task-activity-section">
+                    <div className="task-activity-section-head">
+                      <h3>{t("taskDetail.windowMetricsTitle")}</h3>
+                      <p>{t("taskDetail.windowMetricsSubtitle")}</p>
+                    </div>
+                    <dl className="definition-grid">
+                      <div>
+                        <dt>{t("taskDetail.windowCount")}</dt>
+                        <dd>{formatCount(summary.metric_window_count)}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("taskDetail.avgDuration")}</dt>
+                        <dd>{formatDurationMs(summary.weighted_avg_duration_ms)}</dd>
+                      </div>
+                    </dl>
+                  </section>
                 </div>
-                <dl className="definition-grid">
-                  <div>
-                    <dt>{t("taskDetail.cancelled")}</dt>
-                    <dd>{summary.event_counts.cancelled}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.succeededEvents")}</dt>
-                    <dd>{summary.event_counts.succeeded}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.windowCount")}</dt>
-                    <dd>{summary.metric_window_count}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.weightedAvg")}</dt>
-                    <dd>{formatDurationMs(summary.weighted_avg_duration_ms)}</dd>
-                  </div>
-                </dl>
               </Panel>
 
               <div className="two-column-grid">

@@ -257,6 +257,128 @@ def test_agent_ws_telemetry_reuses_ingestion_logic(
     assert task_definition.description == "Sync billing users into the warehouse."
 
 
+def test_agent_ws_restart_reuses_instance_identity_and_accepts_continued_sequences(
+    client,
+    auth_headers,
+    db_session,
+) -> None:
+    instance_id = "8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"
+
+    first_sync_body = make_sync_body(instance_id)
+    first_sync_body["sequence"] = 1
+    first_sync_body["sent_at"] = "2026-03-08T17:31:05Z"
+
+    second_sync_body = make_sync_body(instance_id)
+    second_sync_body["sequence"] = 2
+    second_sync_body["runtime"]["pid"] = 18232
+    second_sync_body["runtime"]["started_at"] = "2026-03-08T18:00:00Z"
+    second_sync_body["sent_at"] = "2026-03-08T18:00:05Z"
+
+    with client.websocket_connect("/api/v1/agents/ws", headers=auth_headers) as websocket:
+        websocket.send_json(_hello_message(instance_id=instance_id))
+        first_hello_ack = websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "telemetry",
+                "message_id": "msg_restart_sync_1",
+                "sent_at": "2026-03-17T12:00:01Z",
+                "payload": {
+                    "channel": "sync",
+                    "body": first_sync_body,
+                },
+            }
+        )
+        websocket.send_json(
+            {
+                "type": "telemetry",
+                "message_id": "msg_restart_heartbeat_1",
+                "sent_at": "2026-03-17T12:00:02Z",
+                "payload": {
+                    "channel": "heartbeat",
+                    "body": {
+                        "service": make_service_payload(instance_id),
+                        "runtime": {
+                            "onestep_version": "1.0.0a0",
+                            "python_version": "3.11.14",
+                            "hostname": "vm-prod-3",
+                            "pid": 18231,
+                            "started_at": "2026-03-08T17:29:50Z",
+                        },
+                        "health": {
+                            "status": "ok",
+                            "uptime_s": 70,
+                            "inflight_tasks": 3,
+                        },
+                        "sent_at": "2026-03-08T17:31:10Z",
+                        "sequence": 1,
+                    },
+                },
+            }
+        )
+
+    with client.websocket_connect("/api/v1/agents/ws", headers=auth_headers) as websocket:
+        websocket.send_json(_hello_message(instance_id=instance_id))
+        second_hello_ack = websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "telemetry",
+                "message_id": "msg_restart_sync_2",
+                "sent_at": "2026-03-17T12:05:01Z",
+                "payload": {
+                    "channel": "sync",
+                    "body": second_sync_body,
+                },
+            }
+        )
+        websocket.send_json(
+            {
+                "type": "telemetry",
+                "message_id": "msg_restart_heartbeat_2",
+                "sent_at": "2026-03-17T12:05:02Z",
+                "payload": {
+                    "channel": "heartbeat",
+                    "body": {
+                        "service": make_service_payload(instance_id),
+                        "runtime": {
+                            "onestep_version": "1.0.0a0",
+                            "python_version": "3.11.14",
+                            "hostname": "vm-prod-3",
+                            "pid": 18232,
+                            "started_at": "2026-03-08T18:00:00Z",
+                        },
+                        "health": {
+                            "status": "ok",
+                            "uptime_s": 10,
+                            "inflight_tasks": 1,
+                        },
+                        "sent_at": "2026-03-08T18:00:10Z",
+                        "sequence": 2,
+                    },
+                },
+            }
+        )
+
+    db_session.expire_all()
+    instances = db_session.scalars(
+        select(Instance).where(Instance.instance_id == UUID(instance_id))
+    ).all()
+    sessions = db_session.scalars(
+        select(AgentSession)
+        .where(AgentSession.instance_id == UUID(instance_id))
+        .order_by(AgentSession.connected_at.asc(), AgentSession.session_id.asc())
+    ).all()
+
+    assert len(instances) == 1
+    assert len(sessions) == 2
+    assert first_hello_ack["payload"]["session_id"] != second_hello_ack["payload"]["session_id"]
+
+    instance = instances[0]
+    assert instance.last_sync_sequence == 2
+    assert instance.last_heartbeat_sequence == 2
+    assert instance.pid == 18232
+    assert instance.started_at == datetime(2026, 3, 8, 18, 0, 0, tzinfo=UTC)
+
+
 def test_agent_ws_accepts_bearer_token_via_subprotocol(client) -> None:
     with client.websocket_connect(
         "/api/v1/agents/ws",

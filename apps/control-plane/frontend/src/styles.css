@@ -3895,6 +3895,40 @@ body::before {
   background: linear-gradient(180deg, rgba(255, 245, 244, 0.92), rgba(255, 251, 251, 0.98));
 }
 
+.task-activity-intro {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.task-activity-stack {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.task-activity-section {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-muted);
+}
+
+.task-activity-section-head h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.task-activity-section-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.task-activity-section .definition-grid {
+  margin-top: 12px;
+}
+
 .task-history-stack {
   display: grid;
   gap: 12px;
