@@ -575,14 +575,16 @@ def test_ws_sender_executes_pause_task_and_resume_task_commands() -> None:
     app = OneStepApp("billing-sync")
     source = MemoryQueue("sync-users.incoming", batch_size=1, poll_interval_s=0.01)
     sink = MemoryQueue("sync-users.processed", batch_size=1, poll_interval_s=0.01)
-    started = asyncio.Event()
-    release = asyncio.Event()
+    started: asyncio.Event | None = None
+    release: asyncio.Event | None = None
     sender = ControlPlaneWsSender(_make_config(), transport=transport)
     reporter = ControlPlaneReporter(_make_config(), sender=sender)
     reporter.attach(app)
 
     @app.task(name="sync_users", source=source, emit=sink, concurrency=1)
     async def sync_users(ctx, item):
+        assert started is not None
+        assert release is not None
         if item["value"] == 1:
             started.set()
             await release.wait()
@@ -591,6 +593,9 @@ def test_ws_sender_executes_pause_task_and_resume_task_commands() -> None:
         return {"value": item["value"]}
 
     async def scenario() -> None:
+        nonlocal started, release
+        started = asyncio.Event()
+        release = asyncio.Event()
         await source.publish({"value": 1})
         await source.publish({"value": 2})
         serve_task = asyncio.create_task(app.serve())
@@ -1091,14 +1096,16 @@ def test_ws_sender_send_and_wait_blocks_until_delivery() -> None:
         connected: bool = False
         connect_calls: int = 0
         send_calls: list[tuple[str, dict[str, object]]] = field(default_factory=list)
-        started: asyncio.Event = field(default_factory=asyncio.Event)
-        release: asyncio.Event = field(default_factory=asyncio.Event)
+        started: asyncio.Event | None = None
+        release: asyncio.Event | None = None
 
         async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
             self.connected = True
             self.connect_calls += 1
 
         async def send_telemetry(self, channel: str, body: dict[str, object]) -> None:
+            assert self.started is not None
+            assert self.release is not None
             self.send_calls.append((channel, dict(body)))
             self.started.set()
             await self.release.wait()
@@ -1106,8 +1113,7 @@ def test_ws_sender_send_and_wait_blocks_until_delivery() -> None:
         async def close(self) -> None:
             self.connected = False
 
-    transport = BlockingTransport()
-    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    transport: BlockingTransport | None = None
     payload = {
         "service": {
             "name": "billing-sync",
@@ -1129,6 +1135,12 @@ def test_ws_sender_send_and_wait_blocks_until_delivery() -> None:
     }
 
     async def scenario() -> None:
+        nonlocal transport
+        transport = BlockingTransport(
+            started=asyncio.Event(),
+            release=asyncio.Event(),
+        )
+        sender = ControlPlaneWsSender(_make_config(), transport=transport)
         wait_task = asyncio.create_task(sender.send_and_wait("sync", payload))
         await asyncio.wait_for(transport.started.wait(), timeout=0.1)
         assert wait_task.done() is False
@@ -1138,6 +1150,7 @@ def test_ws_sender_send_and_wait_blocks_until_delivery() -> None:
 
     asyncio.run(scenario())
 
+    assert transport is not None
     assert transport.connect_calls == 1
     assert [call[0] for call in transport.send_calls] == ["sync"]
 
@@ -1148,9 +1161,10 @@ def test_ws_sender_startup_and_shutdown_do_not_block_when_connect_hangs() -> Non
         connected: bool = False
         connect_calls: int = 0
         close_calls: int = 0
-        _connect_gate: asyncio.Event = field(default_factory=asyncio.Event)
+        _connect_gate: asyncio.Event | None = None
 
         async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
+            assert self._connect_gate is not None
             self.connect_calls += 1
             await self._connect_gate.wait()
             self.connected = True
@@ -1164,17 +1178,20 @@ def test_ws_sender_startup_and_shutdown_do_not_block_when_connect_hangs() -> Non
 
     config = _make_config()
     config.shutdown_flush_timeout_s = 0.01
-    transport = HangingTransport()
     app = OneStepApp("billing-sync")
-    sender = ControlPlaneWsSender(config, transport=transport)
-    reporter = ControlPlaneReporter(config, sender=sender)
-    reporter.attach(app)
+    transport: HangingTransport | None = None
 
     async def scenario() -> None:
+        nonlocal transport
+        transport = HangingTransport(_connect_gate=asyncio.Event())
+        sender = ControlPlaneWsSender(config, transport=transport)
+        reporter = ControlPlaneReporter(config, sender=sender)
+        reporter.attach(app)
         await asyncio.wait_for(app.startup(), timeout=0.1)
         await asyncio.wait_for(app.shutdown(), timeout=0.1)
 
     asyncio.run(scenario())
 
+    assert transport is not None
     assert transport.connect_calls >= 1
     assert transport.close_calls == 1

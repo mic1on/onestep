@@ -419,14 +419,16 @@ def test_reporter_send_sync_now_waits_for_sender_delivery() -> None:
     class WaitableSender:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str, dict]] = []
-            self.started = asyncio.Event()
-            self.release = asyncio.Event()
+            self.started: asyncio.Event | None = None
+            self.release: asyncio.Event | None = None
 
         async def __call__(self, channel: str, payload: dict) -> None:
             self.calls.append(("enqueue", channel, payload))
 
         async def send_and_wait(self, channel: str, payload: dict) -> None:
             self.calls.append(("wait", channel, payload))
+            assert self.started is not None
+            assert self.release is not None
             self.started.set()
             await self.release.wait()
 
@@ -436,6 +438,8 @@ def test_reporter_send_sync_now_waits_for_sender_delivery() -> None:
     reporter.attach(app)
 
     async def scenario() -> None:
+        sender.started = asyncio.Event()
+        sender.release = asyncio.Event()
         await app.startup()
         wait_task = asyncio.create_task(reporter.send_sync_now())
         await asyncio.wait_for(sender.started.wait(), timeout=0.1)
@@ -453,14 +457,16 @@ def test_reporter_flush_metrics_now_waits_for_sender_delivery() -> None:
     class WaitableSender:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str, dict]] = []
-            self.started = asyncio.Event()
-            self.release = asyncio.Event()
+            self.started: asyncio.Event | None = None
+            self.release: asyncio.Event | None = None
 
         async def __call__(self, channel: str, payload: dict) -> None:
             self.calls.append(("enqueue", channel, payload))
 
         async def send_and_wait(self, channel: str, payload: dict) -> None:
             self.calls.append(("wait", channel, payload))
+            assert self.started is not None
+            assert self.release is not None
             self.started.set()
             await self.release.wait()
 
@@ -470,6 +476,8 @@ def test_reporter_flush_metrics_now_waits_for_sender_delivery() -> None:
     reporter.attach(app)
 
     async def scenario() -> None:
+        sender.started = asyncio.Event()
+        sender.release = asyncio.Event()
         await app.startup()
         await app.emit_event(
             TaskEvent(
@@ -497,14 +505,16 @@ def test_reporter_flush_events_now_waits_for_sender_delivery() -> None:
     class WaitableSender:
         def __init__(self) -> None:
             self.calls: list[tuple[str, str, dict]] = []
-            self.started = asyncio.Event()
-            self.release = asyncio.Event()
+            self.started: asyncio.Event | None = None
+            self.release: asyncio.Event | None = None
 
         async def __call__(self, channel: str, payload: dict) -> None:
             self.calls.append(("enqueue", channel, payload))
 
         async def send_and_wait(self, channel: str, payload: dict) -> None:
             self.calls.append(("wait", channel, payload))
+            assert self.started is not None
+            assert self.release is not None
             self.started.set()
             await self.release.wait()
 
@@ -514,6 +524,8 @@ def test_reporter_flush_events_now_waits_for_sender_delivery() -> None:
     reporter.attach(app)
 
     async def scenario() -> None:
+        sender.started = asyncio.Event()
+        sender.release = asyncio.Event()
         await app.startup()
         await app.emit_event(
             TaskEvent(
