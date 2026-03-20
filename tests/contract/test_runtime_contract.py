@@ -17,7 +17,6 @@ from onestep import (
     OneStepApp,
     RetryAction,
     RetryDecision,
-    Sink,
     StructuredEventLogger,
     TaskEventKind,
 )
@@ -282,6 +281,125 @@ def test_run_installs_sigterm_handler_contract(monkeypatch) -> None:
     assert handlers[signal.SIGTERM] == f"previous-{signal.SIGTERM}"
 
 
+def test_drain_stops_new_fetch_and_waits_for_inflight_contract() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", batch_size=1, poll_interval_s=0.01)
+        sink = MemoryQueue("processed", batch_size=1, poll_interval_s=0.01)
+        app = OneStepApp("drain-contract")
+        started = asyncio.Event()
+        release = asyncio.Event()
+        seen: list[int] = []
+
+        @app.task(source=source, emit=sink, concurrency=1)
+        async def consume(ctx, item):
+            seen.append(item["value"])
+            started.set()
+            await release.wait()
+            return {"value": item["value"]}
+
+        await source.publish({"value": 1})
+        await source.publish({"value": 2})
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        app.request_drain()
+        release.set()
+        drain_status = await asyncio.wait_for(app.wait_for_drain(), timeout=1.0)
+
+        assert drain_status == {
+            "operation": "drain",
+            "requested": True,
+            "completion": "complete",
+            "drained": True,
+            "accepting_new_work": False,
+            "runner_count": 1,
+            "parked_runner_count": 1,
+            "fetching_runner_count": 0,
+            "inflight_task_count": 0,
+        }
+        assert seen == [1]
+        assert source.size() == 1
+
+        app.request_shutdown()
+        await asyncio.wait_for(serve_task, timeout=1.0)
+
+        deliveries = await sink.fetch(1)
+        assert len(deliveries) == 1
+        assert deliveries[0].payload == {"value": 1}
+
+    asyncio.run(scenario())
+
+
+def test_task_pause_and_resume_control_intake_contract() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("task-control.incoming", batch_size=1, poll_interval_s=0.01)
+        sink = MemoryQueue("task-control.processed", batch_size=1, poll_interval_s=0.01)
+        app = OneStepApp("task-control-contract")
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        release_first = asyncio.Event()
+        seen: list[int] = []
+
+        @app.task(source=source, emit=sink, concurrency=1)
+        async def consume(ctx, item):
+            seen.append(item["value"])
+            if item["value"] == 1:
+                first_started.set()
+                await release_first.wait()
+            if item["value"] == 2:
+                second_started.set()
+                ctx.app.request_shutdown()
+            return {"value": item["value"]}
+
+        await source.publish({"value": 1})
+        await source.publish({"value": 2})
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+        app.request_task_pause("consume")
+        release_first.set()
+        pause_status = await asyncio.wait_for(app.wait_for_task_pause("consume"), timeout=1.0)
+
+        assert pause_status == {
+            "operation": "pause_task",
+            "task_name": "consume",
+            "requested": True,
+            "completion": "complete",
+            "paused": True,
+            "accepting_new_work": False,
+            "runner_count": 1,
+            "parked_runner_count": 1,
+            "fetching_runner_count": 0,
+            "inflight_task_count": 0,
+        }
+        assert seen == [1]
+        assert source.size() == 1
+
+        app.request_task_resume("consume")
+        resume_status = await asyncio.wait_for(app.wait_for_task_resume("consume"), timeout=1.0)
+        assert resume_status["operation"] == "resume_task"
+        assert resume_status["task_name"] == "consume"
+        assert resume_status["requested"] is True
+        assert resume_status["completion"] == "complete"
+        assert resume_status["paused"] is False
+        assert resume_status["accepting_new_work"] is True
+        assert resume_status["runner_count"] == 1
+        assert resume_status["parked_runner_count"] == 0
+
+        await asyncio.wait_for(second_started.wait(), timeout=1.0)
+        await asyncio.wait_for(serve_task, timeout=1.0)
+
+        deliveries = await sink.fetch(1)
+        deliveries.extend(await sink.fetch(1))
+        assert len(deliveries) == 2
+        assert [delivery.payload for delivery in deliveries] == [
+            {"value": 1},
+            {"value": 2},
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_ctx_emit_and_return_follow_separate_contracts() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming")
@@ -376,6 +494,111 @@ def test_failure_classification_and_dead_letter_payload() -> None:
             "original_attempts": 0,
         }
         assert await source.fetch(1) == []
+
+    asyncio.run(scenario())
+
+
+def test_replay_task_dead_letters_restores_original_payload_and_meta() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        dead = MemoryQueue("dead", poll_interval_s=0.01)
+        app = OneStepApp("dlq-replay-app")
+
+        @app.task(source=source, retry=NoRetry(), dead_letter=dead)
+        async def consume(ctx, item):
+            return item
+
+        await app.startup()
+        await dead.publish(
+            {
+                "payload": {"value": 7},
+                "failure": {
+                    "kind": "error",
+                    "exception_type": "RuntimeError",
+                    "message": "boom",
+                    "traceback": "Traceback",
+                },
+            },
+            meta={
+                "app": "dlq-replay-app",
+                "task": "consume",
+                "source": "incoming",
+                "original_meta": {"trace_id": "abc"},
+                "original_attempts": 3,
+            },
+        )
+
+        result = await app.replay_task_dead_letters("consume", limit=5)
+        replayed_batch = await source.fetch(1)
+        remaining_dead = await dead.fetch(1)
+        await app.shutdown()
+
+        assert result == {
+            "operation": "replay_dead_letters",
+            "task_name": "consume",
+            "requested": True,
+            "completion": "complete",
+            "requested_limit": 5,
+            "attempted_count": 1,
+            "replayed_count": 1,
+            "failed_count": 0,
+            "empty": False,
+        }
+        assert len(replayed_batch) == 1
+        assert replayed_batch[0].payload == {"value": 7}
+        assert replayed_batch[0].envelope.meta == {"trace_id": "abc"}
+        assert replayed_batch[0].envelope.attempts == 3
+        assert remaining_dead == []
+
+    asyncio.run(scenario())
+
+
+def test_discard_task_dead_letters_acknowledges_dead_letter_batch() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        dead = MemoryQueue("dead", poll_interval_s=0.01)
+        app = OneStepApp("dlq-discard-app")
+
+        @app.task(source=source, retry=NoRetry(), dead_letter=dead)
+        async def consume(ctx, item):
+            return item
+
+        await app.startup()
+        await dead.publish(
+            {
+                "payload": {"value": 11},
+                "failure": {
+                    "kind": "error",
+                    "exception_type": "RuntimeError",
+                    "message": "boom",
+                    "traceback": "Traceback",
+                },
+            },
+            meta={
+                "app": "dlq-discard-app",
+                "task": "consume",
+                "source": "incoming",
+                "original_meta": {"trace_id": "abc"},
+                "original_attempts": 1,
+            },
+        )
+
+        result = await app.discard_task_dead_letters("consume", limit=5)
+        remaining_dead = await dead.fetch(1)
+        await app.shutdown()
+
+        assert result == {
+            "operation": "discard_dead_letters",
+            "task_name": "consume",
+            "requested": True,
+            "completion": "complete",
+            "requested_limit": 5,
+            "attempted_count": 1,
+            "discarded_count": 1,
+            "failed_count": 0,
+            "empty": False,
+        }
+        assert remaining_dead == []
 
     asyncio.run(scenario())
 

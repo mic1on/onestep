@@ -19,7 +19,13 @@ Files:
 - `mysql_incremental.py`: incremental sync using a durable cursor store
 - `rabbitmq_queue.py`: RabbitMQ source/sink usage
 - `sqs_queue.py`: SQS source/sink usage
-- `control_plane_reporter_demo.py`: long-running reporter demo for local control plane smoke testing
+- `control_plane_reporter_demo.py`: long-running reporter demo for local control plane smoke testing;
+  cycles `ok -> retry_once -> fail -> slow` so you can observe success, retry, timeout, and
+  dead-letter behavior from the control plane
 
 Control plane reporting is documented in the top-level `README.md`. For a quick local demo, start
 `onestep-control-plane` first and then run `control_plane_reporter_demo.py`.
+
+When the control plane is unavailable, the demo agent now reconnects automatically with backoff.
+Its low-priority `metrics` and `events` buffers are capped so a long outage does not grow memory
+without bound.

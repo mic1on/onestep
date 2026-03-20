@@ -237,7 +237,8 @@ The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined
 
 ## Control Plane Reporter
 
-`onestep` can push runtime telemetry to `onestep-control-plane` without adding a new connector or changing task code.
+`onestep` can push runtime telemetry to `onestep-control-plane` over a single long-lived
+WebSocket session without adding a new connector or changing task code.
 
 Attach the reporter explicitly:
 
@@ -266,27 +267,59 @@ Common optional environment variables:
 - `ONESTEP_NODE_NAME`
 - `ONESTEP_DEPLOYMENT_VERSION`
 - `ONESTEP_INSTANCE_ID`
+- `ONESTEP_REPLICA_KEY`
+- `ONESTEP_STATE_DIR`
 - `ONESTEP_CONTROL_PLANE_HEARTBEAT_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_METRICS_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_FLUSH_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_BATCH_SIZE`
+- `ONESTEP_CONTROL_PLANE_MAX_PENDING_EVENTS`
+- `ONESTEP_CONTROL_PLANE_MAX_PENDING_METRIC_BATCHES`
 - `ONESTEP_CONTROL_PLANE_TIMEOUT_S`
+- `ONESTEP_CONTROL_PLANE_RECONNECT_BASE_DELAY_S`
+- `ONESTEP_CONTROL_PLANE_RECONNECT_MAX_DELAY_S`
 
-The reporter currently pushes:
+The reporter now uses:
 
-- `POST /api/v1/agents/sync`
-- `POST /api/v1/agents/heartbeat`
-- `POST /api/v1/agents/metrics`
-- `POST /api/v1/agents/events`
+- `GET /api/v1/agents/ws`
+- `hello` / `hello_ack`
+- `telemetry(sync|heartbeat|metrics|events)`
+- `command` / `command_ack` / `command_result`
 
 Behavior:
 
-- startup sends an initial heartbeat
-- startup also sends a topology sync built from the current app tasks
-- sync is retried on later heartbeat cycles until the current topology hash is accepted
+- startup reuses a stable `instance_id` from local state unless `ONESTEP_INSTANCE_ID` or `ONESTEP_REPLICA_KEY` overrides it
+- startup opens a fresh WS session and negotiates capabilities
+- startup sends a heartbeat and a topology sync built from the current app tasks
+- `sync` and `heartbeat` sequences are tracked independently and persist across restarts
+- sync is resent on later heartbeat cycles until the current topology hash converges
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
+- remote commands can trigger `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `sync_now`, `flush_metrics`, and `flush_events`
+- transport send failures reset the current session and reconnect with exponential backoff plus jitter
+- low-priority `metrics` and `events` buffers are bounded locally; if the control plane stays down, the oldest buffered telemetry is dropped first
 - reporter failures are logged but do not stop task execution
+
+Identity resolution order:
+
+1. `ONESTEP_INSTANCE_ID`: hard override for tests or explicit pinning.
+2. `ONESTEP_REPLICA_KEY`: derives a deterministic UUIDv5 from `service_name + environment + replica_key`.
+3. local identity state: reuses the `instance_id` stored in the reporter state dir.
+
+By default `ControlPlaneReporterConfig.from_env()` uses a local state dir under:
+
+- `~/.onestep/control-plane-state/<environment>/<service_name>`
+- `~/.onestep/control-plane-state/<environment>/<service_name>/<replica_key>` when `ONESTEP_REPLICA_KEY` is set
+
+Multi-replica rules:
+
+- single worker: the default state dir is enough
+- multiple workers on one host: give each worker a unique `ONESTEP_REPLICA_KEY` or `ONESTEP_STATE_DIR`
+- StatefulSet-style deployments: use the stable ordinal as `ONESTEP_REPLICA_KEY`
+- disposable deployment pod names are not a stable replica key unless you inject one yourself
+
+For an operations-focused guide with deployment patterns and troubleshooting, see
+[`docs/stable-instance-identity.md`](docs/stable-instance-identity.md).
 
 Quick local demo:
 
@@ -305,11 +338,21 @@ cd ../onestep-control-plane
 ./scripts/run-control-plane-demo.sh
 ```
 
-3. Inspect the control plane:
+3. Or run the end-to-end smoke script, which boots the local control plane, starts the
+   demo agent, dispatches a `ping`, and waits for a successful `command_result`:
+
+```bash
+./scripts/run-control-plane-smoke.sh
+```
+
+4. Inspect the control plane. The demo cycles through `ok`, `retry_once`, `fail`, and `slow`
+   jobs so you can see successful runs, retries, terminal failures, timeouts, and dead-letter
+   events without changing any code:
 
 ```text
-http://127.0.0.1:8080/api/v1/services?environment=dev
-http://127.0.0.1:8080/openapi.json
+http://127.0.0.1:8080/services?environment=dev
+http://127.0.0.1:8080/services/control-plane-demo?environment=dev
+http://127.0.0.1:8080/services/control-plane-demo?environment=dev&tab=commands
 ```
 
 ## Runtime
