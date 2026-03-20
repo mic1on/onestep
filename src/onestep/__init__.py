@@ -13,6 +13,13 @@ from .control_plane_ws import (
 )
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
+from .identity_store import (
+    IdentityLockError,
+    IdentityStateError,
+    IdentityStore,
+    build_default_state_dir,
+    derive_replica_instance_id,
+)
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
 from .resilience import (
     ConnectorErrorKind,
@@ -61,6 +68,9 @@ __all__ = [
     "Envelope",
     "FailureInfo",
     "FailureKind",
+    "IdentityLockError",
+    "IdentityStateError",
+    "IdentityStore",
     "InMemoryMetrics",
     "InMemoryCursorStore",
     "InMemoryStateStore",
@@ -91,6 +101,8 @@ __all__ = [
     "__version__",
     "build_control_plane_http_base_url",
     "build_control_plane_ws_url",
+    "build_default_state_dir",
+    "derive_replica_instance_id",
     "load_app_config",
     "load_yaml_app",
 ]

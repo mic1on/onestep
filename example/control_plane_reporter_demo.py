@@ -90,6 +90,7 @@ async def announce(_: OneStepApp) -> None:
     print(f"Service name: {app.name}")
     print(f"Environment: {ENVIRONMENT}")
     print(f"Instance ID: {reporter.config.instance_id}")
+    print(f"State dir: {reporter.config.state_dir}")
     print(f"Interval: {INTERVAL_SECONDS}s")
     print(f"Worker timeout: {WORKER_TIMEOUT_S}s")
     print(f"Slow-job sleep: {SLOW_JOB_SLEEP_S}s")

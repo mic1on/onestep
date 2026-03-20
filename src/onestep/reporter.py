@@ -17,6 +17,12 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from uuid import UUID, uuid4
 
 from .events import TaskEvent, TaskEventKind
+from .identity_store import (
+    IdentityStore,
+    build_default_state_dir,
+    derive_replica_instance_id,
+    peek_instance_id,
+)
 from .retry import FailureKind
 
 if TYPE_CHECKING:
@@ -47,6 +53,15 @@ def _normalize_base_url(value: str) -> str:
     if not normalized:
         raise ValueError("control plane base URL must not be empty")
     return normalized
+
+
+def _normalize_state_dir(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return os.path.abspath(os.path.expanduser(normalized))
 
 
 def _coerce_positive_float(name: str, value: float) -> float:
@@ -157,7 +172,9 @@ class ControlPlaneReporterConfig:
     service_name: str | None = None
     node_name: str | None = None
     deployment_version: str | None = None
-    instance_id: UUID = field(default_factory=uuid4)
+    instance_id: UUID | None = None
+    replica_key: str | None = None
+    state_dir: str | None = None
     heartbeat_interval_s: float = 30.0
     metrics_interval_s: float = 30.0
     event_flush_interval_s: float = 5.0
@@ -212,6 +229,8 @@ class ControlPlaneReporterConfig:
         )
         if self.reconnect_max_delay_s < self.reconnect_base_delay_s:
             raise ValueError("reconnect_max_delay_s must be >= reconnect_base_delay_s")
+        self.replica_key = self.replica_key.strip() if self.replica_key and self.replica_key.strip() else None
+        self.state_dir = _normalize_state_dir(self.state_dir)
 
     @classmethod
     def from_env(cls, *, app_name: str | None = None) -> "ControlPlaneReporterConfig":
@@ -228,8 +247,24 @@ class ControlPlaneReporterConfig:
             "ONESTEP_DEPLOYMENT_VERSION",
             "ONESTEP_VERSION",
         )
+        replica_key = _read_env("ONESTEP_REPLICA_KEY")
+        identity_name = service_name or app_name or "onestep"
+        state_dir = _normalize_state_dir(_read_env("ONESTEP_STATE_DIR")) or build_default_state_dir(
+            service_name=identity_name,
+            environment=environment,
+            replica_key=replica_key,
+        )
         instance_id_value = _read_env("ONESTEP_INSTANCE_ID")
-        instance_id = UUID(instance_id_value) if instance_id_value is not None else uuid4()
+        if instance_id_value is not None:
+            instance_id = UUID(instance_id_value)
+        elif replica_key is not None:
+            instance_id = derive_replica_instance_id(
+                service_name=identity_name,
+                environment=environment,
+                replica_key=replica_key,
+            )
+        else:
+            instance_id = peek_instance_id(state_dir) or uuid4()
         heartbeat_interval_s = float(_read_env("ONESTEP_CONTROL_PLANE_HEARTBEAT_INTERVAL_S") or 30.0)
         metrics_interval_s = float(_read_env("ONESTEP_CONTROL_PLANE_METRICS_INTERVAL_S") or 30.0)
         event_flush_interval_s = float(
@@ -258,6 +293,8 @@ class ControlPlaneReporterConfig:
             node_name=node_name,
             deployment_version=deployment_version,
             instance_id=instance_id,
+            replica_key=replica_key,
+            state_dir=state_dir,
             heartbeat_interval_s=heartbeat_interval_s,
             metrics_interval_s=metrics_interval_s,
             event_flush_interval_s=event_flush_interval_s,
@@ -359,6 +396,8 @@ class ControlPlaneReporter:
         self._deployment_version = config.deployment_version or _resolve_onestep_version()
         self._onestep_version = _resolve_onestep_version()
         self._sequence = 0
+        self._heartbeat_sequence = 0
+        self._sync_sequence = 0
         self._event_sequence = 0
         self._pending_events: list[dict[str, Any]] = []
         self._metrics_window_started_at = _utcnow()
@@ -369,6 +408,12 @@ class ControlPlaneReporter:
         self._loop_tasks: list[asyncio.Task[None]] = []
         self._stop_event: asyncio.Event | None = None
         self._event_flush_signal: asyncio.Event | None = None
+        self._identity_store: IdentityStore | None = None
+
+    @property
+    def session_id(self) -> str | None:
+        session_id = getattr(self._sender, "session_id", None)
+        return session_id if isinstance(session_id, str) else None
 
     def attach(self, app: "OneStepApp") -> "ControlPlaneReporter":
         if self._attached:
@@ -392,6 +437,8 @@ class ControlPlaneReporter:
 
     async def startup(self) -> None:
         self._sequence = 0
+        self._heartbeat_sequence = 0
+        self._sync_sequence = 0
         self._event_sequence = 0
         self._pending_events.clear()
         self._pending_metric_batches.clear()
@@ -402,35 +449,43 @@ class ControlPlaneReporter:
         self._event_flush_signal = asyncio.Event()
         self._started_at = _utcnow()
         self._metrics_window_started_at = self._started_at
-        start = getattr(self._sender, "start", None)
-        if callable(start):
-            result = start()
-            if inspect.isawaitable(result):
-                await result
-        await self._safe_send_heartbeat()
-        await self._safe_send_sync()
-        self._loop_tasks = [
-            asyncio.create_task(self._heartbeat_loop(), name="onestep-control-plane-heartbeat"),
-            asyncio.create_task(self._metrics_loop(), name="onestep-control-plane-metrics"),
-            asyncio.create_task(self._events_loop(), name="onestep-control-plane-events"),
-        ]
+        self._ensure_identity_ready()
+        try:
+            start = getattr(self._sender, "start", None)
+            if callable(start):
+                result = start()
+                if inspect.isawaitable(result):
+                    await result
+            await self._safe_send_heartbeat()
+            await self._safe_send_sync()
+            self._loop_tasks = [
+                asyncio.create_task(self._heartbeat_loop(), name="onestep-control-plane-heartbeat"),
+                asyncio.create_task(self._metrics_loop(), name="onestep-control-plane-metrics"),
+                asyncio.create_task(self._events_loop(), name="onestep-control-plane-events"),
+            ]
+        except Exception:
+            self._close_identity_store()
+            raise
 
     async def shutdown(self) -> None:
-        if self._stop_event is not None:
-            self._stop_event.set()
-        if self._event_flush_signal is not None:
-            self._event_flush_signal.set()
-        if self._loop_tasks:
-            await asyncio.gather(*self._loop_tasks, return_exceptions=True)
-        self._loop_tasks = []
-        self._rotate_metrics_window(_utcnow())
-        await self._flush_metric_batches()
-        await self._flush_event_batches()
-        close = getattr(self._sender, "close", None)
-        if callable(close):
-            result = close()
-            if inspect.isawaitable(result):
-                await result
+        try:
+            if self._stop_event is not None:
+                self._stop_event.set()
+            if self._event_flush_signal is not None:
+                self._event_flush_signal.set()
+            if self._loop_tasks:
+                await asyncio.gather(*self._loop_tasks, return_exceptions=True)
+            self._loop_tasks = []
+            self._rotate_metrics_window(_utcnow())
+            await self._flush_metric_batches()
+            await self._flush_event_batches()
+            close = getattr(self._sender, "close", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+        finally:
+            self._close_identity_store()
 
     def handle_event(self, event: TaskEvent) -> None:
         bucket = self._metrics_by_task.setdefault(event.task, _TaskMetricsState())
@@ -518,16 +573,28 @@ class ControlPlaneReporter:
         self._sequence += 1
         return self._sequence
 
+    def _next_heartbeat_sequence(self) -> int:
+        if self._identity_store is not None:
+            return self._identity_store.next_heartbeat_sequence()
+        self._heartbeat_sequence += 1
+        return self._heartbeat_sequence
+
+    def _next_sync_sequence(self) -> int:
+        if self._identity_store is not None:
+            return self._identity_store.next_sync_sequence()
+        self._sync_sequence += 1
+        return self._sync_sequence
+
     def _next_event_id(self) -> str:
         self._event_sequence += 1
-        return f"{self.config.instance_id.hex}-{self._event_sequence}"
+        return f"{self._require_instance_id().hex}-{self._event_sequence}"
 
     def _service_descriptor(self) -> dict[str, Any]:
         return {
             "name": self._service_name,
             "environment": self.config.environment,
             "node_name": self._node_name,
-            "instance_id": self.config.instance_id,
+            "instance_id": self._require_instance_id(),
             "deployment_version": self._deployment_version,
         }
 
@@ -549,6 +616,66 @@ class ControlPlaneReporter:
             "inflight_tasks": inflight_tasks,
             "task_controls": self._build_task_control_states(),
         }
+
+    def _identity_name(self) -> str:
+        return self._service_name or self.config.service_name or "onestep"
+
+    def _resolve_state_dir(self) -> str | None:
+        if self.config.state_dir is not None:
+            return self.config.state_dir
+        if self.config.replica_key is None and self.config.instance_id is not None:
+            return None
+        return build_default_state_dir(
+            service_name=self._identity_name(),
+            environment=self.config.environment,
+            replica_key=self.config.replica_key,
+        )
+
+    def _preferred_instance_id(self) -> UUID:
+        if self.config.instance_id is not None:
+            return self.config.instance_id
+        if self.config.replica_key is not None:
+            self.config.instance_id = derive_replica_instance_id(
+                service_name=self._identity_name(),
+                environment=self.config.environment,
+                replica_key=self.config.replica_key,
+            )
+        else:
+            self.config.instance_id = uuid4()
+        return self.config.instance_id
+
+    def _ensure_identity_ready(self) -> None:
+        if self._identity_store is not None:
+            self.config.instance_id = self._identity_store.load_or_create_instance_id()
+            return
+        state_dir = self._resolve_state_dir()
+        if state_dir is None:
+            self.config.instance_id = self._preferred_instance_id()
+            return
+        preferred_instance_id: UUID | None = None
+        if self.config.replica_key is not None:
+            preferred_instance_id = self._preferred_instance_id()
+        elif self.config.instance_id is not None:
+            preferred_instance_id = self.config.instance_id
+        self._identity_store = IdentityStore(
+            state_dir,
+            instance_id=preferred_instance_id,
+        )
+        self.config.state_dir = state_dir
+        self.config.instance_id = self._identity_store.load_or_create_instance_id()
+
+    def _close_identity_store(self) -> None:
+        if self._identity_store is None:
+            return
+        self._identity_store.close()
+        self._identity_store = None
+
+    def _require_instance_id(self) -> UUID:
+        if self.config.instance_id is None:
+            self._ensure_identity_ready()
+        if self.config.instance_id is None:
+            raise RuntimeError("control plane reporter instance identity is not initialized")
+        return self.config.instance_id
 
     def _build_task_control_states(self) -> list[dict[str, Any]]:
         if self._app is None:
@@ -774,7 +901,7 @@ class ControlPlaneReporter:
                 "topology_hash": topology_hash,
             },
             "sent_at": _utcnow(),
-            "sequence": self._next_sequence(),
+            "sequence": self._next_sync_sequence(),
         }
         await self._send_via_sender("sync", payload, wait_for_delivery=wait_for_delivery)
         self._last_synced_topology_hash = topology_hash
@@ -791,7 +918,7 @@ class ControlPlaneReporter:
             "runtime": self._build_runtime_descriptor(),
             "health": self._build_health_descriptor(),
             "sent_at": _utcnow(),
-            "sequence": self._next_sequence(),
+            "sequence": self._next_heartbeat_sequence(),
         }
         await self._sender("heartbeat", payload)
         self._degraded_since_last_heartbeat = False

@@ -267,6 +267,8 @@ Common optional environment variables:
 - `ONESTEP_NODE_NAME`
 - `ONESTEP_DEPLOYMENT_VERSION`
 - `ONESTEP_INSTANCE_ID`
+- `ONESTEP_REPLICA_KEY`
+- `ONESTEP_STATE_DIR`
 - `ONESTEP_CONTROL_PLANE_HEARTBEAT_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_METRICS_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_FLUSH_INTERVAL_S`
@@ -286,8 +288,10 @@ The reporter now uses:
 
 Behavior:
 
+- startup reuses a stable `instance_id` from local state unless `ONESTEP_INSTANCE_ID` or `ONESTEP_REPLICA_KEY` overrides it
 - startup opens a fresh WS session and negotiates capabilities
-- startup sends a topology sync built from the current app tasks, then heartbeat
+- startup sends a heartbeat and a topology sync built from the current app tasks
+- `sync` and `heartbeat` sequences are tracked independently and persist across restarts
 - sync is resent on later heartbeat cycles until the current topology hash converges
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
@@ -295,6 +299,27 @@ Behavior:
 - transport send failures reset the current session and reconnect with exponential backoff plus jitter
 - low-priority `metrics` and `events` buffers are bounded locally; if the control plane stays down, the oldest buffered telemetry is dropped first
 - reporter failures are logged but do not stop task execution
+
+Identity resolution order:
+
+1. `ONESTEP_INSTANCE_ID`: hard override for tests or explicit pinning.
+2. `ONESTEP_REPLICA_KEY`: derives a deterministic UUIDv5 from `service_name + environment + replica_key`.
+3. local identity state: reuses the `instance_id` stored in the reporter state dir.
+
+By default `ControlPlaneReporterConfig.from_env()` uses a local state dir under:
+
+- `~/.onestep/control-plane-state/<environment>/<service_name>`
+- `~/.onestep/control-plane-state/<environment>/<service_name>/<replica_key>` when `ONESTEP_REPLICA_KEY` is set
+
+Multi-replica rules:
+
+- single worker: the default state dir is enough
+- multiple workers on one host: give each worker a unique `ONESTEP_REPLICA_KEY` or `ONESTEP_STATE_DIR`
+- StatefulSet-style deployments: use the stable ordinal as `ONESTEP_REPLICA_KEY`
+- disposable deployment pod names are not a stable replica key unless you inject one yourself
+
+For an operations-focused guide with deployment patterns and troubleshooting, see
+[`docs/stable-instance-identity.md`](docs/stable-instance-identity.md).
 
 Quick local demo:
 

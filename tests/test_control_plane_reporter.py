@@ -84,7 +84,7 @@ def test_reporter_startup_sends_heartbeat() -> None:
         "tasks": [],
         "topology_hash": sync_payload["app"]["topology_hash"],
     }
-    assert sync_payload["sequence"] == 2
+    assert sync_payload["sequence"] == 1
     assert sync_payload["app"]["topology_hash"].startswith("sha256:")
 
 

@@ -235,6 +235,12 @@ class ControlPlaneWsTransport:
     def hello_ack(self) -> AgentHelloAck | None:
         return self._hello_ack
 
+    @property
+    def session_id(self) -> str | None:
+        if self._hello_ack is None:
+            return None
+        return self._hello_ack.session_id
+
     def set_capabilities(self, capabilities: list[str]) -> None:
         self._capabilities = list(capabilities)
 
@@ -603,6 +609,11 @@ class ControlPlaneWsSender:
         set_command_handler = getattr(self._transport, "set_command_handler", None)
         if callable(set_command_handler):
             set_command_handler(self)
+
+    @property
+    def session_id(self) -> str | None:
+        session_id = getattr(self._transport, "session_id", None)
+        return session_id if isinstance(session_id, str) else None
 
     async def start(self) -> None:
         task = self._worker_task
