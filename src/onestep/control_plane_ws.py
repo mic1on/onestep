@@ -105,6 +105,31 @@ def build_control_plane_ws_url(base_url: str) -> str:
     return urlunsplit((scheme_map[parsed.scheme], parsed.netloc, path, parsed.query, parsed.fragment))
 
 
+def _extract_http_status_code(exc: BaseException) -> int | None:
+    for candidate in (exc, getattr(exc, "response", None)):
+        if candidate is None:
+            continue
+        for attr_name in ("status_code", "status"):
+            value = getattr(candidate, attr_name, None)
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def _format_exception_summary(exc: BaseException) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return f"{type(exc).__module__}.{type(exc).__qualname__}"
+
+
+def _is_transient_ws_connect_failure(exc: BaseException) -> bool:
+    status_code = _extract_http_status_code(exc)
+    if status_code is not None:
+        return status_code == 429 or 500 <= status_code < 600
+    return isinstance(exc, (OSError, TimeoutError, asyncio.TimeoutError))
+
+
 def _next_message_id() -> str:
     return f"msg_{uuid4().hex}"
 
@@ -998,10 +1023,14 @@ class ControlPlaneWsSender:
                 service=self._service_descriptor,
                 runtime=self._runtime_descriptor,
             )
-        except Exception:
+        except Exception as exc:
+            log_message = (
+                "control plane WS connect failed; will retry in background: "
+                f"{_format_exception_summary(exc)}"
+            )
             self._logger.warning(
-                "control plane WS connect failed; will retry in background",
-                exc_info=True,
+                log_message,
+                exc_info=not _is_transient_ws_connect_failure(exc),
             )
             self._reconnect_attempts += 1
             return False

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID
+
+import pytest
 
 from onestep import (
     ControlPlaneReporter,
@@ -1088,6 +1091,73 @@ def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -
 
     assert transport.connect_calls == 2
     assert [attempt[0] for attempt in transport.send_attempts] == ["sync", "sync"]
+
+
+@pytest.mark.parametrize("status_code", range(500, 600))
+def test_ws_sender_retries_transient_http_5xx_connect_failures_without_traceback(
+    caplog,
+    status_code: int,
+) -> None:
+    @dataclass
+    class FakeHandshakeResponse:
+        status_code: int
+
+    class FakeInvalidStatus(RuntimeError):
+        def __init__(self, status_code: int) -> None:
+            super().__init__(f"server rejected WebSocket connection: HTTP {status_code}")
+            self.response = FakeHandshakeResponse(status_code=status_code)
+
+    @dataclass
+    class HandshakeFlakyTransport:
+        connected: bool = False
+        connect_calls: int = 0
+        send_calls: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+
+        async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
+            self.connect_calls += 1
+            if self.connect_calls == 1:
+                raise FakeInvalidStatus(status_code)
+            self.connected = True
+
+        async def send_telemetry(self, channel: str, body: dict[str, object]) -> None:
+            self.send_calls.append((channel, dict(body)))
+
+        async def close(self) -> None:
+            self.connected = False
+
+    transport = HandshakeFlakyTransport()
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    payload = {
+        "service": {
+            "name": "billing-sync",
+            "environment": "prod",
+            "node_name": "vm-prod-3",
+            "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
+            "deployment_version": "1.0.0+c435c99",
+        },
+        "runtime": {
+            "onestep_version": "1.0.0",
+            "python_version": "3.12.3",
+            "hostname": "host-a",
+            "pid": 12345,
+            "started_at": datetime(2026, 3, 17, 11, 58, tzinfo=timezone.utc),
+        },
+        "app": {"name": "billing-sync", "shutdown_timeout_s": 30.0, "tasks": []},
+        "sent_at": datetime(2026, 3, 17, 12, 0, 0, tzinfo=timezone.utc),
+        "sequence": 3,
+    }
+
+    async def scenario() -> None:
+        with caplog.at_level(logging.WARNING, logger="onestep.control_plane.ws_sender"):
+            await asyncio.wait_for(sender.send_and_wait("sync", payload), timeout=0.2)
+        await sender.close()
+
+    asyncio.run(scenario())
+
+    assert transport.connect_calls == 2
+    assert [call[0] for call in transport.send_calls] == ["sync"]
+    assert f"HTTP {status_code}" in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_ws_sender_send_and_wait_blocks_until_delivery() -> None:
