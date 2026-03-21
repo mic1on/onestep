@@ -9,6 +9,30 @@ from typing import Protocol
 from .envelope import Envelope
 
 
+class RetryInLocal(Exception):
+    """Exception to trigger in-process retry without broker I/O.
+
+    Unlike queue-based retry (which calls message.requeue() and creates
+    a new broker message), RetryInLocal retries the handler directly
+    within the same worker process, preserving the current delivery context
+    and avoiding additional broker round-trips.
+
+    For SQS FIFO queues, this also avoids the deduplication issue where
+    retry messages with stable MessageDeduplicationId may be dropped.
+
+    Example:
+        async def my_handler(ctx, payload):
+            try:
+                return await unreliable_service_call(payload)
+            except TransientError:
+                raise RetryInLocal(delay_s=1.0)  # Retry locally with 1s delay
+    """
+
+    def __init__(self, message: str = "retry locally", delay_s: float | None = None) -> None:
+        super().__init__(message)
+        self.delay_s = delay_s
+
+
 class FailureKind(str, Enum):
     ERROR = "error"
     TIMEOUT = "timeout"
