@@ -11,7 +11,7 @@ from onestep.context import TaskContext
 from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
 from onestep.resilience import ConnectorOperationError, connector_retry_delay, is_retryable_connector_error
-from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
+from onestep.retry import FailureInfo, FailureKind, RetryDecision, RetryInLocal, resolve_retry_action
 from onestep.task import TaskSpec
 
 if TYPE_CHECKING:
@@ -290,6 +290,12 @@ class TaskRunner:
     ) -> None:
         failure = FailureInfo.from_exception(exc, kind=kind)
         ctx.logger.exception("task failed", extra={"failure_kind": failure.kind.value})
+
+        # Handle RetryInLocal: retry in-process without broker I/O
+        if isinstance(exc, RetryInLocal):
+            await self._handle_retry_in_local(ctx, delivery, exc, failure, duration_s=duration_s)
+            return
+
         action = resolve_retry_action(self.task.retry, delivery.envelope, exc, failure)
         if action.decision is RetryDecision.RETRY:
             await delivery.retry(delay_s=action.delay_s)
@@ -316,6 +322,96 @@ class TaskRunner:
             failure=failure,
             duration_s=duration_s,
         )
+
+    async def _handle_retry_in_local(
+        self,
+        ctx: TaskContext,
+        delivery: "Delivery",
+        exc: RetryInLocal,
+        failure: FailureInfo,
+        *,
+        duration_s: float | None,
+    ) -> None:
+        """Handle RetryInLocal: retry in-process without broker I/O.
+
+        This implements true local retry by:
+        1. Checking the retry policy for permission to retry
+        2. If allowed, waiting for the optional delay
+        3. Re-invoking the handler directly (no new broker message)
+        4. On success, continuing normal flow; on failure, repeating the cycle
+        """
+        # Check retry policy
+        action = resolve_retry_action(self.task.retry, delivery.envelope, exc, failure)
+
+        if action.decision is not RetryDecision.RETRY:
+            # No more retries allowed - fall through to failure handling
+            if self.task.dead_letter_sinks:
+                published = await self._publish_dead_letter(
+                    ctx,
+                    delivery,
+                    failure,
+                    duration_s=duration_s,
+                )
+                if not published:
+                    return
+            await self._fail_delivery(ctx, delivery, exc)
+            await self._emit_event(
+                TaskEventKind.FAILED,
+                delivery,
+                failure=failure,
+                duration_s=duration_s,
+            )
+            return
+
+        # Determine delay: prefer RetryInLocal's delay, fall back to policy's
+        delay_s = exc.delay_s if exc.delay_s is not None else action.delay_s
+
+        # Wait if delay is specified
+        if delay_s and delay_s > 0:
+            ctx.logger.info(f"retrying locally in {delay_s}s")
+            try:
+                await asyncio.wait_for(self.app.wait_for_shutdown(), timeout=delay_s)
+            except asyncio.TimeoutError:
+                pass  # Continue with retry
+            if self.app.is_stopping:
+                return
+
+        # Increment attempts for local retry
+        delivery.envelope.attempts += 1
+
+        ctx.logger.info(
+            f"retrying locally (attempt {delivery.envelope.attempts})",
+            extra={"attempts": delivery.envelope.attempts},
+        )
+
+        # Emit retry event
+        await self._emit_event(
+            TaskEventKind.RETRIED,
+            delivery,
+            failure=failure,
+            duration_s=duration_s,
+        )
+
+        # Retry the handler directly in-process
+        try:
+            await delivery.start_processing()
+            result = await self._invoke_handler(ctx, delivery)
+            if result is not None and self.task.sinks:
+                envelope = Envelope(body=result)
+                for sink in self.task.sinks:
+                    await self._send_to_sink(sink, envelope)
+            await delivery.ack()
+            await self._emit_event(
+                TaskEventKind.SUCCEEDED,
+                delivery,
+                duration_s=time.perf_counter() - duration_s if duration_s else 0,
+            )
+        except Exception as retry_exc:
+            # Recursively handle the retry result (could be another RetryInLocal or final failure)
+            if isinstance(retry_exc, RetryInLocal):
+                await self._handle_retry_in_local(ctx, delivery, retry_exc, failure, duration_s=None)
+            else:
+                await self._handle_failure(ctx, delivery, retry_exc, FailureKind.ERROR, duration_s=None)
 
     async def _publish_dead_letter(
         self,
