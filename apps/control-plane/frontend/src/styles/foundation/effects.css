@@ -1,0 +1,19 @@
+:root {
+  --radius-2xl: 14px;
+  --radius-3xl: 20px;
+  --radius-4xl: 28px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 10px 24px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 18px 40px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 26px 60px rgba(15, 23, 42, 0.1);
+  --shadow-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+
+  --blur-sm: 12px;
+  --blur-md: 18px;
+  --blur-lg: 24px;
+
+  --duration-fast: 160ms;
+  --duration-base: 220ms;
+  --ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+}

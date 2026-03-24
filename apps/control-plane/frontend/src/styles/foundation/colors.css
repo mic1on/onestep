@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light;
+
+  --color-neutral-950: #101623;
+  --color-neutral-900: #14202b;
+  --color-neutral-800: #263447;
+  --color-neutral-700: #4a596c;
+  --color-neutral-600: #677684;
+  --color-neutral-500: #8090a0;
+  --color-neutral-300: rgba(20, 32, 43, 0.14);
+  --color-neutral-200: rgba(20, 32, 43, 0.08);
+  --color-neutral-100: #f3f6fa;
+  --color-neutral-50: #f8fafd;
+
+  --color-blue-600: #0058cc;
+  --color-blue-500: #0071e3;
+  --color-blue-100: rgba(0, 113, 227, 0.12);
+
+  --color-green-500: #2f9d75;
+  --color-amber-500: #d18a2b;
+  --color-red-500: #d84d42;
+
+  --color-surface-canvas: #eef3f8;
+  --color-surface-base: #ffffff;
+  --color-surface-elevated: rgba(255, 255, 255, 0.82);
+  --color-surface-muted: #f3f6fa;
+
+  --color-text-primary: var(--color-neutral-900);
+  --color-text-secondary: var(--color-neutral-600);
+  --color-accent: var(--color-blue-500);
+  --color-accent-strong: var(--color-blue-600);
+  --color-accent-soft: var(--color-blue-100);
+  --color-success: var(--color-green-500);
+  --color-warning: var(--color-amber-500);
+  --color-danger: var(--color-red-500);
+
+  --color-border-subtle: var(--color-neutral-200);
+  --color-border-strong: var(--color-neutral-300);
+
+  --gradient-app-canvas:
+    radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.12), transparent 24%),
+    radial-gradient(circle at 100% 0%, rgba(255, 255, 255, 0.78), transparent 34%),
+    linear-gradient(180deg, #f8fafd 0%, #eef3f8 52%, #e7edf5 100%);
+  --gradient-surface-glass:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 249, 252, 0.84)),
+    radial-gradient(circle at 100% 0%, rgba(214, 225, 243, 0.18), transparent 46%);
+  --gradient-surface-panel:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 253, 0.95)),
+    radial-gradient(circle at 100% 0%, rgba(214, 225, 243, 0.16), transparent 48%);
+}

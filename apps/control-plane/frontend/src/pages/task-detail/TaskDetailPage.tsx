@@ -2,15 +2,14 @@ import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
-import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
-import { StatCard } from "../../components/ui/StatCard";
+import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
 import { SessionList } from "../../features/commands/components/SessionList";
 import { useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
 import { ServiceInstancesList } from "../../features/services/components/ServiceInstancesList";
-import { useServiceInstancesQuery } from "../../features/services/queries";
+import { useServiceInstancesQuery, useServiceTasksQuery } from "../../features/services/queries";
 import { TaskCommandControls } from "../../features/tasks/components/TaskCommandControls";
 import { TaskMetricHistoryChart } from "../../features/tasks/components/TaskMetricHistoryChart";
 import { useTaskDetailQuery } from "../../features/tasks/queries";
@@ -20,31 +19,49 @@ import {
   formatDateTime,
   formatDurationMs,
   formatIdentifierPreview,
+  formatRelativeTime,
 } from "../../lib/formatters";
-import { createSearch, parseEnvironment, parseLookback } from "../../lib/params";
-import { servicePath, taskPath } from "../../lib/routes";
+import { parseEnvironment, parseLookback } from "../../lib/params";
+import { instancePath, servicePath, taskPath } from "../../lib/routes";
+import type { AgentSessionSummary, InstanceSummary, TaskDashboardSummary } from "../../lib/api/types";
 
-const TAB_OPTIONS = ["control", "events", "details"] as const;
-const READ_ONLY_TAB_OPTIONS = ["events", "details"] as const;
-type TaskDetailTab = (typeof TAB_OPTIONS)[number];
+type ServiceView = "overview" | "instances" | "tasks" | "commands";
 
 export function TaskDetailPage() {
   const { i18n, t } = useTranslation();
   const { serviceName, taskName } = useParams<{ serviceName: string; taskName: string }>();
   const [searchParams] = useSearchParams();
-  const isZh = i18n.resolvedLanguage?.startsWith("zh");
+  const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
 
   if (!serviceName || !taskName) {
     return <EmptyState title={t("taskDetail.missingTitle")} body={t("taskDetail.missingBody")} />;
   }
 
+  const resolvedServiceName = serviceName;
+  const resolvedTaskName = taskName;
   const environment = parseEnvironment(searchParams);
   const lookbackMinutes = parseLookback(searchParams, 60);
-  const requestedTab = parseTab(searchParams.get("tab"));
-  const query = useTaskDetailQuery(serviceName, taskName, environment, lookbackMinutes);
-  const hasTaskDetailError = Boolean(query.error);
-  const payload = query.data;
+
+  const taskQuery = useTaskDetailQuery(resolvedServiceName, resolvedTaskName, environment, lookbackMinutes);
+  const tasksQuery = useServiceTasksQuery(resolvedServiceName, environment, lookbackMinutes);
+  const commandsQuery = useServiceCommandsQuery(resolvedServiceName, environment, {
+    enabled: !taskQuery.error,
+  });
+  const instancesQuery = useServiceInstancesQuery(resolvedServiceName, environment, {
+    enabled: !taskQuery.error,
+  });
+  const sessionsQuery = useServiceSessionsQuery(resolvedServiceName, environment, {
+    enabled: !taskQuery.error,
+  });
+
+  if (taskQuery.error) {
+    return <EmptyState title={t("taskDetail.loadErrorTitle")} body={String(taskQuery.error)} />;
+  }
+
+  const payload = taskQuery.data;
   const summary = payload?.summary;
+  const tasks = prioritizeTasks(tasksQuery.data?.items ?? []);
+  const taskControlStates = payload?.task_control.instances ?? [];
   const eventCountTotal = summary
     ? summary.event_counts.failed +
       summary.event_counts.retried +
@@ -52,374 +69,434 @@ export function TaskDetailPage() {
       summary.event_counts.cancelled +
       summary.event_counts.succeeded
     : 0;
-  const taskControlStates = payload?.task_control.instances ?? [];
   const controllableInstances = taskControlStates.filter(isControllableInstance);
-  const hasControllableInstances = controllableInstances.length > 0;
-  const visibleTabs = hasControllableInstances ? TAB_OPTIONS : READ_ONLY_TAB_OPTIONS;
-  const currentTab = resolveCurrentTab(requestedTab, hasControllableInstances);
-  const commandsQuery = useServiceCommandsQuery(serviceName, environment, {
-    enabled: !hasTaskDetailError && currentTab === "control" && hasControllableInstances,
-  });
-  const instancesQuery = useServiceInstancesQuery(serviceName, environment, {
-    enabled: !hasTaskDetailError && currentTab === "details",
-  });
-  const sessionsQuery = useServiceSessionsQuery(serviceName, environment, {
-    enabled: !hasTaskDetailError && currentTab === "details",
-  });
+  const commands = commandsQuery.data?.items ?? [];
+  const taskCommands = commands.filter(
+    (command) =>
+      (command.kind === "pause_task" || command.kind === "resume_task") &&
+      command.args.task_name === resolvedTaskName,
+  );
   const instanceOrder = new Map(taskControlStates.map((state, index) => [state.instance_id, index]));
   const boundInstanceIds = new Set(taskControlStates.map((state) => state.instance_id));
-  const taskCommands =
-    commandsQuery.data?.items.filter(
-      (command) =>
-        (command.kind === "pause_task" || command.kind === "resume_task") &&
-        command.args.task_name === taskName,
-    ) ?? [];
-  const boundInstances = (instancesQuery.data?.items ?? [])
+  const boundInstances = sortBoundInstances(instancesQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
+  const boundSessions = sortBoundSessions(sessionsQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
+  const taskStatus: "ok" | "warning" | "degraded" = summary ? deriveTaskStatus(summary) : "ok";
+
+  function buildServiceViewHref(view: ServiceView) {
+    return servicePath(resolvedServiceName, {
+      environment,
+      lookback_minutes: lookbackMinutes,
+      tab: view === "overview" ? undefined : view,
+    });
+  }
+
+  return (
+    <div className="ref-console-page ref-detail-page">
+      <section className="ref-detail-topbar">
+        <div className="ref-detail-topbar-main">
+          <div className="ref-detail-title">
+            <Link className="ref-back-button" to={buildServiceViewHref("tasks")}>
+              {isZh ? "‹" : "‹"}
+            </Link>
+            <div className="ref-detail-title-copy">
+              <div className="ref-detail-title-row">
+                <h2>{resolvedTaskName}</h2>
+                <StatusBadge {...getTaskStatusBadge(taskStatus, isZh)} />
+              </div>
+              <p>
+                {isZh
+                  ? `${resolvedServiceName} · 最近事件 ${formatRelativeTime(summary?.last_event_at ?? null)}`
+                  : `${resolvedServiceName} · last event ${formatRelativeTime(summary?.last_event_at ?? null)}`}
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {taskQuery.isPending ? <div className="loading-block hero-block">{t("taskDetail.loading")}</div> : null}
+
+      {summary ? (
+        <div className="ref-detail-layout">
+          <aside className="ref-side-nav">
+            <Link className="ref-side-nav-item" to={buildServiceViewHref("overview")}>
+              <span className="ref-side-nav-icon">◫</span>
+              <span>{isZh ? "概览" : "Overview"}</span>
+            </Link>
+            <Link className="ref-side-nav-item" to={buildServiceViewHref("instances")}>
+              <span className="ref-side-nav-icon">≣</span>
+              <span>{isZh ? "实例" : "Instances"}</span>
+            </Link>
+            <Link className="ref-side-nav-item is-active" to={buildServiceViewHref("tasks")}>
+              <span className="ref-side-nav-icon">⌘</span>
+              <span>{isZh ? "任务" : "Tasks"}</span>
+            </Link>
+            <Link className="ref-side-nav-item" to={buildServiceViewHref("commands")}>
+              <span className="ref-side-nav-icon">↻</span>
+              <span>{isZh ? "命令" : "Commands"}</span>
+            </Link>
+          </aside>
+
+          <div className="ref-detail-content">
+            <div className="ref-task-workbench">
+              <section className="ref-task-browser">
+                <div className="ref-section-headline">
+                  <h3>{isZh ? `任务列表 (${tasks.length})` : `Tasks (${tasks.length})`}</h3>
+                </div>
+                <div className="ref-task-browser-card">
+                  {tasks.map((task) => {
+                    const issueCount = task.failed + task.dead_lettered;
+                    const isActive = task.task_name === resolvedTaskName;
+
+                    return (
+                      <Link
+                        className={isActive ? "ref-task-browser-row is-active" : "ref-task-browser-row"}
+                        key={task.task_name}
+                        to={taskPath(resolvedServiceName, task.task_name, {
+                          environment,
+                          lookback_minutes: lookbackMinutes,
+                        })}
+                      >
+                        <div className="ref-task-browser-copy">
+                          <strong>{task.task_name}</strong>
+                          <span>{task.description ?? t("common.notAvailable")}</span>
+                        </div>
+                        <div className="ref-task-browser-metrics">
+                          <span>{t("taskDetail.failedDlq")}: {formatCount(issueCount)}</span>
+                          <span>{t("taskDetail.maxP95")}: {formatDurationMs(task.max_p95_duration_ms)}</span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="ref-task-detail-pane">
+                <section className="ref-summary-strip">
+                  <SummaryChip label={t("taskDetail.succeeded")} tone="success" value={formatCount(summary.succeeded)} />
+                  <SummaryChip
+                    label={t("taskDetail.failedDlq")}
+                    tone={summary.failed + summary.dead_lettered > 0 ? "danger" : "default"}
+                    value={formatCount(summary.failed + summary.dead_lettered)}
+                  />
+                  <SummaryChip label={t("taskDetail.retried")} tone="accent" value={formatCount(summary.retried)} />
+                  <SummaryChip label={t("taskDetail.maxP95")} tone="default" value={formatDurationMs(summary.max_p95_duration_ms)} />
+                </section>
+
+                <section className="ref-overview-grid">
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={isZh ? "当前任务的定义、输入来源和运行约束。" : "Task definition, source, and current execution constraints."}
+                    title={isZh ? "任务配置" : "Task configuration"}
+                  >
+                    <div className="ref-info-grid">
+                      <InfoPair label={t("taskDetail.description")} value={summary.description ?? t("common.notAvailable")} />
+                      <InfoPair label={t("taskDetail.source")} value={summary.source_name ?? t("common.notAvailable")} />
+                      <InfoPair label={t("taskDetail.sourceKind")} value={summary.source_kind ?? t("common.notAvailable")} />
+                      <InfoPair label={t("taskDetail.concurrency")} value={String(summary.concurrency ?? t("common.notAvailable"))} />
+                      <InfoPair
+                        label={t("taskDetail.timeout")}
+                        value={summary.timeout_s ? `${summary.timeout_s}s` : t("common.none")}
+                      />
+                      <InfoPair label={t("taskDetail.lastEvent")} value={formatDateTime(summary.last_event_at)} />
+                    </div>
+                  </Panel>
+
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={isZh ? "仅展示有真实来源的任务运行信号。" : "Only signals backed by real task data are shown here."}
+                    title={isZh ? "任务运行摘要" : "Task runtime signals"}
+                  >
+                    <div className="ref-signal-grid">
+                      <SignalCard
+                        label={t("taskDetail.eventTotal")}
+                        note={isZh ? "事件总量" : "Current event volume"}
+                        value={formatCount(eventCountTotal)}
+                      />
+                      <SignalCard
+                        label={t("taskDetail.windowCount")}
+                        note={isZh ? "指标窗口数量" : "Metric windows in scope"}
+                        value={formatCount(summary.metric_window_count)}
+                      />
+                      <SignalCard
+                        label={t("taskDetail.avgDuration")}
+                        note={isZh ? "基于窗口聚合" : "Weighted from metric windows"}
+                        value={formatDurationMs(summary.weighted_avg_duration_ms)}
+                      />
+                      <SignalCard
+                        label={t("taskDetail.boundInstancesTitle")}
+                        note={isZh ? "当前绑定实例" : "Instances currently reporting this task"}
+                        value={String(taskControlStates.length)}
+                      />
+                    </div>
+                  </Panel>
+                </section>
+
+                {controllableInstances.length > 0 ? (
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={t("taskDetail.controlsSubtitle")}
+                    title={t("taskDetail.controlsTitle")}
+                  >
+                    <TaskCommandControls
+                      environment={environment}
+                      serviceName={resolvedServiceName}
+                      taskControl={payload.task_control}
+                      taskName={resolvedTaskName}
+                    />
+                  </Panel>
+                ) : null}
+
+                <section className="ref-access-grid">
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={t("taskDetail.recentCommandsSubtitle")}
+                    title={t("taskDetail.recentCommandsTitle")}
+                  >
+                    <CommandFeed
+                      commands={taskCommands.slice(0, 4)}
+                      emptyBody={t("taskDetail.noCommandsBody")}
+                      emptyTitle={t("taskDetail.noCommandsTitle")}
+                      environment={environment}
+                      lookbackMinutes={lookbackMinutes}
+                      serviceName={resolvedServiceName}
+                    />
+                  </Panel>
+
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={t("taskDetail.sessionsSubtitle")}
+                    title={t("taskDetail.sessionsTitle")}
+                  >
+                    <SessionList
+                      emptyBody={t("taskDetail.noSessionsBody")}
+                      emptyTitle={t("taskDetail.noSessionsTitle")}
+                      sessions={boundSessions}
+                    />
+                  </Panel>
+                </section>
+
+                <section className="ref-access-grid">
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={t("taskDetail.recentEventsSubtitle")}
+                    title={t("taskDetail.recentEventsTitle")}
+                  >
+                    {payload.recent_events.length ? (
+                      <div className="stack-list">
+                        {payload.recent_events.map((event) => (
+                          <article className="event-row" key={event.event_id}>
+                            <div>
+                              <strong>{t(`eventKind.${event.kind}`, { defaultValue: event.kind })}</strong>
+                              <p>{formatDateTime(event.occurred_at)}</p>
+                            </div>
+                            <TaskEventFailureDetails event={event} />
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <EmptyState title={t("taskDetail.noEventsTitle")} body={t("taskDetail.noEventsBody")} />
+                    )}
+                  </Panel>
+
+                  <Panel
+                    className="ref-card-panel"
+                    subtitle={t("taskDetail.boundInstancesSubtitle")}
+                    title={t("taskDetail.boundInstancesTitle")}
+                  >
+                    <ServiceInstancesList
+                      environment={environment}
+                      instances={boundInstances}
+                      lookbackMinutes={lookbackMinutes}
+                      serviceName={resolvedServiceName}
+                    />
+                  </Panel>
+                </section>
+
+                <Panel
+                  className="ref-card-panel"
+                  subtitle={t("taskDetail.recentWindowsSubtitle")}
+                  title={t("taskDetail.recentWindowsTitle")}
+                >
+                  {payload.recent_metric_windows.length ? (
+                    <div className="task-history-stack">
+                      <TaskMetricHistoryChart windows={payload.recent_metric_windows} />
+                    </div>
+                  ) : (
+                    <EmptyState title={t("taskDetail.noWindowsTitle")} body={t("taskDetail.noWindowsBody")} />
+                  )}
+                </Panel>
+
+                <details className="ref-collapse-card">
+                  <summary>
+                    <strong>{isZh ? "原始配置" : "Raw configuration"}</strong>
+                    <span>{isZh ? "展开查看 emit、retry 和 source 配置。" : "Expand to inspect emit, retry, and source configuration."}</span>
+                  </summary>
+                  <div className="ref-collapse-body ref-json-stack">
+                    <div>
+                      <p className="json-label">{t("taskDetail.emit")}</p>
+                      <pre className="json-block">{formatCompactJson(summary.emit)}</pre>
+                    </div>
+                    <div>
+                      <p className="json-label">{t("taskDetail.retryPolicy")}</p>
+                      <pre className="json-block">{formatCompactJson(summary.retry_policy)}</pre>
+                    </div>
+                    <div>
+                      <p className="json-label">{t("taskDetail.sourceConfig")}</p>
+                      <pre className="json-block">{formatCompactJson(summary.source_config)}</pre>
+                    </div>
+                  </div>
+                </details>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryChip({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "default" | "accent" | "success" | "danger";
+}) {
+  return (
+    <article className={`ref-summary-chip ref-summary-chip-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function InfoPair({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="ref-info-pair">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function SignalCard({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note?: string;
+}) {
+  return (
+    <div className="ref-signal-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {note ? <p>{note}</p> : null}
+    </div>
+  );
+}
+
+function deriveTaskStatus(summary: TaskDashboardSummary) {
+  if (summary.failed + summary.dead_lettered > 0) {
+    return "degraded" as const;
+  }
+  if (summary.retried > 0) {
+    return "warning" as const;
+  }
+  return "ok" as const;
+}
+
+function getTaskStatusBadge(status: "ok" | "warning" | "degraded", isZh: boolean) {
+  if (status === "ok") {
+    return { value: "online" as const, label: isZh ? "稳定" : "Stable" };
+  }
+  if (status === "warning") {
+    return { value: "degraded" as const, label: isZh ? "重试中" : "Retrying" };
+  }
+  return { value: "failed" as const, label: isZh ? "异常" : "Issues" };
+}
+
+function prioritizeTasks(tasks: TaskDashboardSummary[]) {
+  return [...tasks].sort((left, right) => {
+    const priorityDelta = getTaskPriority(right) - getTaskPriority(left);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return compareDateDesc(left.last_event_at, right.last_event_at);
+  });
+}
+
+function getTaskPriority(task: TaskDashboardSummary) {
+  if (task.failed + task.dead_lettered > 0) {
+    return 3;
+  }
+  if (task.retried > 0) {
+    return 2;
+  }
+  if (task.max_p95_duration_ms !== null) {
+    return 1;
+  }
+  return 0;
+}
+
+function prioritizeInstances(instances: InstanceSummary[]) {
+  return [...instances].sort((left, right) => {
+    const priorityDelta = getInstancePriority(right) - getInstancePriority(left);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return compareDateDesc(left.last_seen_at, right.last_seen_at);
+  });
+}
+
+function getInstancePriority(instance: InstanceSummary) {
+  if (instance.connectivity !== "online") {
+    return 3;
+  }
+  if (instance.status === "error" || instance.status === "degraded") {
+    return 2;
+  }
+  if (instance.active_session === null) {
+    return 1;
+  }
+  return 0;
+}
+
+function sortBoundInstances(
+  instances: InstanceSummary[],
+  boundInstanceIds: Set<string>,
+  instanceOrder: Map<string, number>,
+) {
+  return instances
     .filter((instance) => boundInstanceIds.has(instance.instance_id))
     .sort((left, right) => {
       const leftIndex = instanceOrder.get(left.instance_id) ?? Number.MAX_SAFE_INTEGER;
       const rightIndex = instanceOrder.get(right.instance_id) ?? Number.MAX_SAFE_INTEGER;
       return leftIndex - rightIndex;
     });
-  const boundSessions = (sessionsQuery.data?.items ?? [])
+}
+
+function sortBoundSessions(
+  sessions: AgentSessionSummary[],
+  boundInstanceIds: Set<string>,
+  instanceOrder: Map<string, number>,
+) {
+  return sessions
     .filter((session) => boundInstanceIds.has(session.instance_id))
     .sort((left, right) => {
       const leftIndex = instanceOrder.get(left.instance_id) ?? Number.MAX_SAFE_INTEGER;
       const rightIndex = instanceOrder.get(right.instance_id) ?? Number.MAX_SAFE_INTEGER;
       return leftIndex - rightIndex;
     });
-
-  if (query.error) {
-    return <EmptyState title={t("taskDetail.loadErrorTitle")} body={String(query.error)} />;
-  }
-
-  return (
-    <div className="page-stack">
-      <PageHeader
-        actions={
-          <div className="page-actions-stack">
-            <Link
-              className="button-link"
-              to={servicePath(serviceName, {
-                environment,
-                lookback_minutes: lookbackMinutes,
-              })}
-            >
-              {isZh ? "返回任务列表" : "Back to task list"}
-            </Link>
-          </div>
-        }
-        title={taskName}
-      />
-
-      {query.isPending ? <div className="loading-block hero-block">{t("taskDetail.loading")}</div> : null}
-
-      {summary ? (
-        <>
-          <section className="stats-grid stats-grid-quad stats-grid-compact task-detail-summary-grid">
-            <StatCard
-              label={t("taskDetail.succeeded")}
-              size="compact"
-              tone="success"
-              value={formatCount(summary.succeeded)}
-            />
-            <StatCard
-              label={t("taskDetail.failedDlq")}
-              size="compact"
-              tone={summary.failed + summary.dead_lettered > 0 ? "danger" : "default"}
-              value={formatCount(summary.failed + summary.dead_lettered)}
-            />
-            <StatCard
-              hint={t("taskDetail.retriedHint")}
-              label={t("taskDetail.retried")}
-              size="compact"
-              value={formatCount(summary.retried)}
-            />
-            <StatCard
-              label={t("taskDetail.maxP95")}
-              size="compact"
-              value={formatDurationMs(summary.max_p95_duration_ms)}
-            />
-          </section>
-
-          <nav className="service-section-nav" aria-label={t("taskDetail.sectionAriaLabel")}>
-            {visibleTabs.map((section) => (
-              <Link
-                key={section}
-                className={currentTab === section ? "service-section-link active" : "service-section-link"}
-                to={taskPath(serviceName, taskName, {
-                  environment,
-                  lookback_minutes: lookbackMinutes,
-                  tab: section === "control" ? undefined : section,
-                })}
-              >
-                <div className="service-section-link-copy">
-                  <span className="service-section-link-title">{t(`tabs.${section}`)}</span>
-                  <span className="service-section-link-label">
-                    {section === "control"
-                      ? t("taskDetail.controlsTitle")
-                      : section === "events"
-                        ? t("taskDetail.recentEventsTitle")
-                        : t("taskDetail.boundInstancesTitle")}
-                  </span>
-                </div>
-                <div className="service-section-link-metric tone-default">
-                  <strong>
-                    {section === "control"
-                      ? controllableInstances.length
-                      : section === "events"
-                        ? payload.recent_events.length
-                        : taskControlStates.length}
-                  </strong>
-                </div>
-              </Link>
-            ))}
-          </nav>
-
-          {currentTab === "control" ? (
-            <div className="page-stack">
-              <Panel className="panel-flat" title={t("taskDetail.controlsTitle")} subtitle={t("taskDetail.controlsSubtitle")}>
-                <TaskCommandControls
-                  environment={environment}
-                  serviceName={serviceName}
-                  taskName={taskName}
-                  taskControl={payload.task_control}
-                />
-              </Panel>
-
-              <Panel className="panel-flat panel-flat-compact" title={t("taskDetail.recentCommandsTitle")} subtitle={t("taskDetail.recentCommandsSubtitle")}>
-                {commandsQuery.error ? (
-                  <EmptyState title={t("taskDetail.recentCommandsTitle")} body={String(commandsQuery.error)} />
-                ) : (
-                  <CommandFeed
-                    commands={taskCommands.slice(0, 5)}
-                    emptyBody={t("taskDetail.noCommandsBody")}
-                    emptyTitle={t("taskDetail.noCommandsTitle")}
-                    environment={environment}
-                    lookbackMinutes={lookbackMinutes}
-                    serviceName={serviceName}
-                  />
-                )}
-              </Panel>
-            </div>
-          ) : null}
-
-          {currentTab === "events" ? (
-            <div className="page-stack">
-              <Panel
-                className="panel-flat panel-flat-compact"
-                title={t("taskDetail.activityOverviewTitle")}
-                subtitle={t("taskDetail.activityOverviewSubtitle")}
-              >
-                <p className="task-activity-intro">{t("taskDetail.activityOverviewNote")}</p>
-
-                <div className="task-activity-stack">
-                  <section className="task-activity-section">
-                    <div className="task-activity-section-head">
-                      <h3>{t("taskDetail.eventCountsTitle")}</h3>
-                      <p>{t("taskDetail.eventCountsSubtitle")}</p>
-                    </div>
-                    <dl className="definition-grid">
-                      <div>
-                        <dt>{t("taskDetail.eventTotal")}</dt>
-                        <dd>{formatCount(eventCountTotal)}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("taskDetail.failedEvents")}</dt>
-                        <dd>{formatCount(summary.event_counts.failed)}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("taskDetail.retriedEvents")}</dt>
-                        <dd>{formatCount(summary.event_counts.retried)}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("taskDetail.deadLetteredEvents")}</dt>
-                        <dd>{formatCount(summary.event_counts.dead_lettered)}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("taskDetail.succeededEvents")}</dt>
-                        <dd>{formatCount(summary.event_counts.succeeded)}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("taskDetail.cancelledEvents")}</dt>
-                        <dd>{formatCount(summary.event_counts.cancelled)}</dd>
-                      </div>
-                    </dl>
-                  </section>
-
-                  <section className="task-activity-section">
-                    <div className="task-activity-section-head">
-                      <h3>{t("taskDetail.windowMetricsTitle")}</h3>
-                      <p>{t("taskDetail.windowMetricsSubtitle")}</p>
-                    </div>
-                    <dl className="definition-grid">
-                      <div>
-                        <dt>{t("taskDetail.windowCount")}</dt>
-                        <dd>{formatCount(summary.metric_window_count)}</dd>
-                      </div>
-                      <div>
-                        <dt>{t("taskDetail.avgDuration")}</dt>
-                        <dd>{formatDurationMs(summary.weighted_avg_duration_ms)}</dd>
-                      </div>
-                    </dl>
-                  </section>
-                </div>
-              </Panel>
-
-              <div className="two-column-grid">
-                <Panel className="panel-flat" title={t("taskDetail.recentEventsTitle")} subtitle={t("taskDetail.recentEventsSubtitle")}>
-                  {payload.recent_events.length ? (
-                    <div className="stack-list">
-                      {payload.recent_events.map((event) => (
-                        <article className="event-row" key={event.event_id}>
-                          <div>
-                            <strong>{t(`eventKind.${event.kind}`, { defaultValue: event.kind })}</strong>
-                            <p>{formatDateTime(event.occurred_at)}</p>
-                          </div>
-                          <TaskEventFailureDetails event={event} />
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyState title={t("taskDetail.noEventsTitle")} body={t("taskDetail.noEventsBody")} />
-                  )}
-                </Panel>
-
-                <Panel className="panel-flat" title={t("taskDetail.recentWindowsTitle")} subtitle={t("taskDetail.recentWindowsSubtitle")}>
-                  {payload.recent_metric_windows.length ? (
-                    <div className="task-history-stack">
-                      <TaskMetricHistoryChart windows={payload.recent_metric_windows} />
-                      <div className="stack-list task-window-list">
-                        {payload.recent_metric_windows.map((window) => (
-                          <article className="event-row" key={window.window_id}>
-                            <div>
-                              <strong>{window.window_id}</strong>
-                              <p>
-                                {t("taskDetail.windowRange", {
-                                  start: formatDateTime(window.window_started_at),
-                                  end: formatDateTime(window.window_ended_at),
-                                })}
-                              </p>
-                            </div>
-                            <div className="row-metrics">
-                              <span>{t("metrics.ok", { value: formatCount(window.succeeded) })}</span>
-                              <span>{t("metrics.fail", { value: formatCount(window.failed + window.dead_lettered) })}</span>
-                              <span>{t("metrics.p95", { value: formatDurationMs(window.p95_duration_ms) })}</span>
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <EmptyState title={t("taskDetail.noWindowsTitle")} body={t("taskDetail.noWindowsBody")} />
-                  )}
-                </Panel>
-              </div>
-            </div>
-          ) : null}
-
-          {currentTab === "details" ? (
-            <div className="page-stack">
-              <Panel className="panel-flat" title={t("taskDetail.configurationTitle")} subtitle={t("taskDetail.configurationSubtitle")}>
-                <dl className="definition-grid">
-                  <div>
-                    <dt>{t("taskDetail.description")}</dt>
-                    <dd>{summary.description ?? t("common.notAvailable")}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.source")}</dt>
-                    <dd>{summary.source_name ?? t("common.notAvailable")}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.sourceKind")}</dt>
-                    <dd>{summary.source_kind ?? t("common.notAvailable")}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.concurrency")}</dt>
-                    <dd>{summary.concurrency ?? t("common.notAvailable")}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.timeout")}</dt>
-                    <dd>{summary.timeout_s ? `${summary.timeout_s}s` : t("common.none")}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.topologyHash")}</dt>
-                    <dd title={summary.topology_hash ?? t("common.notAvailable")}>
-                      {formatIdentifierPreview(summary.topology_hash)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>{t("taskDetail.lastEvent")}</dt>
-                    <dd>{formatDateTime(summary.last_event_at)}</dd>
-                  </div>
-                </dl>
-                <div className="json-stack">
-                  <div>
-                    <p className="json-label">{t("taskDetail.emit")}</p>
-                    <pre className="json-block">{formatCompactJson(summary.emit)}</pre>
-                  </div>
-                  <div>
-                    <p className="json-label">{t("taskDetail.retryPolicy")}</p>
-                    <pre className="json-block">{formatCompactJson(summary.retry_policy)}</pre>
-                  </div>
-                  <div>
-                    <p className="json-label">{t("taskDetail.sourceConfig")}</p>
-                    <pre className="json-block">{formatCompactJson(summary.source_config)}</pre>
-                  </div>
-                </div>
-              </Panel>
-
-              <Panel className="panel-flat" title={t("taskDetail.boundInstancesTitle")} subtitle={t("taskDetail.boundInstancesSubtitle")}>
-                {instancesQuery.isPending ? <div className="loading-block">{t("taskDetail.loadingBoundInstances")}</div> : null}
-                {!instancesQuery.isPending && instancesQuery.error ? (
-                  <EmptyState title={t("taskDetail.boundInstancesTitle")} body={String(instancesQuery.error)} />
-                ) : null}
-                {!instancesQuery.isPending && !instancesQuery.error ? (
-                  <ServiceInstancesList
-                    environment={environment}
-                    instances={boundInstances}
-                    lookbackMinutes={lookbackMinutes}
-                    serviceName={serviceName}
-                  />
-                ) : null}
-              </Panel>
-
-              <Panel className="panel-flat panel-flat-compact" title={t("taskDetail.sessionsTitle")} subtitle={t("taskDetail.sessionsSubtitle")}>
-                {sessionsQuery.isPending ? <div className="loading-block">{t("taskDetail.loadingSessions")}</div> : null}
-                {!sessionsQuery.isPending && sessionsQuery.error ? (
-                  <EmptyState title={t("taskDetail.sessionsTitle")} body={String(sessionsQuery.error)} />
-                ) : null}
-                {!sessionsQuery.isPending && !sessionsQuery.error ? (
-                  <SessionList
-                    emptyBody={t("taskDetail.noSessionsBody")}
-                    emptyTitle={t("taskDetail.noSessionsTitle")}
-                    sessions={boundSessions}
-                  />
-                ) : null}
-              </Panel>
-            </div>
-          ) : null}
-        </>
-      ) : null}
-    </div>
-  );
 }
 
-function parseTab(value: string | null): TaskDetailTab | null {
-  if (value && TAB_OPTIONS.includes(value as TaskDetailTab)) {
-    return value as TaskDetailTab;
-  }
-  return null;
-}
-
-function resolveCurrentTab(requestedTab: TaskDetailTab | null, hasControllableInstances: boolean): TaskDetailTab {
-  if (requestedTab === "events" || requestedTab === "details") {
-    return requestedTab;
-  }
-  if (requestedTab === "control" && hasControllableInstances) {
-    return requestedTab;
-  }
-  return hasControllableInstances ? "control" : "events";
+function compareDateDesc(left: string | null, right: string | null) {
+  const leftValue = left ? Date.parse(left) : 0;
+  const rightValue = right ? Date.parse(right) : 0;
+  return rightValue - leftValue;
 }
 
 function isControllableInstance(state: { connectivity: string; supported_commands: string[] }) {
