@@ -26,6 +26,14 @@ class TaskContext:
     def current(self) -> Envelope:
         return self.delivery.envelope
 
+    @property
+    def resources(self) -> Mapping[str, Any]:
+        return self.app.resources
+
+    @property
+    def task_config(self) -> Mapping[str, Any]:
+        return self.task.config
+
     async def emit(
         self,
         body: Any,

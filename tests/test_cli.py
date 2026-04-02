@@ -62,6 +62,9 @@ def test_cli_check_prints_task_summary(capsys) -> None:
     assert exit_code == 0
     assert "Target: testsupport_cli_check:app" in captured.out
     assert "App: cli-check" in captured.out
+    assert "Reporter: -" in captured.out
+    assert "Resources: 0" in captured.out
+    assert "Hooks: startup=0 shutdown=0 events=0" in captured.out
     assert "- consume source=incoming<MemoryQueue> emit=processed<MemoryQueue>" in captured.out
     assert "timeout=5.00s" in captured.out
     assert "description='Process incoming jobs and forward them to the processed queue.'" in captured.out
@@ -87,6 +90,7 @@ def test_cli_check_json_supports_factory_targets(capsys) -> None:
     assert exit_code == 0
     assert summary["target"] == "testsupport_cli_factory:build_app"
     assert summary["name"] == "cli-factory"
+    assert summary["reporter"] is None
     assert summary["tasks"][0]["name"] == "consume"
     assert summary["tasks"][0]["description"] == "Consume a single item from the factory queue."
     assert summary["tasks"][0]["source"] == {"name": "factory.incoming", "type": "MemoryQueue"}
@@ -112,6 +116,82 @@ def test_cli_invalid_target_returns_non_zero(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "failed to load testsupport_missing_module:app" in captured.err
+
+
+def test_cli_init_creates_minimal_project(tmp_path, monkeypatch, capsys) -> None:
+    project_dir = tmp_path / "billing-sync"
+
+    exit_code = main(["init", str(project_dir)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"Initialized OneStep project at {project_dir.resolve()}" in captured.out
+    assert "Project: billing-sync" in captured.out
+    assert "Package: billing_sync" in captured.out
+    assert (project_dir / "pyproject.toml").exists()
+    assert (project_dir / "worker.yaml").exists()
+    assert (project_dir / "README.md").exists()
+    assert (project_dir / "src" / "billing_sync" / "tasks" / "__init__.py").exists()
+    assert (project_dir / "src" / "billing_sync" / "tasks" / "demo.py").exists()
+    assert (project_dir / "src" / "billing_sync" / "transforms" / "__init__.py").exists()
+    assert (project_dir / "src" / "billing_sync" / "transforms" / "demo.py").exists()
+    assert (project_dir / "src" / "billing_sync" / "hooks.py").exists()
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry)
+            not in {os.path.abspath(str(project_dir)), os.path.abspath(str(project_dir / "src"))}
+        ],
+    )
+    clear_modules(
+        monkeypatch,
+        "billing_sync",
+        "billing_sync.tasks",
+        "billing_sync.tasks.demo",
+        "billing_sync.transforms",
+        "billing_sync.transforms.demo",
+        "billing_sync.hooks",
+    )
+
+    exit_code = main(["check", "worker.yaml"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "App: billing-sync" in captured.out
+    assert "handler=billing_sync.tasks.demo:run_demo" in captured.out
+
+
+def test_cli_init_rejects_existing_files_without_force(tmp_path, capsys) -> None:
+    project_dir = tmp_path / "existing-worker"
+    project_dir.mkdir()
+    existing_worker = project_dir / "worker.yaml"
+    existing_worker.write_text("name: keep-me\n", encoding="utf-8")
+
+    exit_code = main(["init", str(project_dir)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert f"failed to initialize {project_dir}" in captured.err
+    assert existing_worker.read_text(encoding="utf-8") == "name: keep-me\n"
+
+
+def test_cli_init_force_overwrites_existing_files(tmp_path, capsys) -> None:
+    project_dir = tmp_path / "existing-worker"
+    project_dir.mkdir()
+    existing_worker = project_dir / "worker.yaml"
+    existing_worker.write_text("name: keep-me\n", encoding="utf-8")
+
+    exit_code = main(["init", str(project_dir), "--force"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Project: existing-worker" in captured.out
+    assert "apiVersion: onestep/v1alpha1" in existing_worker.read_text(encoding="utf-8")
 
 
 def test_cli_check_loads_modules_from_current_working_directory(tmp_path, monkeypatch, capsys) -> None:
@@ -270,9 +350,205 @@ def test_cli_check_loads_yaml_target(capsys, tmp_path) -> None:
     assert exit_code == 0
     assert f"Target: {config_path}" in captured.out
     assert "App: yaml-cli-app" in captured.out
+    assert "Reporter: -" in captured.out
+    assert "Resources: 2 (incoming<MemoryQueue>, processed<MemoryQueue>)" in captured.out
+    assert "Hooks: startup=0 shutdown=0 events=0" in captured.out
     assert "- consume source=incoming<MemoryQueue> emit=processed<MemoryQueue>" in captured.out
     assert "retry=MaxAttempts" in captured.out
     assert "description='Consume queued messages from YAML config.'" in captured.out
+    assert "handler=testsupport_yaml_cli:consume" in captured.out
+
+
+def test_cli_check_loads_yaml_handlers_from_yaml_project_src_layout(tmp_path, monkeypatch, capsys) -> None:
+    project_dir = tmp_path / "yaml-project"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text(
+        "[project]\nname = 'yaml-project'\nversion = '0.0.0'\n",
+        encoding="utf-8",
+    )
+    src_dir = project_dir / "src" / "demo_worker"
+    src_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text("", encoding="utf-8")
+    (src_dir / "tasks.py").write_text(
+        "\n".join(
+            [
+                "from onestep import OneStepApp",
+                "",
+                "async def consume(ctx, item):",
+                "    return None",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config_path = project_dir / "worker.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-project-app",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "consume",
+                        "source": "incoming",
+                        "handler": "demo_worker.tasks:consume",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    work_dir = tmp_path / "tools"
+    work_dir.mkdir()
+    monkeypatch.chdir(work_dir)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry)
+            not in {
+                os.path.abspath(str(work_dir)),
+                os.path.abspath(str(project_dir)),
+                os.path.abspath(str(project_dir / "src")),
+            }
+        ],
+    )
+    clear_modules(monkeypatch, "demo_worker", "demo_worker.tasks")
+
+    with registered_yaml_module():
+        exit_code = main(["check", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "App: yaml-project-app" in captured.out
+    assert "handler=demo_worker.tasks:consume" in captured.out
+
+
+def test_cli_check_strict_loads_valid_yaml_target(capsys, tmp_path) -> None:
+    config_path = tmp_path / "strict-app.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-strict-app",
+                },
+                "resources": {
+                    "incoming": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "consume",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_cli_strict:consume",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async def consume(ctx, item):
+        return None
+
+    with registered_yaml_module(), registered_module("testsupport_yaml_cli_strict", consume=consume):
+        exit_code = main(["check", "--strict", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "App: yaml-strict-app" in captured.out
+
+
+def test_cli_check_strict_rejects_unknown_task_fields(capsys, tmp_path) -> None:
+    config_path = tmp_path / "strict-invalid-task.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "name": "yaml-strict-invalid",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "consume",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_cli_invalid:consume",
+                        "unexpected": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async def consume(ctx, item):
+        return None
+
+    with registered_yaml_module(), registered_module("testsupport_yaml_cli_invalid", consume=consume):
+        exit_code = main(["check", "--strict", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert f"failed to load {config_path}" in captured.err
+    assert "unsupported fields for tasks[0]" in captured.err
+
+
+def test_cli_check_strict_rejects_mixed_app_and_legacy_root_fields(capsys, tmp_path) -> None:
+    config_path = tmp_path / "strict-mixed.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "name": "legacy-name",
+                "app": {
+                    "name": "yaml-strict-mixed",
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "strict mode does not allow mixing 'app' with legacy top-level app fields" in captured.err
+
+
+def test_cli_check_strict_rejects_unknown_reporter_fields(capsys, tmp_path) -> None:
+    config_path = tmp_path / "strict-reporter.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "name": "yaml-strict-reporter",
+                "reporter": {
+                    "base_url": "https://control-plane.example.com",
+                    "url": "https://wrong.example.com",
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "unsupported fields for reporter: url" in captured.err
 
 
 def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_path) -> None:
@@ -616,3 +892,291 @@ def test_yaml_target_builds_webhook_auth_and_response(tmp_path) -> None:
     assert status_code == 200
     assert headers["X-Test"] == "1"
     assert payload == b'{"accepted": true}'
+
+
+def test_yaml_target_supports_resources_app_hooks_task_config_and_task_hooks(tmp_path) -> None:
+    config_path = tmp_path / "hooks.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "name": "yaml-hooks",
+                },
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "processed": {"type": "memory"},
+                },
+                "hooks": {
+                    "startup": {
+                        "ref": "testsupport_yaml_hooks:seed",
+                        "params": {"value": 5},
+                    },
+                    "shutdown": "testsupport_yaml_hooks:teardown",
+                    "events": {
+                        "ref": "testsupport_yaml_hooks:observe",
+                        "params": {"label": "audit"},
+                    },
+                },
+                "tasks": [
+                    {
+                        "name": "consume",
+                        "source": "incoming",
+                        "emit": ["processed"],
+                        "config": {"mode": "sync"},
+                        "metadata": {"owner": "data-platform"},
+                        "handler": {
+                            "ref": "testsupport_yaml_hooks:consume",
+                            "params": {"factor": 2},
+                        },
+                        "hooks": {
+                            "before": {
+                                "ref": "testsupport_yaml_hooks:before",
+                                "params": {"label": "pre"},
+                            },
+                            "after_success": "testsupport_yaml_hooks:after",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen = []
+
+    async def seed(app, *, value: int):
+        seen.append(("startup", sorted(app.resources)))
+        await app.resources["incoming"].publish({"value": value})
+
+    def teardown(app):
+        seen.append(("shutdown", app.name))
+
+    def observe(event, *, label: str):
+        if event.kind.value == "succeeded":
+            seen.append(("event", label, event.task))
+
+    async def before(ctx, payload, *, label: str):
+        seen.append(("before", label, ctx.task_config["mode"], payload["value"]))
+
+    async def consume(ctx, item, *, factor: int):
+        seen.append(("handler", ctx.task_config["mode"], item["value"], sorted(ctx.resources)))
+        ctx.app.request_shutdown()
+        return {"value": item["value"] * factor}
+
+    def after(ctx, payload, result):
+        seen.append(("after", payload["value"], result["value"]))
+
+    async def scenario() -> None:
+        with registered_yaml_module(), registered_module(
+            "testsupport_yaml_hooks",
+            seed=seed,
+            teardown=teardown,
+            observe=observe,
+            before=before,
+            consume=consume,
+            after=after,
+        ):
+            app = OneStepApp.load(str(config_path))
+            assert sorted(app.resources) == ["incoming", "processed"]
+            assert app.tasks[0].config == {"mode": "sync"}
+            assert app.tasks[0].metadata == {"owner": "data-platform"}
+            assert app.tasks[0].handler_ref == "testsupport_yaml_hooks:consume"
+            await app.serve()
+            deliveries = await app.resources["processed"].fetch(1)
+            assert len(deliveries) == 1
+            assert deliveries[0].payload == {"value": 10}
+
+    asyncio.run(scenario())
+    assert seen == [
+        ("startup", ["incoming", "processed"]),
+        ("before", "pre", "sync", 5),
+        ("handler", "sync", 5, ["incoming", "processed"]),
+        ("after", 5, 10),
+        ("event", "audit", "consume"),
+        ("shutdown", "yaml-hooks"),
+    ]
+
+
+def test_yaml_task_failure_hooks_receive_failure_and_ignore_secondary_failures(tmp_path) -> None:
+    config_path = tmp_path / "failure-hooks.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-failure-hooks",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                },
+                "hooks": {
+                    "startup": "testsupport_yaml_failure_hooks:seed",
+                },
+                "tasks": [
+                    {
+                        "name": "explode",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_failure_hooks:explode",
+                        "hooks": {
+                            "on_failure": [
+                                "testsupport_yaml_failure_hooks:capture_failure",
+                                "testsupport_yaml_failure_hooks:broken_failure",
+                            ]
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen = []
+
+    async def seed(app):
+        await app.resources["incoming"].publish({"id": 7})
+
+    async def explode(ctx, item):
+        raise RuntimeError("boom")
+
+    async def capture_failure(ctx, payload, failure):
+        seen.append(("capture", payload["id"], failure.kind.value, failure.exception_type, failure.message))
+        ctx.app.request_shutdown()
+
+    def broken_failure(ctx, payload, failure):
+        seen.append(("broken", failure.kind.value))
+        raise RuntimeError("hook observer broke")
+
+    async def scenario() -> None:
+        with registered_yaml_module(), registered_module(
+            "testsupport_yaml_failure_hooks",
+            seed=seed,
+            explode=explode,
+            capture_failure=capture_failure,
+            broken_failure=broken_failure,
+        ):
+            app = OneStepApp.load(str(config_path))
+            await app.serve()
+
+    asyncio.run(scenario())
+    assert seen == [
+        ("capture", 7, "error", "RuntimeError", "boom"),
+        ("broken", "error"),
+    ]
+
+
+def test_yaml_target_attaches_reporter_from_env(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "reporter-bool.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-reporter",
+                "reporter": True,
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ONESTEP_CONTROL_URL", "https://control-plane.example.com")
+    monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "secret-token")
+    created = []
+
+    class FakeReporter:
+        def __init__(self, config):
+            self.config = config
+            self.app = None
+            created.append(self)
+
+        def attach(self, app):
+            self.app = app
+            app.on_startup(lambda: None)
+            app.on_shutdown(lambda: None)
+            app.on_event(lambda event: None)
+            return self
+
+    monkeypatch.setattr(config_module, "ControlPlaneReporter", FakeReporter)
+
+    with registered_yaml_module():
+        app = OneStepApp.load(str(config_path))
+
+    assert len(created) == 1
+    reporter = created[0]
+    assert reporter.app is app
+    assert reporter.config.base_url == "https://control-plane.example.com"
+    assert reporter.config.token == "secret-token"
+    assert reporter.config.service_name == "yaml-reporter"
+    assert app.describe()["reporter"] == {
+        "type": "control_plane",
+        "base_url": "https://control-plane.example.com",
+        "service_name": "yaml-reporter",
+    }
+    assert app.describe()["hooks"] == {"startup": 1, "shutdown": 1, "events": 1}
+
+
+def test_yaml_target_reporter_mapping_overrides_env_defaults(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "reporter-mapping.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-reporter-overrides",
+                "reporter": {
+                    "base_url": "https://yaml-control-plane.example.com",
+                    "service_name": "billing-sync-worker",
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ONESTEP_CONTROL_URL", "https://env-control-plane.example.com")
+    monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "env-token")
+    created = []
+
+    class FakeReporter:
+        def __init__(self, config):
+            self.config = config
+            created.append(self)
+
+        def attach(self, app):
+            return self
+
+    monkeypatch.setattr(config_module, "ControlPlaneReporter", FakeReporter)
+
+    with registered_yaml_module():
+        OneStepApp.load(str(config_path))
+
+    assert len(created) == 1
+    assert created[0].config.base_url == "https://yaml-control-plane.example.com"
+    assert created[0].config.token == "env-token"
+    assert created[0].config.service_name == "billing-sync-worker"
+
+
+def test_cli_check_prints_reporter_summary_for_yaml_target(monkeypatch, tmp_path, capsys) -> None:
+    config_path = tmp_path / "reporter-summary.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-reporter-summary",
+                "reporter": {
+                    "base_url": "https://yaml-control-plane.example.com",
+                    "service_name": "billing-sync-worker",
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "env-token")
+
+    class FakeReporter:
+        def __init__(self, config):
+            self.config = config
+
+        def attach(self, app):
+            return self
+
+    monkeypatch.setattr(config_module, "ControlPlaneReporter", FakeReporter)
+
+    with registered_yaml_module():
+        exit_code = main(["check", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (
+        "Reporter: control_plane service=billing-sync-worker "
+        "base_url=https://yaml-control-plane.example.com"
+    ) in captured.out

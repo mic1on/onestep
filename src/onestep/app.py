@@ -13,10 +13,11 @@ from typing import Any
 from .connectors.base import Sink, Source
 from .envelope import Envelope
 from .events import TaskEvent
+from .invoke import invoke_callback
 from .retry import RetryPolicy
 from .runtime.runner import TaskRunner
 from .state import InMemoryStateStore, StateStore
-from .task import TaskHandler, TaskSpec
+from .task import TaskHandler, TaskHooks, TaskSpec
 
 
 class OneStepApp:
@@ -35,6 +36,7 @@ class OneStepApp:
         self.state = state or InMemoryStateStore()
         self.shutdown_timeout_s = shutdown_timeout_s
         self._tasks: list[TaskSpec] = []
+        self._named_resources: dict[str, Any] = {}
         self._shutdown: asyncio.Event | None = None
         self._shutdown_requested = False
         self._drain: asyncio.Event | None = None
@@ -47,12 +49,17 @@ class OneStepApp:
         self._startup_hooks: list[Callable[..., Any]] = []
         self._shutdown_hooks: list[Callable[..., Any]] = []
         self._event_handlers: list[Callable[..., Any]] = []
+        self._reporter_summary: dict[str, Any] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._events_logger = logging.getLogger(f"onestep.{name}.events")
 
     @property
     def tasks(self) -> tuple[TaskSpec, ...]:
         return tuple(self._tasks)
+
+    @property
+    def resources(self) -> Mapping[str, Any]:
+        return self._named_resources
 
     @property
     def is_stopping(self) -> bool:
@@ -108,6 +115,16 @@ class OneStepApp:
         self._require_controllable_task(task_name)
         self._paused_tasks.discard(task_name)
         self.notify_runner_state_changed()
+
+    def bind_resources(self, resources: Mapping[str, Any]) -> None:
+        self._named_resources = dict(resources)
+
+    def register_resource(self, name: str, resource: Any) -> Any:
+        self._named_resources[name] = resource
+        return resource
+
+    def set_reporter_summary(self, reporter: Mapping[str, Any] | None) -> None:
+        self._reporter_summary = None if reporter is None else copy.deepcopy(dict(reporter))
 
     async def replay_task_dead_letters(self, task_name: str, *, limit: int) -> dict[str, Any]:
         if limit < 1:
@@ -430,6 +447,10 @@ class OneStepApp:
         source: Source | None = None,
         emit: Sink | Sequence[Sink] | None = None,
         dead_letter: Sink | Sequence[Sink] | None = None,
+        config: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        handler_ref: str | None = None,
+        hooks: TaskHooks | None = None,
         concurrency: int = 1,
         retry: RetryPolicy | None = None,
         timeout_s: float | None = None,
@@ -439,9 +460,13 @@ class OneStepApp:
                 name=name or func.__name__,
                 description=description,
                 handler=func,
+                handler_ref=handler_ref,
                 source=source,
                 sinks=emit,
                 dead_letter=dead_letter,
+                config=config,
+                metadata=metadata,
+                hooks=hooks,
                 concurrency=concurrency,
                 retry=retry,
                 timeout_s=timeout_s,
@@ -463,23 +488,28 @@ class OneStepApp:
         self._runners = []
         resources: list[Any] = []
         seen: set[int] = set()
+
+        def add_resource(resource: Any) -> None:
+            if resource is None or id(resource) in seen:
+                return
+            resources.append(resource)
+            seen.add(id(resource))
+
+        for resource in self._named_resources.values():
+            add_resource(resource)
+        add_resource(self.state)
         for task in self._tasks:
-            if task.source is not None and id(task.source) not in seen:
-                resources.append(task.source)
-                seen.add(id(task.source))
+            if task.source is not None:
+                add_resource(task.source)
             for sink in task.sinks:
-                if id(sink) not in seen:
-                    resources.append(sink)
-                    seen.add(id(sink))
+                add_resource(sink)
             for sink in task.dead_letter_sinks:
-                if id(sink) not in seen:
-                    resources.append(sink)
-                    seen.add(id(sink))
+                add_resource(sink)
         opened: list[Any] = []
         self._resources = []
         try:
             for resource in resources:
-                await resource.open()
+                await _open_resource(resource)
                 opened.append(resource)
             self._resources = list(opened)
             await self._run_hooks(self._startup_hooks)
@@ -530,13 +560,35 @@ class OneStepApp:
         return {
             "name": self.name,
             "shutdown_timeout_s": self.shutdown_timeout_s,
+            "reporter": copy.deepcopy(self._reporter_summary),
+            "resources": [
+                {
+                    "key": name,
+                    "name": getattr(resource, "name", name),
+                    "type": resource.__class__.__name__,
+                }
+                for name, resource in self._named_resources.items()
+            ],
+            "hooks": {
+                "startup": len(self._startup_hooks),
+                "shutdown": len(self._shutdown_hooks),
+                "events": len(self._event_handlers),
+            },
             "tasks": [
                 {
                     "name": task.name,
                     "description": task.description,
+                    "handler_ref": task.handler_ref,
                     "source": _describe_resource(task.source),
                     "emit": [_describe_resource(sink) for sink in task.sinks],
                     "dead_letter": [_describe_resource(sink) for sink in task.dead_letter_sinks],
+                    "config": copy.deepcopy(task.config),
+                    "metadata": copy.deepcopy(task.metadata),
+                    "hooks": {
+                        "before": len(task.hooks.before),
+                        "after_success": len(task.hooks.after_success),
+                        "on_failure": len(task.hooks.on_failure),
+                    },
                     "concurrency": task.concurrency,
                     "timeout_s": task.timeout_s,
                     "retry": task.retry.__class__.__name__,
@@ -578,14 +630,14 @@ class OneStepApp:
 
     async def _run_hooks(self, hooks: Sequence[Callable[..., Any]]) -> None:
         for hook in hooks:
-            result = _invoke_hook(hook, self)
+            result = invoke_callback(hook, self)
             if inspect.isawaitable(result):
                 await result
 
     async def emit_event(self, event: TaskEvent) -> None:
         for handler in self._event_handlers:
             try:
-                result = _invoke_single_arg(handler, event)
+                result = invoke_callback(handler, event)
                 if inspect.isawaitable(result):
                     await result
             except Exception:
@@ -600,7 +652,7 @@ class OneStepApp:
         first_error: BaseException | None = None
         for resource in reversed(resources):
             try:
-                await resource.close()
+                await _close_resource(resource)
             except BaseException as exc:
                 if first_error is None:
                     first_error = exc
@@ -731,40 +783,6 @@ class OneStepApp:
                     signal.signal(sig, previous)
 
 
-def _invoke_hook(hook: Callable[..., Any], app: OneStepApp) -> Any:
-    try:
-        signature = inspect.signature(hook)
-    except (TypeError, ValueError):
-        return hook(app)
-
-    positional = [
-        parameter
-        for parameter in signature.parameters.values()
-        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    has_varargs = any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in signature.parameters.values())
-    if not positional and not has_varargs:
-        return hook()
-    return hook(app)
-
-
-def _invoke_single_arg(callback: Callable[..., Any], value: Any) -> Any:
-    try:
-        signature = inspect.signature(callback)
-    except (TypeError, ValueError):
-        return callback(value)
-
-    positional = [
-        parameter
-        for parameter in signature.parameters.values()
-        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    has_varargs = any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in signature.parameters.values())
-    if not positional and not has_varargs:
-        return callback()
-    return callback(value)
-
-
 def _describe_resource(resource: Source | Sink | None) -> dict[str, str] | None:
     if resource is None:
         return None
@@ -772,6 +790,24 @@ def _describe_resource(resource: Source | Sink | None) -> dict[str, str] | None:
         "name": resource.name,
         "type": resource.__class__.__name__,
     }
+
+
+async def _open_resource(resource: Any) -> None:
+    opener = getattr(resource, "open", None)
+    if not callable(opener):
+        return
+    result = opener()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _close_resource(resource: Any) -> None:
+    closer = getattr(resource, "close", None)
+    if not callable(closer):
+        return
+    result = closer()
+    if inspect.isawaitable(result):
+        await result
 
 
 def _invoke_app_factory(target: str, factory: Callable[..., Any]) -> Any:

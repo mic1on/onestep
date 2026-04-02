@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import copy
 import inspect
+import logging
 import time
 from typing import TYPE_CHECKING
 
 from onestep.context import TaskContext
 from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
+from onestep.invoke import invoke_callback
 from onestep.resilience import ConnectorOperationError, connector_retry_delay, is_retryable_connector_error
 from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
 from onestep.task import TaskSpec
@@ -225,7 +226,9 @@ class TaskRunner:
         try:
             await delivery.start_processing()
             await self._emit_event(TaskEventKind.STARTED, delivery)
+            await self._run_task_hooks(self.task.hooks.before, ctx, delivery.payload)
             result = await self._invoke_handler(ctx, delivery)
+            await self._run_task_hooks(self.task.hooks.after_success, ctx, delivery.payload, result)
             if result is not None and self.task.sinks:
                 envelope = Envelope(body=result)
                 for sink in self.task.sinks:
@@ -290,6 +293,15 @@ class TaskRunner:
     ) -> None:
         failure = FailureInfo.from_exception(exc, kind=kind)
         ctx.logger.exception("task failed", extra={"failure_kind": failure.kind.value})
+        await self._run_task_hooks(
+            self.task.hooks.on_failure,
+            ctx,
+            delivery.payload,
+            failure,
+            suppress_exceptions=True,
+            logger=ctx.logger,
+            message="task failure hook failed",
+        )
         action = resolve_retry_action(self.task.retry, delivery.envelope, exc, failure)
         if action.decision is RetryDecision.RETRY:
             await delivery.retry(delay_s=action.delay_s)
@@ -384,6 +396,28 @@ class TaskRunner:
     async def _emit_batch_event(self, kind: TaskEventKind, deliveries: list["Delivery"]) -> None:
         for delivery in deliveries:
             await self._emit_event(kind, delivery)
+
+    async def _run_task_hooks(
+        self,
+        hooks,
+        *args,
+        suppress_exceptions: bool = False,
+        logger: logging.Logger | None = None,
+        message: str = "task hook failed",
+    ) -> None:
+        for hook in hooks:
+            try:
+                result = invoke_callback(hook, *args)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                if not suppress_exceptions:
+                    raise
+                active_logger = logger or self._logger
+                active_logger.exception(
+                    message,
+                    extra={"task_hook": getattr(hook, "__name__", hook.__class__.__name__)},
+                )
 
     async def _emit_event(
         self,
