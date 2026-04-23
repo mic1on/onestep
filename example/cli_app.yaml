@@ -1,3 +1,6 @@
+apiVersion: onestep/v1alpha1
+kind: App
+
 app:
   name: cli-demo-yaml
   config:

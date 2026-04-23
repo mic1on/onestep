@@ -582,3 +582,19 @@ def test_reporter_config_from_env_uses_fallback_names(monkeypatch) -> None:
     assert config.event_flush_interval_s == 7.0
     assert config.event_batch_size == 50
     assert config.timeout_s == 4.0
+
+
+def test_reporter_config_from_env_allows_minimal_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "env-token")
+    monkeypatch.setenv("ONESTEP_ENV", "prod")
+
+    config = ControlPlaneReporterConfig.from_env(
+        app_name="billing-sync",
+        base_url="https://yaml-control-plane.example.com",
+        service_name="billing-sync-worker",
+    )
+
+    assert config.base_url == "https://yaml-control-plane.example.com"
+    assert config.token == "env-token"
+    assert config.service_name == "billing-sync-worker"
+    assert config.environment == "prod"

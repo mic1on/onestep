@@ -10,6 +10,7 @@ Files:
 
 - `cli_app.py`: minimal module shape for `onestep run package.module:app`
 - `cli_app.yaml`: YAML app definition that reuses `example.cli_app:sync_users`
+- `yaml_project/`: standalone project-style demo with `worker.yaml`, `tasks.py`, `transforms.py`, and `hooks.py`
 - `memory_pipeline.py`: in-memory source and sink with a simple transform
 - `interval_source.py`: fixed-interval scheduling
 - `cron_source.py`: wall-clock scheduling with cron expressions
