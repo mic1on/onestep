@@ -26,6 +26,16 @@ class TaskContext:
     def current(self) -> Envelope:
         return self.delivery.envelope
 
+    async def update_current_row(self, values: Mapping[str, Any]) -> None:
+        if not isinstance(values, Mapping):
+            raise TypeError("update_current_row() requires a mapping payload")
+        updater = getattr(self.delivery, "update_current_row", None)
+        if updater is None:
+            raise RuntimeError(
+                "update_current_row() is only supported for deliveries that can mutate their current row"
+            )
+        await updater(dict(values))
+
     async def emit(
         self,
         body: Any,

@@ -173,6 +173,12 @@ class TableQueueDelivery(Delivery):
         self._source = source
         self._row_ref = row_ref
 
+    async def update_current_row(self, values: Mapping[str, Any]) -> None:
+        payload = dict(values)
+        await self._source.update_row(self._row_ref, payload)
+        if isinstance(self.envelope.body, dict):
+            self.envelope.body.update(payload)
+
     async def ack(self) -> None:
         await self._source.ack_row(self._row_ref)
 
@@ -249,15 +255,18 @@ class TableQueueSource(Source):
             return [dict(row) for row in refreshed.mappings().all()]
 
     async def ack_row(self, row_ref: _TableRowRef) -> None:
-        await asyncio.to_thread(self._update_row_sync, row_ref, self.ack)
+        await self.update_row(row_ref, self.ack)
 
     async def retry_row(self, row_ref: _TableRowRef, *, delay_s: float | None = None) -> None:
         if delay_s:
             await asyncio.sleep(delay_s)
-        await asyncio.to_thread(self._update_row_sync, row_ref, self.nack)
+        await self.update_row(row_ref, self.nack)
 
     async def fail_row(self, row_ref: _TableRowRef, exc: Exception | None = None) -> None:
-        await asyncio.to_thread(self._update_row_sync, row_ref, self.nack)
+        await self.update_row(row_ref, self.nack)
+
+    async def update_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
+        await asyncio.to_thread(self._update_row_sync, row_ref, dict(values))
 
     def _update_row_sync(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
         if not values:

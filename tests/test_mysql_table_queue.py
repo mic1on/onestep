@@ -16,6 +16,7 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("payload", sa.String, nullable=False),
         sa.Column("status", sa.Integer, nullable=False),
+        sa.Column("score", sa.Integer),
     )
     processed = sa.Table(
         "processed_orders",
@@ -29,11 +30,13 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
         conn.execute(
             sa.insert(orders),
             [
-                {"id": 1, "payload": "A", "status": 0},
-                {"id": 2, "payload": "B", "status": 0},
+                {"id": 1, "payload": "A", "status": 0, "score": None},
+                {"id": 2, "payload": "B", "status": 0, "score": None},
             ],
         )
     engine.dispose()
+
+    seen_scores: list[tuple[int, int]] = []
 
     async def scenario() -> None:
         app = OneStepApp("table-queue")
@@ -53,7 +56,9 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
 
         @app.task(source=source, emit=sink, concurrency=2)
         async def process(ctx, row):
+            await ctx.update_current_row({"score": row["id"] * 10})
             seen.append(row["id"])
+            seen_scores.append((row["id"], row["score"]))
             if len(seen) == 2:
                 ctx.app.request_shutdown()
             return {"id": row["id"], "payload": row["payload"], "status": "done"}
@@ -65,11 +70,12 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
 
     verify_engine = sa.create_engine(db_url, future=True)
     with verify_engine.begin() as conn:
-        order_rows = conn.execute(sa.select(orders.c.id, orders.c.status).order_by(orders.c.id)).all()
+        order_rows = conn.execute(sa.select(orders.c.id, orders.c.status, orders.c.score).order_by(orders.c.id)).all()
         processed_rows = conn.execute(
             sa.select(processed.c.id, processed.c.payload, processed.c.status).order_by(processed.c.id)
         ).all()
     verify_engine.dispose()
 
-    assert order_rows == [(1, 1), (2, 1)]
+    assert seen_scores == [(1, 10), (2, 20)]
+    assert order_rows == [(1, 1, 10), (2, 1, 20)]
     assert processed_rows == [(1, "A", "done"), (2, "B", "done")]

@@ -583,6 +583,10 @@ async def process_order(ctx, row):
     return {"id": row["id"], "payload": row["payload"], "status": "done"}
 ```
 
+When you need to write computed fields back to the claimed row itself, call
+`await ctx.update_current_row({...})` inside the task. This is currently
+supported for `MySQLConnector.table_queue(...)` deliveries.
+
 ## MySQL Incremental Sync
 
 Use `(updated_at, id)` as a lightweight cursor for Logstash-style sync.
