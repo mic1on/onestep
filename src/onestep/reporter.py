@@ -233,15 +233,22 @@ class ControlPlaneReporterConfig:
         self.state_dir = _normalize_state_dir(self.state_dir)
 
     @classmethod
-    def from_env(cls, *, app_name: str | None = None) -> "ControlPlaneReporterConfig":
-        base_url = _read_env("ONESTEP_CONTROL_PLANE_URL", "ONESTEP_CONTROL_URL")
-        token = _read_env("ONESTEP_CONTROL_PLANE_TOKEN", "ONESTEP_CONTROL_TOKEN")
+    def from_env(
+        cls,
+        *,
+        app_name: str | None = None,
+        base_url: str | None = None,
+        token: str | None = None,
+        service_name: str | None = None,
+    ) -> "ControlPlaneReporterConfig":
+        base_url = base_url or _read_env("ONESTEP_CONTROL_PLANE_URL", "ONESTEP_CONTROL_URL")
+        token = token or _read_env("ONESTEP_CONTROL_PLANE_TOKEN", "ONESTEP_CONTROL_TOKEN")
         if base_url is None:
             raise ValueError("missing ONESTEP_CONTROL_PLANE_URL or ONESTEP_CONTROL_URL")
         if token is None:
             raise ValueError("missing ONESTEP_CONTROL_PLANE_TOKEN or ONESTEP_CONTROL_TOKEN")
         environment = _read_env("ONESTEP_CONTROL_PLANE_ENVIRONMENT", "ONESTEP_ENV") or "dev"
-        service_name = _read_env("ONESTEP_SERVICE_NAME") or app_name
+        service_name = service_name or _read_env("ONESTEP_SERVICE_NAME") or app_name
         node_name = _read_env("ONESTEP_NODE_NAME")
         deployment_version = _read_env(
             "ONESTEP_DEPLOYMENT_VERSION",
@@ -430,6 +437,13 @@ class ControlPlaneReporter:
         bind_reporter = getattr(self._sender, "bind_reporter", None)
         if callable(bind_reporter):
             bind_reporter(self)
+        app.set_reporter_summary(
+            {
+                "type": "control_plane",
+                "base_url": self.config.base_url,
+                "service_name": self._service_name or app.name,
+            }
+        )
         app.on_startup(self.startup)
         app.on_shutdown(self.shutdown)
         app.on_event(self.handle_event)

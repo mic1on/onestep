@@ -113,32 +113,26 @@ Use JSON output when you want the check result in CI or deployment scripts:
 onestep check --json your_package.tasks:app
 ```
 
-You can also load a YAML app definition with `handler.ref` entries that point to Python callables:
+You can also load a YAML app definition. Start with the smallest working shape
+and add fields only when needed. `resources` is the preferred top-level section
+for named runtime objects, while `handler.ref` and `hooks.*.ref` point to
+Python callables:
 
 ```yaml
 app:
   name: billing-sync
 
-connectors:
+resources:
   tick:
     type: interval
     minutes: 5
     immediate: true
-  processed:
-    type: memory
 
 tasks:
   - name: sync_billing
     source: tick
     handler:
       ref: your_package.handlers.billing:sync_billing
-      params:
-        region: cn
-    emit: [processed]
-    retry:
-      type: max_attempts
-      max_attempts: 3
-      delay_s: 10
 ```
 
 Check or run the YAML target the same way:
@@ -148,8 +142,48 @@ onestep check worker.yaml
 onestep run worker.yaml
 ```
 
-YAML resources can reference other resources by name, for example `rabbitmq_queue.connector: rmq`
-or `mysql_incremental.state: cursor_store`.
+Scaffold a minimal standalone YAML project when starting from scratch:
+
+```bash
+onestep init billing-sync
+```
+
+That generates:
+
+- `pyproject.toml`
+- `worker.yaml`
+- `src/<package>/tasks/`
+- `src/<package>/transforms/`
+
+The generated project stays intentionally small. `worker.yaml` only defines
+runtime wiring; business logic still lives in Python. Add `hooks.py` later only
+when you actually wire hooks in YAML.
+
+Use strict checking when you want schema validation for YAML targets, including
+unknown-field detection and contract checks for `reporter`, `hooks`, `tasks`,
+and resource specs:
+
+```bash
+onestep check --strict worker.yaml
+```
+
+YAML resources can reference other resources by name, for example
+`rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.
+
+Task handlers and hooks can read:
+
+- `ctx.config` for app-level config
+- `ctx.task_config` for task-level config
+- `ctx.resources` for named runtime objects
+
+App hooks can read `app.resources` for the same named resource registry.
+
+For a progressive YAML guide from minimal task to fully wired app, including
+strict-check guidance, see
+`docs/yaml-task-definition.md`.
+
+For a standalone project-style example with `worker.yaml` plus
+`tasks.py` / `transforms.py` / `hooks.py`, see `example/yaml_project/`.
 
 Currently supported YAML resource types:
 
@@ -186,6 +220,10 @@ connectors:
 
 The named state resource must support `load/save/delete`; `mysql_state_store`
 and `mysql_cursor_store` both work.
+
+Legacy `connectors`, `sources`, and `sinks` sections are still supported and
+merged into the same internal resource registry. For the full YAML schema and a
+larger task-definition example, see `docs/yaml-task-definition.md`.
 
 Runnable examples live in:
 
@@ -239,6 +277,25 @@ The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined
 
 `onestep` can push runtime telemetry to `onestep-control-plane` over a single long-lived
 WebSocket session without adding a new connector or changing task code.
+
+The YAML form is intentionally minimal:
+
+```yaml
+app:
+  name: billing-sync
+
+reporter: true
+```
+
+That enables `ControlPlaneReporter` using env-backed defaults. When you need explicit
+overrides, keep the field names aligned with `ControlPlaneReporterConfig`:
+
+```yaml
+reporter:
+  base_url: https://control-plane.example.com
+  token: ${ONESTEP_CONTROL_PLANE_TOKEN}
+  service_name: billing-sync-worker
+```
 
 Attach the reporter explicitly:
 

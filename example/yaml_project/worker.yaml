@@ -1,0 +1,42 @@
+apiVersion: onestep/v1alpha1
+kind: App
+
+app:
+  name: yaml-project-demo
+  config:
+    expected_rows: 2
+
+resources:
+  incoming_users:
+    type: memory
+
+  normalized_users:
+    type: memory
+
+hooks:
+  startup:
+    ref: demo_worker.hooks:seed_demo_data
+  shutdown:
+    ref: demo_worker.hooks:on_shutdown
+
+tasks:
+  - name: normalize_users
+    source: incoming_users
+    emit: [normalized_users]
+    config:
+      region: cn
+      dry_run: false
+    handler:
+      ref: demo_worker.tasks:normalize_users
+      params:
+        phone_country_code: "+86"
+    hooks:
+      before:
+        ref: demo_worker.hooks:before_normalize
+      after_success:
+        ref: demo_worker.hooks:after_normalize
+
+  - name: print_rows
+    source: normalized_users
+    handler:
+      ref: demo_worker.tasks:print_row
