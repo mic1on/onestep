@@ -135,7 +135,7 @@ def test_cli_init_creates_minimal_project(tmp_path, monkeypatch, capsys) -> None
     assert (project_dir / "src" / "billing_sync" / "tasks" / "demo.py").exists()
     assert (project_dir / "src" / "billing_sync" / "transforms" / "__init__.py").exists()
     assert (project_dir / "src" / "billing_sync" / "transforms" / "demo.py").exists()
-    assert (project_dir / "src" / "billing_sync" / "hooks.py").exists()
+    assert not (project_dir / "src" / "billing_sync" / "hooks.py").exists()
 
     monkeypatch.chdir(project_dir)
     monkeypatch.setattr(
@@ -155,7 +155,6 @@ def test_cli_init_creates_minimal_project(tmp_path, monkeypatch, capsys) -> None
         "billing_sync.tasks.demo",
         "billing_sync.transforms",
         "billing_sync.transforms.demo",
-        "billing_sync.hooks",
     )
 
     exit_code = main(["check", "worker.yaml"])

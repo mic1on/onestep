@@ -76,7 +76,7 @@ onestep init your-project
 ```
 
 `init` intentionally generates the smallest runnable project. It does not add
-reporter config, extra hooks, or more YAML structure by default.
+reporter config, hook modules, extra hooks, or more YAML structure by default.
 
 From the repo root:
 

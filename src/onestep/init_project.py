@@ -72,7 +72,6 @@ def _build_file_map(*, project_name: str, package_name: str) -> dict[Path, str]:
         Path("src") / package_name / "tasks" / "demo.py": _tasks_py(),
         Path("src") / package_name / "transforms" / "__init__.py": _transforms_package_init(),
         Path("src") / package_name / "transforms" / "demo.py": _transforms_py(),
-        Path("src") / package_name / "hooks.py": _hooks_py(),
     }
 
 
@@ -97,7 +96,6 @@ Files:
 - `worker.yaml`: runtime wiring
 - `src/.../tasks/`: task handlers
 - `src/.../transforms/`: business transforms
-- `src/.../hooks.py`: optional lifecycle and task hooks
 
 Common commands:
 
@@ -111,6 +109,9 @@ Add more tasks by:
 1. creating a new module under `src/.../tasks/`
 2. adding any shared transform logic under `src/.../transforms/`
 3. appending a new entry under `tasks:` in `worker.yaml`
+
+Add `src/.../hooks.py` only when you really need lifecycle or task hooks, and then
+wire those hooks explicitly in `worker.yaml`.
 """
 
 
@@ -176,17 +177,4 @@ def normalize_payload(payload: dict[str, Any], *, app_name: str) -> dict[str, An
         "message": str(payload.get("message") or "hello onestep"),
         "payload": payload,
     }
-"""
-
-
-def _hooks_py() -> str:
-    return """from __future__ import annotations
-
-
-def on_startup(app) -> None:
-    print(f"{app.name} started")
-
-
-def on_shutdown(app) -> None:
-    print(f"{app.name} stopped")
 """

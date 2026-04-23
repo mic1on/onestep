@@ -154,10 +154,10 @@ That generates:
 - `worker.yaml`
 - `src/<package>/tasks/`
 - `src/<package>/transforms/`
-- `src/<package>/hooks.py`
 
 The generated project stays intentionally small. `worker.yaml` only defines
-runtime wiring; business logic still lives in Python.
+runtime wiring; business logic still lives in Python. Add `hooks.py` later only
+when you actually wire hooks in YAML.
 
 Use strict checking when you want schema validation for YAML targets, including
 unknown-field detection and contract checks for `reporter`, `hooks`, `tasks`,
