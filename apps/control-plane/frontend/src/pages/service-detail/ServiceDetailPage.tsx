@@ -110,10 +110,9 @@ export function ServiceDetailPage() {
 
   const dashboard = dashboardQuery.data;
   const tasks = prioritizeTasks(tasksQuery.data?.items ?? []);
-  const instances = prioritizeInstances(instancesQuery.data?.items ?? []);
+  const instances = instancesQuery.data?.items ?? [];
   const commands = commandsQuery.data?.items ?? [];
   const sessions = sessionsQuery.data?.items ?? [];
-  const topSessions = sessions.slice(0, 3);
   const serviceStatus: "online" | "offline" | "degraded" = dashboard ? deriveServiceStatus(dashboard) : "offline";
   const runtimeSignals = dashboard ? buildRuntimeSignals(dashboard, isZh) : [];
 
@@ -277,55 +276,6 @@ export function ServiceDetailPage() {
                         <CompactKpi key={item.label} label={item.label} value={item.value} />
                       ))}
                     </div>
-                  </Panel>
-                </section>
-
-                <section className="ref-access-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={isZh ? "当前服务的接入状态、会话覆盖和命令概况。" : "Current access state, session coverage, and command status."}
-                    title={isZh ? "接入与控制" : "Access and control"}
-                  >
-                    <div className="ref-access-card">
-                      <div className="ref-access-row">
-                        <span>{isZh ? "在线实例" : "Online instances"}</span>
-                        <strong>{`${dashboard.instance_connectivity.online}/${dashboard.instance_connectivity.total || 0}`}</strong>
-                      </div>
-                      <div className="ref-access-row">
-                        <span>{isZh ? "执行中命令" : "In-flight commands"}</span>
-                        <strong>{dashboard.command_overview.statuses.in_flight}</strong>
-                      </div>
-                      <div className="ref-access-row">
-                        <span>{isZh ? "最近命令" : "Last command"}</span>
-                        <strong>{formatDateTime(dashboard.command_overview.last_command_at)}</strong>
-                      </div>
-                      <div className="ref-access-row">
-                        <span>{isZh ? "最近完成" : "Last completed"}</span>
-                        <strong>{formatDateTime(dashboard.command_overview.last_completed_at)}</strong>
-                      </div>
-                    </div>
-                  </Panel>
-
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={isZh ? "优先展示最近的控制会话，帮助判断是否可以安全发命令。" : "Recent control sessions help you quickly judge whether commands are safe to dispatch."}
-                    title={isZh ? "控制会话" : "Control sessions"}
-                  >
-                    {topSessions.length ? (
-                      <div className="ref-session-list">
-                        {topSessions.map((session) => (
-                          <div className="ref-session-item" key={session.session_id}>
-                            <div>
-                              <strong>{session.node_name ?? formatIdentifierPreview(session.instance_id)}</strong>
-                              <span>{session.hostname ?? formatIdentifierPreview(session.session_id)}</span>
-                            </div>
-                            <StatusBadge value={session.status} />
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <EmptyState title={t("serviceDetail.noSessionsTitle")} body={t("serviceDetail.noSessionsBody")} />
-                    )}
                   </Panel>
                 </section>
 
@@ -678,16 +628,6 @@ function prioritizeTasks(tasks: TaskDashboardSummary[]) {
   });
 }
 
-function prioritizeInstances(instances: InstanceSummary[]) {
-  return [...instances].sort((left, right) => {
-    const priorityDelta = getInstancePriority(right) - getInstancePriority(left);
-    if (priorityDelta !== 0) {
-      return priorityDelta;
-    }
-    return compareDateDesc(left.last_seen_at, right.last_seen_at);
-  });
-}
-
 function getTaskPriority(task: TaskDashboardSummary) {
   if (task.failed + task.dead_lettered > 0) {
     return 3;
@@ -699,22 +639,6 @@ function getTaskPriority(task: TaskDashboardSummary) {
     return 1;
   }
   return 0;
-}
-
-function getInstancePriority(instance: InstanceSummary) {
-  if (instance.connectivity === "online") {
-    if (instance.status === "error" || instance.status === "degraded") {
-      return 3;
-    }
-    if (instance.active_session === null) {
-      return 2;
-    }
-    return 1;
-  }
-  if (instance.connectivity === "offline") {
-    return 0;
-  }
-  return -1;
 }
 
 function summarizeCapabilities(sessions: AgentSessionSummary[]) {

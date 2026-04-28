@@ -66,7 +66,7 @@ export function InstanceDetailPage() {
 
   const payload = detailQuery.data;
   const instance = payload?.instance;
-  const instances = prioritizeInstances(instancesQuery.data?.items ?? []);
+  const instances = instancesQuery.data?.items ?? [];
   const activeSession = instance?.active_session;
   const latestSession = payload?.latest_session;
   const deliveryMode =
@@ -510,32 +510,6 @@ function buildInstanceRuntimeSignals(
       note: isZh ? "来自控制会话状态" : "Control session state",
     },
   ];
-}
-
-function prioritizeInstances(instances: InstanceSummary[]) {
-  return [...instances].sort((left, right) => {
-    const priorityDelta = getInstancePriority(right) - getInstancePriority(left);
-    if (priorityDelta !== 0) {
-      return priorityDelta;
-    }
-    return compareDateDesc(left.last_seen_at, right.last_seen_at);
-  });
-}
-
-function getInstancePriority(instance: InstanceSummary) {
-  if (instance.connectivity === "online") {
-    if (instance.status === "error" || instance.status === "degraded") {
-      return 3;
-    }
-    if (instance.active_session === null) {
-      return 2;
-    }
-    return 1;
-  }
-  if (instance.connectivity === "offline") {
-    return 0;
-  }
-  return -1;
 }
 
 function deriveInstanceStatus(instance: InstanceSummary): "online" | "offline" | "degraded" {

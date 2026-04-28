@@ -464,32 +464,6 @@ function getTaskPriority(task: TaskDashboardSummary) {
   return 0;
 }
 
-function prioritizeInstances(instances: InstanceSummary[]) {
-  return [...instances].sort((left, right) => {
-    const priorityDelta = getInstancePriority(right) - getInstancePriority(left);
-    if (priorityDelta !== 0) {
-      return priorityDelta;
-    }
-    return compareDateDesc(left.last_seen_at, right.last_seen_at);
-  });
-}
-
-function getInstancePriority(instance: InstanceSummary) {
-  if (instance.connectivity === "online") {
-    if (instance.status === "error" || instance.status === "degraded") {
-      return 3;
-    }
-    if (instance.active_session === null) {
-      return 2;
-    }
-    return 1;
-  }
-  if (instance.connectivity === "offline") {
-    return 0;
-  }
-  return -1;
-}
-
 function sortBoundInstances(
   instances: InstanceSummary[],
   boundInstanceIds: Set<string>,
