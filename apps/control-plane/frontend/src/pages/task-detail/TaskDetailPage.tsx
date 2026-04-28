@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
@@ -12,6 +13,12 @@ import { ServiceInstancesList } from "../../features/services/components/Service
 import { useServiceInstancesQuery, useServiceTasksQuery } from "../../features/services/queries";
 import { TaskCommandControls } from "../../features/tasks/components/TaskCommandControls";
 import { TaskMetricHistoryChart } from "../../features/tasks/components/TaskMetricHistoryChart";
+import {
+  formatRetryPolicySummary,
+  TaskEmitValue,
+  TaskSourceValue,
+  TaskTopologyPreview,
+} from "../../features/tasks/components/TaskTopologySummary";
 import { useTaskDetailQuery } from "../../features/tasks/queries";
 import {
   formatCompactJson,
@@ -81,6 +88,7 @@ export function TaskDetailPage() {
   const boundInstances = sortBoundInstances(instancesQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
   const boundSessions = sortBoundSessions(sessionsQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
   const taskStatus: "ok" | "warning" | "degraded" = summary ? deriveTaskStatus(summary) : "ok";
+  const retrySummary = summary ? formatRetryPolicySummary(summary.retry_policy, isZh) : t("common.none");
 
   function buildServiceViewHref(view: ServiceView) {
     return servicePath(resolvedServiceName, {
@@ -165,6 +173,7 @@ export function TaskDetailPage() {
                         <div className="ref-task-browser-copy">
                           <strong>{task.task_name}</strong>
                           <span>{task.description ?? t("common.notAvailable")}</span>
+                          <TaskTopologyPreview isZh={isZh} task={task} />
                         </div>
                         <div className="ref-task-browser-metrics">
                           <span>{t("taskDetail.failedDlq")}: {formatCount(issueCount)}</span>
@@ -196,13 +205,20 @@ export function TaskDetailPage() {
                   >
                     <div className="ref-info-grid">
                       <InfoPair label={t("taskDetail.description")} value={summary.description ?? t("common.notAvailable")} />
-                      <InfoPair label={t("taskDetail.source")} value={summary.source_name ?? t("common.notAvailable")} />
-                      <InfoPair label={t("taskDetail.sourceKind")} value={summary.source_kind ?? t("common.notAvailable")} />
+                      <InfoPair
+                        label={t("taskDetail.source")}
+                        value={<TaskSourceValue emptyLabel={t("common.notAvailable")} isZh={isZh} task={summary} />}
+                      />
+                      <InfoPair
+                        label={t("taskDetail.emit")}
+                        value={<TaskEmitValue emit={summary.emit} emptyLabel={t("common.none")} isZh={isZh} />}
+                      />
                       <InfoPair label={t("taskDetail.concurrency")} value={String(summary.concurrency ?? t("common.notAvailable"))} />
                       <InfoPair
                         label={t("taskDetail.timeout")}
                         value={summary.timeout_s ? `${summary.timeout_s}s` : t("common.none")}
                       />
+                      <InfoPair label={t("taskDetail.retryPolicy")} value={retrySummary} />
                       <InfoPair label={t("taskDetail.lastEvent")} value={formatDateTime(summary.last_event_at)} />
                     </div>
                   </Panel>
@@ -378,11 +394,11 @@ function SummaryChip({
   );
 }
 
-function InfoPair({ label, value }: { label: string; value: string }) {
+function InfoPair({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="ref-info-pair">
       <span>{label}</span>
-      <strong>{value}</strong>
+      {typeof value === "string" ? <strong>{value}</strong> : value}
     </div>
   );
 }
@@ -459,16 +475,19 @@ function prioritizeInstances(instances: InstanceSummary[]) {
 }
 
 function getInstancePriority(instance: InstanceSummary) {
-  if (instance.connectivity !== "online") {
-    return 3;
-  }
-  if (instance.status === "error" || instance.status === "degraded") {
-    return 2;
-  }
-  if (instance.active_session === null) {
+  if (instance.connectivity === "online") {
+    if (instance.status === "error" || instance.status === "degraded") {
+      return 3;
+    }
+    if (instance.active_session === null) {
+      return 2;
+    }
     return 1;
   }
-  return 0;
+  if (instance.connectivity === "offline") {
+    return 0;
+  }
+  return -1;
 }
 
 function sortBoundInstances(

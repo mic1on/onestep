@@ -131,7 +131,7 @@ export function ServicesListPage() {
             <span>{isZh ? "名称" : "Name"}</span>
             <span>{isZh ? "状态" : "Status"}</span>
             <span>{isZh ? "创建时间" : "Created"}</span>
-            <span>{isZh ? "最近同步" : "Last sync"}</span>
+            <span>{isZh ? "最近活跃" : "Last active"}</span>
             <span>{isZh ? "部署版本" : "Deployment"}</span>
             <span>{isZh ? "实例数" : "Instances"}</span>
           </div>
@@ -153,7 +153,10 @@ export function ServicesListPage() {
                 </div>
 
                 <div className="ref-status-cell">
-                  <StatusBadge {...getServiceBadgeProps(service, isZh)} />
+                  <div className="ref-status-copy">
+                    <StatusBadge {...getServiceBadgeProps(service, isZh)} />
+                    <span>{getServiceStatusReason(service, isZh)}</span>
+                  </div>
                 </div>
 
                 <div className="ref-meta-cell">
@@ -161,8 +164,10 @@ export function ServicesListPage() {
                 </div>
 
                 <div className="ref-meta-cell">
-                  <strong title={formatDateTime(service.latest_sync_at)}>{formatRelativeTime(service.latest_sync_at)}</strong>
-                  <span>{getSyncHint(service, isZh)}</span>
+                  <strong title={formatDateTime(getServiceActivityAt(service))}>
+                    {formatRelativeTime(getServiceActivityAt(service))}
+                  </strong>
+                  <span>{getActivityHint(service, isZh)}</span>
                 </div>
 
                 <div className="ref-meta-cell">
@@ -213,7 +218,7 @@ function serviceNeedsAttention(service: ServiceSummary) {
 }
 
 function isServiceFullyOnline(service: ServiceSummary) {
-  return service.instance_count > 0 && service.online_instance_count === service.instance_count && !isServiceStale(service.latest_sync_at);
+  return service.instance_count > 0 && service.online_instance_count > 0 && !isServiceStale(service.latest_sync_at);
 }
 
 function getServiceAttentionScore(service: ServiceSummary) {
@@ -221,8 +226,6 @@ function getServiceAttentionScore(service: ServiceSummary) {
 
   if (service.instance_count === 0 || service.online_instance_count === 0) {
     score += 5;
-  } else if (service.online_instance_count < service.instance_count) {
-    score += 3;
   }
 
   if (service.latest_sync_at === null) {
@@ -244,25 +247,32 @@ function compareServicesForSurface(left: ServiceSummary, right: ServiceSummary) 
     return attentionDelta;
   }
 
-  const lastSeenDelta = compareDateDesc(left.last_seen_at, right.last_seen_at);
-  if (lastSeenDelta !== 0) {
-    return lastSeenDelta;
+  const lastActivityDelta = compareDateDesc(getServiceActivityAt(left), getServiceActivityAt(right));
+  if (lastActivityDelta !== 0) {
+    return lastActivityDelta;
   }
 
   return left.name.localeCompare(right.name);
 }
 
 function getServiceBadgeProps(service: ServiceSummary, isZh: boolean) {
-  if (service.instance_count === 0 || service.online_instance_count === 0) {
+  if (service.instance_count === 0) {
     return {
-      label: isZh ? "离线" : "Offline",
+      label: isZh ? "无实例" : "No instances",
+      value: "unknown" as const,
+    };
+  }
+
+  if (service.online_instance_count === 0) {
+    return {
+      label: isZh ? "全部离线" : "All offline",
       value: "offline" as const,
     };
   }
 
-  if (service.online_instance_count < service.instance_count || isServiceStale(service.latest_sync_at)) {
+  if (isServiceStale(service.latest_sync_at)) {
     return {
-      label: isZh ? "关注" : "Review",
+      label: isZh ? "同步旧" : "Stale sync",
       value: "degraded" as const,
     };
   }
@@ -273,8 +283,33 @@ function getServiceBadgeProps(service: ServiceSummary, isZh: boolean) {
   };
 }
 
+function getServiceStatusReason(service: ServiceSummary, isZh: boolean) {
+  if (service.instance_count === 0) {
+    return isZh ? "还没有实例上报" : "No instances reported yet";
+  }
+  if (service.online_instance_count === 0) {
+    return isZh ? "当前没有在线实例" : "No online instances";
+  }
+
+  const reasons: string[] = [];
+  if (service.latest_sync_at === null) {
+    reasons.push(isZh ? "未收到拓扑同步" : "No topology sync received");
+  } else if (isServiceStale(service.latest_sync_at)) {
+    reasons.push(
+      isZh
+        ? `拓扑同步 ${formatRelativeTime(service.latest_sync_at)}`
+        : `Topology sync ${formatRelativeTime(service.latest_sync_at)}`,
+    );
+  }
+
+  if (reasons.length > 0) {
+    return reasons.join(" · ");
+  }
+  return isZh ? "服务活跃，拓扑同步正常" : "Service is active and topology sync is fresh";
+}
+
 function getCoverageBarClass(service: ServiceSummary) {
-  if (isServiceFullyOnline(service)) {
+  if (service.instance_count > 0 && service.online_instance_count > 0 && service.online_instance_count === service.instance_count && !isServiceStale(service.latest_sync_at)) {
     return "ref-usage-fill is-healthy";
   }
   if (service.online_instance_count > 0) {
@@ -283,14 +318,23 @@ function getCoverageBarClass(service: ServiceSummary) {
   return "ref-usage-fill is-empty";
 }
 
-function getSyncHint(service: ServiceSummary, isZh: boolean) {
+function getServiceActivityAt(service: ServiceSummary) {
+  const lastSeenValue = service.last_seen_at ? Date.parse(service.last_seen_at) : 0;
+  const latestSyncValue = service.latest_sync_at ? Date.parse(service.latest_sync_at) : 0;
+
+  if (lastSeenValue === 0 && latestSyncValue === 0) {
+    return null;
+  }
+  return lastSeenValue >= latestSyncValue ? service.last_seen_at : service.latest_sync_at;
+}
+
+function getActivityHint(service: ServiceSummary, isZh: boolean) {
   if (service.latest_sync_at === null) {
-    return isZh ? "未同步" : "No sync";
+    return isZh ? "未收到拓扑同步" : "No topology sync";
   }
-  if (isServiceStale(service.latest_sync_at)) {
-    return isZh ? "同步偏旧" : "Stale";
-  }
-  return isZh ? "已同步" : "Fresh";
+  return isZh
+    ? `拓扑同步 ${formatRelativeTime(service.latest_sync_at)}`
+    : `Topology sync ${formatRelativeTime(service.latest_sync_at)}`;
 }
 
 function isServiceStale(value: string | null) {

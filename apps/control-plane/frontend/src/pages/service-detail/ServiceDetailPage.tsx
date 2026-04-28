@@ -11,6 +11,7 @@ import { CommandReasonDialog } from "../../features/commands/components/CommandR
 import { useCreateServiceCommandFanoutMutation, useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
 import { ServiceCommandFanout } from "../../features/commands/components/ServiceCommandFanout";
 import { useServiceDashboardQuery, useServiceInstancesQuery, useServiceTasksQuery } from "../../features/services/queries";
+import { TaskTopologyPreview } from "../../features/tasks/components/TaskTopologySummary";
 import type {
   AgentCommandKind,
   AgentSessionSummary,
@@ -410,6 +411,7 @@ export function ServiceDetailPage() {
                       <div className="ref-table-primary">
                         <strong>{task.task_name}</strong>
                         <span>{task.description ?? t("common.notAvailable")}</span>
+                        <TaskTopologyPreview isZh={isZh} task={task} />
                       </div>
                       <div className="ref-table-primary">
                         <strong>{task.succeeded}</strong>
@@ -700,16 +702,19 @@ function getTaskPriority(task: TaskDashboardSummary) {
 }
 
 function getInstancePriority(instance: InstanceSummary) {
-  if (instance.connectivity !== "online") {
-    return 3;
-  }
-  if (instance.status === "error" || instance.status === "degraded") {
-    return 2;
-  }
-  if (instance.active_session === null) {
+  if (instance.connectivity === "online") {
+    if (instance.status === "error" || instance.status === "degraded") {
+      return 3;
+    }
+    if (instance.active_session === null) {
+      return 2;
+    }
     return 1;
   }
-  return 0;
+  if (instance.connectivity === "offline") {
+    return 0;
+  }
+  return -1;
 }
 
 function summarizeCapabilities(sessions: AgentSessionSummary[]) {

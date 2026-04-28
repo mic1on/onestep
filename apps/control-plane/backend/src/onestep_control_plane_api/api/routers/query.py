@@ -373,9 +373,14 @@ def list_service_instances(
     db: Session = Depends(get_db_session),
 ) -> InstanceListResponse:
     service = get_service_or_404(db, service_name=service_name, environment=environment)
-    cutoff = online_cutoff(utcnow())
+    now = utcnow()
+    cutoff = online_cutoff(now)
+    health_cutoff = health_participation_cutoff(now)
     active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
-    filters = [Instance.service_id == service.id]
+    filters = [
+        Instance.service_id == service.id,
+        instance_participates_in_health_expression(health_cutoff),
+    ]
 
     if instance_status is not None:
         filters.append(Instance.status == instance_status)

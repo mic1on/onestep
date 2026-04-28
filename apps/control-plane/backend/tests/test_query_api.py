@@ -771,12 +771,15 @@ def test_service_health_ages_out_stale_historical_instances(client, db_session) 
     )
     assert instances.status_code == 200
     instances_payload = instances.json()
-    assert instances_payload["total"] == 3
+    assert instances_payload["total"] == 2
     assert {item["node_name"] for item in instances_payload["items"]} == {
         "vm-online",
         "vm-recent-offline",
-        "vm-stale-history",
     }
+    assert [item["node_name"] for item in instances_payload["items"]] == [
+        "vm-online",
+        "vm-recent-offline",
+    ]
     assert any(
         item["instance_id"] == str(recent_online.instance_id)
         for item in instances_payload["items"]

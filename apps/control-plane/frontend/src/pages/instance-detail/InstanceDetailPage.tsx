@@ -523,18 +523,19 @@ function prioritizeInstances(instances: InstanceSummary[]) {
 }
 
 function getInstancePriority(instance: InstanceSummary) {
-  if (instance.instance_id) {
-    if (instance.connectivity !== "online") {
+  if (instance.connectivity === "online") {
+    if (instance.status === "error" || instance.status === "degraded") {
       return 3;
     }
-    if (instance.status === "error" || instance.status === "degraded") {
+    if (instance.active_session === null) {
       return 2;
     }
-    if (instance.active_session === null) {
-      return 1;
-    }
+    return 1;
   }
-  return 0;
+  if (instance.connectivity === "offline") {
+    return 0;
+  }
+  return -1;
 }
 
 function deriveInstanceStatus(instance: InstanceSummary): "online" | "offline" | "degraded" {
