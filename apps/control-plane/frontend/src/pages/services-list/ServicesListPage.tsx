@@ -6,7 +6,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useServicesQuery } from "../../features/services/queries";
 import type { ServiceSummary } from "../../lib/api/types";
-import { formatDateTime, formatIdentifierPreview, formatRelativeTime } from "../../lib/formatters";
+import { formatDateTime, formatRelativeTime } from "../../lib/formatters";
 import { servicePath } from "../../lib/routes";
 
 export function ServicesListPage() {
@@ -21,7 +21,7 @@ export function ServicesListPage() {
   const deferredSearch = useDeferredValue(search);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
 
-  const { data, isPending, error, refetch } = useServicesQuery(
+  const { data, isPending, error } = useServicesQuery(
     selectedEnvironment === "all" ? undefined : selectedEnvironment,
   );
 
@@ -93,9 +93,6 @@ export function ServicesListPage() {
             />
           </label>
 
-          <button className="ref-primary-button" onClick={() => void refetch()} type="button">
-            {isZh ? "刷新目录" : "Refresh"}
-          </button>
         </div>
       </section>
 
@@ -137,16 +134,22 @@ export function ServicesListPage() {
             <span>{isZh ? "最近同步" : "Last sync"}</span>
             <span>{isZh ? "部署版本" : "Deployment"}</span>
             <span>{isZh ? "实例数" : "Instances"}</span>
-            <span>{isZh ? "拓扑" : "Topology"}</span>
-            <span>{isZh ? "操作" : "Action"}</span>
           </div>
 
           <div className="ref-table-body">
             {sortedItems.map((service) => (
               <article className="ref-table-row" key={`${service.environment}:${service.name}`}>
                 <div className="ref-service-cell">
-                  <strong>{service.name}</strong>
-                  <span>{t(`environment.${service.environment}`)}</span>
+                  <Link
+                    className="ref-service-link"
+                    to={servicePath(service.name, {
+                      environment: service.environment,
+                      lookback_minutes: 60,
+                    })}
+                  >
+                    <strong>{service.name}</strong>
+                    <span>{t(`environment.${service.environment}`)}</span>
+                  </Link>
                 </div>
 
                 <div className="ref-status-cell">
@@ -178,27 +181,6 @@ export function ServicesListPage() {
                   <strong>
                     {isZh ? "活跃" : "Live"}: {service.online_instance_count}/{service.instance_count}
                   </strong>
-                </div>
-
-                <div className="ref-meta-cell">
-                  <strong title={service.latest_topology_hash ?? t("common.topologyUnavailable")}>
-                    {formatIdentifierPreview(service.latest_topology_hash, 12, 8)}
-                  </strong>
-                </div>
-
-                <div className="ref-action-cell">
-                  <Link
-                    className="ref-detail-button"
-                    to={servicePath(service.name, {
-                      environment: service.environment,
-                      lookback_minutes: 60,
-                    })}
-                  >
-                    {isZh ? "详情" : "Detail"}
-                  </Link>
-                  <span className="ref-menu-dots" aria-hidden="true">
-                    •••
-                  </span>
                 </div>
               </article>
             ))}

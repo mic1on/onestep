@@ -127,11 +127,17 @@ export function ServiceDetailPage() {
   return (
     <div className="ref-console-page ref-detail-page">
       <section className="ref-detail-topbar">
+        <div className="ref-detail-topbar-rail">
+          <Link className="ref-back-button" to={`/services?environment=${environment}`}>
+            <span aria-hidden="true" className="ref-back-button-icon">
+              ←
+            </span>
+            <span className="ref-back-button-label">{isZh ? "返回" : "Back"}</span>
+          </Link>
+        </div>
+
         <div className="ref-detail-topbar-main">
           <div className="ref-detail-title">
-            <Link className="ref-back-button" to={`/services?environment=${environment}`}>
-              {isZh ? "‹" : "‹"}
-            </Link>
             <div className="ref-detail-title-copy">
               <div className="ref-detail-title-row">
                 <h2>{serviceName}</h2>

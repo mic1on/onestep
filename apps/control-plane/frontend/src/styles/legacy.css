@@ -1986,9 +1986,9 @@ body {
 .shell-env-select select:focus,
 .fleet-filter-select select:focus,
 .task-command-number-field input:focus {
-  outline: 2px solid rgba(59, 130, 246, 0.18);
+  outline: 2px solid rgba(17, 18, 20, 0.14);
   outline-offset: 0;
-  border-color: rgba(59, 130, 246, 0.28);
+  border-color: rgba(17, 18, 20, 0.2);
 }
 
 .shell-env-select {
@@ -2040,7 +2040,7 @@ body {
 
 .shell-status-pill-live {
   color: var(--accent-strong);
-  background: rgba(219, 234, 254, 0.85);
+  background: rgba(17, 18, 20, 0.06);
 }
 
 .page-shell {
@@ -2129,8 +2129,8 @@ body {
 }
 
 .button-danger {
-  border-color: rgba(220, 38, 38, 0.18);
-  background: rgba(254, 226, 226, 0.8);
+  border-color: rgba(17, 18, 20, 0.14);
+  background: rgba(17, 18, 20, 0.06);
   color: var(--danger);
 }
 
@@ -2773,8 +2773,8 @@ body {
 
 .fanout-instance-option.active,
 .task-control-instance-card.active {
-  border-color: rgba(59, 130, 246, 0.28);
-  background: rgba(219, 234, 254, 0.56);
+  border-color: rgba(17, 18, 20, 0.16);
+  background: rgba(17, 18, 20, 0.05);
 }
 
 .fanout-summary-grid {
@@ -2861,13 +2861,13 @@ body {
 }
 
 .inline-feedback-success {
-  background: rgba(220, 252, 231, 0.82);
-  color: #166534;
+  background: rgba(53, 58, 65, 0.12);
+  color: #31353c;
 }
 
 .inline-feedback-error {
-  background: rgba(254, 226, 226, 0.82);
-  color: #991b1b;
+  background: rgba(17, 18, 20, 0.08);
+  color: #191b1e;
 }
 
 .two-column-grid {
@@ -2900,8 +2900,9 @@ body {
   margin: 0;
   padding: 16px;
   border-radius: 18px;
-  background: #0f172a;
-  color: #e2e8f0;
+  border: 1px solid rgba(17, 18, 20, 0.08);
+  background: #17191d;
+  color: #eef0f2;
   overflow: auto;
   white-space: pre-wrap;
   font-family: "IBM Plex Mono", monospace;
@@ -2918,15 +2919,15 @@ body {
   justify-content: center;
   width: 34px;
   height: 34px;
-  border: 1px solid rgba(220, 38, 38, 0.16);
+  border: 1px solid rgba(17, 18, 20, 0.16);
   border-radius: var(--radius-sm);
-  background: rgba(254, 226, 226, 0.7);
+  background: rgba(17, 18, 20, 0.08);
   color: var(--danger);
   box-shadow: none;
 }
 
 .traceback-toggle.is-active {
-  background: rgba(254, 202, 202, 0.9);
+  background: rgba(17, 18, 20, 0.14);
 }
 
 .status-badge {
@@ -2943,28 +2944,28 @@ body {
 }
 
 .badge-success {
-  background: rgba(220, 252, 231, 0.9);
-  color: #166534;
+  background: rgba(53, 58, 65, 0.12);
+  color: #31353c;
 }
 
 .badge-warning {
-  background: rgba(254, 243, 199, 0.92);
-  color: #92400e;
+  background: rgba(93, 98, 107, 0.16);
+  color: #50555d;
 }
 
 .badge-danger {
-  background: rgba(254, 226, 226, 0.92);
-  color: #991b1b;
+  background: rgba(17, 18, 20, 0.12);
+  color: #191b1e;
 }
 
 .badge-accent {
-  background: rgba(219, 234, 254, 0.92);
-  color: #1d4ed8;
+  background: rgba(29, 31, 35, 0.1);
+  color: #111214;
 }
 
 .badge-muted {
-  background: rgba(226, 232, 240, 0.92);
-  color: #475569;
+  background: rgba(125, 130, 138, 0.16);
+  color: #5c626c;
 }
 
 .api-chip,
@@ -2983,7 +2984,7 @@ body {
 .inline-link {
   color: var(--accent-strong);
   text-decoration: underline;
-  text-decoration-color: rgba(59, 130, 246, 0.28);
+  text-decoration-color: rgba(17, 18, 20, 0.24);
 }
 
 .auth-shell {
@@ -3518,8 +3519,8 @@ body::before {
 }
 
 .service-title-chip-environment {
-  border-color: rgba(0, 113, 227, 0.18);
-  color: #005bb8;
+  border-color: rgba(17, 18, 20, 0.14);
+  color: var(--accent-strong);
 }
 
 .service-title-chip-meta {
@@ -3528,7 +3529,7 @@ body::before {
 }
 
 .service-title-chip.is-danger {
-  border-color: rgba(217, 45, 32, 0.18);
+  border-color: rgba(17, 18, 20, 0.16);
   color: var(--danger);
 }
 
@@ -3981,15 +3982,15 @@ body::before {
 }
 
 .task-history-legend-swatch.is-success {
-  background: linear-gradient(180deg, rgba(47, 139, 105, 0.95), rgba(47, 139, 105, 0.76));
+  background: linear-gradient(180deg, rgba(65, 70, 78, 0.95), rgba(65, 70, 78, 0.76));
 }
 
 .task-history-legend-swatch.is-danger {
-  background: linear-gradient(180deg, rgba(188, 89, 67, 0.95), rgba(188, 89, 67, 0.76));
+  background: linear-gradient(180deg, rgba(147, 152, 160, 0.95), rgba(147, 152, 160, 0.76));
 }
 
 .task-history-legend-swatch.is-latency {
-  background: linear-gradient(180deg, rgba(13, 78, 73, 0.95), rgba(21, 111, 105, 0.72));
+  background: linear-gradient(180deg, rgba(17, 18, 20, 0.95), rgba(56, 60, 67, 0.72));
 }
 
 .task-history-chart-frame {
@@ -4019,11 +4020,11 @@ body::before {
 }
 
 .task-history-bar-success {
-  fill: rgba(47, 139, 105, 0.9);
+  fill: rgba(65, 70, 78, 0.9);
 }
 
 .task-history-bar-danger {
-  fill: rgba(188, 89, 67, 0.86);
+  fill: rgba(147, 152, 160, 0.86);
 }
 
 .task-history-line {
@@ -4126,7 +4127,7 @@ body::before {
 }
 
 .task-list-metric.is-danger strong {
-  color: var(--danger);
+  color: var(--text);
 }
 
 .task-list-actions {
@@ -4353,7 +4354,7 @@ body::before,
 .button-link:hover,
 .segmented-option.active {
   transform: none;
-  border-color: rgba(13, 78, 73, 0.2);
+  border-color: rgba(17, 18, 20, 0.14);
   background: var(--surface-muted);
   color: var(--accent-strong);
   box-shadow: none;
@@ -4378,16 +4379,16 @@ body::before,
 }
 
 .service-command-tab.active {
-  border-color: rgba(13, 78, 73, 0.22);
+  border-color: rgba(17, 18, 20, 0.16);
 }
 
 .task-detail-summary-grid .stat-card-success {
-  border-color: rgba(47, 139, 105, 0.22);
+  border-color: rgba(79, 84, 92, 0.22);
 }
 
 .task-detail-summary-grid .stat-card-danger,
 .task-list-metric.is-danger {
-  border-color: rgba(188, 89, 67, 0.24);
+  border-color: rgba(17, 18, 20, 0.18);
 }
 
 .service-title-chip,
@@ -4433,8 +4434,8 @@ body::before,
 }
 
 .button-danger:hover {
-  border-color: rgba(188, 89, 67, 0.24);
-  background: rgba(188, 89, 67, 0.08);
+  border-color: rgba(17, 18, 20, 0.18);
+  background: rgba(17, 18, 20, 0.06);
   color: var(--danger);
 }
 
@@ -4624,7 +4625,7 @@ body {
   min-width: 38px;
   height: 32px;
   padding: 0 12px;
-  border: 1px solid rgba(0, 113, 227, 0.18);
+  border: 1px solid rgba(17, 18, 20, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.86);
   color: var(--accent-strong);
@@ -4685,8 +4686,8 @@ body {
 
 .shell-nav-link:hover,
 .shell-nav-link.active {
-  border-color: rgba(0, 113, 227, 0.14);
-  background: rgba(240, 248, 255, 0.8);
+  border-color: rgba(17, 18, 20, 0.12);
+  background: rgba(17, 18, 20, 0.05);
   color: var(--accent-strong);
 }
 

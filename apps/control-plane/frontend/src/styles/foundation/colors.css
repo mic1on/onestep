@@ -1,29 +1,29 @@
 :root {
   color-scheme: light;
 
-  --color-neutral-950: #101623;
-  --color-neutral-900: #14202b;
-  --color-neutral-800: #263447;
-  --color-neutral-700: #4a596c;
-  --color-neutral-600: #677684;
-  --color-neutral-500: #8090a0;
-  --color-neutral-300: rgba(20, 32, 43, 0.14);
-  --color-neutral-200: rgba(20, 32, 43, 0.08);
-  --color-neutral-100: #f3f6fa;
-  --color-neutral-50: #f8fafd;
+  --color-neutral-950: #0f1012;
+  --color-neutral-900: #16181b;
+  --color-neutral-800: #292c31;
+  --color-neutral-700: #474b53;
+  --color-neutral-600: #676c75;
+  --color-neutral-500: #8b9098;
+  --color-neutral-300: rgba(15, 16, 18, 0.16);
+  --color-neutral-200: rgba(15, 16, 18, 0.08);
+  --color-neutral-100: #f0f1f3;
+  --color-neutral-50: #f7f7f8;
 
-  --color-blue-600: #0058cc;
-  --color-blue-500: #0071e3;
-  --color-blue-100: rgba(0, 113, 227, 0.12);
+  --color-blue-600: #111214;
+  --color-blue-500: #1a1c20;
+  --color-blue-100: rgba(17, 18, 20, 0.08);
 
-  --color-green-500: #2f9d75;
-  --color-amber-500: #d18a2b;
-  --color-red-500: #d84d42;
+  --color-green-500: #363a41;
+  --color-amber-500: #5b6068;
+  --color-red-500: #24272c;
 
-  --color-surface-canvas: #eef3f8;
+  --color-surface-canvas: #eceef1;
   --color-surface-base: #ffffff;
-  --color-surface-elevated: rgba(255, 255, 255, 0.82);
-  --color-surface-muted: #f3f6fa;
+  --color-surface-elevated: rgba(255, 255, 255, 0.84);
+  --color-surface-muted: #f2f3f5;
 
   --color-text-primary: var(--color-neutral-900);
   --color-text-secondary: var(--color-neutral-600);
@@ -38,13 +38,13 @@
   --color-border-strong: var(--color-neutral-300);
 
   --gradient-app-canvas:
-    radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.12), transparent 24%),
-    radial-gradient(circle at 100% 0%, rgba(255, 255, 255, 0.78), transparent 34%),
-    linear-gradient(180deg, #f8fafd 0%, #eef3f8 52%, #e7edf5 100%);
+    radial-gradient(circle at 0% 0%, rgba(17, 18, 20, 0.1), transparent 24%),
+    radial-gradient(circle at 100% 0%, rgba(255, 255, 255, 0.76), transparent 34%),
+    linear-gradient(180deg, #f7f7f8 0%, #eceef1 52%, #e4e7eb 100%);
   --gradient-surface-glass:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 249, 252, 0.84)),
-    radial-gradient(circle at 100% 0%, rgba(214, 225, 243, 0.18), transparent 46%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(246, 247, 248, 0.86)),
+    radial-gradient(circle at 100% 0%, rgba(17, 18, 20, 0.06), transparent 46%);
   --gradient-surface-panel:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 253, 0.95)),
-    radial-gradient(circle at 100% 0%, rgba(214, 225, 243, 0.16), transparent 48%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 248, 249, 0.95)),
+    radial-gradient(circle at 100% 0%, rgba(17, 18, 20, 0.05), transparent 48%);
 }

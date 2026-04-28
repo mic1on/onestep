@@ -1,0 +1,48 @@
+services:
+  api:
+    image: ${ONESTEP_CP_API_IMAGE}
+    restart: unless-stopped
+    environment:
+      ONESTEP_CP_APP_ENV: ${ONESTEP_CP_APP_ENV:-docker}
+      ONESTEP_CP_DATABASE_URL: postgresql+psycopg://${ONESTEP_CP_POSTGRES_USER:-postgres}:${ONESTEP_CP_POSTGRES_PASSWORD:-postgres}@10.10.8.230:5432/${ONESTEP_CP_POSTGRES_DB:-onestep_control_plane}
+      ONESTEP_CP_INGEST_TOKENS: ${ONESTEP_CP_INGEST_TOKENS:?set ONESTEP_CP_INGEST_TOKENS}
+      ONESTEP_CP_CONSOLE_AUTH_USERNAME: ${ONESTEP_CP_CONSOLE_AUTH_USERNAME:?set ONESTEP_CP_CONSOLE_AUTH_USERNAME}
+      ONESTEP_CP_CONSOLE_AUTH_PASSWORD: ${ONESTEP_CP_CONSOLE_AUTH_PASSWORD:?set ONESTEP_CP_CONSOLE_AUTH_PASSWORD}
+      ONESTEP_CP_CORS_ALLOW_ORIGINS: ${ONESTEP_CP_CORS_ALLOW_ORIGINS:-}
+      ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S: ${ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S:-90}
+      ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S: ${ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S:-3600}
+      TZ: ${ONESTEP_CP_TIMEZONE:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${ONESTEP_CP_API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  frontend:
+    image: ${ONESTEP_CP_FRONTEND_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      ONESTEP_CP_UI_API_BASE_URL: ${ONESTEP_CP_UI_API_BASE_URL:-/}
+    ports:
+      - "${ONESTEP_CP_FRONTEND_PORT:-4173}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  onestep-control-plane-postgres-data:

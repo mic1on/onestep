@@ -149,11 +149,17 @@ export function InstanceDetailPage() {
   return (
     <div className="ref-console-page ref-detail-page">
       <section className="ref-detail-topbar">
+        <div className="ref-detail-topbar-rail">
+          <Link className="ref-back-button" to={buildServiceViewHref("instances")}>
+            <span aria-hidden="true" className="ref-back-button-icon">
+              ←
+            </span>
+            <span className="ref-back-button-label">{isZh ? "返回" : "Back"}</span>
+          </Link>
+        </div>
+
         <div className="ref-detail-topbar-main">
           <div className="ref-detail-title">
-            <Link className="ref-back-button" to={buildServiceViewHref("instances")}>
-              {isZh ? "‹" : "‹"}
-            </Link>
             <div className="ref-detail-title-copy">
               <div className="ref-detail-title-row">
                 <h2>{instance?.node_name ?? resolvedInstanceId}</h2>
