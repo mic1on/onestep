@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
-import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useServicesQuery } from "../../features/services/queries";
 import type { ServiceSummary } from "../../lib/api/types";
 import { formatDateTime, formatRelativeTime } from "../../lib/formatters";
@@ -129,7 +128,6 @@ export function ServicesListPage() {
         <section className="ref-table-card">
           <div className="ref-table-head">
             <span>{isZh ? "名称" : "Name"}</span>
-            <span>{isZh ? "状态" : "Status"}</span>
             <span>{isZh ? "创建时间" : "Created"}</span>
             <span>{isZh ? "最近活跃" : "Last active"}</span>
             <span>{isZh ? "部署版本" : "Deployment"}</span>
@@ -152,20 +150,13 @@ export function ServicesListPage() {
                   </Link>
                 </div>
 
-                <div className="ref-status-cell">
-                  <div className="ref-status-copy">
-                    <StatusBadge {...getServiceBadgeProps(service, isZh)} />
-                    <span>{getServiceStatusReason(service, isZh)}</span>
-                  </div>
-                </div>
-
                 <div className="ref-meta-cell">
                   <strong>{formatDateTime(service.created_at)}</strong>
                 </div>
 
                 <div className="ref-meta-cell">
-                  <strong title={formatDateTime(getServiceActivityAt(service))}>
-                    {formatRelativeTime(getServiceActivityAt(service))}
+                  <strong title={formatDateTime(service.last_seen_at)}>
+                    {formatRelativeTime(service.last_seen_at)}
                   </strong>
                   <span>{getActivityHint(service, isZh)}</span>
                 </div>
@@ -247,65 +238,12 @@ function compareServicesForSurface(left: ServiceSummary, right: ServiceSummary) 
     return attentionDelta;
   }
 
-  const lastActivityDelta = compareDateDesc(getServiceActivityAt(left), getServiceActivityAt(right));
+  const lastActivityDelta = compareDateDesc(left.last_seen_at, right.last_seen_at);
   if (lastActivityDelta !== 0) {
     return lastActivityDelta;
   }
 
   return left.name.localeCompare(right.name);
-}
-
-function getServiceBadgeProps(service: ServiceSummary, isZh: boolean) {
-  if (service.instance_count === 0) {
-    return {
-      label: isZh ? "无实例" : "No instances",
-      value: "unknown" as const,
-    };
-  }
-
-  if (service.online_instance_count === 0) {
-    return {
-      label: isZh ? "全部离线" : "All offline",
-      value: "offline" as const,
-    };
-  }
-
-  if (isServiceStale(service.latest_sync_at)) {
-    return {
-      label: isZh ? "同步旧" : "Stale sync",
-      value: "degraded" as const,
-    };
-  }
-
-  return {
-    label: isZh ? "运行中" : "Running",
-    value: "online" as const,
-  };
-}
-
-function getServiceStatusReason(service: ServiceSummary, isZh: boolean) {
-  if (service.instance_count === 0) {
-    return isZh ? "还没有实例上报" : "No instances reported yet";
-  }
-  if (service.online_instance_count === 0) {
-    return isZh ? "当前没有在线实例" : "No online instances";
-  }
-
-  const reasons: string[] = [];
-  if (service.latest_sync_at === null) {
-    reasons.push(isZh ? "未收到拓扑同步" : "No topology sync received");
-  } else if (isServiceStale(service.latest_sync_at)) {
-    reasons.push(
-      isZh
-        ? `拓扑同步 ${formatRelativeTime(service.latest_sync_at)}`
-        : `Topology sync ${formatRelativeTime(service.latest_sync_at)}`,
-    );
-  }
-
-  if (reasons.length > 0) {
-    return reasons.join(" · ");
-  }
-  return isZh ? "服务活跃，拓扑同步正常" : "Service is active and topology sync is fresh";
 }
 
 function getCoverageBarClass(service: ServiceSummary) {
@@ -318,23 +256,11 @@ function getCoverageBarClass(service: ServiceSummary) {
   return "ref-usage-fill is-empty";
 }
 
-function getServiceActivityAt(service: ServiceSummary) {
-  const lastSeenValue = service.last_seen_at ? Date.parse(service.last_seen_at) : 0;
-  const latestSyncValue = service.latest_sync_at ? Date.parse(service.latest_sync_at) : 0;
-
-  if (lastSeenValue === 0 && latestSyncValue === 0) {
-    return null;
-  }
-  return lastSeenValue >= latestSyncValue ? service.last_seen_at : service.latest_sync_at;
-}
-
 function getActivityHint(service: ServiceSummary, isZh: boolean) {
-  if (service.latest_sync_at === null) {
-    return isZh ? "未收到拓扑同步" : "No topology sync";
+  if (service.last_seen_at === null) {
+    return isZh ? "实例尚未上报活跃时间" : "No instance activity reported yet";
   }
-  return isZh
-    ? `拓扑同步 ${formatRelativeTime(service.latest_sync_at)}`
-    : `Topology sync ${formatRelativeTime(service.latest_sync_at)}`;
+  return formatDateTime(service.last_seen_at);
 }
 
 function isServiceStale(value: string | null) {

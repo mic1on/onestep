@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Panel } from "../../components/ui/Panel";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
@@ -33,12 +34,14 @@ import { instancePath, servicePath, taskPath } from "../../lib/routes";
 import type { AgentSessionSummary, InstanceSummary, TaskDashboardSummary } from "../../lib/api/types";
 
 type ServiceView = "overview" | "instances" | "tasks" | "commands";
+type TaskActivityTab = "events" | "instances" | "commands" | "sessions";
 
 export function TaskDetailPage() {
   const { i18n, t } = useTranslation();
   const { serviceName, taskName } = useParams<{ serviceName: string; taskName: string }>();
   const [searchParams] = useSearchParams();
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
+  const [activityTab, setActivityTab] = useState<TaskActivityTab>("events");
 
   if (!serviceName || !taskName) {
     return <EmptyState title={t("taskDetail.missingTitle")} body={t("taskDetail.missingBody")} />;
@@ -69,13 +72,6 @@ export function TaskDetailPage() {
   const summary = payload?.summary;
   const tasks = prioritizeTasks(tasksQuery.data?.items ?? []);
   const taskControlStates = payload?.task_control.instances ?? [];
-  const eventCountTotal = summary
-    ? summary.event_counts.failed +
-      summary.event_counts.retried +
-      summary.event_counts.dead_lettered +
-      summary.event_counts.cancelled +
-      summary.event_counts.succeeded
-    : 0;
   const controllableInstances = taskControlStates.filter(isControllableInstance);
   const commands = commandsQuery.data?.items ?? [];
   const taskCommands = commands.filter(
@@ -89,6 +85,12 @@ export function TaskDetailPage() {
   const boundSessions = sortBoundSessions(sessionsQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
   const taskStatus: "ok" | "warning" | "degraded" = summary ? deriveTaskStatus(summary) : "ok";
   const retrySummary = summary ? formatRetryPolicySummary(summary.retry_policy, isZh) : t("common.none");
+  const activityTabs: { label: string; value: TaskActivityTab }[] = [
+    { label: t("taskDetail.recentEventsTitle"), value: "events" },
+    { label: t("taskDetail.boundInstancesTitle"), value: "instances" },
+    { label: t("taskDetail.recentCommandsTitle"), value: "commands" },
+    { label: t("taskDetail.sessionsTitle"), value: "sessions" },
+  ];
 
   function buildServiceViewHref(view: ServiceView) {
     return servicePath(resolvedServiceName, {
@@ -186,6 +188,9 @@ export function TaskDetailPage() {
               </section>
 
               <section className="ref-task-detail-pane">
+                <div aria-hidden="true" className="ref-section-headline ref-section-headline-ghost">
+                  <h3>{isZh ? "任务列表" : "Tasks"}</h3>
+                </div>
                 <section className="ref-summary-strip">
                   <SummaryChip label={t("taskDetail.succeeded")} tone="success" value={formatCount(summary.succeeded)} />
                   <SummaryChip
@@ -197,61 +202,29 @@ export function TaskDetailPage() {
                   <SummaryChip label={t("taskDetail.maxP95")} tone="default" value={formatDurationMs(summary.max_p95_duration_ms)} />
                 </section>
 
-                <section className="ref-overview-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={isZh ? "当前任务的定义、输入来源和运行约束。" : "Task definition, source, and current execution constraints."}
-                    title={isZh ? "任务配置" : "Task configuration"}
-                  >
-                    <div className="ref-info-grid">
-                      <InfoPair label={t("taskDetail.description")} value={summary.description ?? t("common.notAvailable")} />
-                      <InfoPair
-                        label={t("taskDetail.source")}
-                        value={<TaskSourceValue emptyLabel={t("common.notAvailable")} isZh={isZh} task={summary} />}
-                      />
-                      <InfoPair
-                        label={t("taskDetail.emit")}
-                        value={<TaskEmitValue emit={summary.emit} emptyLabel={t("common.none")} isZh={isZh} />}
-                      />
-                      <InfoPair label={t("taskDetail.concurrency")} value={String(summary.concurrency ?? t("common.notAvailable"))} />
-                      <InfoPair
-                        label={t("taskDetail.timeout")}
-                        value={summary.timeout_s ? `${summary.timeout_s}s` : t("common.none")}
-                      />
-                      <InfoPair label={t("taskDetail.retryPolicy")} value={retrySummary} />
-                      <InfoPair label={t("taskDetail.lastEvent")} value={formatDateTime(summary.last_event_at)} />
-                    </div>
-                  </Panel>
-
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={isZh ? "仅展示有真实来源的任务运行信号。" : "Only signals backed by real task data are shown here."}
-                    title={isZh ? "任务运行摘要" : "Task runtime signals"}
-                  >
-                    <div className="ref-signal-grid">
-                      <SignalCard
-                        label={t("taskDetail.eventTotal")}
-                        note={isZh ? "事件总量" : "Current event volume"}
-                        value={formatCount(eventCountTotal)}
-                      />
-                      <SignalCard
-                        label={t("taskDetail.windowCount")}
-                        note={isZh ? "指标窗口数量" : "Metric windows in scope"}
-                        value={formatCount(summary.metric_window_count)}
-                      />
-                      <SignalCard
-                        label={t("taskDetail.avgDuration")}
-                        note={isZh ? "基于窗口聚合" : "Weighted from metric windows"}
-                        value={formatDurationMs(summary.weighted_avg_duration_ms)}
-                      />
-                      <SignalCard
-                        label={t("taskDetail.boundInstancesTitle")}
-                        note={isZh ? "当前绑定实例" : "Instances currently reporting this task"}
-                        value={String(taskControlStates.length)}
-                      />
-                    </div>
-                  </Panel>
-                </section>
+                <Panel
+                  className="ref-card-panel"
+                  subtitle={summary.description ?? t("common.notAvailable")}
+                  title={isZh ? "任务配置" : "Task configuration"}
+                >
+                  <div className="ref-info-grid">
+                    <InfoPair
+                      label={t("taskDetail.source")}
+                      value={<TaskSourceValue emptyLabel={t("common.notAvailable")} isZh={isZh} task={summary} />}
+                    />
+                    <InfoPair
+                      label={t("taskDetail.emit")}
+                      value={<TaskEmitValue emit={summary.emit} emptyLabel={t("common.none")} isZh={isZh} />}
+                    />
+                    <InfoPair label={t("taskDetail.concurrency")} value={String(summary.concurrency ?? t("common.notAvailable"))} />
+                    <InfoPair
+                      label={t("taskDetail.timeout")}
+                      value={summary.timeout_s ? `${summary.timeout_s}s` : t("common.none")}
+                    />
+                    <InfoPair label={t("taskDetail.retryPolicy")} value={retrySummary} />
+                    <InfoPair label={t("taskDetail.lastEvent")} value={formatDateTime(summary.last_event_at)} />
+                  </div>
+                </Panel>
 
                 {controllableInstances.length > 0 ? (
                   <Panel
@@ -268,71 +241,79 @@ export function TaskDetailPage() {
                   </Panel>
                 ) : null}
 
-                <section className="ref-access-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("taskDetail.recentCommandsSubtitle")}
-                    title={t("taskDetail.recentCommandsTitle")}
-                  >
-                    <CommandFeed
-                      commands={taskCommands.slice(0, 4)}
-                      emptyBody={t("taskDetail.noCommandsBody")}
-                      emptyTitle={t("taskDetail.noCommandsTitle")}
-                      environment={environment}
-                      lookbackMinutes={lookbackMinutes}
-                      serviceName={resolvedServiceName}
+                <details className="ref-collapse-card">
+                  <summary>
+                    <strong>{isZh ? "任务活动" : "Task activity"}</strong>
+                    <span>
+                      {isZh
+                        ? "整合最近事件、绑定实例、最近命令和关联会话，默认收起。"
+                        : "Collapsed by default with recent events, bound instances, commands, and sessions."}
+                    </span>
+                  </summary>
+                  <div className="ref-collapse-body ref-task-activity-stack">
+                    <SegmentedControl
+                      ariaLabel={isZh ? "任务活动视图" : "Task activity view"}
+                      onChange={setActivityTab}
+                      options={activityTabs}
+                      value={activityTab}
                     />
-                  </Panel>
 
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("taskDetail.sessionsSubtitle")}
-                    title={t("taskDetail.sessionsTitle")}
-                  >
-                    <SessionList
-                      emptyBody={t("taskDetail.noSessionsBody")}
-                      emptyTitle={t("taskDetail.noSessionsTitle")}
-                      sessions={boundSessions}
-                    />
-                  </Panel>
-                </section>
+                    <section className="ref-task-activity-panel">
+                      <header className="ref-task-activity-header">
+                        <div>
+                          <h3>{getTaskActivityTitle(activityTab, t)}</h3>
+                          <p>{getTaskActivitySubtitle(activityTab, t)}</p>
+                        </div>
+                      </header>
 
-                <section className="ref-access-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("taskDetail.recentEventsSubtitle")}
-                    title={t("taskDetail.recentEventsTitle")}
-                  >
-                    {payload.recent_events.length ? (
-                      <div className="stack-list">
-                        {payload.recent_events.map((event) => (
-                          <article className="event-row" key={event.event_id}>
-                            <div>
-                              <strong>{t(`eventKind.${event.kind}`, { defaultValue: event.kind })}</strong>
-                              <p>{formatDateTime(event.occurred_at)}</p>
-                            </div>
-                            <TaskEventFailureDetails event={event} />
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <EmptyState title={t("taskDetail.noEventsTitle")} body={t("taskDetail.noEventsBody")} />
-                    )}
-                  </Panel>
+                      {activityTab === "events" ? (
+                        payload.recent_events.length ? (
+                          <div className="stack-list">
+                            {payload.recent_events.map((event) => (
+                              <article className="event-row" key={event.event_id}>
+                                <div>
+                                  <strong>{t(`eventKind.${event.kind}`, { defaultValue: event.kind })}</strong>
+                                  <p>{formatDateTime(event.occurred_at)}</p>
+                                </div>
+                                <TaskEventFailureDetails event={event} />
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <EmptyState title={t("taskDetail.noEventsTitle")} body={t("taskDetail.noEventsBody")} />
+                        )
+                      ) : null}
 
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("taskDetail.boundInstancesSubtitle")}
-                    title={t("taskDetail.boundInstancesTitle")}
-                  >
-                    <ServiceInstancesList
-                      environment={environment}
-                      instances={boundInstances}
-                      lookbackMinutes={lookbackMinutes}
-                      serviceName={resolvedServiceName}
-                    />
-                  </Panel>
-                </section>
+                      {activityTab === "instances" ? (
+                        <ServiceInstancesList
+                          environment={environment}
+                          instances={boundInstances}
+                          lookbackMinutes={lookbackMinutes}
+                          serviceName={resolvedServiceName}
+                        />
+                      ) : null}
+
+                      {activityTab === "commands" ? (
+                        <CommandFeed
+                          commands={taskCommands.slice(0, 4)}
+                          emptyBody={t("taskDetail.noCommandsBody")}
+                          emptyTitle={t("taskDetail.noCommandsTitle")}
+                          environment={environment}
+                          lookbackMinutes={lookbackMinutes}
+                          serviceName={resolvedServiceName}
+                        />
+                      ) : null}
+
+                      {activityTab === "sessions" ? (
+                        <SessionList
+                          emptyBody={t("taskDetail.noSessionsBody")}
+                          emptyTitle={t("taskDetail.noSessionsTitle")}
+                          sessions={boundSessions}
+                        />
+                      ) : null}
+                    </section>
+                  </div>
+                </details>
 
                 <Panel
                   className="ref-card-panel"
@@ -403,22 +384,30 @@ function InfoPair({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function SignalCard({
-  label,
-  value,
-  note,
-}: {
-  label: string;
-  value: string;
-  note?: string;
-}) {
-  return (
-    <div className="ref-signal-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {note ? <p>{note}</p> : null}
-    </div>
-  );
+function getTaskActivityTitle(activityTab: TaskActivityTab, t: ReturnType<typeof useTranslation>["t"]) {
+  if (activityTab === "instances") {
+    return t("taskDetail.boundInstancesTitle");
+  }
+  if (activityTab === "commands") {
+    return t("taskDetail.recentCommandsTitle");
+  }
+  if (activityTab === "sessions") {
+    return t("taskDetail.sessionsTitle");
+  }
+  return t("taskDetail.recentEventsTitle");
+}
+
+function getTaskActivitySubtitle(activityTab: TaskActivityTab, t: ReturnType<typeof useTranslation>["t"]) {
+  if (activityTab === "instances") {
+    return t("taskDetail.boundInstancesSubtitle");
+  }
+  if (activityTab === "commands") {
+    return t("taskDetail.recentCommandsSubtitle");
+  }
+  if (activityTab === "sessions") {
+    return t("taskDetail.sessionsSubtitle");
+  }
+  return t("taskDetail.recentEventsSubtitle");
 }
 
 function deriveTaskStatus(summary: TaskDashboardSummary) {

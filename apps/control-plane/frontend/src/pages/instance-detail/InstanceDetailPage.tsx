@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Panel } from "../../components/ui/Panel";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
@@ -31,6 +32,7 @@ import { parseEnvironment, parseLookback } from "../../lib/params";
 import { instancePath, servicePath } from "../../lib/routes";
 
 type ServiceView = "overview" | "instances" | "tasks" | "commands";
+type InstanceActivityTab = "runtime" | "control" | "commands" | "metrics" | "events";
 
 export function InstanceDetailPage() {
   const { i18n, t } = useTranslation();
@@ -40,6 +42,7 @@ export function InstanceDetailPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [reasonDialogKind, setReasonDialogKind] = useState<AgentCommandKind | null>(null);
   const [deliveryModeOverride, setDeliveryModeOverride] = useState<AgentCommandDeliveryMode | null>(null);
+  const [activityTab, setActivityTab] = useState<InstanceActivityTab>("runtime");
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
 
   if (!serviceName || !instanceId) {
@@ -73,6 +76,13 @@ export function InstanceDetailPage() {
     deliveryModeOverride ?? (activeSession ? "dispatch_now_only" : "queue_until_reconnect");
   const runtimeSignals = payload && instance ? buildInstanceRuntimeSignals(payload, instance, isZh) : [];
   const instanceStatus = instance ? deriveInstanceStatus(instance) : "offline";
+  const activityTabs: Array<{ label: string; value: InstanceActivityTab }> = [
+    { label: t("instanceDetail.activityTabs.runtime"), value: "runtime" },
+    { label: t("instanceDetail.activityTabs.control"), value: "control" },
+    { label: t("instanceDetail.activityTabs.commands"), value: "commands" },
+    { label: t("instanceDetail.activityTabs.metrics"), value: "metrics" },
+    { label: t("instanceDetail.activityTabs.events"), value: "events" },
+  ];
 
   function buildServiceViewHref(view: ServiceView) {
     return servicePath(resolvedServiceName, {
@@ -237,161 +247,154 @@ export function InstanceDetailPage() {
                   <SummaryChip label={t("instanceDetail.lastSync")} tone="default" value={formatDateTime(instance.last_sync_at)} />
                 </section>
 
-                <section className="ref-overview-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("instanceDetail.runtimeSnapshotSubtitle")}
-                    title={t("instanceDetail.runtimeSnapshotTitle")}
-                  >
-                    <div className="ref-info-grid">
-                      <InfoPair label={t("instanceDetail.instanceId")} value={instance.instance_id} />
-                      <InfoPair label={t("instanceDetail.host")} value={instance.hostname ?? t("common.notAvailable")} />
-                      <InfoPair label={t("instanceDetail.pid")} value={String(instance.pid ?? t("common.notAvailable"))} />
-                      <InfoPair label={t("instanceDetail.deployment")} value={instance.deployment_version} />
-                      <InfoPair label={t("instanceDetail.onestep")} value={instance.onestep_version ?? t("common.notAvailable")} />
-                      <InfoPair label={t("instanceDetail.python")} value={instance.python_version ?? t("common.notAvailable")} />
-                      <InfoPair label={t("instanceDetail.startedAt")} value={formatDateTime(instance.started_at)} />
-                      <InfoPair label={t("instanceDetail.topologyHash")} value={formatIdentifierPreview(instance.last_topology_hash)} />
-                    </div>
-                  </Panel>
-
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={isZh ? "仅展示实例当前真实存在的运行数据。" : "Only instance signals backed by current real data are shown."}
-                    title={isZh ? "实例运行摘要" : "Instance runtime signals"}
-                  >
-                    <div className="ref-signal-grid">
-                      {runtimeSignals.map((signal) => (
-                        <SignalCard key={signal.label} label={signal.label} note={signal.note} value={signal.value} />
-                      ))}
-                    </div>
-                  </Panel>
-                </section>
-
-                <section className="ref-access-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("instanceDetail.controlPlaneSubtitle")}
-                    title={t("instanceDetail.controlPlaneTitle")}
-                  >
-                    {activeSession ? (
-                      <>
-                        <div className="ref-session-list">
-                          <div className="ref-session-item">
-                            <div>
-                              <strong>{formatIdentifierPreview(activeSession.session_id)}</strong>
-                              <span>{activeSession.hostname ?? t("common.notAvailable")}</span>
-                            </div>
-                            <StatusBadge value={activeSession.status} />
-                          </div>
-                        </div>
-                        <div className="ref-info-grid">
-                          <InfoPair label={t("instanceDetail.controlConnection")} value={formatDateTime(activeSession.connected_at)} />
-                          <InfoPair label={t("instanceDetail.lastSeen")} value={formatRelativeTime(activeSession.last_message_at)} />
-                          <InfoPair label={t("instanceDetail.controlCapabilities")} value={formatCount(activeSession.accepted_capabilities.length)} />
-                          <InfoPair label="Protocol" value={activeSession.protocol_version} />
-                        </div>
-                      </>
-                    ) : latestSession ? (
-                      <>
-                        <div className="ref-session-list">
-                          <div className="ref-session-item">
-                            <div>
-                              <strong>{formatIdentifierPreview(latestSession.session_id)}</strong>
-                              <span>{latestSession.hostname ?? t("common.notAvailable")}</span>
-                            </div>
-                            <StatusBadge value={latestSession.status} />
-                          </div>
-                        </div>
-                        <div className="ref-info-grid">
-                          <InfoPair label={t("instanceDetail.controlConnection")} value={formatDateTime(latestSession.connected_at)} />
-                          <InfoPair label={t("instanceDetail.lastSeen")} value={formatRelativeTime(latestSession.last_message_at)} />
-                          <InfoPair label={t("instanceDetail.latestControlDisconnect")} value={formatDateTime(latestSession.disconnected_at)} />
-                          <InfoPair label={t("instanceDetail.controlCapabilities")} value={formatCount(latestSession.accepted_capabilities.length)} />
-                        </div>
-                      </>
-                    ) : (
-                      <EmptyState title={t("instanceDetail.controlIdleTitle")} body={t("instanceDetail.controlIdleBody")} />
-                    )}
-
-                    <div className="command-panel-actions">
-                      <CommandQuickActions
-                        activeAcceptedCapabilities={activeSession?.accepted_capabilities ?? []}
-                        deliveryMode={deliveryMode}
-                        hasActiveSession={activeSession !== undefined && activeSession !== null}
-                        hasKnownSession={latestSession !== undefined && latestSession !== null}
-                        isSubmitting={createCommandMutation.isPending}
-                        latestAcceptedCapabilities={latestSession?.accepted_capabilities ?? []}
-                        onDeliveryModeChange={setDeliveryModeOverride}
-                        onSubmit={handleCommandSubmit}
-                      />
-                    </div>
-                  </Panel>
-
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("instanceDetail.commandsSubtitle")}
-                    title={t("instanceDetail.commandsTitle")}
-                  >
-                    <CommandFeed
-                      commands={commandsQuery.data?.items ?? []}
-                      emptyBody={t("instanceDetail.noCommandsBody")}
-                      emptyTitle={t("instanceDetail.noCommandsTitle")}
+                <Panel
+                  className="ref-card-panel ref-instance-activity-card"
+                  subtitle={getInstanceActivitySubtitle(activityTab, t, isZh)}
+                  title={getInstanceActivityTitle(activityTab, t, isZh)}
+                >
+                  <div className="ref-instance-activity-stack">
+                    <SegmentedControl
+                      ariaLabel={t("instanceDetail.activityAriaLabel")}
+                      onChange={(value) => setActivityTab(value as InstanceActivityTab)}
+                      options={activityTabs}
+                      value={activityTab}
                     />
-                  </Panel>
-                </section>
 
-                <section className="ref-access-grid">
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("instanceDetail.recentWindowsSubtitle")}
-                    title={t("instanceDetail.recentWindowsTitle")}
-                  >
-                    {payload.recent_metric_windows.length ? (
-                      <div className="stack-list">
-                        {payload.recent_metric_windows.map((window) => (
-                          <article className="event-row" key={window.window_id}>
-                            <div>
-                              <strong>{window.task_name}</strong>
-                              <p>{window.window_id}</p>
-                            </div>
-                            <div className="row-metrics">
-                              <span>{t("metrics.ok", { value: formatCount(window.succeeded) })}</span>
-                              <span>{t("metrics.fail", { value: formatCount(window.failed) })}</span>
-                              <span>{t("metrics.p95", { value: formatDurationMs(window.p95_duration_ms) })}</span>
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <EmptyState title={t("instanceDetail.noWindowsTitle")} body={t("instanceDetail.noWindowsBody")} />
-                    )}
-                  </Panel>
+                    <section className="ref-instance-activity-panel">
+                      {activityTab === "runtime" ? (
+                        <div className="ref-signal-grid">
+                          {runtimeSignals.map((signal) => (
+                            <SignalCard key={signal.label} label={signal.label} note={signal.note} value={signal.value} />
+                          ))}
+                        </div>
+                      ) : null}
 
-                  <Panel
-                    className="ref-card-panel"
-                    subtitle={t("instanceDetail.recentEventsSubtitle")}
-                    title={t("instanceDetail.recentEventsTitle")}
-                  >
-                    {payload.recent_events.length ? (
-                      <div className="stack-list">
-                        {payload.recent_events.map((event) => (
-                          <article className="event-row" key={event.event_id}>
-                            <div>
-                              <strong>{event.task_name}</strong>
-                              <p>
-                                {t(`eventKind.${event.kind}`, { defaultValue: event.kind })} · {formatDateTime(event.occurred_at)}
-                              </p>
-                            </div>
-                            <TaskEventFailureDetails event={event} />
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <EmptyState title={t("instanceDetail.noEventsTitle")} body={t("instanceDetail.noEventsBody")} />
-                    )}
-                  </Panel>
-                </section>
+                      {activityTab === "control" ? (
+                        <div className="ref-instance-control-stack">
+                          {activeSession ? (
+                            <>
+                              <div className="ref-session-list">
+                                <div className="ref-session-item">
+                                  <div>
+                                    <strong>{formatIdentifierPreview(activeSession.session_id)}</strong>
+                                    <span>{activeSession.hostname ?? t("common.notAvailable")}</span>
+                                  </div>
+                                  <StatusBadge value={activeSession.status} />
+                                </div>
+                              </div>
+                              <div className="ref-info-grid">
+                                <InfoPair label={t("instanceDetail.controlConnection")} value={formatDateTime(activeSession.connected_at)} />
+                                <InfoPair label={t("instanceDetail.lastSeen")} value={formatRelativeTime(activeSession.last_message_at)} />
+                                <InfoPair label={t("instanceDetail.controlCapabilities")} value={formatCount(activeSession.accepted_capabilities.length)} />
+                                <InfoPair label="Protocol" value={activeSession.protocol_version} />
+                              </div>
+                            </>
+                          ) : latestSession ? (
+                            <>
+                              <div className="ref-session-list">
+                                <div className="ref-session-item">
+                                  <div>
+                                    <strong>{formatIdentifierPreview(latestSession.session_id)}</strong>
+                                    <span>{latestSession.hostname ?? t("common.notAvailable")}</span>
+                                  </div>
+                                  <StatusBadge value={latestSession.status} />
+                                </div>
+                              </div>
+                              <div className="ref-info-grid">
+                                <InfoPair label={t("instanceDetail.controlConnection")} value={formatDateTime(latestSession.connected_at)} />
+                                <InfoPair label={t("instanceDetail.lastSeen")} value={formatRelativeTime(latestSession.last_message_at)} />
+                                <InfoPair label={t("instanceDetail.latestControlDisconnect")} value={formatDateTime(latestSession.disconnected_at)} />
+                                <InfoPair label={t("instanceDetail.controlCapabilities")} value={formatCount(latestSession.accepted_capabilities.length)} />
+                              </div>
+                            </>
+                          ) : (
+                            <EmptyState title={t("instanceDetail.controlIdleTitle")} body={t("instanceDetail.controlIdleBody")} />
+                          )}
+
+                          <div className="command-panel-actions">
+                            <CommandQuickActions
+                              activeAcceptedCapabilities={activeSession?.accepted_capabilities ?? []}
+                              deliveryMode={deliveryMode}
+                              hasActiveSession={activeSession !== undefined && activeSession !== null}
+                              hasKnownSession={latestSession !== undefined && latestSession !== null}
+                              isSubmitting={createCommandMutation.isPending}
+                              latestAcceptedCapabilities={latestSession?.accepted_capabilities ?? []}
+                              onDeliveryModeChange={setDeliveryModeOverride}
+                              onSubmit={handleCommandSubmit}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {activityTab === "commands" ? (
+                        <CommandFeed
+                          commands={commandsQuery.data?.items ?? []}
+                          emptyBody={t("instanceDetail.noCommandsBody")}
+                          emptyTitle={t("instanceDetail.noCommandsTitle")}
+                        />
+                      ) : null}
+
+                      {activityTab === "metrics" ? (
+                        payload.recent_metric_windows.length ? (
+                          <div className="stack-list">
+                            {payload.recent_metric_windows.map((window) => (
+                              <article className="event-row" key={window.window_id}>
+                                <div>
+                                  <strong>{window.task_name}</strong>
+                                  <p>{window.window_id}</p>
+                                </div>
+                                <div className="row-metrics">
+                                  <span>{t("metrics.ok", { value: formatCount(window.succeeded) })}</span>
+                                  <span>{t("metrics.fail", { value: formatCount(window.failed) })}</span>
+                                  <span>{t("metrics.p95", { value: formatDurationMs(window.p95_duration_ms) })}</span>
+                                </div>
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <EmptyState title={t("instanceDetail.noWindowsTitle")} body={t("instanceDetail.noWindowsBody")} />
+                        )
+                      ) : null}
+
+                      {activityTab === "events" ? (
+                        payload.recent_events.length ? (
+                          <div className="stack-list">
+                            {payload.recent_events.map((event) => (
+                              <article className="event-row" key={event.event_id}>
+                                <div>
+                                  <strong>{event.task_name}</strong>
+                                  <p>
+                                    {t(`eventKind.${event.kind}`, { defaultValue: event.kind })} · {formatDateTime(event.occurred_at)}
+                                  </p>
+                                </div>
+                                <TaskEventFailureDetails event={event} />
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <EmptyState title={t("instanceDetail.noEventsTitle")} body={t("instanceDetail.noEventsBody")} />
+                        )
+                      ) : null}
+                    </section>
+                  </div>
+                </Panel>
+
+                <Panel
+                  className="ref-card-panel"
+                  subtitle={t("instanceDetail.runtimeSnapshotSubtitle")}
+                  title={t("instanceDetail.runtimeSnapshotTitle")}
+                >
+                  <div className="ref-info-grid">
+                    <InfoPair label={t("instanceDetail.instanceId")} value={instance.instance_id} />
+                    <InfoPair label={t("instanceDetail.host")} value={instance.hostname ?? t("common.notAvailable")} />
+                    <InfoPair label={t("instanceDetail.pid")} value={String(instance.pid ?? t("common.notAvailable"))} />
+                    <InfoPair label={t("instanceDetail.deployment")} value={instance.deployment_version} />
+                    <InfoPair label={t("instanceDetail.onestep")} value={instance.onestep_version ?? t("common.notAvailable")} />
+                    <InfoPair label={t("instanceDetail.python")} value={instance.python_version ?? t("common.notAvailable")} />
+                    <InfoPair label={t("instanceDetail.startedAt")} value={formatDateTime(instance.started_at)} />
+                    <InfoPair label={t("instanceDetail.topologyHash")} value={formatIdentifierPreview(instance.last_topology_hash)} />
+                  </div>
+                </Panel>
 
                 <details className="ref-collapse-card">
                   <summary>
@@ -510,6 +513,48 @@ function buildInstanceRuntimeSignals(
       note: isZh ? "来自控制会话状态" : "Control session state",
     },
   ];
+}
+
+function getInstanceActivityTitle(
+  tab: InstanceActivityTab,
+  t: ReturnType<typeof useTranslation>["t"],
+  isZh: boolean,
+) {
+  if (tab === "runtime") {
+    return isZh ? "运行摘要" : "Runtime signals";
+  }
+  if (tab === "control") {
+    return t("instanceDetail.controlPlaneTitle");
+  }
+  if (tab === "commands") {
+    return t("instanceDetail.commandsTitle");
+  }
+  if (tab === "metrics") {
+    return t("instanceDetail.recentWindowsTitle");
+  }
+  return t("instanceDetail.recentEventsTitle");
+}
+
+function getInstanceActivitySubtitle(
+  tab: InstanceActivityTab,
+  t: ReturnType<typeof useTranslation>["t"],
+  isZh: boolean,
+) {
+  if (tab === "runtime") {
+    return isZh
+      ? "仅展示实例当前真实存在的运行数据。"
+      : "Only instance signals backed by current real data are shown.";
+  }
+  if (tab === "control") {
+    return t("instanceDetail.controlPlaneSubtitle");
+  }
+  if (tab === "commands") {
+    return t("instanceDetail.commandsSubtitle");
+  }
+  if (tab === "metrics") {
+    return t("instanceDetail.recentWindowsSubtitle");
+  }
+  return t("instanceDetail.recentEventsSubtitle");
 }
 
 function deriveInstanceStatus(instance: InstanceSummary): "online" | "offline" | "degraded" {

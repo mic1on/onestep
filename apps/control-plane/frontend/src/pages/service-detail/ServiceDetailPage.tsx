@@ -30,20 +30,22 @@ import { instancePath, servicePath, taskPath } from "../../lib/routes";
 
 const LOOKBACK_OPTIONS = [15, 60, 360, 1440];
 const DETAIL_VIEWS = ["overview", "instances", "tasks", "commands"] as const;
-const QUICK_ACTIONS: Array<Exclude<AgentCommandKind, "shutdown" | "ping" | "pause_task" | "resume_task" | "discard_dead_letters" | "replay_dead_letters">> = [
-  "sync_now",
-  "flush_metrics",
-  "flush_events",
-  "restart",
-];
+const SYNC_ACTIONS = ["sync_now", "flush_metrics", "flush_events"] as const;
+const QUICK_ACTIONS: Array<
+  Exclude<
+    AgentCommandKind,
+    "shutdown" | "ping" | "pause_task" | "resume_task" | "discard_dead_letters" | "replay_dead_letters"
+  > | "sync_all"
+> = [...SYNC_ACTIONS, "sync_all", "restart"];
 type DetailView = (typeof DETAIL_VIEWS)[number];
+type QuickActionKind = (typeof QUICK_ACTIONS)[number];
 
 export function ServiceDetailPage() {
   const { i18n, t } = useTranslation();
   const { serviceName } = useParams<{ serviceName: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingQuickAction, setPendingQuickAction] =
-    useState<(typeof QUICK_ACTIONS)[number] | null>(null);
+    useState<QuickActionKind | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
@@ -84,19 +86,40 @@ export function ServiceDetailPage() {
     setActionMessage(null);
 
     try {
-      const result = await quickActionMutation.mutateAsync({
-        kind: pendingQuickAction,
-        timeout_s: resolveQuickActionTimeoutSeconds(pendingQuickAction),
-        reason,
-        target_mode: "all_online",
-        offline_behavior: "skip",
-      });
+      if (pendingQuickAction === "sync_all") {
+        let targetCount = 0;
+        for (const kind of SYNC_ACTIONS) {
+          const result = await quickActionMutation.mutateAsync({
+            kind,
+            timeout_s: resolveQuickActionTimeoutSeconds(kind),
+            reason,
+            target_mode: "all_online",
+            offline_behavior: "skip",
+          });
+          targetCount = Math.max(targetCount, result.counts.dispatched + result.counts.queued);
+        }
 
-      setActionMessage(
-        isZh
-          ? `${t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction })} 已下发，目标 ${result.counts.dispatched + result.counts.queued} 个实例。`
-          : `${t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction })} dispatched to ${result.counts.dispatched + result.counts.queued} instances.`,
-      );
+        setActionMessage(
+          isZh
+            ? `${t("serviceDetail.syncMenu.syncAll")} 已下发，目标 ${targetCount} 个实例。`
+            : `${t("serviceDetail.syncMenu.syncAll")} dispatched to ${targetCount} instances.`,
+        );
+      } else {
+        const result = await quickActionMutation.mutateAsync({
+          kind: pendingQuickAction,
+          timeout_s: resolveQuickActionTimeoutSeconds(pendingQuickAction),
+          reason,
+          target_mode: "all_online",
+          offline_behavior: "skip",
+        });
+
+        setActionMessage(
+          isZh
+            ? `${getQuickActionLabel(pendingQuickAction, t)} 已下发，目标 ${result.counts.dispatched + result.counts.queued} 个实例。`
+            : `${getQuickActionLabel(pendingQuickAction, t)} dispatched to ${result.counts.dispatched + result.counts.queued} instances.`,
+        );
+      }
+
       setPendingQuickAction(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
@@ -161,18 +184,43 @@ export function ServiceDetailPage() {
               }))}
               value={String(lookbackMinutes)}
             />
-
-            {QUICK_ACTIONS.map((kind) => (
-              <button
-                className={kind === "restart" ? "ref-ghost-button is-danger" : "ref-ghost-button"}
-                disabled={quickActionMutation.isPending}
-                key={kind}
-                onClick={() => setPendingQuickAction(kind)}
-                type="button"
-              >
-                {t(`commandKind.${kind}`, { defaultValue: kind })}
+            <div className="ref-action-menu" role="group">
+              <button className="ref-ghost-button ref-action-menu-trigger" disabled={quickActionMutation.isPending} type="button">
+                <span>{t("serviceDetail.syncMenu.trigger")}</span>
+                <span aria-hidden="true" className="ref-action-menu-caret">
+                  ▾
+                </span>
               </button>
-            ))}
+              <div className="ref-action-menu-panel">
+                {SYNC_ACTIONS.map((kind) => (
+                  <button
+                    className="ref-action-menu-item"
+                    disabled={quickActionMutation.isPending}
+                    key={kind}
+                    onClick={() => setPendingQuickAction(kind)}
+                    type="button"
+                  >
+                    {getQuickActionLabel(kind, t)}
+                  </button>
+                ))}
+                <button
+                  className="ref-action-menu-item ref-action-menu-item-strong"
+                  disabled={quickActionMutation.isPending}
+                  onClick={() => setPendingQuickAction("sync_all")}
+                  type="button"
+                >
+                  {t("serviceDetail.syncMenu.syncAll")}
+                </button>
+              </div>
+            </div>
+            <button
+              className="ref-ghost-button is-danger"
+              disabled={quickActionMutation.isPending}
+              onClick={() => setPendingQuickAction("restart")}
+              type="button"
+            >
+              {t("commandKind.restart", { defaultValue: "restart" })}
+            </button>
           </div>
         </div>
       </section>
@@ -477,8 +525,8 @@ export function ServiceDetailPage() {
         description={
           pendingQuickAction
             ? isZh
-              ? `为 ${serviceName} 执行 ${t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction })}，请填写本次操作原因。`
-              : `Provide a reason for ${t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction })} on ${serviceName}.`
+              ? `为 ${serviceName} 执行 ${getQuickActionLabel(pendingQuickAction, t)}，请填写本次操作原因。`
+              : `Provide a reason for ${getQuickActionLabel(pendingQuickAction, t)} on ${serviceName}.`
             : ""
         }
         isSubmitting={quickActionMutation.isPending}
@@ -492,8 +540,8 @@ export function ServiceDetailPage() {
         title={
           pendingQuickAction
             ? isZh
-              ? `确认 ${t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction })}`
-              : `Confirm ${t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction })}`
+              ? `确认 ${getQuickActionLabel(pendingQuickAction, t)}`
+              : `Confirm ${getQuickActionLabel(pendingQuickAction, t)}`
             : ""
         }
       />
@@ -657,7 +705,26 @@ function compareDateDesc(left: string | null, right: string | null) {
   return rightValue - leftValue;
 }
 
-function resolveQuickActionTimeoutSeconds(kind: (typeof QUICK_ACTIONS)[number]) {
+function getQuickActionLabel(
+  kind: QuickActionKind,
+  t: ReturnType<typeof useTranslation>["t"],
+) {
+  if (kind === "sync_now") {
+    return t("serviceDetail.syncMenu.syncConfig");
+  }
+  if (kind === "flush_metrics") {
+    return t("serviceDetail.syncMenu.syncMetrics");
+  }
+  if (kind === "flush_events") {
+    return t("serviceDetail.syncMenu.syncEvents");
+  }
+  if (kind === "sync_all") {
+    return t("serviceDetail.syncMenu.syncAll");
+  }
+  return t(`commandKind.${kind}`, { defaultValue: kind });
+}
+
+function resolveQuickActionTimeoutSeconds(kind: Exclude<QuickActionKind, "sync_all">) {
   if (kind === "restart") {
     return 30;
   }

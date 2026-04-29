@@ -1105,6 +1105,24 @@ button {
   color: var(--text);
 }
 
+.task-control-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 8px;
+}
+
+.task-control-summary-card {
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.task-control-summary-card strong {
+  font-size: 0.8rem;
+}
+
+.task-control-summary-card p {
+  font-size: 1.1rem;
+}
+
 .fanout-result-group {
   display: grid;
   gap: 12px;
