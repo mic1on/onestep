@@ -1638,11 +1638,20 @@ body {
   align-items: start;
 }
 
+.ref-instance-workbench {
+  align-items: stretch;
+}
+
 .ref-task-browser,
 .ref-task-detail-pane {
   display: grid;
   gap: 14px;
   min-width: 0;
+}
+
+.ref-instance-workbench .ref-task-browser,
+.ref-instance-workbench .ref-task-detail-pane {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .ref-task-browser-card {
@@ -1779,6 +1788,7 @@ body {
 .ref-instance-activity-card {
   display: grid;
   gap: 16px;
+  height: 100%;
 }
 
 .ref-card-panel-compact.panel {

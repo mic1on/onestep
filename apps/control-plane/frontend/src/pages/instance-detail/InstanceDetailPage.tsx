@@ -211,7 +211,14 @@ export function InstanceDetailPage() {
           </aside>
 
           <div className="ref-detail-content">
-            <div className="ref-task-workbench">
+            <section className="ref-summary-strip">
+              <SummaryChip label={t("instanceDetail.connectivity")} tone={instance.connectivity === "online" ? "success" : "danger"} value={t(`status.${instance.connectivity}`)} />
+              <SummaryChip label={t("instanceDetail.health")} tone={instance.status === "ok" ? "success" : "accent"} value={t(`status.${instance.status}`, { defaultValue: instance.status })} />
+              <SummaryChip label={t("instanceDetail.lastSeen")} tone="default" value={formatRelativeTime(instance.last_seen_at)} />
+              <SummaryChip label={t("instanceDetail.lastSync")} tone="default" value={formatDateTime(instance.last_sync_at)} />
+            </section>
+
+            <div className="ref-task-workbench ref-instance-workbench">
               <section className="ref-task-browser">
                 <div className="ref-section-headline">
                   <h3>{isZh ? `实例列表 (${instances.length})` : `Instances (${instances.length})`}</h3>
@@ -240,13 +247,6 @@ export function InstanceDetailPage() {
               </section>
 
               <section className="ref-task-detail-pane">
-                <section className="ref-summary-strip">
-                  <SummaryChip label={t("instanceDetail.connectivity")} tone={instance.connectivity === "online" ? "success" : "danger"} value={t(`status.${instance.connectivity}`)} />
-                  <SummaryChip label={t("instanceDetail.health")} tone={instance.status === "ok" ? "success" : "accent"} value={t(`status.${instance.status}`, { defaultValue: instance.status })} />
-                  <SummaryChip label={t("instanceDetail.lastSeen")} tone="default" value={formatRelativeTime(instance.last_seen_at)} />
-                  <SummaryChip label={t("instanceDetail.lastSync")} tone="default" value={formatDateTime(instance.last_sync_at)} />
-                </section>
-
                 <Panel
                   className="ref-card-panel ref-instance-activity-card"
                   subtitle={getInstanceActivitySubtitle(activityTab, t, isZh)}
