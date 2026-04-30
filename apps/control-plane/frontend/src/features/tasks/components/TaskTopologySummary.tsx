@@ -46,7 +46,7 @@ export function TaskTopologyPreview({
         value={source?.inline ?? (isZh ? "无" : "none")}
       />
       <TopologyPreviewRow
-        label={isZh ? "发往" : "Emit"}
+        label={isZh ? "发" : "Emit"}
         value={formatEmitPreview(emitSummaries, isZh)}
       />
     </div>

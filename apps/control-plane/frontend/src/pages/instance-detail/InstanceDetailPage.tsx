@@ -32,7 +32,7 @@ import { parseEnvironment, parseLookback } from "../../lib/params";
 import { instancePath, servicePath } from "../../lib/routes";
 
 type ServiceView = "overview" | "instances" | "tasks" | "commands";
-type InstanceActivityTab = "runtime" | "control" | "commands" | "metrics" | "events";
+type InstanceActivityTab = "commands" | "metrics" | "events";
 
 export function InstanceDetailPage() {
   const { i18n, t } = useTranslation();
@@ -42,7 +42,7 @@ export function InstanceDetailPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [reasonDialogKind, setReasonDialogKind] = useState<AgentCommandKind | null>(null);
   const [deliveryModeOverride, setDeliveryModeOverride] = useState<AgentCommandDeliveryMode | null>(null);
-  const [activityTab, setActivityTab] = useState<InstanceActivityTab>("runtime");
+  const [activityTab, setActivityTab] = useState<InstanceActivityTab>("commands");
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
 
   if (!serviceName || !instanceId) {
@@ -77,8 +77,6 @@ export function InstanceDetailPage() {
   const runtimeSignals = payload && instance ? buildInstanceRuntimeSignals(payload, instance, isZh) : [];
   const instanceStatus = instance ? deriveInstanceStatus(instance) : "offline";
   const activityTabs: Array<{ label: string; value: InstanceActivityTab }> = [
-    { label: t("instanceDetail.activityTabs.runtime"), value: "runtime" },
-    { label: t("instanceDetail.activityTabs.control"), value: "control" },
     { label: t("instanceDetail.activityTabs.commands"), value: "commands" },
     { label: t("instanceDetail.activityTabs.metrics"), value: "metrics" },
     { label: t("instanceDetail.activityTabs.events"), value: "events" },
@@ -211,14 +209,7 @@ export function InstanceDetailPage() {
           </aside>
 
           <div className="ref-detail-content">
-            <section className="ref-summary-strip">
-              <SummaryChip label={t("instanceDetail.connectivity")} tone={instance.connectivity === "online" ? "success" : "danger"} value={t(`status.${instance.connectivity}`)} />
-              <SummaryChip label={t("instanceDetail.health")} tone={instance.status === "ok" ? "success" : "accent"} value={t(`status.${instance.status}`, { defaultValue: instance.status })} />
-              <SummaryChip label={t("instanceDetail.lastSeen")} tone="default" value={formatRelativeTime(instance.last_seen_at)} />
-              <SummaryChip label={t("instanceDetail.lastSync")} tone="default" value={formatDateTime(instance.last_sync_at)} />
-            </section>
-
-            <div className="ref-task-workbench ref-instance-workbench">
+            <div className="ref-task-workbench">
               <section className="ref-task-browser">
                 <div className="ref-section-headline">
                   <h3>{isZh ? `实例列表 (${instances.length})` : `Instances (${instances.length})`}</h3>
@@ -247,12 +238,51 @@ export function InstanceDetailPage() {
               </section>
 
               <section className="ref-task-detail-pane">
+                <div aria-hidden="true" className="ref-section-headline ref-section-headline-ghost">
+                  <h3>{isZh ? "实例列表" : "Instances"}</h3>
+                </div>
+                <section className="ref-summary-strip">
+                  <SummaryChip label={t("instanceDetail.connectivity")} tone={instance.connectivity === "online" ? "success" : "danger"} value={t(`status.${instance.connectivity}`)} />
+                  <SummaryChip label={t("instanceDetail.health")} tone={instance.status === "ok" ? "success" : "accent"} value={t(`status.${instance.status}`, { defaultValue: instance.status })} />
+                  <SummaryChip label={t("instanceDetail.lastSeen")} tone="default" value={formatRelativeTime(instance.last_seen_at)} />
+                  <SummaryChip label={t("instanceDetail.lastSync")} tone="default" value={formatDateTime(instance.last_sync_at)} />
+                </section>
+
                 <Panel
-                  className="ref-card-panel ref-instance-activity-card"
-                  subtitle={getInstanceActivitySubtitle(activityTab, t, isZh)}
-                  title={getInstanceActivityTitle(activityTab, t, isZh)}
+                  className="ref-card-panel"
+                  subtitle={t("instanceDetail.runtimeSnapshotSubtitle")}
+                  title={t("instanceDetail.runtimeSnapshotTitle")}
                 >
-                  <div className="ref-instance-activity-stack">
+                  <div className="ref-compact-kpi-grid ref-compact-kpi-grid-instance">
+                    {runtimeSignals.map((signal) => (
+                      <article className="ref-compact-kpi" key={signal.label}>
+                        <span>{signal.label}</span>
+                        <strong>{signal.value}</strong>
+                      </article>
+                    ))}
+                  </div>
+                  <div className="ref-info-grid">
+                    <InfoPair label={t("instanceDetail.instanceId")} value={instance.instance_id} />
+                    <InfoPair label={t("instanceDetail.host")} value={instance.hostname ?? t("common.notAvailable")} />
+                    <InfoPair label={t("instanceDetail.pid")} value={String(instance.pid ?? t("common.notAvailable"))} />
+                    <InfoPair label={t("instanceDetail.deployment")} value={instance.deployment_version} />
+                    <InfoPair label={t("instanceDetail.onestep")} value={instance.onestep_version ?? t("common.notAvailable")} />
+                    <InfoPair label={t("instanceDetail.python")} value={instance.python_version ?? t("common.notAvailable")} />
+                    <InfoPair label={t("instanceDetail.startedAt")} value={formatDateTime(instance.started_at)} />
+                    <InfoPair label={t("instanceDetail.topologyHash")} value={formatIdentifierPreview(instance.last_topology_hash)} />
+                  </div>
+                </Panel>
+
+                <details className="ref-collapse-card">
+                  <summary>
+                    <strong>{isZh ? "实例活动" : "Instance activity"}</strong>
+                    <span>
+                      {isZh
+                        ? "整合最近命令、指标窗口和任务事件，默认收起。"
+                        : "Collapsed by default with recent commands, metric windows, and task events."}
+                    </span>
+                  </summary>
+                  <div className="ref-collapse-body ref-task-activity-stack">
                     <SegmentedControl
                       ariaLabel={t("instanceDetail.activityAriaLabel")}
                       onChange={(value) => setActivityTab(value as InstanceActivityTab)}
@@ -260,78 +290,32 @@ export function InstanceDetailPage() {
                       value={activityTab}
                     />
 
-                    <section className="ref-instance-activity-panel">
-                      {activityTab === "runtime" ? (
-                        <div className="ref-signal-grid">
-                          {runtimeSignals.map((signal) => (
-                            <SignalCard key={signal.label} label={signal.label} note={signal.note} value={signal.value} />
-                          ))}
+                    <section className="ref-task-activity-panel">
+                      <header className="ref-task-activity-header">
+                        <div>
+                          <h3>{getInstanceActivityTitle(activityTab, t)}</h3>
+                          <p>{getInstanceActivitySubtitle(activityTab, t)}</p>
                         </div>
-                      ) : null}
-
-                      {activityTab === "control" ? (
-                        <div className="ref-instance-control-stack">
-                          {activeSession ? (
-                            <>
-                              <div className="ref-session-list">
-                                <div className="ref-session-item">
-                                  <div>
-                                    <strong>{formatIdentifierPreview(activeSession.session_id)}</strong>
-                                    <span>{activeSession.hostname ?? t("common.notAvailable")}</span>
-                                  </div>
-                                  <StatusBadge value={activeSession.status} />
-                                </div>
-                              </div>
-                              <div className="ref-info-grid">
-                                <InfoPair label={t("instanceDetail.controlConnection")} value={formatDateTime(activeSession.connected_at)} />
-                                <InfoPair label={t("instanceDetail.lastSeen")} value={formatRelativeTime(activeSession.last_message_at)} />
-                                <InfoPair label={t("instanceDetail.controlCapabilities")} value={formatCount(activeSession.accepted_capabilities.length)} />
-                                <InfoPair label="Protocol" value={activeSession.protocol_version} />
-                              </div>
-                            </>
-                          ) : latestSession ? (
-                            <>
-                              <div className="ref-session-list">
-                                <div className="ref-session-item">
-                                  <div>
-                                    <strong>{formatIdentifierPreview(latestSession.session_id)}</strong>
-                                    <span>{latestSession.hostname ?? t("common.notAvailable")}</span>
-                                  </div>
-                                  <StatusBadge value={latestSession.status} />
-                                </div>
-                              </div>
-                              <div className="ref-info-grid">
-                                <InfoPair label={t("instanceDetail.controlConnection")} value={formatDateTime(latestSession.connected_at)} />
-                                <InfoPair label={t("instanceDetail.lastSeen")} value={formatRelativeTime(latestSession.last_message_at)} />
-                                <InfoPair label={t("instanceDetail.latestControlDisconnect")} value={formatDateTime(latestSession.disconnected_at)} />
-                                <InfoPair label={t("instanceDetail.controlCapabilities")} value={formatCount(latestSession.accepted_capabilities.length)} />
-                              </div>
-                            </>
-                          ) : (
-                            <EmptyState title={t("instanceDetail.controlIdleTitle")} body={t("instanceDetail.controlIdleBody")} />
-                          )}
-
-                          <div className="command-panel-actions">
-                            <CommandQuickActions
-                              activeAcceptedCapabilities={activeSession?.accepted_capabilities ?? []}
-                              deliveryMode={deliveryMode}
-                              hasActiveSession={activeSession !== undefined && activeSession !== null}
-                              hasKnownSession={latestSession !== undefined && latestSession !== null}
-                              isSubmitting={createCommandMutation.isPending}
-                              latestAcceptedCapabilities={latestSession?.accepted_capabilities ?? []}
-                              onDeliveryModeChange={setDeliveryModeOverride}
-                              onSubmit={handleCommandSubmit}
-                            />
-                          </div>
-                        </div>
-                      ) : null}
+                      </header>
 
                       {activityTab === "commands" ? (
-                        <CommandFeed
-                          commands={commandsQuery.data?.items ?? []}
-                          emptyBody={t("instanceDetail.noCommandsBody")}
-                          emptyTitle={t("instanceDetail.noCommandsTitle")}
-                        />
+                        <>
+                          <CommandQuickActions
+                            activeAcceptedCapabilities={activeSession?.accepted_capabilities ?? []}
+                            deliveryMode={deliveryMode}
+                            hasActiveSession={activeSession !== undefined && activeSession !== null}
+                            hasKnownSession={latestSession !== undefined && latestSession !== null}
+                            isSubmitting={createCommandMutation.isPending}
+                            latestAcceptedCapabilities={latestSession?.accepted_capabilities ?? []}
+                            onDeliveryModeChange={setDeliveryModeOverride}
+                            onSubmit={handleCommandSubmit}
+                          />
+                          <CommandFeed
+                            commands={commandsQuery.data?.items ?? []}
+                            emptyBody={t("instanceDetail.noCommandsBody")}
+                            emptyTitle={t("instanceDetail.noCommandsTitle")}
+                          />
+                        </>
                       ) : null}
 
                       {activityTab === "metrics" ? (
@@ -377,24 +361,7 @@ export function InstanceDetailPage() {
                       ) : null}
                     </section>
                   </div>
-                </Panel>
-
-                <Panel
-                  className="ref-card-panel"
-                  subtitle={t("instanceDetail.runtimeSnapshotSubtitle")}
-                  title={t("instanceDetail.runtimeSnapshotTitle")}
-                >
-                  <div className="ref-info-grid">
-                    <InfoPair label={t("instanceDetail.instanceId")} value={instance.instance_id} />
-                    <InfoPair label={t("instanceDetail.host")} value={instance.hostname ?? t("common.notAvailable")} />
-                    <InfoPair label={t("instanceDetail.pid")} value={String(instance.pid ?? t("common.notAvailable"))} />
-                    <InfoPair label={t("instanceDetail.deployment")} value={instance.deployment_version} />
-                    <InfoPair label={t("instanceDetail.onestep")} value={instance.onestep_version ?? t("common.notAvailable")} />
-                    <InfoPair label={t("instanceDetail.python")} value={instance.python_version ?? t("common.notAvailable")} />
-                    <InfoPair label={t("instanceDetail.startedAt")} value={formatDateTime(instance.started_at)} />
-                    <InfoPair label={t("instanceDetail.topologyHash")} value={formatIdentifierPreview(instance.last_topology_hash)} />
-                  </div>
-                </Panel>
+                </details>
 
                 <details className="ref-collapse-card">
                   <summary>
@@ -455,24 +422,6 @@ function InfoPair({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SignalCard({
-  label,
-  value,
-  note,
-}: {
-  label: string;
-  value: string;
-  note?: string;
-}) {
-  return (
-    <div className="ref-signal-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {note ? <p>{note}</p> : null}
-    </div>
-  );
-}
-
 function buildInstanceRuntimeSignals(
   payload: NonNullable<ReturnType<typeof useInstanceDetailQuery>["data"]>,
   instance: InstanceSummary,
@@ -515,17 +464,7 @@ function buildInstanceRuntimeSignals(
   ];
 }
 
-function getInstanceActivityTitle(
-  tab: InstanceActivityTab,
-  t: ReturnType<typeof useTranslation>["t"],
-  isZh: boolean,
-) {
-  if (tab === "runtime") {
-    return isZh ? "运行摘要" : "Runtime signals";
-  }
-  if (tab === "control") {
-    return t("instanceDetail.controlPlaneTitle");
-  }
+function getInstanceActivityTitle(tab: InstanceActivityTab, t: ReturnType<typeof useTranslation>["t"]) {
   if (tab === "commands") {
     return t("instanceDetail.commandsTitle");
   }
@@ -535,19 +474,7 @@ function getInstanceActivityTitle(
   return t("instanceDetail.recentEventsTitle");
 }
 
-function getInstanceActivitySubtitle(
-  tab: InstanceActivityTab,
-  t: ReturnType<typeof useTranslation>["t"],
-  isZh: boolean,
-) {
-  if (tab === "runtime") {
-    return isZh
-      ? "仅展示实例当前真实存在的运行数据。"
-      : "Only instance signals backed by current real data are shown.";
-  }
-  if (tab === "control") {
-    return t("instanceDetail.controlPlaneSubtitle");
-  }
+function getInstanceActivitySubtitle(tab: InstanceActivityTab, t: ReturnType<typeof useTranslation>["t"]) {
   if (tab === "commands") {
     return t("instanceDetail.commandsSubtitle");
   }

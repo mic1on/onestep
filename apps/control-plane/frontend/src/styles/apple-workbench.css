@@ -1638,20 +1638,11 @@ body {
   align-items: start;
 }
 
-.ref-instance-workbench {
-  align-items: stretch;
-}
-
 .ref-task-browser,
 .ref-task-detail-pane {
   display: grid;
   gap: 14px;
   min-width: 0;
-}
-
-.ref-instance-workbench .ref-task-browser,
-.ref-instance-workbench .ref-task-detail-pane {
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .ref-task-browser-card {
@@ -1785,12 +1776,6 @@ body {
   box-shadow: none;
 }
 
-.ref-instance-activity-card {
-  display: grid;
-  gap: 16px;
-  height: 100%;
-}
-
 .ref-card-panel-compact.panel {
   padding: 14px;
 }
@@ -1879,6 +1864,11 @@ body {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.ref-compact-kpi-grid-instance {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 16px;
 }
 
 .ref-compact-kpi {
