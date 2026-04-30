@@ -754,6 +754,7 @@ class ControlPlaneReporter:
                 "bind_arguments": resource.bind_arguments,
                 "durable": resource.durable,
                 "auto_delete": resource.auto_delete,
+                "exclusive": resource.exclusive,
                 "arguments": resource.arguments,
                 "exchange_durable": resource.exchange_durable,
                 "exchange_auto_delete": resource.exchange_auto_delete,

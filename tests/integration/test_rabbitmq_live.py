@@ -16,7 +16,7 @@ def test_rabbitmq_round_trip_live():
     async def scenario():
         connector = RabbitMQConnector(os.environ["ONESTEP_RABBITMQ_URL"])
         queue_name = f"{os.getenv('ONESTEP_RABBITMQ_QUEUE', 'onestep.integration')}.{uuid.uuid4().hex}"
-        queue = connector.queue(queue_name, poll_interval_s=1.0, auto_delete=True, durable=False)
+        queue = connector.queue(queue_name, poll_interval_s=1.0, auto_delete=True, durable=False, exclusive=True)
         await queue.publish({"value": 1})
         batch = await queue.fetch(1)
         assert len(batch) == 1
@@ -41,6 +41,7 @@ def test_rabbitmq_requeue_with_exchange_live():
             poll_interval_s=1.0,
             auto_delete=True,
             durable=False,
+            exclusive=True,
             exchange_auto_delete=True,
             exchange_durable=False,
         )

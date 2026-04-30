@@ -712,6 +712,7 @@ def test_yaml_target_builds_mysql_rabbitmq_sqs_and_state_resources_via_refs(monk
                         "queue": "incoming_jobs",
                         "exchange": "jobs.events",
                         "routing_key": "jobs.created",
+                        "exclusive": True,
                         "prefetch": 50,
                     },
                     "db": {
@@ -831,6 +832,7 @@ def test_yaml_target_builds_mysql_rabbitmq_sqs_and_state_resources_via_refs(monk
     assert ingest_task.source.connector.url == "amqp://guest:guest@localhost/"
     assert ingest_task.source.connector.options == {"client_properties": {"connection_name": "yaml-worker"}}
     assert ingest_task.source.kwargs["exchange"] == "jobs.events"
+    assert ingest_task.source.kwargs["exclusive"] is True
     assert ingest_task.source.kwargs["prefetch"] == 50
     assert ingest_sqs_task.source.kind == "sqs_queue"
     assert ingest_sqs_task.source.name == "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs.fifo"
