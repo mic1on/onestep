@@ -19,6 +19,8 @@ from onestep_control_plane_api.api.schemas import (
 )
 from onestep_control_plane_api.db.models import (
     Instance,
+    NotificationChannel,
+    NotificationDelivery,
     Service,
     TaskDefinition,
     TaskEvent,
@@ -625,3 +627,40 @@ def test_http_ingestion_routes_are_not_exposed_and_absent_from_openapi(client) -
     assert "/api/v1/agents/sync" not in payload["paths"]
     assert "/api/v1/agents/metrics" not in payload["paths"]
     assert "/api/v1/agents/events" not in payload["paths"]
+
+
+def test_ingest_events_creates_notification_delivery_only_for_new_events(
+    db_session, monkeypatch
+) -> None:
+    channel = NotificationChannel(
+        name="ops-feishu",
+        provider="feishu",
+        webhook_url="https://example.com/hook",
+        enabled=True,
+        service_scopes_json=[{"name": "billing-sync", "environment": "prod"}],
+        event_types_json=["task_failed"],
+        missed_start_grace_seconds=300,
+    )
+    db_session.add(channel)
+    db_session.commit()
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 3, 8, 17, 31, 2, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    first_response = ingest_events(db_session, make_events_payload())
+    assert first_response.ingested_count == 1
+    deliveries = db_session.scalars(select(NotificationDelivery)).all()
+    assert len(deliveries) == 1
+    assert deliveries[0].event_type == "task_failed"
+
+    second_response = ingest_events(db_session, make_events_payload())
+    assert second_response.ingested_count == 0
+    deliveries = db_session.scalars(select(NotificationDelivery)).all()
+    assert len(deliveries) == 1

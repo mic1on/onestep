@@ -7,4 +7,11 @@ MAX_RECENT_EVENT_LIMIT = 50
 DEFAULT_TASK_ACTIVITY_LIMIT = 20
 MAX_TASK_ACTIVITY_LIMIT = 100
 HEALTH_STATUS_VALUES = ("ok", "degraded", "error", "starting", "unknown")
-TASK_EVENT_KIND_VALUES = ("failed", "retried", "dead_lettered", "cancelled", "succeeded")
+TASK_EVENT_KIND_VALUES = (
+    "started",
+    "failed",
+    "retried",
+    "dead_lettered",
+    "cancelled",
+    "succeeded",
+)

@@ -790,18 +790,11 @@ class NotificationChannelUpdateRequest(APIModel):
 
     @model_validator(mode="after")
     def validate_non_empty_patch(self) -> NotificationChannelUpdateRequest:
-        if not any(getattr(self, field_name) is not None for field_name in self.model_fields):
-            raise ValueError("at least one field must be provided")
-
-        event_types = self.event_types
-        grace_seconds = self.missed_start_grace_seconds
-        if grace_seconds is not None and event_types is not None and (
-            "task_missed_start" not in event_types
+        if not any(
+            getattr(self, field_name) is not None
+            for field_name in self.__class__.model_fields
         ):
-            raise ValueError(
-                "missed_start_grace_seconds can only be updated together with "
-                "event_types that include task_missed_start"
-            )
+            raise ValueError("at least one field must be provided")
         return self
 
 
@@ -920,6 +913,7 @@ class TaskMetricWindowListResponse(PaginatedResponse):
 
 
 class TaskEventCounts(APIModel):
+    started: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
     retried: int = Field(default=0, ge=0)
     dead_lettered: int = Field(default=0, ge=0)

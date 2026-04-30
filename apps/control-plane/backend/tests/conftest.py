@@ -50,6 +50,11 @@ def test_engine():
 
 @pytest.fixture()
 def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, None]:
+    original_username = settings.console_auth_username
+    original_password = settings.console_auth_password
+    settings.console_auth_username = ""
+    settings.console_auth_password = ""
+
     def _override() -> Generator[Session, None, None]:
         yield from override_db_session(test_engine)
 
@@ -59,6 +64,8 @@ def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, 
         yield test_client
     app.dependency_overrides.clear()
     app.state.session_factory = SessionLocal
+    settings.console_auth_username = original_username
+    settings.console_auth_password = original_password
 
 
 @pytest.fixture()

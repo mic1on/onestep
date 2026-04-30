@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.common import (
@@ -21,6 +23,9 @@ from onestep_control_plane_api.api.ingestion_support import (
     build_metric_window_payload,
     build_task_event_payload,
     sync_task_definitions,
+)
+from onestep_control_plane_api.api.notification_service import (
+    dispatch_runtime_task_event_notifications,
 )
 from onestep_control_plane_api.api.schemas import (
     EventsAcceptedResponse,
@@ -164,6 +169,7 @@ def ingest_events_request(
 
     events = dedupe_by_key(request.events, lambda event: event.event_id)
     inserted_count = 0
+    inserted_event_ids: list[str] = []
     if events:
         inserted_rows = db.execute(
             build_insert_statement(db, TaskEvent)
@@ -174,9 +180,18 @@ def ingest_events_request(
                 ]
             )
             .on_conflict_do_nothing(index_elements=["event_id"])
-            .returning(TaskEvent.id)
+            .returning(TaskEvent.event_id)
         ).all()
         inserted_count = len(inserted_rows)
+        inserted_event_ids = [row.event_id for row in inserted_rows]
 
     db.commit()
+    if inserted_event_ids:
+        inserted_events = db.scalars(
+            select(TaskEvent)
+            .options(selectinload(TaskEvent.service))
+            .where(TaskEvent.event_id.in_(inserted_event_ids))
+            .order_by(TaskEvent.created_at)
+        ).all()
+        dispatch_runtime_task_event_notifications(db, task_events=inserted_events)
     return EventsAcceptedResponse(received_at=received_at, ingested_count=inserted_count)

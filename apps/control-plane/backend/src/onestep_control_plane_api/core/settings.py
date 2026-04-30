@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     api_response_timezone: str = ""
+    notification_missed_start_scan_interval_s: int = Field(default=60, ge=5)
+    notification_delivery_timeout_s: float = Field(default=5.0, gt=0)
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",

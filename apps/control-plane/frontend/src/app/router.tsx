@@ -5,6 +5,7 @@ import { RequireConsoleAuth } from "../features/auth/RequireConsoleAuth";
 import { InstanceDetailPage } from "../pages/instance-detail/InstanceDetailPage";
 import { LoginPage } from "../pages/login/LoginPage";
 import { NotFoundPage } from "../pages/not-found/NotFoundPage";
+import { SettingsNotificationsPage } from "../pages/settings-notifications/SettingsNotificationsPage";
 import { ServiceDetailPage } from "../pages/service-detail/ServiceDetailPage";
 import { ServicesListPage } from "../pages/services-list/ServicesListPage";
 import { TaskDetailPage } from "../pages/task-detail/TaskDetailPage";
@@ -40,6 +41,10 @@ export const router = createBrowserRouter([
           {
             path: "services/:serviceName/instances/:instanceId",
             element: <InstanceDetailPage />,
+          },
+          {
+            path: "settings/notifications",
+            element: <SettingsNotificationsPage />,
           },
           {
             path: "*",
