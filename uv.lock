@@ -449,7 +449,7 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.2.0a1"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },

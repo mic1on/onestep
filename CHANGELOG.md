@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+- Adds YAML app definitions with strict validation, named resources, hooks, and
+  `handler.ref` wiring.
+- Adds `onestep init` to scaffold a minimal standalone YAML worker project.
+- Adds `TaskContext.update_current_row()` for mutable current-row deliveries,
+  with MySQL table-queue support for in-place row updates.
+
 ## 1.0.0
 
 First stable release of the rewritten `onestep` runtime.
