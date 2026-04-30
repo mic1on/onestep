@@ -178,7 +178,7 @@ export function SettingsNotificationsPage() {
       const response = await testMutation.mutateAsync(formState.id);
       setFeedback({
         tone: "success",
-        message: response.detail ?? "Test notification sent.",
+        message: response.message ?? response.detail ?? "Test notification sent.",
       });
     } catch (error) {
       setFeedback({
@@ -517,17 +517,20 @@ function channelToFormState(channel: NotificationChannel): FormState {
 }
 
 function buildPayload(formState: FormState): NotificationChannelUpsertRequest {
-  return {
+  const payload: NotificationChannelUpsertRequest = {
     name: formState.name.trim(),
     provider: formState.provider,
     webhook_url: formState.webhook_url.trim(),
     enabled: formState.enabled,
     service_scopes: [...formState.service_scopes].sort(compareServiceScopes),
     event_types: [...formState.event_types],
-    missed_start_grace_seconds: formState.event_types.includes("task_missed_start")
-      ? normalizeGraceSeconds(formState.missed_start_grace_seconds)
-      : null,
   };
+
+  if (formState.event_types.includes("task_missed_start")) {
+    payload.missed_start_grace_seconds = normalizeGraceSeconds(formState.missed_start_grace_seconds);
+  }
+
+  return payload;
 }
 
 function normalizeGraceSeconds(rawValue: string) {

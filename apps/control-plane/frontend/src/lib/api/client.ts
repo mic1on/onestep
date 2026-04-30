@@ -113,6 +113,7 @@ function normalizeNotificationChannel(channel: {
   service_scopes_json?: NotificationServiceScope[];
   serviceScopes?: NotificationServiceScope[];
   event_types?: NotificationEventType[];
+  event_type_filters?: NotificationEventType[];
   event_types_json?: NotificationEventType[];
   eventTypes?: NotificationEventType[];
   missed_start_grace_seconds?: number | null;
@@ -127,7 +128,8 @@ function normalizeNotificationChannel(channel: {
     webhook_url: channel.webhook_url ?? channel.webhookUrl ?? "",
     enabled: channel.enabled,
     service_scopes: channel.service_scopes ?? channel.service_scopes_json ?? channel.serviceScopes ?? [],
-    event_types: channel.event_types ?? channel.event_types_json ?? channel.eventTypes ?? [],
+    event_types:
+      channel.event_types ?? channel.event_type_filters ?? channel.event_types_json ?? channel.eventTypes ?? [],
     missed_start_grace_seconds:
       channel.missed_start_grace_seconds ?? channel.missedStartGraceSeconds ?? null,
     created_at: channel.created_at,

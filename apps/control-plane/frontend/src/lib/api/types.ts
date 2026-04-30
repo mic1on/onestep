@@ -115,10 +115,11 @@ export interface NotificationChannelUpsertRequest {
   enabled: boolean;
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];
-  missed_start_grace_seconds: number | null;
+  missed_start_grace_seconds?: number;
 }
 
 export interface NotificationChannelTestResponse {
+  message?: string;
   ok?: boolean;
   detail?: string;
 }
