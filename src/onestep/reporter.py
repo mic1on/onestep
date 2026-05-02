@@ -532,6 +532,8 @@ class ControlPlaneReporter:
             self._degraded_since_last_heartbeat = True
 
         if event.kind in {
+            TaskEventKind.STARTED,
+            TaskEventKind.SUCCEEDED,
             TaskEventKind.RETRIED,
             TaskEventKind.FAILED,
             TaskEventKind.DEAD_LETTERED,
