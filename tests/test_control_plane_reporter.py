@@ -283,7 +283,7 @@ def test_reporter_flushes_metrics_and_events() -> None:
         2026, 3, 8, 17, 31, 0, tzinfo=timezone.utc
     )
 
-    event_payload = events_calls[0]["events"][0]
+    event_payload = events_calls[0]["events"][1]
     assert event_payload["kind"] == "retried"
     assert event_payload["task_name"] == "sync_users"
     assert event_payload["failure"] == {
