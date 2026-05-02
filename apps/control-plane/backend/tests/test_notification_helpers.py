@@ -247,10 +247,19 @@ def test_render_notification_message_joins_lines() -> None:
     assert message.splitlines()[0] == "[任务开始] prod/billing-worker sync_invoice"
 
 
-def test_build_feishu_payload_uses_text_message() -> None:
+def test_build_feishu_payload_uses_card_message() -> None:
     payload = build_feishu_payload(build_event("task_started"))
-    assert payload["msg_type"] == "text"
-    assert payload["content"]["text"].startswith("[任务开始]")
+    assert payload["msg_type"] == "interactive"
+    assert payload["card"]["header"]["title"]["content"] == "[任务开始] prod/billing-worker sync_invoice"
+    assert payload["card"]["header"]["template"] == "blue"
+    assert len(payload["card"]["elements"]) == 1
+    assert "环境: prod" in payload["card"]["elements"][0]["text"]["content"]
+
+
+def test_build_feishu_payload_uses_red_header_for_failed() -> None:
+    payload = build_feishu_payload(build_event("task_failed"))
+    assert payload["card"]["header"]["template"] == "red"
+    assert "任务失败" in payload["card"]["header"]["title"]["content"]
 
 
 def test_build_wechat_work_payload_uses_markdown_message() -> None:

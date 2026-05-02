@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageHeader } from "../../components/ui/PageHeader";
@@ -14,27 +15,11 @@ import {
 } from "../../features/notifications/queries";
 import type { NotificationChannel, NotificationChannelUpsertRequest, NotificationEventType, NotificationProvider, NotificationServiceScope } from "../../lib/api/types";
 
-const EVENT_OPTIONS: Array<{ value: NotificationEventType; label: string; description: string }> = [
-  {
-    value: "task_started",
-    label: "Task started",
-    description: "Send as soon as a task begins execution.",
-  },
-  {
-    value: "task_succeeded",
-    label: "Task succeeded",
-    description: "Send when a task completes successfully.",
-  },
-  {
-    value: "task_failed",
-    label: "Task failed",
-    description: "Send when a task completes with an error.",
-  },
-  {
-    value: "task_missed_start",
-    label: "Task missed start",
-    description: "Send when a scheduled task does not emit a started event before the grace window.",
-  },
+const EVENT_VALUES: NotificationEventType[] = [
+  "task_started",
+  "task_succeeded",
+  "task_failed",
+  "task_missed_start",
 ];
 
 type FormState = {
@@ -60,6 +45,7 @@ const DEFAULT_FORM_STATE: FormState = {
 };
 
 export function SettingsNotificationsPage() {
+  const { t } = useTranslation();
   const channelsQuery = useNotificationChannelsQuery();
   const servicesQuery = useNotificationServicesQuery();
   const createMutation = useCreateNotificationChannelMutation();
@@ -126,7 +112,7 @@ export function SettingsNotificationsPage() {
       setFormState(channelToFormState(saved));
       setFeedback({
         tone: "success",
-        message: formState.id === null ? "Notification channel created." : "Notification channel updated.",
+        message: formState.id === null ? t("notifications.created") : t("notifications.updated"),
       });
     } catch (error) {
       setFeedback({
@@ -153,7 +139,7 @@ export function SettingsNotificationsPage() {
       setFormState(remainingChannels[0] ? channelToFormState(remainingChannels[0]) : DEFAULT_FORM_STATE);
       setFeedback({
         tone: "success",
-        message: "Notification channel deleted.",
+        message: t("notifications.deleted"),
       });
     } catch (error) {
       setFeedback({
@@ -167,7 +153,7 @@ export function SettingsNotificationsPage() {
     if (!formState.id) {
       setFeedback({
         tone: "error",
-        message: "Save the channel before sending a test notification.",
+        message: t("notifications.saveBeforeTest"),
       });
       return;
     }
@@ -178,7 +164,7 @@ export function SettingsNotificationsPage() {
       const response = await testMutation.mutateAsync(formState.id);
       setFeedback({
         tone: "success",
-        message: response.message ?? response.detail ?? "Test notification sent.",
+        message: response.message ?? response.detail ?? t("notifications.testSent"),
       });
     } catch (error) {
       setFeedback({
@@ -191,14 +177,8 @@ export function SettingsNotificationsPage() {
   return (
     <div className="ref-console-page" style={{ gap: 16 }}>
       <PageHeader
-        eyebrow="Global Settings"
-        title="Notifications"
-        subtitle={
-          <p>
-            Configure Feishu and WeCom robot webhooks, choose which services are in scope, and select which task
-            events should fan out to operators.
-          </p>
-        }
+        title={t("notifications.title")}
+        subtitle={<p>{t("notifications.subtitle")}</p>}
         actions={
           <div className="page-actions-stack">
             <button
@@ -210,7 +190,7 @@ export function SettingsNotificationsPage() {
               }}
               type="button"
             >
-              New channel
+              {t("notifications.newChannel")}
             </button>
           </div>
         }
@@ -231,16 +211,16 @@ export function SettingsNotificationsPage() {
         }}
       >
         <Panel
-          title="Channels"
-          subtitle="Each channel owns a webhook target, service scope, and event subscription set."
+          title={t("notifications.channelsTitle")}
+          subtitle={t("notifications.channelsSubtitle")}
           className="ref-card-panel ref-card-panel-compact"
         >
-          {channelsQuery.isPending ? <div className="loading-block">Loading notification channels…</div> : null}
-          {channelsQuery.error ? <EmptyState title="Failed to load channels" body={String(channelsQuery.error)} /> : null}
+          {channelsQuery.isPending ? <div className="loading-block">{t("notifications.loadingChannels")}</div> : null}
+          {channelsQuery.error ? <EmptyState title={t("notifications.loadErrorTitle")} body={String(channelsQuery.error)} /> : null}
           {!channelsQuery.isPending && !channelsQuery.error && channels.length === 0 ? (
             <EmptyState
-              title="No notification channels yet"
-              body="Create the first channel to start routing task events to Feishu or WeCom."
+              title={t("notifications.emptyTitle")}
+              body={t("notifications.emptyBody")}
             />
           ) : null}
 
@@ -269,14 +249,17 @@ export function SettingsNotificationsPage() {
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                       <strong style={{ fontSize: 15 }}>{channel.name}</strong>
-                      <StatusBadge value={channel.enabled ? "active" : "offline"} label={channel.enabled ? "Enabled" : "Disabled"} />
+                      <StatusBadge
+                        value={channel.enabled ? "active" : "offline"}
+                        label={channel.enabled ? t("notifications.enabled") : t("notifications.disabled")}
+                      />
                     </div>
                     <div style={{ display: "grid", gap: 6 }}>
                       <span style={{ color: "var(--ref-ink-700)", fontSize: 13 }}>
-                        {getProviderLabel(channel.provider)} · {channel.service_scopes.length} services
+                        {getProviderLabel(channel.provider, t)} · {t("notifications.servicesCount", { count: channel.service_scopes.length })}
                       </span>
                       <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
-                        {formatEventTypes(channel.event_types)}
+                        {formatEventTypes(channel.event_types, t)}
                       </span>
                     </div>
                   </button>
@@ -287,13 +270,13 @@ export function SettingsNotificationsPage() {
         </Panel>
 
         <Panel
-          title={formState.id ? "Edit channel" : "Create channel"}
-          subtitle="Webhook delivery failures should not block telemetry ingestion. Keep the first version simple and explicit."
+          title={formState.id ? t("notifications.editChannel") : t("notifications.createChannel")}
+          subtitle={t("notifications.formSubtitle")}
           className="ref-card-panel"
           actions={
             <div className="page-actions-inline">
               <button className="button-secondary" disabled={isTesting || isSaving} onClick={() => void handleTest()} type="button">
-                {isTesting ? "Sending…" : "Send test"}
+                {isTesting ? t("notifications.sending") : t("notifications.sendTest")}
               </button>
               <button
                 className={formState.id ? "button-secondary button-danger" : "button-secondary"}
@@ -301,7 +284,7 @@ export function SettingsNotificationsPage() {
                 onClick={() => void handleDelete()}
                 type="button"
               >
-                {formState.id ? (isDeleting ? "Deleting…" : "Delete") : "Reset"}
+                {formState.id ? (isDeleting ? t("notifications.deleting") : t("notifications.delete")) : t("notifications.reset")}
               </button>
             </div>
           }
@@ -309,10 +292,10 @@ export function SettingsNotificationsPage() {
           <form onSubmit={(event) => void handleSubmit(event)} style={{ display: "grid", gap: 18 }}>
             <div className="ref-overview-grid ref-overview-grid-compact">
               <label className="ref-inline-control">
-                <span>Name</span>
+                <span>{t("notifications.nameLabel")}</span>
                 <input
                   onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="Primary Feishu channel"
+                  placeholder={t("notifications.namePlaceholder")}
                   required
                   type="text"
                   value={formState.name}
@@ -320,7 +303,7 @@ export function SettingsNotificationsPage() {
               </label>
 
               <label className="ref-inline-control">
-                <span>Provider</span>
+                <span>{t("notifications.providerLabel")}</span>
                 <select
                   onChange={(event) =>
                     setFormState((current) => ({
@@ -330,14 +313,14 @@ export function SettingsNotificationsPage() {
                   }
                   value={formState.provider}
                 >
-                  <option value="feishu">Feishu</option>
-                  <option value="wechat_work">WeCom</option>
+                  <option value="feishu">{t("notifications.providerFeishu")}</option>
+                  <option value="wechat_work">{t("notifications.providerWecom")}</option>
                 </select>
               </label>
             </div>
 
             <label className="ref-inline-control">
-              <span>Webhook URL</span>
+              <span>{t("notifications.webhookUrlLabel")}</span>
               <input
                 onChange={(event) => setFormState((current) => ({ ...current, webhook_url: event.target.value }))}
                 placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
@@ -364,22 +347,22 @@ export function SettingsNotificationsPage() {
                 type="checkbox"
               />
               <div style={{ display: "grid", gap: 4 }}>
-                <strong style={{ fontSize: 14 }}>Channel enabled</strong>
+                <strong style={{ fontSize: 14 }}>{t("notifications.enabledLabel")}</strong>
                 <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
-                  Disabled channels stay configured but do not receive live or derived notifications.
+                  {t("notifications.enabledHint")}
                 </span>
               </div>
             </label>
 
             <section style={{ display: "grid", gap: 10 }}>
               <div style={{ display: "grid", gap: 4 }}>
-                <strong style={{ fontSize: 15 }}>Services</strong>
+                <strong style={{ fontSize: 15 }}>{t("notifications.servicesTitle")}</strong>
                 <span style={{ color: "var(--ref-ink-600)", fontSize: 13 }}>
-                  Select the services that should fan out notifications through this webhook.
+                  {t("notifications.servicesSubtitle")}
                 </span>
               </div>
-              {servicesQuery.isPending ? <div className="loading-block">Loading services…</div> : null}
-              {servicesQuery.error ? <EmptyState title="Failed to load services" body={String(servicesQuery.error)} /> : null}
+              {servicesQuery.isPending ? <div className="loading-block">{t("notifications.loadingServices")}</div> : null}
+              {servicesQuery.error ? <EmptyState title={t("notifications.loadServicesErrorTitle")} body={String(servicesQuery.error)} /> : null}
               {!servicesQuery.isPending && !servicesQuery.error ? (
                 <div
                   style={{
@@ -426,9 +409,9 @@ export function SettingsNotificationsPage() {
 
             <section style={{ display: "grid", gap: 10 }}>
               <div style={{ display: "grid", gap: 4 }}>
-                <strong style={{ fontSize: 15 }}>Event types</strong>
+                <strong style={{ fontSize: 15 }}>{t("notifications.eventTypesTitle")}</strong>
                 <span style={{ color: "var(--ref-ink-600)", fontSize: 13 }}>
-                  Raw events emit immediately. Missed start is derived from scheduled task expectations.
+                  {t("notifications.eventTypesSubtitle")}
                 </span>
               </div>
               <div
@@ -438,11 +421,11 @@ export function SettingsNotificationsPage() {
                   gap: 10,
                 }}
               >
-                {EVENT_OPTIONS.map((option) => {
-                  const checked = formState.event_types.includes(option.value);
+                {EVENT_VALUES.map((value) => {
+                  const checked = formState.event_types.includes(value);
                   return (
                     <label
-                      key={option.value}
+                      key={value}
                       style={{
                         display: "flex",
                         gap: 12,
@@ -458,14 +441,14 @@ export function SettingsNotificationsPage() {
                         onChange={() =>
                           setFormState((current) => ({
                             ...current,
-                            event_types: toggleEventType(current.event_types, option.value),
+                            event_types: toggleEventType(current.event_types, value),
                           }))
                         }
                         type="checkbox"
                       />
                       <div style={{ display: "grid", gap: 4 }}>
-                        <strong style={{ fontSize: 14 }}>{option.label}</strong>
-                        <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>{option.description}</span>
+                        <strong style={{ fontSize: 14 }}>{getEventLabel(value, t)}</strong>
+                        <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>{getEventDesc(value, t)}</span>
                       </div>
                     </label>
                   );
@@ -475,7 +458,7 @@ export function SettingsNotificationsPage() {
 
             {hasMissedStart ? (
               <label className="ref-inline-control" style={{ maxWidth: 260 }}>
-                <span>Missed start grace seconds</span>
+                <span>{t("notifications.graceLabel")}</span>
                 <input
                   min={1}
                   onChange={(event) =>
@@ -493,7 +476,7 @@ export function SettingsNotificationsPage() {
 
             <div className="page-actions-inline">
               <button className="ref-primary-button" disabled={isSaving} type="submit">
-                {isSaving ? "Saving…" : formState.id ? "Save changes" : "Create channel"}
+                {isSaving ? t("notifications.saving") : formState.id ? t("notifications.saveChanges") : t("notifications.createChannel")}
               </button>
             </div>
           </form>
@@ -574,16 +557,36 @@ function toggleEventType(currentTypes: NotificationEventType[], targetType: Noti
   return [...currentTypes, targetType];
 }
 
-function getProviderLabel(provider: NotificationProvider) {
-  return provider === "feishu" ? "Feishu" : "WeCom";
+const EVENT_LABEL_KEYS: Record<NotificationEventType, string> = {
+  task_started: "notifications.eventTaskStarted",
+  task_succeeded: "notifications.eventTaskSucceeded",
+  task_failed: "notifications.eventTaskFailed",
+  task_missed_start: "notifications.eventTaskMissedStart",
+};
+
+const EVENT_DESC_KEYS: Record<NotificationEventType, string> = {
+  task_started: "notifications.eventTaskStartedDesc",
+  task_succeeded: "notifications.eventTaskSucceededDesc",
+  task_failed: "notifications.eventTaskFailedDesc",
+  task_missed_start: "notifications.eventTaskMissedStartDesc",
+};
+
+function getEventLabel(eventType: NotificationEventType, t: (key: string) => string) {
+  return t(EVENT_LABEL_KEYS[eventType]);
 }
 
-function formatEventTypes(eventTypes: NotificationEventType[]) {
+function getEventDesc(eventType: NotificationEventType, t: (key: string) => string) {
+  return t(EVENT_DESC_KEYS[eventType]);
+}
+
+function getProviderLabel(provider: NotificationProvider, t: (key: string) => string) {
+  return provider === "feishu" ? t("notifications.providerFeishu") : t("notifications.providerWecom");
+}
+
+function formatEventTypes(eventTypes: NotificationEventType[], t: (key: string) => string) {
   if (eventTypes.length === 0) {
-    return "No events selected";
+    return t("notifications.noEventsSelected");
   }
 
-  return eventTypes
-    .map((eventType) => EVENT_OPTIONS.find((option) => option.value === eventType)?.label ?? eventType)
-    .join(", ");
+  return eventTypes.map((eventType) => getEventLabel(eventType, t)).join(", ");
 }
