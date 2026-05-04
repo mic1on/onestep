@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Adds RabbitMQ `exclusive` queue support and resource configuration.
+- Extends task lifecycle event handling with `STARTED` and `SUCCEEDED`.
+- Fixes the reporter metrics/event payload index regression covered by tests.
+
 ## 1.2.0
 
 - Adds YAML app definitions with strict validation, named resources, hooks, and
