@@ -76,7 +76,13 @@ export function TaskDetailPage() {
   const commands = commandsQuery.data?.items ?? [];
   const taskCommands = commands.filter(
     (command) =>
-      (command.kind === "pause_task" || command.kind === "resume_task") &&
+      (
+        command.kind === "pause_task" ||
+        command.kind === "resume_task" ||
+        command.kind === "discard_dead_letters" ||
+        command.kind === "replay_dead_letters" ||
+        command.kind === "run_task_once"
+      ) &&
       command.args.task_name === resolvedTaskName,
   );
   const instanceOrder = new Map(taskControlStates.map((state, index) => [state.instance_id, index]));

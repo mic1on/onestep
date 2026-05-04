@@ -16,6 +16,7 @@ export type AgentCommandKind =
   | "resume_task"
   | "discard_dead_letters"
   | "replay_dead_letters"
+  | "run_task_once"
   | "sync_now"
   | "flush_metrics"
   | "flush_events";
@@ -23,7 +24,8 @@ export type TaskCommandKind =
   | "pause_task"
   | "resume_task"
   | "discard_dead_letters"
-  | "replay_dead_letters";
+  | "replay_dead_letters"
+  | "run_task_once";
 export type AgentCommandSourceSurface = "unknown" | "instance_detail" | "service_detail_fanout" | "task_detail";
 export type AgentCommandDeliveryMode = "dispatch_now_only" | "queue_until_reconnect";
 export type ServiceCommandTargetMode = "all_online" | "selected_instances";

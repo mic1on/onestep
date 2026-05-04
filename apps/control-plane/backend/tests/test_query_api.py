@@ -1675,6 +1675,283 @@ def test_task_command_fanout_targets_selected_instances_only(
         )
 
 
+def test_task_command_fanout_dispatches_run_task_once_with_payload_to_selected_online_instances(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    selected_a = seed_instance(
+        db_session,
+        service,
+        node_name="vm-manual-a",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": ["run_task_once"],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    selected_b = seed_instance(
+        db_session,
+        service,
+        node_name="vm-manual-b",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=9),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": ["run_task_once"],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    offline_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-manual-offline",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=5),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": ["run_task_once"],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    session_a = seed_agent_session(
+        db_session,
+        service,
+        selected_a,
+        status="active",
+        connected_at=now - timedelta(minutes=2),
+        session_id="sess_manual_a",
+        accepted_capabilities_json=["telemetry.sync", "command.run_task_once"],
+    )
+    session_b = seed_agent_session(
+        db_session,
+        service,
+        selected_b,
+        status="active",
+        connected_at=now - timedelta(minutes=2),
+        session_id="sess_manual_b",
+        accepted_capabilities_json=["telemetry.sync", "command.run_task_once"],
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        offline_instance,
+        status="disconnected",
+        connected_at=now - timedelta(minutes=3),
+        last_message_at=now - timedelta(minutes=2),
+        session_id="sess_manual_offline",
+        accepted_capabilities_json=["telemetry.sync", "command.run_task_once"],
+    )
+    db_session.commit()
+
+    queue_a: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    queue_b: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    asyncio.run(
+        agent_connection_registry.register(
+            instance_id=selected_a.instance_id,
+            session_id=session_a.session_id,
+            send_queue=queue_a,
+        )
+    )
+    asyncio.run(
+        agent_connection_registry.register(
+            instance_id=selected_b.instance_id,
+            session_id=session_b.session_id,
+            send_queue=queue_b,
+        )
+    )
+    try:
+        response = client.post(
+            "/api/v1/services/billing-sync/tasks/sync_users/commands",
+            params={"environment": "prod"},
+            json={
+                "kind": "run_task_once",
+                "args": {"payload": {"source": "manual", "dry_run": True}},
+                "reason": "Run the task manually for targeted verification",
+                "target_mode": "selected_instances",
+                "target_instance_ids": [
+                    str(selected_a.instance_id),
+                    str(selected_b.instance_id),
+                ],
+                "offline_behavior": "skip",
+                "timeout_s": 120,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["counts"] == {
+            "dispatched": 2,
+            "queued": 0,
+            "skipped": 0,
+            "rejected": 0,
+            "total": 2,
+        }
+        assert queue_a.get_nowait()["payload"]["args"] == {
+            "task_name": "sync_users",
+            "payload": {"source": "manual", "dry_run": True},
+        }
+        assert queue_b.get_nowait()["payload"]["args"] == {
+            "task_name": "sync_users",
+            "payload": {"source": "manual", "dry_run": True},
+        }
+    finally:
+        asyncio.run(
+            agent_connection_registry.unregister(
+                instance_id=selected_a.instance_id,
+                session_id=session_a.session_id,
+            )
+        )
+        asyncio.run(
+            agent_connection_registry.unregister(
+                instance_id=selected_b.instance_id,
+                session_id=session_b.session_id,
+            )
+        )
+
+
+def test_task_command_fanout_rejects_run_task_once_without_selected_instances(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-manual-invalid",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": ["run_task_once"],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/services/billing-sync/tasks/sync_users/commands",
+        params={"environment": "prod"},
+        json={
+            "kind": "run_task_once",
+            "args": {"payload": {"source": "manual"}},
+            "reason": "This should fail without explicit target selection",
+            "target_mode": "all_online",
+            "offline_behavior": "skip",
+            "timeout_s": 120,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "target_mode=selected_instances is required when kind=run_task_once" in response.text
+
+
+def test_task_command_fanout_rejects_run_task_once_with_non_object_payload(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-manual-payload",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": ["run_task_once"],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        instance,
+        status="active",
+        connected_at=now - timedelta(minutes=2),
+        session_id="sess_manual_payload",
+        accepted_capabilities_json=["telemetry.sync", "command.run_task_once"],
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/services/billing-sync/tasks/sync_users/commands",
+        params={"environment": "prod"},
+        json={
+            "kind": "run_task_once",
+            "args": {"payload": ["not", "an", "object"]},
+            "reason": "This should fail because the payload is not an object",
+            "target_mode": "selected_instances",
+            "target_instance_ids": [str(instance.instance_id)],
+            "offline_behavior": "skip",
+            "timeout_s": 120,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "args.payload must be a JSON object when kind=run_task_once" in response.text
+
+
 def test_task_command_fanout_dispatches_replay_dead_letters_with_limit(
     client,
     db_session,
@@ -2488,6 +2765,7 @@ def test_get_service_task_detail_includes_task_control_state(client, db_session)
                         "resume_task",
                         "discard_dead_letters",
                         "replay_dead_letters",
+                        "run_task_once",
                     ],
                     "pause_requested": True,
                     "paused": True,
@@ -2543,6 +2821,7 @@ def test_get_service_task_detail_includes_task_control_state(client, db_session)
             "command.resume_task",
             "command.discard_dead_letters",
             "command.replay_dead_letters",
+            "command.run_task_once",
         ],
         session_id="sess_paused",
     )
@@ -2587,6 +2866,7 @@ def test_get_service_task_detail_includes_task_control_state(client, db_session)
                 "resume_task",
                 "discard_dead_letters",
                 "replay_dead_letters",
+                "run_task_once",
             ],
             "state_known": True,
             "pause_requested": True,

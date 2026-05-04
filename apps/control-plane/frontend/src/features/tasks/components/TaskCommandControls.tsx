@@ -24,6 +24,7 @@ type PendingTaskAction = {
 };
 
 const DEFAULT_REPLAY_LIMIT = 10;
+const DEFAULT_RUN_TASK_PAYLOAD = "{\n  \"trigger\": \"manual\"\n}";
 
 export function TaskCommandControls({
   serviceName,
@@ -39,10 +40,15 @@ export function TaskCommandControls({
   const [submittingAction, setSubmittingAction] = useState<PendingTaskAction | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [lastRunSummary, setLastRunSummary] = useState<string | null>(null);
+  const [manualRunTargetIds, setManualRunTargetIds] = useState<string[]>([]);
+  const [manualRunPayloadText, setManualRunPayloadText] = useState(DEFAULT_RUN_TASK_PAYLOAD);
+  const [manualRunReason, setManualRunReason] = useState("");
+  const [manualRunError, setManualRunError] = useState<string | null>(null);
 
   const taskStates = taskControl.instances;
   const onlineTaskStates = taskStates.filter((state) => state.connectivity === "online");
   const availableActions = getTaskActions(onlineTaskStates);
+  const manualRunStates = onlineTaskStates.filter((state) => canRunTaskCommand(state, "run_task_once"));
   const onlineSupportingStates = onlineTaskStates.filter((state) => supportsTaskControl(state));
   const pausedOnlineCount = onlineSupportingStates.filter((state) => state.state_known && state.paused).length;
   const acceptingOnlineCount = onlineSupportingStates.filter(
@@ -54,6 +60,7 @@ export function TaskCommandControls({
   async function dispatchTaskCommand(action: PendingTaskAction, reason: string) {
     setSubmitError(null);
     setLastRunSummary(null);
+    setManualRunError(null);
     setSubmittingAction(action);
     try {
       const response = await mutation.mutateAsync({
@@ -61,6 +68,8 @@ export function TaskCommandControls({
         args:
           action.kind === "replay_dead_letters" || action.kind === "discard_dead_letters"
             ? { limit: replayLimit }
+            : action.kind === "run_task_once"
+              ? { payload: parseManualRunPayload(manualRunPayloadText) }
             : undefined,
         timeout_s: resolveTaskCommandTimeoutSeconds(action.kind),
         reason,
@@ -82,6 +91,40 @@ export function TaskCommandControls({
     } finally {
       setSubmittingAction(null);
     }
+  }
+
+  function toggleManualRunTarget(instanceId: string) {
+    setManualRunTargetIds((current) =>
+      current.includes(instanceId)
+        ? current.filter((value) => value !== instanceId)
+        : [...current, instanceId],
+    );
+  }
+
+  async function handleManualRunSubmit() {
+    const normalizedReason = manualRunReason.trim();
+    if (!normalizedReason) {
+      setManualRunError(t("taskCommandControls.manualRun.reasonRequired"));
+      return;
+    }
+    if (manualRunTargetIds.length === 0) {
+      setManualRunError(t("taskCommandControls.manualRun.selectionRequired"));
+      return;
+    }
+
+    try {
+      parseManualRunPayload(manualRunPayloadText);
+    } catch (error) {
+      setManualRunError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+
+    await dispatchTaskCommand(
+      { kind: "run_task_once", targetInstanceIds: manualRunTargetIds },
+      normalizedReason,
+    );
+    setManualRunReason("");
+    setManualRunError(null);
   }
 
   return (
@@ -133,6 +176,85 @@ export function TaskCommandControls({
         )}
       </div>
 
+      {manualRunStates.length > 0 ? (
+        <div className="fanout-section">
+          <div className="fanout-section-header">
+            <span className="list-row-label">{t("taskCommandControls.manualRun.title")}</span>
+            <div className="fanout-inline-actions">
+              <button
+                className="button-link"
+                onClick={() => setManualRunTargetIds(manualRunStates.map((state) => state.instance_id))}
+                type="button"
+              >
+                {t("taskCommandControls.manualRun.selectAll")}
+              </button>
+              <button className="button-link" onClick={() => setManualRunTargetIds([])} type="button">
+                {t("taskCommandControls.manualRun.clearSelection")}
+              </button>
+            </div>
+          </div>
+          <p className="fanout-note">
+            {t("taskCommandControls.manualRun.subtitle", { count: manualRunStates.length })}
+          </p>
+          <div className="fanout-instance-grid">
+            {manualRunStates.map((state) => {
+              const checked = manualRunTargetIds.includes(state.instance_id);
+              return (
+                <label
+                  className={checked ? "fanout-instance-option active" : "fanout-instance-option"}
+                  key={state.instance_id}
+                >
+                  <input
+                    checked={checked}
+                    onChange={() => toggleManualRunTarget(state.instance_id)}
+                    type="checkbox"
+                  />
+                  <div className="fanout-instance-copy">
+                    <strong>{state.node_name}</strong>
+                    <p>{state.instance_id}</p>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          <label className="dialog-field">
+            <span>{t("taskCommandControls.manualRun.payloadLabel")}</span>
+            <textarea
+              onChange={(event) => setManualRunPayloadText(event.target.value)}
+              placeholder={t("taskCommandControls.manualRun.payloadPlaceholder")}
+              rows={8}
+              value={manualRunPayloadText}
+            />
+          </label>
+          <label className="dialog-field">
+            <span>{t("taskCommandControls.manualRun.reasonLabel")}</span>
+            <textarea
+              onChange={(event) => setManualRunReason(event.target.value)}
+              placeholder={t("taskCommandControls.manualRun.reasonPlaceholder")}
+              rows={3}
+              value={manualRunReason}
+            />
+          </label>
+          {manualRunError || submitError ? (
+            <p className="fanout-note">{manualRunError ?? submitError}</p>
+          ) : null}
+          <div className="task-control-action-row">
+            <button
+              className="button-secondary"
+              disabled={mutation.isPending}
+              onClick={() => void handleManualRunSubmit()}
+              type="button"
+            >
+              {mutation.isPending && submittingAction?.kind === "run_task_once"
+                ? t("commands.dispatchingAction", {
+                    kind: t("commandKind.run_task_once", { defaultValue: "run_task_once" }),
+                  })
+                : t("commands.action.run_task_once")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <CommandReasonDialog
         description={t("taskCommandControls.dialogBody", {
           kind: reasonDialogAction ? t(`commandKind.${reasonDialogAction.kind}`, { defaultValue: reasonDialogAction.kind }) : "",
@@ -163,7 +285,12 @@ export function TaskCommandControls({
 }
 
 function resolveTaskCommandTimeoutSeconds(kind: TaskCommandKind) {
-  if (kind === "pause_task" || kind === "discard_dead_letters" || kind === "replay_dead_letters") {
+  if (
+    kind === "pause_task" ||
+    kind === "discard_dead_letters" ||
+    kind === "replay_dead_letters" ||
+    kind === "run_task_once"
+  ) {
     return 120;
   }
   return 30;
@@ -212,4 +339,17 @@ function canPauseTask(state: TaskInstanceControlState) {
 
 function canResumeTask(state: TaskInstanceControlState) {
   return canRunTaskCommand(state, "resume_task") && state.state_known && state.paused === true;
+}
+
+function parseManualRunPayload(payloadText: string) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payloadText);
+  } catch {
+    throw new Error("Payload must be valid JSON.");
+  }
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("Payload must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
 }
