@@ -187,6 +187,7 @@ def test_reporter_heartbeat_includes_task_control_states() -> None:
             "supported_commands": [
                 "pause_task",
                 "resume_task",
+                "run_task_once",
             ],
             "pause_requested": True,
             "paused": True,

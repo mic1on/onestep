@@ -603,6 +603,41 @@ def test_discard_task_dead_letters_acknowledges_dead_letter_batch() -> None:
     asyncio.run(scenario())
 
 
+def test_run_task_once_executes_generic_manual_delivery_contract() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("manual-run-contract")
+
+        @app.task(source=source, emit=sink)
+        async def consume(ctx, item):
+            return {
+                "value": item["value"] + 1,
+                "manual_run": bool(ctx.delivery.envelope.meta.get("manual_run")),
+            }
+
+        await app.startup()
+        result = await app.run_task_once("consume", payload={"value": 9})
+        processed = await sink.fetch(1)
+        await app.shutdown()
+
+        assert result == {
+            "operation": "run_task_once",
+            "task_name": "consume",
+            "requested": True,
+            "completion": "complete",
+            "attempted_count": 1,
+            "manual_run": True,
+        }
+        assert len(processed) == 1
+        assert processed[0].payload == {
+            "value": 10,
+            "manual_run": True,
+        }
+
+    asyncio.run(scenario())
+
+
 def test_task_events_and_metrics_for_success_and_timeout_dead_letter() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming", poll_interval_s=0.01)

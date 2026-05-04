@@ -63,6 +63,8 @@ class ScheduleDelivery(Delivery):
 
 
 class BaseScheduleSource(Source):
+    supports_manual_run = True
+
     def __init__(
         self,
         name: str,
