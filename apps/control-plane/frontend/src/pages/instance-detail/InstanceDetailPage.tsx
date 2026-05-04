@@ -7,6 +7,7 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
+import { useToast } from "../../components/ui/ToastProvider";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
 import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
 import { CommandQuickActions } from "../../features/commands/components/CommandQuickActions";
@@ -36,6 +37,7 @@ type InstanceActivityTab = "commands" | "metrics" | "events";
 
 export function InstanceDetailPage() {
   const { i18n, t } = useTranslation();
+  const { pushToast } = useToast();
   const { serviceName, instanceId } = useParams<{ serviceName: string; instanceId: string }>();
   const [searchParams] = useSearchParams();
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
@@ -131,17 +133,20 @@ export function InstanceDetailPage() {
         delivery_mode: deliveryMode,
         reason,
       });
-      setSubmitMessage(
+      const message =
         response.status === "pending" && response.session_id === null
           ? t("instanceDetail.commandQueuedOk", {
               kind: t(`commandKind.${kind}`, { defaultValue: kind }),
             })
           : t("instanceDetail.commandDispatchOk", {
               kind: t(`commandKind.${kind}`, { defaultValue: kind }),
-            }),
-      );
+            });
+      setSubmitMessage(message);
+      pushToast({ tone: "success", message });
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setSubmitError(message);
+      pushToast({ tone: "error", message });
       throw error;
     }
   }
@@ -183,8 +188,6 @@ export function InstanceDetailPage() {
         </div>
       </section>
 
-      {submitMessage ? <div className="inline-feedback inline-feedback-success">{submitMessage}</div> : null}
-      {submitError ? <div className="inline-feedback inline-feedback-error">{submitError}</div> : null}
       {detailQuery.isPending ? <div className="loading-block hero-block">{t("instanceDetail.loading")}</div> : null}
 
       {instance ? (

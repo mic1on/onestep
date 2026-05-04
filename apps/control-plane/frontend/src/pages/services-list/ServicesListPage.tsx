@@ -55,39 +55,40 @@ export function ServicesListPage() {
             {t("servicesList.subtitle")}
           </p>
         }
+        actions={
+          <div className="ref-page-actions">
+            <label className="ref-inline-control ref-inline-control-select">
+              <span>{t("servicesList.filterScope")}</span>
+              <select
+                onChange={(event) => updateSearchParam("environment", event.target.value)}
+                value={selectedEnvironment}
+              >
+                <option value="all">{t("environment.all")}</option>
+                <option value="prod">{t("environment.prod")}</option>
+                <option value="staging">{t("environment.staging")}</option>
+                <option value="dev">{t("environment.dev")}</option>
+              </select>
+            </label>
+
+            <label className="ref-inline-control ref-inline-control-search">
+              <span>{t("common.search")}</span>
+              <input
+                name="service-search"
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setSearch(nextValue);
+                  startTransition(() => {
+                    updateSearchParam("q", nextValue || undefined);
+                  });
+                }}
+                placeholder={t("servicesList.searchPlaceholder")}
+                type="search"
+                value={search}
+              />
+            </label>
+          </div>
+        }
       />
-
-      <div className="ref-page-actions">
-        <label className="ref-inline-control ref-inline-control-select">
-          <span>{t("servicesList.filterScope")}</span>
-          <select
-            onChange={(event) => updateSearchParam("environment", event.target.value)}
-            value={selectedEnvironment}
-          >
-            <option value="all">{t("environment.all")}</option>
-            <option value="prod">{t("environment.prod")}</option>
-            <option value="staging">{t("environment.staging")}</option>
-            <option value="dev">{t("environment.dev")}</option>
-          </select>
-        </label>
-
-        <label className="ref-inline-control ref-inline-control-search">
-          <span>{t("common.search")}</span>
-          <input
-            name="service-search"
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              setSearch(nextValue);
-              startTransition(() => {
-                updateSearchParam("q", nextValue || undefined);
-              });
-            }}
-            placeholder={t("servicesList.searchPlaceholder")}
-            type="search"
-            value={search}
-          />
-        </label>
-      </div>
 
       <section className="ref-summary-strip">
         <SummaryChip

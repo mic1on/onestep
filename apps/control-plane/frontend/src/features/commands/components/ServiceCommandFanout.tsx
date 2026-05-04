@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { SegmentedControl } from "../../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../../components/ui/StatusBadge";
+import { useToast } from "../../../components/ui/ToastProvider";
 import { CommandReasonDialog } from "./CommandReasonDialog";
 import { useCreateServiceCommandFanoutMutation } from "../queries";
 import { commandSupportsQueueing } from "../capabilities";
@@ -37,6 +38,7 @@ export function ServiceCommandFanout({
   instances,
 }: ServiceCommandFanoutProps) {
   const { t } = useTranslation();
+  const { pushToast } = useToast();
   const mutation = useCreateServiceCommandFanoutMutation(serviceName, environment);
   const [targetMode, setTargetMode] = useState<ServiceCommandTargetMode>("all_online");
   const [offlineBehavior, setOfflineBehavior] = useState<"skip" | "queue">("skip");
@@ -75,8 +77,17 @@ export function ServiceCommandFanout({
         offline_behavior: offlineBehavior,
       });
       setLastResult(result);
+      pushToast({
+        tone: "success",
+        message: t("serviceCommandFanout.lastRunSummary", {
+          kind: t(`commandKind.${result.kind}`, { defaultValue: result.kind }),
+          total: result.counts.total,
+        }),
+      });
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setSubmitError(message);
+      pushToast({ tone: "error", message });
       throw error;
     } finally {
       setPendingKind(null);
@@ -220,17 +231,8 @@ export function ServiceCommandFanout({
         </div>
       </div>
 
-      {submitError ? <div className="inline-feedback inline-feedback-error">{submitError}</div> : null}
-
       {lastResult ? (
         <div className="fanout-result-stack">
-          <div className="inline-feedback inline-feedback-success">
-            {t("serviceCommandFanout.lastRunSummary", {
-              kind: t(`commandKind.${lastResult.kind}`, { defaultValue: lastResult.kind }),
-              total: lastResult.counts.total,
-            })}
-          </div>
-
           <div className="fanout-summary-grid">
             <article className="fanout-summary-card">
               <strong>{t("serviceCommandFanout.outcome.dispatched")}</strong>

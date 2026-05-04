@@ -8,7 +8,7 @@ import {
   testNotificationChannel,
   updateNotificationChannel,
 } from "../../lib/api/client";
-import type { NotificationChannelUpsertRequest } from "../../lib/api/types";
+import type { NotificationChannelPatchRequest, NotificationChannelUpsertRequest } from "../../lib/api/types";
 
 const NOTIFICATION_CHANNELS_QUERY_KEY = ["notification-channels"];
 const NOTIFICATION_SERVICES_QUERY_KEY = ["notification-services"];
@@ -42,7 +42,7 @@ export function useUpdateNotificationChannelMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ channelId, payload }: { channelId: string; payload: NotificationChannelUpsertRequest }) =>
+    mutationFn: ({ channelId, payload }: { channelId: string; payload: NotificationChannelPatchRequest }) =>
       updateNotificationChannel(channelId, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: NOTIFICATION_CHANNELS_QUERY_KEY });

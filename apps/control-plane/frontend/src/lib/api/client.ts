@@ -10,6 +10,7 @@ import type {
   InstanceListResponse,
   NotificationChannel,
   NotificationChannelListResponse,
+  NotificationChannelPatchRequest,
   NotificationChannelTestResponse,
   NotificationChannelUpsertRequest,
   NotificationEventType,
@@ -161,7 +162,7 @@ export async function createNotificationChannel(payload: NotificationChannelUpse
   return normalizeNotificationChannel(response);
 }
 
-export async function updateNotificationChannel(channelId: string, payload: NotificationChannelUpsertRequest) {
+export async function updateNotificationChannel(channelId: string, payload: NotificationChannelPatchRequest) {
   const response = await request<Parameters<typeof normalizeNotificationChannel>[0]>(
     `/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}`,
     {

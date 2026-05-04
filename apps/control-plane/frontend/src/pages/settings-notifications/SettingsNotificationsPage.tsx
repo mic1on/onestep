@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
-import { StatusBadge } from "../../components/ui/StatusBadge";
+import { useToast } from "../../components/ui/ToastProvider";
 import {
   useCreateNotificationChannelMutation,
   useDeleteNotificationChannelMutation,
@@ -46,6 +46,7 @@ const DEFAULT_FORM_STATE: FormState = {
 
 export function SettingsNotificationsPage() {
   const { t } = useTranslation();
+  const { pushToast } = useToast();
   const channelsQuery = useNotificationChannelsQuery();
   const servicesQuery = useNotificationServicesQuery();
   const createMutation = useCreateNotificationChannelMutation();
@@ -58,7 +59,7 @@ export function SettingsNotificationsPage() {
 
   const [selectedChannelId, setSelectedChannelId] = useState<string | "new">("new");
   const [formState, setFormState] = useState<FormState>(DEFAULT_FORM_STATE);
-  const [feedback, setFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? null,
@@ -67,6 +68,10 @@ export function SettingsNotificationsPage() {
 
   useEffect(() => {
     if (selectedChannelId === "new") {
+      if (channels.length > 0) {
+        setSelectedChannelId(channels[0].id);
+        return;
+      }
       setFormState(DEFAULT_FORM_STATE);
       return;
     }
@@ -95,11 +100,10 @@ export function SettingsNotificationsPage() {
   const isDeleting = deleteMutation.isPending;
   const isTesting = testMutation.isPending;
   const hasMissedStart = formState.event_types.includes("task_missed_start");
+  const togglingChannelId = updateMutation.isPending ? updateMutation.variables?.channelId ?? null : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setFeedback(null);
-
     const payload = buildPayload(formState);
 
     try {
@@ -110,12 +114,13 @@ export function SettingsNotificationsPage() {
 
       setSelectedChannelId(saved.id);
       setFormState(channelToFormState(saved));
-      setFeedback({
+      setIsDeleteConfirmOpen(false);
+      pushToast({
         tone: "success",
         message: formState.id === null ? t("notifications.created") : t("notifications.updated"),
       });
     } catch (error) {
-      setFeedback({
+      pushToast({
         tone: "error",
         message: error instanceof Error ? error.message : String(error),
       });
@@ -126,23 +131,22 @@ export function SettingsNotificationsPage() {
     if (!formState.id) {
       setFormState(DEFAULT_FORM_STATE);
       setSelectedChannelId("new");
-      setFeedback(null);
+      setIsDeleteConfirmOpen(false);
       return;
     }
-
-    setFeedback(null);
 
     try {
       await deleteMutation.mutateAsync(formState.id);
       const remainingChannels = channels.filter((channel) => channel.id !== formState.id);
       setSelectedChannelId(remainingChannels[0]?.id ?? "new");
       setFormState(remainingChannels[0] ? channelToFormState(remainingChannels[0]) : DEFAULT_FORM_STATE);
-      setFeedback({
+      setIsDeleteConfirmOpen(false);
+      pushToast({
         tone: "success",
         message: t("notifications.deleted"),
       });
     } catch (error) {
-      setFeedback({
+      pushToast({
         tone: "error",
         message: error instanceof Error ? error.message : String(error),
       });
@@ -151,23 +155,42 @@ export function SettingsNotificationsPage() {
 
   async function handleTest() {
     if (!formState.id) {
-      setFeedback({
+      pushToast({
         tone: "error",
         message: t("notifications.saveBeforeTest"),
       });
       return;
     }
 
-    setFeedback(null);
-
     try {
       const response = await testMutation.mutateAsync(formState.id);
-      setFeedback({
+      pushToast({
         tone: "success",
         message: response.message ?? response.detail ?? t("notifications.testSent"),
       });
     } catch (error) {
-      setFeedback({
+      pushToast({
+        tone: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async function handleToggleEnabled(channel: NotificationChannel) {
+    try {
+      const updated = await updateMutation.mutateAsync({
+        channelId: channel.id,
+        payload: { enabled: !channel.enabled },
+      });
+      if (selectedChannelId === updated.id) {
+        setFormState(channelToFormState(updated));
+      }
+      pushToast({
+        tone: "success",
+        message: t("notifications.updated"),
+      });
+    } catch (error) {
+      pushToast({
         tone: "error",
         message: error instanceof Error ? error.message : String(error),
       });
@@ -182,11 +205,11 @@ export function SettingsNotificationsPage() {
         actions={
           <div className="page-actions-stack">
             <button
-              className="ref-primary-button"
+              className="notification-action-button notification-action-button-primary"
               onClick={() => {
                 setSelectedChannelId("new");
                 setFormState(DEFAULT_FORM_STATE);
-                setFeedback(null);
+                setIsDeleteConfirmOpen(false);
               }}
               type="button"
             >
@@ -195,12 +218,6 @@ export function SettingsNotificationsPage() {
           </div>
         }
       />
-
-      {feedback ? (
-        <div className={feedback.tone === "success" ? "inline-feedback inline-feedback-success" : "inline-feedback inline-feedback-error"}>
-          {feedback.message}
-        </div>
-      ) : null}
 
       <div
         style={{
@@ -228,41 +245,56 @@ export function SettingsNotificationsPage() {
             <div style={{ display: "grid", gap: 10 }}>
               {channels.map((channel) => {
                 const selected = channel.id === selectedChannelId;
+                const isToggling = togglingChannelId === channel.id;
                 return (
-                  <button
+                  <article
                     key={channel.id}
-                    onClick={() => {
-                      setSelectedChannelId(channel.id);
-                      setFeedback(null);
-                    }}
-                    type="button"
-                    className="ref-ghost-button"
+                    className={`notification-channel-card${selected ? " is-selected" : ""}`}
                     style={{
-                      display: "grid",
-                      gap: 10,
-                      justifyItems: "stretch",
-                      padding: 14,
-                      textAlign: "left",
                       background: selected ? "var(--ref-surface-accent)" : "var(--ref-surface-soft)",
                       borderColor: selected ? "var(--ref-border-emphasis)" : "var(--ref-border-strong)",
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                      <strong style={{ fontSize: 15 }}>{channel.name}</strong>
-                      <StatusBadge
-                        value={channel.enabled ? "active" : "offline"}
-                        label={channel.enabled ? t("notifications.enabled") : t("notifications.disabled")}
-                      />
+                    <button
+                      onClick={() => {
+                        setSelectedChannelId(channel.id);
+                        setIsDeleteConfirmOpen(false);
+                      }}
+                      type="button"
+                      className="notification-channel-main"
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                        <strong style={{ fontSize: 14 }}>{channel.name}</strong>
+                      </div>
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <span style={{ color: "var(--ref-ink-700)", fontSize: 12 }}>
+                          {getProviderLabel(channel.provider, t)} · {t("notifications.servicesCount", { count: channel.service_scopes.length })}
+                        </span>
+                        <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
+                          {formatEventTypes(channel.event_types, t)}
+                        </span>
+                      </div>
+                    </button>
+                    <div className="notification-channel-actions">
+                      <button
+                        className={`notification-channel-toggle${channel.enabled ? " is-enabled" : " is-disabled"}${isToggling ? " is-pending" : ""}`}
+                        disabled={isToggling}
+                        onClick={() => void handleToggleEnabled(channel)}
+                        type="button"
+                      >
+                        <span className="notification-channel-toggle-dot" aria-hidden="true" />
+                        <span className="notification-channel-toggle-label">
+                        {isToggling
+                          ? channel.enabled
+                            ? t("notifications.disabling")
+                            : t("notifications.enabling")
+                          : channel.enabled
+                            ? t("notifications.disable")
+                            : t("notifications.enable")}
+                        </span>
+                      </button>
                     </div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      <span style={{ color: "var(--ref-ink-700)", fontSize: 13 }}>
-                        {getProviderLabel(channel.provider, t)} · {t("notifications.servicesCount", { count: channel.service_scopes.length })}
-                      </span>
-                      <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
-                        {formatEventTypes(channel.event_types, t)}
-                      </span>
-                    </div>
-                  </button>
+                  </article>
                 );
               })}
             </div>
@@ -274,18 +306,59 @@ export function SettingsNotificationsPage() {
           subtitle={t("notifications.formSubtitle")}
           className="ref-card-panel"
           actions={
-            <div className="page-actions-inline">
-              <button className="button-secondary" disabled={isTesting || isSaving} onClick={() => void handleTest()} type="button">
-                {isTesting ? t("notifications.sending") : t("notifications.sendTest")}
-              </button>
+            <div className="page-actions-inline notification-actions-row">
               <button
-                className={formState.id ? "button-secondary button-danger" : "button-secondary"}
-                disabled={isDeleting || isSaving}
-                onClick={() => void handleDelete()}
+                className="notification-action-button notification-action-button-secondary"
+                disabled={isTesting || isSaving}
+                onClick={() => void handleTest()}
                 type="button"
               >
-                {formState.id ? (isDeleting ? t("notifications.deleting") : t("notifications.delete")) : t("notifications.reset")}
+                {isTesting ? t("notifications.sending") : t("notifications.sendTest")}
               </button>
+              <div className="notification-delete-popconfirm">
+                <button
+                  className={formState.id ? "notification-action-button notification-action-button-danger" : "notification-action-button notification-action-button-secondary"}
+                  disabled={isDeleting || isSaving}
+                  onClick={() => {
+                    if (!formState.id) {
+                      void handleDelete();
+                      return;
+                    }
+                    setIsDeleteConfirmOpen((current) => !current);
+                  }}
+                  type="button"
+                >
+                  {formState.id ? t("notifications.delete") : t("notifications.reset")}
+                </button>
+
+                {formState.id && isDeleteConfirmOpen ? (
+                  <div className="notification-delete-bubble" role="alertdialog" aria-live="polite">
+                    <div className="notification-delete-bubble-arrow" aria-hidden="true" />
+                    <div className="notification-delete-bubble-copy">
+                      <strong>{t("notifications.deleteConfirmTitle")}</strong>
+                      <p>{t("notifications.deleteConfirmBody")}</p>
+                    </div>
+                    <div className="notification-delete-bubble-actions">
+                      <button
+                        className="notification-action-button notification-action-button-secondary"
+                        disabled={isDeleting}
+                        onClick={() => setIsDeleteConfirmOpen(false)}
+                        type="button"
+                      >
+                        {t("notifications.cancelDelete")}
+                      </button>
+                      <button
+                        className="notification-action-button notification-action-button-danger-solid"
+                        disabled={isDeleting}
+                        onClick={() => void handleDelete()}
+                        type="button"
+                      >
+                        {isDeleting ? t("notifications.deleting") : t("notifications.confirmDelete")}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </div>
           }
         >
@@ -330,22 +403,14 @@ export function SettingsNotificationsPage() {
               />
             </label>
 
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "12px 14px",
-                border: "1px solid var(--ref-border)",
-                borderRadius: 14,
-                background: "var(--ref-surface-subtle)",
-              }}
-            >
+            <label className={`notification-choice-card notification-choice-card-toggle${formState.enabled ? " is-selected" : ""}`}>
               <input
+                className="notification-choice-input"
                 checked={formState.enabled}
                 onChange={(event) => setFormState((current) => ({ ...current, enabled: event.target.checked }))}
                 type="checkbox"
               />
+              <span className="notification-choice-indicator" aria-hidden="true" />
               <div style={{ display: "grid", gap: 4 }}>
                 <strong style={{ fontSize: 14 }}>{t("notifications.enabledLabel")}</strong>
                 <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
@@ -376,17 +441,10 @@ export function SettingsNotificationsPage() {
                     return (
                       <label
                         key={`${service.environment}:${service.name}`}
-                        style={{
-                          display: "flex",
-                          gap: 12,
-                          alignItems: "flex-start",
-                          padding: "12px 14px",
-                          border: "1px solid var(--ref-border)",
-                          borderRadius: 14,
-                          background: checked ? "var(--ref-surface-accent)" : "var(--ref-surface-subtle)",
-                        }}
+                        className={`notification-choice-card${checked ? " is-selected" : ""}`}
                       >
                         <input
+                          className="notification-choice-input"
                           checked={checked}
                           onChange={() =>
                             setFormState((current) => ({
@@ -396,6 +454,7 @@ export function SettingsNotificationsPage() {
                           }
                           type="checkbox"
                         />
+                        <span className="notification-choice-indicator" aria-hidden="true" />
                         <div style={{ display: "grid", gap: 4 }}>
                           <strong style={{ fontSize: 14 }}>{service.name}</strong>
                           <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>{service.environment}</span>
@@ -426,17 +485,10 @@ export function SettingsNotificationsPage() {
                   return (
                     <label
                       key={value}
-                      style={{
-                        display: "flex",
-                        gap: 12,
-                        alignItems: "flex-start",
-                        padding: "12px 14px",
-                        border: "1px solid var(--ref-border)",
-                        borderRadius: 14,
-                        background: checked ? "var(--ref-surface-accent)" : "var(--ref-surface-subtle)",
-                      }}
+                      className={`notification-choice-card${checked ? " is-selected" : ""}`}
                     >
                       <input
+                        className="notification-choice-input"
                         checked={checked}
                         onChange={() =>
                           setFormState((current) => ({
@@ -446,6 +498,7 @@ export function SettingsNotificationsPage() {
                         }
                         type="checkbox"
                       />
+                      <span className="notification-choice-indicator" aria-hidden="true" />
                       <div style={{ display: "grid", gap: 4 }}>
                         <strong style={{ fontSize: 14 }}>{getEventLabel(value, t)}</strong>
                         <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>{getEventDesc(value, t)}</span>
@@ -474,8 +527,8 @@ export function SettingsNotificationsPage() {
               </label>
             ) : null}
 
-            <div className="page-actions-inline">
-              <button className="ref-primary-button" disabled={isSaving} type="submit">
+            <div className="page-actions-inline notification-actions-row">
+              <button className="notification-action-button notification-action-button-primary" disabled={isSaving} type="submit">
                 {isSaving ? t("notifications.saving") : formState.id ? t("notifications.saveChanges") : t("notifications.createChannel")}
               </button>
             </div>

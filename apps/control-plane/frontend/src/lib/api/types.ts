@@ -43,6 +43,7 @@ export type AgentCommandStatus =
   | "cancelled";
 export type AgentSessionStatus = "active" | "disconnected" | "superseded";
 export type TaskEventKind =
+  | "started"
   | "failed"
   | "retried"
   | "dead_lettered"
@@ -115,6 +116,16 @@ export interface NotificationChannelUpsertRequest {
   enabled: boolean;
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];
+  missed_start_grace_seconds?: number;
+}
+
+export interface NotificationChannelPatchRequest {
+  name?: string;
+  provider?: NotificationProvider;
+  webhook_url?: string;
+  enabled?: boolean;
+  service_scopes?: NotificationServiceScope[];
+  event_types?: NotificationEventType[];
   missed_start_grace_seconds?: number;
 }
 
