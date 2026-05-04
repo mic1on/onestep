@@ -65,6 +65,40 @@ class Service(Base):
     )
 
 
+class NotificationChannel(Base):
+    __tablename__ = "notification_channels"
+    __table_args__ = (sa.UniqueConstraint("name", name="uq_notification_channels_name"),)
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    provider: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    webhook_url: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    service_scopes_json: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=list,
+    )
+    event_types_json: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    missed_start_grace_seconds: Mapped[int] = mapped_column(
+        sa.Integer,
+        nullable=False,
+        default=300,
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    deliveries: Mapped[list[NotificationDelivery]] = relationship(
+        back_populates="channel",
+        cascade="all, delete-orphan",
+    )
+
+
 class Instance(Base):
     __tablename__ = "instances"
     __table_args__ = (
@@ -362,3 +396,37 @@ class TaskEvent(Base):
         back_populates="task_events",
         primaryjoin=lambda: foreign(TaskEvent.instance_id) == Instance.instance_id,
     )
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        sa.UniqueConstraint("dedupe_key", name="uq_notification_deliveries_dedupe_key"),
+        sa.Index(
+            "ix_notification_deliveries_channel_id_created_at",
+            "channel_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    channel_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("notification_channels.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    dedupe_key: Mapped[str] = mapped_column(sa.String(512), nullable=False)
+    event_type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    service_name: Mapped[str | None] = mapped_column(sa.String(255))
+    service_environment: Mapped[str | None] = mapped_column(sa.String(32))
+    task_name: Mapped[str | None] = mapped_column(sa.String(255))
+    task_event_id: Mapped[str | None] = mapped_column(sa.String(255))
+    scheduled_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
+    request_payload_json: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)
+    response_status_code: Mapped[int | None] = mapped_column(sa.Integer)
+    response_body: Mapped[str | None] = mapped_column(sa.Text)
+    error_message: Mapped[str | None] = mapped_column(sa.Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    channel: Mapped[NotificationChannel] = relationship(back_populates="deliveries")

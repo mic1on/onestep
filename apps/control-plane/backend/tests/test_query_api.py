@@ -2239,6 +2239,7 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
     assert sync_users["weighted_avg_duration_ms"] == 175.0
     assert sync_users["max_p95_duration_ms"] == 300.0
     assert sync_users["event_counts"] == {
+        "started": 0,
         "failed": 1,
         "retried": 1,
         "dead_lettered": 0,
@@ -2257,6 +2258,7 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
     assert cleanup_orphans["metric_window_count"] == 0
     assert cleanup_orphans["last_event_at"] is not None
     assert cleanup_orphans["event_counts"] == {
+        "started": 0,
         "failed": 0,
         "retried": 0,
         "dead_lettered": 0,
@@ -2271,6 +2273,7 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
         == "Run the full nightly reconciliation pass for dormant records."
     )
     assert nightly_reconcile["event_counts"] == {
+        "started": 0,
         "failed": 0,
         "retried": 0,
         "dead_lettered": 0,
@@ -2413,6 +2416,7 @@ def test_get_service_task_detail_returns_summary_windows_and_events(client, db_s
         }
     ]
     assert payload["summary"]["event_counts"] == {
+        "started": 0,
         "failed": 1,
         "retried": 1,
         "dead_lettered": 0,

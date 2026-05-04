@@ -3,13 +3,14 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
+import { PageHeader } from "../../components/ui/PageHeader";
 import { useServicesQuery } from "../../features/services/queries";
 import type { ServiceSummary } from "../../lib/api/types";
 import { formatDateTime, formatRelativeTime } from "../../lib/formatters";
 import { servicePath } from "../../lib/routes";
 
 export function ServicesListPage() {
-  const { i18n, t } = useTranslation();
+  const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const environmentParam = searchParams.get("environment");
   const selectedEnvironment =
@@ -18,7 +19,6 @@ export function ServicesListPage() {
       : "all";
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const deferredSearch = useDeferredValue(search);
-  const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
 
   const { data, isPending, error } = useServicesQuery(
     selectedEnvironment === "all" ? undefined : selectedEnvironment,
@@ -45,74 +45,69 @@ export function ServicesListPage() {
 
   return (
     <div className="ref-console-page">
-      <section className="ref-page-head">
-        <div className="ref-page-title">
-          <div className="ref-page-icon">OS</div>
-          <div className="ref-page-copy">
-            <h2>
-              {isZh ? "服务列表" : "Services"}
-              <span>({sortedItems.length})</span>
-            </h2>
-            <p>
-              {isZh
-                ? `在线实例 ${onlineInstances}/${totalInstances || 0}，当前 ${attentionCount} 个服务需要关注。`
-                : `${onlineInstances}/${totalInstances || 0} instances online, ${attentionCount} services need attention.`}
-            </p>
+      <PageHeader
+        title={t("servicesList.title")}
+        titleMeta={
+          <span className="service-title-chip">{sortedItems.length}</span>
+        }
+        subtitle={
+          <p>
+            {t("servicesList.subtitle")}
+          </p>
+        }
+        actions={
+          <div className="ref-page-actions">
+            <label className="ref-inline-control ref-inline-control-select">
+              <span>{t("servicesList.filterScope")}</span>
+              <select
+                onChange={(event) => updateSearchParam("environment", event.target.value)}
+                value={selectedEnvironment}
+              >
+                <option value="all">{t("environment.all")}</option>
+                <option value="prod">{t("environment.prod")}</option>
+                <option value="staging">{t("environment.staging")}</option>
+                <option value="dev">{t("environment.dev")}</option>
+              </select>
+            </label>
+
+            <label className="ref-inline-control ref-inline-control-search">
+              <span>{t("common.search")}</span>
+              <input
+                name="service-search"
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setSearch(nextValue);
+                  startTransition(() => {
+                    updateSearchParam("q", nextValue || undefined);
+                  });
+                }}
+                placeholder={t("servicesList.searchPlaceholder")}
+                type="search"
+                value={search}
+              />
+            </label>
           </div>
-        </div>
-
-        <div className="ref-page-actions">
-          <label className="ref-inline-control ref-inline-control-select">
-            <span>{t("servicesList.filterScope")}</span>
-            <select
-              onChange={(event) => updateSearchParam("environment", event.target.value)}
-              value={selectedEnvironment}
-            >
-              <option value="all">{t("environment.all")}</option>
-              <option value="prod">{t("environment.prod")}</option>
-              <option value="staging">{t("environment.staging")}</option>
-              <option value="dev">{t("environment.dev")}</option>
-            </select>
-          </label>
-
-          <label className="ref-inline-control ref-inline-control-search">
-            <span>{t("common.search")}</span>
-            <input
-              name="service-search"
-              onChange={(event) => {
-                const nextValue = event.target.value;
-                setSearch(nextValue);
-                startTransition(() => {
-                  updateSearchParam("q", nextValue || undefined);
-                });
-              }}
-              placeholder={t("servicesList.searchPlaceholder")}
-              type="search"
-              value={search}
-            />
-          </label>
-
-        </div>
-      </section>
+        }
+      />
 
       <section className="ref-summary-strip">
         <SummaryChip
-          label={isZh ? "服务数" : "Services"}
+          label={t("servicesList.summaryServices")}
           tone="default"
           value={String(sortedItems.length)}
         />
         <SummaryChip
-          label={isZh ? "在线实例" : "Online"}
+          label={t("servicesList.summaryOnline")}
           tone="success"
           value={`${onlineInstances}/${totalInstances || 0}`}
         />
         <SummaryChip
-          label={isZh ? "稳定服务" : "Ready"}
+          label={t("servicesList.summaryReady")}
           tone="accent"
           value={String(sortedItems.filter(isServiceFullyOnline).length)}
         />
         <SummaryChip
-          label={isZh ? "需关注" : "Attention"}
+          label={t("servicesList.summaryAttention")}
           tone={attentionCount > 0 ? "danger" : "default"}
           value={String(attentionCount)}
         />
@@ -127,11 +122,11 @@ export function ServicesListPage() {
       {!isPending && !error && sortedItems.length > 0 ? (
         <section className="ref-table-card">
           <div className="ref-table-head">
-            <span>{isZh ? "名称" : "Name"}</span>
-            <span>{isZh ? "创建时间" : "Created"}</span>
-            <span>{isZh ? "最近活跃" : "Last active"}</span>
-            <span>{isZh ? "部署版本" : "Deployment"}</span>
-            <span>{isZh ? "实例数" : "Instances"}</span>
+            <span>{t("servicesList.tableHeaderName")}</span>
+            <span>{t("servicesList.tableHeaderCreated")}</span>
+            <span>{t("servicesList.tableHeaderLastActive")}</span>
+            <span>{t("servicesList.tableHeaderDeployment")}</span>
+            <span>{t("servicesList.tableHeaderInstances")}</span>
           </div>
 
           <div className="ref-table-body">
@@ -158,7 +153,7 @@ export function ServicesListPage() {
                   <strong title={formatDateTime(service.last_seen_at)}>
                     {formatRelativeTime(service.last_seen_at)}
                   </strong>
-                  <span>{getActivityHint(service, isZh)}</span>
+                  <span>{getActivityHint(service, t)}</span>
                 </div>
 
                 <div className="ref-meta-cell">
@@ -175,7 +170,7 @@ export function ServicesListPage() {
                     />
                   </div>
                   <strong>
-                    {isZh ? "活跃" : "Live"}: {service.online_instance_count}/{service.instance_count}
+                    {t("servicesList.instanceLive")}: {service.online_instance_count}/{service.instance_count}
                   </strong>
                 </div>
               </article>
@@ -256,9 +251,9 @@ function getCoverageBarClass(service: ServiceSummary) {
   return "ref-usage-fill is-empty";
 }
 
-function getActivityHint(service: ServiceSummary, isZh: boolean) {
+function getActivityHint(service: ServiceSummary, t: (key: string) => string) {
   if (service.last_seen_at === null) {
-    return isZh ? "实例尚未上报活跃时间" : "No instance activity reported yet";
+    return t("servicesList.noActivityHint");
   }
   return formatDateTime(service.last_seen_at);
 }

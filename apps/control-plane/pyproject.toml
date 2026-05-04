@@ -11,6 +11,7 @@ license = { text = "MIT" }
 dependencies = [
   "alembic>=1.16.0",
   "fastapi>=0.116.0",
+  "httpx>=0.28.0",
   "pydantic-settings>=2.7.0",
   "psycopg[binary]>=3.2.0",
   "sqlalchemy>=2.0.36",
@@ -20,11 +21,9 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-  "httpx>=0.28.0",
   "pytest>=8.4.0",
 ]
 dev = [
-  "httpx>=0.28.0",
   "pytest>=8.4.0",
   "ruff>=0.13.0",
 ]

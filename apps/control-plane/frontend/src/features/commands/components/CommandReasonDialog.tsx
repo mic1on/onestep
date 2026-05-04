@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useToast } from "../../../components/ui/ToastProvider";
+
 type CommandReasonDialogProps = {
   open: boolean;
   title: string;
@@ -19,6 +21,7 @@ export function CommandReasonDialog({
   onConfirm,
 }: CommandReasonDialogProps) {
   const { t } = useTranslation();
+  const { pushToast } = useToast();
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -36,14 +39,18 @@ export function CommandReasonDialog({
   async function handleConfirm() {
     const normalizedReason = reason.trim();
     if (!normalizedReason) {
-      setError(t("commandReasonDialog.reasonRequired"));
+      const message = t("commandReasonDialog.reasonRequired");
+      setError(message);
+      pushToast({ tone: "error", message });
       return;
     }
     setError(null);
     try {
       await onConfirm(normalizedReason);
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setError(message);
+      pushToast({ tone: "error", message });
     }
   }
 
@@ -70,8 +77,6 @@ export function CommandReasonDialog({
             value={reason}
           />
         </label>
-
-        {error ? <div className="inline-feedback inline-feedback-error">{error}</div> : null}
 
         <div className="dialog-actions">
           <button className="button-link" disabled={isSubmitting} onClick={onCancel} type="button">

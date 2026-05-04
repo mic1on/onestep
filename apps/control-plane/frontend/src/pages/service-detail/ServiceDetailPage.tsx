@@ -7,6 +7,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
+import { useToast } from "../../components/ui/ToastProvider";
 import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
 import { useCreateServiceCommandFanoutMutation, useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
 import { ServiceCommandFanout } from "../../features/commands/components/ServiceCommandFanout";
@@ -42,6 +43,7 @@ type QuickActionKind = (typeof QUICK_ACTIONS)[number];
 
 export function ServiceDetailPage() {
   const { i18n, t } = useTranslation();
+  const { pushToast } = useToast();
   const { serviceName } = useParams<{ serviceName: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingQuickAction, setPendingQuickAction] =
@@ -99,11 +101,11 @@ export function ServiceDetailPage() {
           targetCount = Math.max(targetCount, result.counts.dispatched + result.counts.queued);
         }
 
-        setActionMessage(
-          isZh
-            ? `${t("serviceDetail.syncMenu.syncAll")} 已下发，目标 ${targetCount} 个实例。`
-            : `${t("serviceDetail.syncMenu.syncAll")} dispatched to ${targetCount} instances.`,
-        );
+        const message = isZh
+          ? `${t("serviceDetail.syncMenu.syncAll")} 已下发，目标 ${targetCount} 个实例。`
+          : `${t("serviceDetail.syncMenu.syncAll")} dispatched to ${targetCount} instances.`;
+        setActionMessage(message);
+        pushToast({ tone: "success", message });
       } else {
         const result = await quickActionMutation.mutateAsync({
           kind: pendingQuickAction,
@@ -113,16 +115,18 @@ export function ServiceDetailPage() {
           offline_behavior: "skip",
         });
 
-        setActionMessage(
-          isZh
-            ? `${getQuickActionLabel(pendingQuickAction, t)} 已下发，目标 ${result.counts.dispatched + result.counts.queued} 个实例。`
-            : `${getQuickActionLabel(pendingQuickAction, t)} dispatched to ${result.counts.dispatched + result.counts.queued} instances.`,
-        );
+        const message = isZh
+          ? `${getQuickActionLabel(pendingQuickAction, t)} 已下发，目标 ${result.counts.dispatched + result.counts.queued} 个实例。`
+          : `${getQuickActionLabel(pendingQuickAction, t)} dispatched to ${result.counts.dispatched + result.counts.queued} instances.`;
+        setActionMessage(message);
+        pushToast({ tone: "success", message });
       }
 
       setPendingQuickAction(null);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setActionError(message);
+      pushToast({ tone: "error", message });
       throw error;
     }
   }
@@ -225,8 +229,6 @@ export function ServiceDetailPage() {
         </div>
       </section>
 
-      {actionMessage ? <div className="inline-feedback inline-feedback-success">{actionMessage}</div> : null}
-      {actionError ? <div className="inline-feedback inline-feedback-error">{actionError}</div> : null}
       {dashboardQuery.isPending ? <div className="loading-block hero-block">{t("serviceDetail.loading")}</div> : null}
 
       {dashboard ? (

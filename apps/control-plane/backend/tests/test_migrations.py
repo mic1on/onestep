@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202603180001"
+HEAD_REVISION = "202604300001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -32,6 +32,8 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "instances",
         "services",
         "alembic_version",
+        "notification_channels",
+        "notification_deliveries",
         "task_definitions",
         "task_events",
         "task_metric_windows",
@@ -111,6 +113,36 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
+    assert {column["name"] for column in inspector.get_columns("notification_channels")} == {
+        "id",
+        "name",
+        "provider",
+        "webhook_url",
+        "enabled",
+        "service_scopes_json",
+        "event_types_json",
+        "missed_start_grace_seconds",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("notification_deliveries")} == {
+        "id",
+        "channel_id",
+        "dedupe_key",
+        "event_type",
+        "service_name",
+        "service_environment",
+        "task_name",
+        "task_event_id",
+        "scheduled_at",
+        "status",
+        "request_payload_json",
+        "response_status_code",
+        "response_body",
+        "error_message",
+        "created_at",
+        "sent_at",
+    }
     assert {column["name"] for column in inspector.get_columns("task_definitions")} == {
         "id",
         "service_id",
@@ -135,6 +167,12 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     agent_command_columns = {
         column["name"]: column for column in inspector.get_columns("agent_commands")
     }
+    notification_channel_columns = {
+        column["name"]: column for column in inspector.get_columns("notification_channels")
+    }
+    notification_delivery_columns = {
+        column["name"]: column for column in inspector.get_columns("notification_deliveries")
+    }
     instance_columns = {column["name"]: column for column in inspector.get_columns("instances")}
     assert isinstance(instance_columns["app_snapshot_json"]["type"], sa.JSON)
     assert isinstance(agent_session_columns["capabilities_json"]["type"], sa.JSON)
@@ -143,6 +181,10 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert isinstance(agent_command_columns["result_json"]["type"], sa.JSON)
     assert isinstance(agent_command_columns["duration_ms"]["type"], sa.Integer)
     assert isinstance(agent_command_columns["source_surface"]["type"], sa.String)
+    assert isinstance(notification_channel_columns["service_scopes_json"]["type"], sa.JSON)
+    assert isinstance(notification_channel_columns["event_types_json"]["type"], sa.JSON)
+    assert isinstance(notification_channel_columns["missed_start_grace_seconds"]["type"], sa.Integer)
+    assert isinstance(notification_delivery_columns["request_payload_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {
@@ -197,6 +239,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("agent_commands")} == {
         "ix_agent_commands_instance_id_status_created_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("notification_deliveries")} == {
+        "ix_notification_deliveries_channel_id_created_at",
     }
     assert {index["name"] for index in inspector.get_indexes("task_metric_windows")} == {
         "ix_task_metric_windows_service_id_task_name_window_ended_at",

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useToast } from "../../../components/ui/ToastProvider";
 import type {
   Environment,
   TaskCommandKind,
@@ -31,6 +32,7 @@ export function TaskCommandControls({
   taskControl,
 }: TaskCommandControlsProps) {
   const { t } = useTranslation();
+  const { pushToast } = useToast();
   const mutation = useCreateTaskCommandFanoutMutation(serviceName, taskName, environment);
   const [replayLimit, setReplayLimit] = useState(DEFAULT_REPLAY_LIMIT);
   const [reasonDialogAction, setReasonDialogAction] = useState<PendingTaskAction | null>(null);
@@ -66,14 +68,16 @@ export function TaskCommandControls({
         target_instance_ids: action.targetInstanceIds,
       });
       const deliveredTargetCount = response.counts.dispatched + response.counts.queued;
-      setLastRunSummary(
-        t("taskCommandControls.lastRunSummary", {
+      const message = t("taskCommandControls.lastRunSummary", {
           kind: t(`commandKind.${action.kind}`, { defaultValue: action.kind }),
           total: deliveredTargetCount,
-        }),
-      );
+        });
+      setLastRunSummary(message);
+      pushToast({ tone: "success", message });
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setSubmitError(message);
+      pushToast({ tone: "error", message });
       throw error;
     } finally {
       setSubmittingAction(null);
@@ -128,9 +132,6 @@ export function TaskCommandControls({
           <p className="fanout-note">{t("taskCommandControls.noOnlineInstances")}</p>
         )}
       </div>
-
-      {submitError ? <div className="inline-feedback inline-feedback-error">{submitError}</div> : null}
-      {lastRunSummary ? <div className="inline-feedback inline-feedback-success">{lastRunSummary}</div> : null}
 
       <CommandReasonDialog
         description={t("taskCommandControls.dialogBody", {

@@ -635,6 +635,7 @@ def get_service_command_overview(
 
 def build_task_event_counts(*, counts_by_kind: dict[str, int]) -> TaskEventCounts:
     return TaskEventCounts(
+        started=counts_by_kind.get("started", 0),
         failed=counts_by_kind.get("failed", 0),
         retried=counts_by_kind.get("retried", 0),
         dead_lettered=counts_by_kind.get("dead_lettered", 0),

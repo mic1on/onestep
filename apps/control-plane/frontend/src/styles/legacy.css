@@ -100,7 +100,7 @@ button {
   pointer-events: none;
 }
 
-.sidebar-frame > * {
+.sidebar-frame>* {
   position: relative;
   z-index: 1;
 }
@@ -124,18 +124,7 @@ button {
   line-height: 0.96;
 }
 
-.eyebrow {
-  margin: 0 0 10px;
-  color: var(--accent);
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.74rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
 
-.sidebar-frame .eyebrow {
-  color: rgba(243, 250, 247, 0.74);
-}
 
 .app-subtitle,
 .page-subtitle,
@@ -1568,6 +1557,7 @@ button {
 }
 
 @media (max-width: 640px) {
+
   .app-shell,
   .auth-shell {
     padding: 14px;
@@ -1718,10 +1708,6 @@ body {
   line-height: 1;
 }
 
-.sidebar-brand .eyebrow,
-.shell-topbar .eyebrow {
-  margin-bottom: 6px;
-}
 
 .app-subtitle {
   margin-top: 6px;
@@ -1940,10 +1926,6 @@ body {
   margin: 0;
   font-size: clamp(1.9rem, 3vw, 2.6rem);
   line-height: 1;
-}
-
-.shell-topbar-eyebrow {
-  color: var(--accent-strong);
 }
 
 .shell-breadcrumbs {
@@ -3092,6 +3074,7 @@ body {
 }
 
 @media (max-width: 720px) {
+
   .app-shell,
   .auth-shell {
     padding: 12px;
@@ -3257,15 +3240,6 @@ body::before {
   letter-spacing: -0.02em;
 }
 
-.eyebrow {
-  margin-bottom: 0;
-  color: #0060c5;
-  font-family: inherit;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
 
 .app-subtitle,
 .sidebar-brand .app-subtitle,
@@ -3405,7 +3379,7 @@ body::before {
   letter-spacing: -0.02em;
 }
 
-.inspector-card + .inspector-card {
+.inspector-card+.inspector-card {
   margin-top: 0;
 }
 
@@ -4478,7 +4452,6 @@ body::before,
     min-width: 0;
   }
 
-  .sidebar-brand .eyebrow,
   .sidebar-brand .app-subtitle {
     display: none;
   }
@@ -4585,54 +4558,42 @@ body {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-6);
+  gap: 0;
+  padding: 24px 24px 0;
 }
 
 .shell-topbar {
   position: sticky;
-  top: var(--space-6);
-  z-index: 30;
+  top: 24px;
+  z-index: 1000;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--space-5);
-  padding: var(--space-4) var(--space-5);
+  gap: var(--space-4);
+  padding: 0 16px 0 24px;
+  height: 56px;
+  margin-bottom: 24px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--gradient-surface-glass);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(var(--blur-md));
-  -webkit-backdrop-filter: blur(var(--blur-md));
 }
 
 .shell-topbar-main {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-5);
   flex: 1 1 auto;
 }
 
 .shell-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
   min-width: 0;
-  padding: 10px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.76);
-  border-radius: calc(var(--radius-lg) - 2px);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(249, 251, 254, 0.88));
-  box-shadow: var(--shadow-inner-highlight);
-  transition:
-    transform var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
-}
-
-.shell-brand:hover {
-  transform: translateY(-1px);
-  border-color: var(--color-border-strong);
 }
 
 .shell-brand-mark {
@@ -4640,130 +4601,86 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 38px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid rgba(17, 18, 20, 0.14);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.86);
+  min-width: 28px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(15, 95, 91, 0.12);
+  border-radius: 8px;
+  background: rgba(15, 95, 91, 0.08);
   color: var(--accent-strong);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
 }
 
-.shell-brand-copy {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.shell-brand-kicker {
-  color: var(--accent-strong);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.shell-brand-copy strong {
+.shell-brand-title {
   color: var(--text);
   font-family: var(--font-display);
-  font-size: clamp(1rem, 1.4vw, 1.2rem);
+  font-size: 14px;
   font-weight: var(--font-weight-bold);
   letter-spacing: -0.02em;
 }
 
-.shell-brand-copy span:last-child {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
 .shell-nav {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  align-items: center;
+  gap: 24px;
 }
 
 .shell-nav-link {
   display: inline-flex;
   align-items: center;
-  min-height: 38px;
-  padding: 0 14px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  min-height: 30px;
+  padding: 0 2px;
+  border-bottom: 2px solid transparent;
   color: var(--muted);
+  transition:
+    color var(--duration-fast) var(--ease-standard);
   font-size: 13px;
   font-weight: var(--font-weight-semibold);
-  transition:
-    color var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
+  letter-spacing: -0.01em;
 }
 
 .shell-nav-link:hover,
 .shell-nav-link.active {
-  border-color: rgba(17, 18, 20, 0.12);
-  background: rgba(17, 18, 20, 0.05);
-  color: var(--accent-strong);
+  border-color: transparent;
+  color: var(--text);
 }
 
 .shell-topbar-side {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--space-3);
-  max-width: 52%;
+  flex: 0 0 auto;
 }
 
-.shell-context {
-  min-width: 0;
-  display: grid;
-  justify-items: end;
-  gap: 8px;
-}
-
-.shell-context-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: var(--font-weight-medium);
-}
-
-.shell-context-link,
-.shell-context-title {
+.shell-username {
   color: var(--text);
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: var(--font-weight-bold);
-  letter-spacing: -0.02em;
+  font-size: 13px;
+  font-weight: var(--font-weight-semibold);
 }
 
-.shell-context-link:hover {
-  color: var(--accent-strong);
-}
-
-.shell-context-chips {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.shell-context-chip,
-.shell-meta-chip {
+.shell-logout-btn {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  padding: 0 12px;
+  height: 36px;
+  padding: 0 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.72);
+  border-radius: var(--radius-pill);
+  background: transparent;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: var(--font-weight-medium);
-  backdrop-filter: blur(var(--blur-sm));
-  -webkit-backdrop-filter: blur(var(--blur-sm));
+  font-size: 13px;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.shell-logout-btn:hover {
+  color: var(--text);
+  border-color: var(--muted);
 }
 
 .shell-topbar-actions {
@@ -4804,51 +4721,25 @@ body {
 
 @media (max-width: 1100px) {
   .app-shell {
-    padding: var(--space-5);
+    padding: 18px 18px 0;
   }
 
   .shell-topbar {
-    top: var(--space-5);
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .shell-topbar-main {
-    flex-wrap: wrap;
-  }
-
-  .shell-topbar-side {
-    max-width: none;
-    align-items: flex-start;
-  }
-
-  .shell-context {
-    justify-items: start;
-  }
-
-  .shell-context-chips,
-  .shell-topbar-actions {
-    justify-content: flex-start;
+    top: 18px;
+    padding: 0 14px 0 18px;
+    margin-bottom: 18px;
   }
 }
 
 @media (max-width: 720px) {
   .app-shell {
-    gap: var(--space-4);
-    padding: var(--space-4);
+    padding: 12px 12px 0;
   }
 
   .shell-topbar {
-    top: var(--space-4);
-    padding: var(--space-4);
-  }
-
-  .shell-brand {
-    width: 100%;
-  }
-
-  .shell-brand-copy span:last-child {
-    display: none;
+    top: 12px;
+    padding: 0 12px 0 14px;
+    margin-bottom: 12px;
   }
 
   .page-shell {

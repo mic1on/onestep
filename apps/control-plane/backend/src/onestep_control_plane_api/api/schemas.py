@@ -36,7 +36,15 @@ class APIModel(BaseModel):
 
 Environment = Literal["dev", "staging", "prod"]
 HealthStatus = Literal["ok", "degraded", "error", "starting", "unknown"]
-TaskEventKind = Literal["failed", "retried", "dead_lettered", "cancelled", "succeeded"]
+TaskEventKind = Literal["started", "failed", "retried", "dead_lettered", "cancelled", "succeeded"]
+NotificationProvider = Literal["feishu", "wechat_work"]
+NotificationEventType = Literal[
+    "task_started",
+    "task_succeeded",
+    "task_failed",
+    "task_missed_start",
+]
+NotificationDeliveryStatus = Literal["pending", "succeeded", "failed"]
 InstanceConnectivity = Literal["online", "offline", "never_reported"]
 TelemetryChannel = Literal["sync", "heartbeat", "metrics", "events"]
 AgentCommandKind = Literal[
@@ -130,6 +138,10 @@ LIVE_ONLY_COMMAND_KINDS = frozenset(
         "replay_dead_letters",
     }
 )
+NOTIFICATION_EVENT_TYPES = frozenset(
+    {"task_started", "task_succeeded", "task_failed", "task_missed_start"}
+)
+NOTIFICATION_EVENT_TYPES_REQUIRING_GRACE_PERIOD = frozenset({"task_missed_start"})
 
 
 def _normalize_task_command_args(
@@ -669,6 +681,172 @@ class ServiceListResponse(PaginatedResponse):
     items: list[ServiceSummary]
 
 
+class NotificationServiceScope(APIModel):
+    name: str = Field(min_length=1, max_length=255)
+    environment: Environment
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_service_scope_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            return value
+        return value.strip()
+
+
+class NotificationChannelBase(APIModel):
+    name: str = Field(min_length=1, max_length=255)
+    provider: NotificationProvider
+    webhook_url: str = Field(min_length=1)
+    enabled: bool = True
+    service_scopes: list[NotificationServiceScope] = Field(default_factory=list)
+    event_types: list[NotificationEventType] = Field(default_factory=list)
+    missed_start_grace_seconds: int = Field(default=300, ge=1, le=86400)
+
+    @field_validator("name", "webhook_url", mode="before")
+    @classmethod
+    def normalize_non_empty_strings(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return value.strip()
+
+    @field_validator("service_scopes")
+    @classmethod
+    def validate_service_scopes_unique(
+        cls,
+        value: list[NotificationServiceScope],
+    ) -> list[NotificationServiceScope]:
+        unique_keys = {(scope.name, scope.environment) for scope in value}
+        if len(unique_keys) != len(value):
+            raise ValueError("service_scopes must be unique by name and environment")
+        return value
+
+    @field_validator("event_types")
+    @classmethod
+    def validate_event_types_unique(
+        cls,
+        value: list[NotificationEventType],
+    ) -> list[NotificationEventType]:
+        if len(set(value)) != len(value):
+            raise ValueError("event_types must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_missed_start_grace_usage(self) -> NotificationChannelBase:
+        if (
+            "task_missed_start" not in self.event_types
+            and self.missed_start_grace_seconds != 300
+        ):
+            raise ValueError(
+                "missed_start_grace_seconds can only be customized when "
+                "event_types includes task_missed_start"
+            )
+        return self
+
+
+class NotificationChannelCreateRequest(NotificationChannelBase):
+    pass
+
+
+class NotificationChannelUpdateRequest(APIModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    provider: NotificationProvider | None = None
+    webhook_url: str | None = Field(default=None, min_length=1)
+    enabled: bool | None = None
+    service_scopes: list[NotificationServiceScope] | None = None
+    event_types: list[NotificationEventType] | None = None
+    missed_start_grace_seconds: int | None = Field(default=None, ge=1, le=86400)
+
+    @field_validator("name", "webhook_url", mode="before")
+    @classmethod
+    def normalize_optional_strings(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return value.strip()
+
+    @field_validator("service_scopes")
+    @classmethod
+    def validate_optional_service_scopes(
+        cls,
+        value: list[NotificationServiceScope] | None,
+    ) -> list[NotificationServiceScope] | None:
+        if value is None:
+            return value
+        unique_keys = {(scope.name, scope.environment) for scope in value}
+        if len(unique_keys) != len(value):
+            raise ValueError("service_scopes must be unique by name and environment")
+        return value
+
+    @field_validator("event_types")
+    @classmethod
+    def validate_optional_event_types(
+        cls,
+        value: list[NotificationEventType] | None,
+    ) -> list[NotificationEventType] | None:
+        if value is None:
+            return value
+        if len(set(value)) != len(value):
+            raise ValueError("event_types must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_non_empty_patch(self) -> NotificationChannelUpdateRequest:
+        if not any(
+            getattr(self, field_name) is not None
+            for field_name in self.__class__.model_fields
+        ):
+            raise ValueError("at least one field must be provided")
+        return self
+
+
+class NotificationChannelSummary(APIModel):
+    id: UUID
+    name: str
+    provider: NotificationProvider
+    webhook_url: str
+    enabled: bool
+    service_scopes: list[NotificationServiceScope] = Field(default_factory=list)
+    event_types: list[NotificationEventType] = Field(default_factory=list)
+    missed_start_grace_seconds: int = Field(ge=1)
+    created_at: datetime
+    updated_at: datetime
+
+
+class NotificationChannelListResponse(APIModel):
+    items: list[NotificationChannelSummary]
+
+
+class NotificationServiceOption(APIModel):
+    name: str
+    environment: Environment
+
+
+class NotificationServiceListResponse(APIModel):
+    items: list[NotificationServiceOption]
+
+
+class NotificationChannelDeleteResponse(APIModel):
+    status: Literal["deleted"] = "deleted"
+
+
+class NotificationTestRequest(APIModel):
+    message: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def normalize_message(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+
+class NotificationTestResponse(APIModel):
+    status: Literal["accepted"] = "accepted"
+    channel_id: UUID
+    provider: NotificationProvider
+    preview_text: str
+
+
 class InstanceConnectivityCounts(APIModel):
     total: int = Field(default=0, ge=0)
     online: int = Field(default=0, ge=0)
@@ -735,6 +913,7 @@ class TaskMetricWindowListResponse(PaginatedResponse):
 
 
 class TaskEventCounts(APIModel):
+    started: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
     retried: int = Field(default=0, ge=0)
     dead_lettered: int = Field(default=0, ge=0)

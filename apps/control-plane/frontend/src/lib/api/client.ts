@@ -8,6 +8,15 @@ import type {
   Environment,
   InstanceDetailResponse,
   InstanceListResponse,
+  NotificationChannel,
+  NotificationChannelListResponse,
+  NotificationChannelPatchRequest,
+  NotificationChannelTestResponse,
+  NotificationChannelUpsertRequest,
+  NotificationEventType,
+  NotificationProvider,
+  NotificationServiceListResponse,
+  NotificationServiceScope,
   ServiceCommandFanoutResponse,
   ServiceCommandOfflineBehavior,
   ServiceCommandTargetMode,
@@ -23,7 +32,7 @@ const API_BASE_URL = getApiBaseUrl();
 
 type QueryValue = string | number | undefined | null;
 type RequestOptions = {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   query?: Record<string, QueryValue>;
   body?: unknown;
   redirectOnUnauthorized?: boolean;
@@ -87,11 +96,115 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError(detail, response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
+}
+
+function normalizeNotificationChannel(channel: {
+  id: string;
+  name: string;
+  provider: NotificationProvider;
+  webhook_url?: string;
+  webhookUrl?: string;
+  enabled: boolean;
+  service_scopes?: NotificationServiceScope[];
+  service_scopes_json?: NotificationServiceScope[];
+  serviceScopes?: NotificationServiceScope[];
+  event_types?: NotificationEventType[];
+  event_type_filters?: NotificationEventType[];
+  event_types_json?: NotificationEventType[];
+  eventTypes?: NotificationEventType[];
+  missed_start_grace_seconds?: number | null;
+  missedStartGraceSeconds?: number | null;
+  created_at: string;
+  updated_at: string;
+}): NotificationChannel {
+  return {
+    id: channel.id,
+    name: channel.name,
+    provider: channel.provider,
+    webhook_url: channel.webhook_url ?? channel.webhookUrl ?? "",
+    enabled: channel.enabled,
+    service_scopes: channel.service_scopes ?? channel.service_scopes_json ?? channel.serviceScopes ?? [],
+    event_types:
+      channel.event_types ?? channel.event_type_filters ?? channel.event_types_json ?? channel.eventTypes ?? [],
+    missed_start_grace_seconds:
+      channel.missed_start_grace_seconds ?? channel.missedStartGraceSeconds ?? null,
+    created_at: channel.created_at,
+    updated_at: channel.updated_at,
+  };
 }
 
 export function listServices(environment?: Environment) {
   return request<ServiceListResponse>("/api/v1/services", { query: { environment } });
+}
+
+export async function listNotificationChannels() {
+  const response = await request<
+    NotificationChannelListResponse | { items: Array<Parameters<typeof normalizeNotificationChannel>[0]> }
+  >("/api/v1/settings/notifications/channels");
+  return {
+    items: response.items.map(normalizeNotificationChannel),
+  } satisfies NotificationChannelListResponse;
+}
+
+export async function createNotificationChannel(payload: NotificationChannelUpsertRequest) {
+  const response = await request<Parameters<typeof normalizeNotificationChannel>[0]>(
+    "/api/v1/settings/notifications/channels",
+    {
+      method: "POST",
+      body: payload,
+    },
+  );
+  return normalizeNotificationChannel(response);
+}
+
+export async function updateNotificationChannel(channelId: string, payload: NotificationChannelPatchRequest) {
+  const response = await request<Parameters<typeof normalizeNotificationChannel>[0]>(
+    `/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}`,
+    {
+      method: "PATCH",
+      body: payload,
+    },
+  );
+  return normalizeNotificationChannel(response);
+}
+
+export function deleteNotificationChannel(channelId: string) {
+  return request<void>(`/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function testNotificationChannel(channelId: string) {
+  return request<NotificationChannelTestResponse>(
+    `/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}/test`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function listNotificationServices() {
+  const response = await request<
+    NotificationServiceListResponse | ServiceListResponse | { items: NotificationServiceScope[] }
+  >("/api/v1/settings/notifications/services");
+
+  if ("total" in response) {
+    return {
+      items: response.items.map((service) => ({
+        name: service.name,
+        environment: service.environment,
+      })),
+    } satisfies NotificationServiceListResponse;
+  }
+
+  return {
+    items: response.items,
+  } satisfies NotificationServiceListResponse;
 }
 
 export function getServiceDashboard(serviceName: string, environment: Environment, lookbackMinutes: number) {

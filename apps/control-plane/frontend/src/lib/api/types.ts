@@ -1,6 +1,12 @@
 export type Environment = "dev" | "staging" | "prod";
 export type HealthStatus = "ok" | "degraded" | "error" | "starting" | "unknown";
 export type InstanceConnectivity = "online" | "offline" | "never_reported";
+export type NotificationProvider = "feishu" | "wechat_work";
+export type NotificationEventType =
+  | "task_started"
+  | "task_succeeded"
+  | "task_failed"
+  | "task_missed_start";
 export type AgentCommandKind =
   | "ping"
   | "shutdown"
@@ -37,6 +43,7 @@ export type AgentCommandStatus =
   | "cancelled";
 export type AgentSessionStatus = "active" | "disconnected" | "superseded";
 export type TaskEventKind =
+  | "started"
   | "failed"
   | "retried"
   | "dead_lettered"
@@ -74,6 +81,58 @@ export interface ServiceListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface NotificationServiceScope {
+  name: string;
+  environment: Environment;
+}
+
+export interface NotificationServiceListResponse {
+  items: NotificationServiceScope[];
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  provider: NotificationProvider;
+  webhook_url: string;
+  enabled: boolean;
+  service_scopes: NotificationServiceScope[];
+  event_types: NotificationEventType[];
+  missed_start_grace_seconds: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationChannelListResponse {
+  items: NotificationChannel[];
+}
+
+export interface NotificationChannelUpsertRequest {
+  name: string;
+  provider: NotificationProvider;
+  webhook_url: string;
+  enabled: boolean;
+  service_scopes: NotificationServiceScope[];
+  event_types: NotificationEventType[];
+  missed_start_grace_seconds?: number;
+}
+
+export interface NotificationChannelPatchRequest {
+  name?: string;
+  provider?: NotificationProvider;
+  webhook_url?: string;
+  enabled?: boolean;
+  service_scopes?: NotificationServiceScope[];
+  event_types?: NotificationEventType[];
+  missed_start_grace_seconds?: number;
+}
+
+export interface NotificationChannelTestResponse {
+  message?: string;
+  ok?: boolean;
+  detail?: string;
 }
 
 export interface ConsoleSessionResponse {
