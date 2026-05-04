@@ -633,7 +633,7 @@ const resources = {
         title: "Control Plane",
         subtitle: "以服务和任务为核心的监控与控制面板",
         servicesNav: "服务",
-        notificationsNav: "通知管理",
+        notificationsNav: "通知",
         navigationLabel: "导航",
         fleetSummaryLabel: "总览",
         environmentsLabel: "环境",
@@ -1184,7 +1184,7 @@ const resources = {
         loginFailedTitle: "登录失败",
       },
       notifications: {
-        title: "通知管理",
+        title: "通知",
         subtitle: "配置飞书和企业微信机器人 Webhook，选择服务范围，并设定哪些任务事件应推送给运维人员。",
         newChannel: "新建渠道",
         channelsTitle: "渠道列表",
