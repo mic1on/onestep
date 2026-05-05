@@ -350,41 +350,36 @@ export function ServiceDetailPage() {
                   <span>{isZh ? "状态" : "Health"}</span>
                   <span>{isZh ? "最近同步" : "Last sync"}</span>
                   <span>{isZh ? "最近可见" : "Last seen"}</span>
-                  <span>{isZh ? "操作" : "Action"}</span>
                 </div>
                 <div className="ref-detail-table-body">
                   {instances.map((instance) => (
-                    <div className="ref-detail-table-row ref-instance-grid" key={instance.instance_id}>
+                    <Link
+                      className="ref-detail-table-row ref-instance-grid"
+                      key={instance.instance_id}
+                      to={instancePath(serviceName, instance.instance_id, {
+                        environment,
+                        lookback_minutes: lookbackMinutes,
+                      })}
+                    >
                       <div className="ref-table-primary">
                         <strong>{instance.node_name}</strong>
                         <span>{formatIdentifierPreview(instance.instance_id)}</span>
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label={isZh ? "会话" : "Session"}>
                         <strong>{instance.active_session ? t(`status.${instance.active_session.status}`) : t("status.offline")}</strong>
                         <span>{instance.hostname ?? t("common.notAvailable")}</span>
                       </div>
-                      <div className="ref-table-status-group">
+                      <div className="ref-table-status-group" data-label={isZh ? "状态" : "Health"}>
                         <StatusBadge value={instance.connectivity} />
                         <StatusBadge value={instance.status} />
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label={isZh ? "最近同步" : "Last sync"}>
                         <strong>{formatDateTime(instance.last_sync_at)}</strong>
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label={isZh ? "最近可见" : "Last seen"}>
                         <strong>{formatRelativeTime(instance.last_seen_at)}</strong>
                       </div>
-                      <div className="ref-table-actions">
-                        <Link
-                          className="ref-icon-action"
-                          to={instancePath(serviceName, instance.instance_id, {
-                            environment,
-                            lookback_minutes: lookbackMinutes,
-                          })}
-                        >
-                          {isZh ? "详情" : "Detail"}
-                        </Link>
-                      </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -403,40 +398,35 @@ export function ServiceDetailPage() {
                   <span>{isZh ? "异常 / DLQ" : "Failed / DLQ"}</span>
                   <span>{isZh ? "P95" : "P95"}</span>
                   <span>{isZh ? "最近事件" : "Last event"}</span>
-                  <span>{isZh ? "操作" : "Action"}</span>
                 </div>
                 <div className="ref-detail-table-body">
                   {tasks.map((task) => (
-                    <div className="ref-detail-table-row ref-task-grid" key={task.task_name}>
+                    <Link
+                      className="ref-detail-table-row ref-task-grid"
+                      key={task.task_name}
+                      to={taskPath(serviceName, task.task_name, {
+                        environment,
+                        lookback_minutes: lookbackMinutes,
+                      })}
+                    >
                       <div className="ref-table-primary">
                         <strong>{task.task_name}</strong>
                         <span>{task.description ?? t("common.notAvailable")}</span>
                         <TaskTopologyPreview isZh={isZh} task={task} />
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label={isZh ? "成功" : "Succeeded"}>
                         <strong>{task.succeeded}</strong>
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label={isZh ? "异常 / DLQ" : "Failed / DLQ"}>
                         <strong>{task.failed + task.dead_lettered}</strong>
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label="P95">
                         <strong>{formatDurationMs(task.max_p95_duration_ms)}</strong>
                       </div>
-                      <div className="ref-table-primary">
+                      <div className="ref-table-primary" data-label={isZh ? "最近事件" : "Last event"}>
                         <strong>{formatDateTime(task.last_event_at)}</strong>
                       </div>
-                      <div className="ref-table-actions">
-                        <Link
-                          className="ref-icon-action"
-                          to={taskPath(serviceName, task.task_name, {
-                            environment,
-                            lookback_minutes: lookbackMinutes,
-                          })}
-                        >
-                          {isZh ? "详情" : "Detail"}
-                        </Link>
-                      </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </div>

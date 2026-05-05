@@ -198,7 +198,7 @@ export function SettingsNotificationsPage() {
   }
 
   return (
-    <div className="ref-console-page" style={{ gap: 16 }}>
+    <div className="ref-console-page settings-notifications-page">
       <PageHeader
         title={t("notifications.title")}
         subtitle={<p>{t("notifications.subtitle")}</p>}
@@ -219,14 +219,7 @@ export function SettingsNotificationsPage() {
         }
       />
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
-          gap: 16,
-          alignItems: "start",
-        }}
-      >
+      <div className="notification-settings-layout">
         <Panel
           title={t("notifications.channelsTitle")}
           subtitle={t("notifications.channelsSubtitle")}
@@ -242,7 +235,7 @@ export function SettingsNotificationsPage() {
           ) : null}
 
           {!channelsQuery.isPending && !channelsQuery.error && channels.length > 0 ? (
-            <div style={{ display: "grid", gap: 10 }}>
+            <div className="notification-channel-list">
               {channels.map((channel) => {
                 const selected = channel.id === selectedChannelId;
                 const isToggling = togglingChannelId === channel.id;
@@ -263,14 +256,14 @@ export function SettingsNotificationsPage() {
                       type="button"
                       className="notification-channel-main"
                     >
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                        <strong style={{ fontSize: 14 }}>{channel.name}</strong>
+                      <div className="notification-channel-title-row">
+                        <strong>{channel.name}</strong>
                       </div>
-                      <div style={{ display: "grid", gap: 4 }}>
-                        <span style={{ color: "var(--ref-ink-700)", fontSize: 12 }}>
+                      <div className="notification-channel-meta">
+                        <span>
                           {getProviderLabel(channel.provider, t)} · {t("notifications.servicesCount", { count: channel.service_scopes.length })}
                         </span>
-                        <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
+                        <span>
                           {formatEventTypes(channel.event_types, t)}
                         </span>
                       </div>
@@ -362,8 +355,8 @@ export function SettingsNotificationsPage() {
             </div>
           }
         >
-          <form onSubmit={(event) => void handleSubmit(event)} style={{ display: "grid", gap: 18 }}>
-            <div className="ref-overview-grid ref-overview-grid-compact">
+          <form className="notification-settings-form" onSubmit={(event) => void handleSubmit(event)}>
+            <div className="notification-form-grid">
               <label className="ref-inline-control">
                 <span>{t("notifications.nameLabel")}</span>
                 <input
@@ -411,31 +404,25 @@ export function SettingsNotificationsPage() {
                 type="checkbox"
               />
               <span className="notification-choice-indicator" aria-hidden="true" />
-              <div style={{ display: "grid", gap: 4 }}>
-                <strong style={{ fontSize: 14 }}>{t("notifications.enabledLabel")}</strong>
-                <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>
+              <div className="notification-choice-copy">
+                <strong>{t("notifications.enabledLabel")}</strong>
+                <span>
                   {t("notifications.enabledHint")}
                 </span>
               </div>
             </label>
 
-            <section style={{ display: "grid", gap: 10 }}>
-              <div style={{ display: "grid", gap: 4 }}>
-                <strong style={{ fontSize: 15 }}>{t("notifications.servicesTitle")}</strong>
-                <span style={{ color: "var(--ref-ink-600)", fontSize: 13 }}>
+            <section className="notification-form-section">
+              <div className="notification-section-heading">
+                <strong>{t("notifications.servicesTitle")}</strong>
+                <span>
                   {t("notifications.servicesSubtitle")}
                 </span>
               </div>
               {servicesQuery.isPending ? <div className="loading-block">{t("notifications.loadingServices")}</div> : null}
               {servicesQuery.error ? <EmptyState title={t("notifications.loadServicesErrorTitle")} body={String(servicesQuery.error)} /> : null}
               {!servicesQuery.isPending && !servicesQuery.error ? (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                    gap: 10,
-                  }}
-                >
+                <div className="notification-choice-grid notification-choice-grid-services">
                   {availableServices.map((service) => {
                     const checked = hasServiceScope(formState.service_scopes, service);
                     return (
@@ -455,9 +442,9 @@ export function SettingsNotificationsPage() {
                           type="checkbox"
                         />
                         <span className="notification-choice-indicator" aria-hidden="true" />
-                        <div style={{ display: "grid", gap: 4 }}>
-                          <strong style={{ fontSize: 14 }}>{service.name}</strong>
-                          <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>{service.environment}</span>
+                        <div className="notification-choice-copy">
+                          <strong>{service.name}</strong>
+                          <span>{service.environment}</span>
                         </div>
                       </label>
                     );
@@ -466,20 +453,14 @@ export function SettingsNotificationsPage() {
               ) : null}
             </section>
 
-            <section style={{ display: "grid", gap: 10 }}>
-              <div style={{ display: "grid", gap: 4 }}>
-                <strong style={{ fontSize: 15 }}>{t("notifications.eventTypesTitle")}</strong>
-                <span style={{ color: "var(--ref-ink-600)", fontSize: 13 }}>
+            <section className="notification-form-section">
+              <div className="notification-section-heading">
+                <strong>{t("notifications.eventTypesTitle")}</strong>
+                <span>
                   {t("notifications.eventTypesSubtitle")}
                 </span>
               </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-                  gap: 10,
-                }}
-              >
+              <div className="notification-choice-grid notification-choice-grid-events">
                 {EVENT_VALUES.map((value) => {
                   const checked = formState.event_types.includes(value);
                   return (
@@ -499,9 +480,9 @@ export function SettingsNotificationsPage() {
                         type="checkbox"
                       />
                       <span className="notification-choice-indicator" aria-hidden="true" />
-                      <div style={{ display: "grid", gap: 4 }}>
-                        <strong style={{ fontSize: 14 }}>{getEventLabel(value, t)}</strong>
-                        <span style={{ color: "var(--ref-ink-600)", fontSize: 12 }}>{getEventDesc(value, t)}</span>
+                      <div className="notification-choice-copy">
+                        <strong>{getEventLabel(value, t)}</strong>
+                        <span>{getEventDesc(value, t)}</span>
                       </div>
                     </label>
                   );
@@ -510,7 +491,7 @@ export function SettingsNotificationsPage() {
             </section>
 
             {hasMissedStart ? (
-              <label className="ref-inline-control" style={{ maxWidth: 260 }}>
+              <label className="ref-inline-control notification-grace-control">
                 <span>{t("notifications.graceLabel")}</span>
                 <input
                   min={1}
