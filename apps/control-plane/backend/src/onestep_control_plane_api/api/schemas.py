@@ -56,6 +56,7 @@ AgentCommandKind = Literal[
     "resume_task",
     "discard_dead_letters",
     "replay_dead_letters",
+    "run_task_once",
     "sync_now",
     "flush_metrics",
     "flush_events",
@@ -68,6 +69,7 @@ ServiceCommandFanoutKind = Literal[
     "resume_task",
     "discard_dead_letters",
     "replay_dead_letters",
+    "run_task_once",
     "sync_now",
     "flush_metrics",
     "flush_events",
@@ -77,6 +79,7 @@ TaskCommandKind = Literal[
     "resume_task",
     "discard_dead_letters",
     "replay_dead_letters",
+    "run_task_once",
 ]
 AgentCommandDeliveryMode = Literal["dispatch_now_only", "queue_until_reconnect"]
 AgentCommandAckStatus = Literal["accepted", "rejected"]
@@ -114,7 +117,13 @@ WsMessageType = Literal[
 ]
 
 TASK_SCOPED_COMMAND_KINDS = frozenset(
-    {"pause_task", "resume_task", "discard_dead_letters", "replay_dead_letters"}
+    {
+        "pause_task",
+        "resume_task",
+        "discard_dead_letters",
+        "replay_dead_letters",
+        "run_task_once",
+    }
 )
 REASON_REQUIRED_COMMAND_KINDS = frozenset(
     {
@@ -125,6 +134,7 @@ REASON_REQUIRED_COMMAND_KINDS = frozenset(
         "resume_task",
         "discard_dead_letters",
         "replay_dead_letters",
+        "run_task_once",
     }
 )
 LIVE_ONLY_COMMAND_KINDS = frozenset(
@@ -136,6 +146,7 @@ LIVE_ONLY_COMMAND_KINDS = frozenset(
         "resume_task",
         "discard_dead_letters",
         "replay_dead_letters",
+        "run_task_once",
     }
 )
 NOTIFICATION_EVENT_TYPES = frozenset(
@@ -162,6 +173,10 @@ def _normalize_task_command_args(
         limit = normalized_args["limit"]
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError(f"args.limit must be a positive integer when kind={kind}")
+    if kind == "run_task_once":
+        payload = normalized_args.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("args.payload must be a JSON object when kind=run_task_once")
     return normalized_args
 
 
@@ -550,6 +565,10 @@ class TaskCommandFanoutRequest(APIModel):
             raise ValueError(
                 "offline_behavior=queue is not supported when "
                 f"kind={self.kind}"
+            )
+        if self.kind == "run_task_once" and self.target_mode != "selected_instances":
+            raise ValueError(
+                "target_mode=selected_instances is required when kind=run_task_once"
             )
         if self.target_mode == "selected_instances" and not self.target_instance_ids:
             raise ValueError(

@@ -234,6 +234,7 @@ Initial supported `kind` values:
 - `resume_task`
 - `discard_dead_letters`
 - `replay_dead_letters`
+- `run_task_once`
 - `sync_now`
 - `flush_metrics`
 - `flush_events`
@@ -246,6 +247,8 @@ Rules:
 - `pause_task` and `resume_task` must include `args.task_name`
 - `discard_dead_letters` and `replay_dead_letters` must include `args.task_name`
 - `discard_dead_letters` and `replay_dead_letters` may include `args.limit`
+- `run_task_once` must include `args.task_name`
+- `run_task_once` must include `args.payload` as a JSON object
 
 ## 15. `command_ack`
 

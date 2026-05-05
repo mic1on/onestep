@@ -404,6 +404,8 @@ def _task_control_supported_commands(
         capability_commands.append("discard_dead_letters")
     if "command.replay_dead_letters" in accepted_capabilities:
         capability_commands.append("replay_dead_letters")
+    if "command.run_task_once" in accepted_capabilities:
+        capability_commands.append("run_task_once")
 
     task_supported_commands = _extract_task_supported_commands(task_control_state)
     if task_supported_commands is None:
@@ -451,6 +453,7 @@ def _extract_task_supported_commands(
             "resume_task",
             "discard_dead_letters",
             "replay_dead_letters",
+            "run_task_once",
         }:
             supported_commands.add(command_kind)
     return supported_commands

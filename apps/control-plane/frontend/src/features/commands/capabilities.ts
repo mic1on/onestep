@@ -8,6 +8,7 @@ export const COMMAND_CAPABILITY_BY_KIND: Record<AgentCommandKind, string> = {
   resume_task: "command.resume_task",
   discard_dead_letters: "command.discard_dead_letters",
   replay_dead_letters: "command.replay_dead_letters",
+  run_task_once: "command.run_task_once",
   sync_now: "command.sync_now",
   flush_metrics: "command.flush_metrics",
   flush_events: "command.flush_events",
@@ -29,6 +30,7 @@ const REASON_REQUIRED_COMMAND_KINDS = new Set<AgentCommandKind>([
   "resume_task",
   "discard_dead_letters",
   "replay_dead_letters",
+  "run_task_once",
 ]);
 
 export function getCommandCapability(kind: AgentCommandKind): string {

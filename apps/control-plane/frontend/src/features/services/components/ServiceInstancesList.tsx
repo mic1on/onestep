@@ -45,7 +45,7 @@ export function ServiceInstancesList({
             lookback_minutes: lookbackMinutes,
           })}
         >
-          <div>
+          <div className="list-row-copy">
             <strong>{instance.node_name}</strong>
             <p>
               {t("serviceInstancesList.instanceMeta", {

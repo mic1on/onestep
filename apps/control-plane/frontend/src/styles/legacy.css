@@ -1552,7 +1552,7 @@ button {
   }
 
   .task-control-action-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -3104,9 +3104,12 @@ body {
     gap: 12px;
   }
 
-  .task-control-action-row,
   .dialog-actions {
     grid-template-columns: 1fr;
+  }
+
+  .task-control-action-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -4502,7 +4505,47 @@ body::before,
 
   .task-list-actions {
     width: 100%;
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .task-list-actions .button-secondary {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .list-row {
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .list-row-copy {
+    min-width: 0;
+  }
+
+  .list-row-copy strong,
+  .list-row-copy p,
+  .list-row-description {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .row-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 7px;
+  }
+
+  .task-list-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .task-list-metric {
+    min-width: 0;
   }
 }
 
@@ -4705,7 +4748,7 @@ body {
 
 .page-shell {
   width: 100%;
-  padding: var(--space-6);
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background: var(--gradient-surface-panel);
@@ -4725,9 +4768,26 @@ body {
   }
 
   .shell-topbar {
+    flex-direction: row;
+    align-items: center;
     top: 18px;
     padding: 0 14px 0 18px;
     margin-bottom: 18px;
+  }
+
+  .shell-topbar-main {
+    min-width: 0;
+    gap: var(--space-3);
+  }
+
+  .shell-topbar-side {
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+
+  .shell-username,
+  .shell-logout-btn {
+    white-space: nowrap;
   }
 }
 
@@ -4737,12 +4797,48 @@ body {
   }
 
   .shell-topbar {
+    flex-direction: row;
+    align-items: center;
     top: 12px;
     padding: 0 12px 0 14px;
     margin-bottom: 12px;
   }
 
+  .shell-nav {
+    flex-wrap: nowrap;
+    gap: 12px;
+    overflow-x: auto;
+  }
+
+  .shell-brand-title {
+    display: none;
+  }
+
+  .shell-username {
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .shell-logout-btn {
+    height: 34px;
+    padding: 0 12px;
+  }
+
   .page-shell {
-    padding: var(--space-4);
+    padding: 0;
+  }
+
+  .list-row,
+  .event-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-list-description {
+    display: -webkit-box;
+    overflow: hidden;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 }
