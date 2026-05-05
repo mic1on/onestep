@@ -20,6 +20,37 @@ from .state import InMemoryStateStore, StateStore
 from .task import TaskHandler, TaskHooks, TaskSpec
 
 
+class _SyntheticManualRunDelivery:
+    def __init__(self, envelope: Envelope) -> None:
+        self.envelope = envelope
+        self.acked = False
+        self.failed = False
+        self.retry_requested = False
+        self.retry_delay_s: float | None = None
+
+    @property
+    def payload(self) -> Any:
+        return self.envelope.body
+
+    async def start_processing(self) -> None:
+        return None
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self.retry_requested = True
+        self.retry_delay_s = delay_s
+        self.envelope = Envelope(
+            body=copy.deepcopy(self.envelope.body),
+            meta=copy.deepcopy(self.envelope.meta),
+            attempts=self.envelope.attempts + 1,
+        )
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self.failed = True
+
+
 class OneStepApp:
     def __init__(
         self,
@@ -243,6 +274,59 @@ class OneStepApp:
             "empty": attempted_count == 0,
         }
 
+    async def run_task_once(
+        self,
+        task_name: str,
+        *,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        task = self._require_manual_run_task(task_name)
+        delivery = _SyntheticManualRunDelivery(
+            Envelope(
+                body=copy.deepcopy(dict(payload)),
+                meta={
+                    "manual_run": True,
+                    "task_name": task_name,
+                },
+                attempts=0,
+            )
+        )
+        runner = TaskRunner(self, task)
+
+        attempted_count = 0
+        completed = False
+        last_failure: Exception | None = None
+
+        while True:
+            attempted_count += 1
+            await runner._handle_delivery(delivery)
+            if delivery.acked:
+                completed = True
+                break
+            if not delivery.retry_requested:
+                break
+            delivery.retry_requested = False
+            last_failure = RuntimeError("manual run exhausted retries")
+
+        if completed:
+            return {
+                "operation": "run_task_once",
+                "task_name": task_name,
+                "requested": True,
+                "completion": "complete",
+                "attempted_count": attempted_count,
+                "manual_run": True,
+            }
+
+        if delivery.failed:
+            raise RuntimeError(
+                f"manual run failed for task {task_name} after {attempted_count} attempt(s)"
+            ) from last_failure
+
+        raise RuntimeError(
+            f"manual run did not reach a terminal successful state for task {task_name}"
+        )
+
     async def wait_for_shutdown(self) -> None:
         shutdown = self._ensure_shutdown_event()
         await shutdown.wait()
@@ -403,6 +487,8 @@ class OneStepApp:
             supported_commands.append("discard_dead_letters")
         if self._task_supports_dead_letter_replay(task):
             supported_commands.append("replay_dead_letters")
+        if self._task_supports_manual_run(task):
+            supported_commands.append("run_task_once")
         return supported_commands
 
     def supports_dead_letter_replay_commands(self) -> bool:
@@ -410,6 +496,9 @@ class OneStepApp:
 
     def supports_dead_letter_discard_commands(self) -> bool:
         return any(self._task_supports_dead_letter_discard(task) for task in self._tasks)
+
+    def supports_manual_run_commands(self) -> bool:
+        return any(self._task_supports_manual_run(task) for task in self._tasks)
 
     def task_resume_status(self, task_name: str) -> dict[str, Any]:
         status = self._task_runtime_status(task_name)
@@ -710,6 +799,14 @@ class OneStepApp:
             )
         return task
 
+    def _require_manual_run_task(self, task_name: str) -> TaskSpec:
+        task = self._require_controllable_task(task_name)
+        if not self._task_supports_manual_run(task):
+            raise ValueError(
+                f"task {task_name} does not support manual run with the configured source"
+            )
+        return task
+
     def _task_supports_dead_letter_discard(self, task: TaskSpec) -> bool:
         return len(task.dead_letter_sinks) == 1 and isinstance(task.dead_letter_sinks[0], Source)
 
@@ -719,6 +816,9 @@ class OneStepApp:
             and isinstance(task.source, Sink)
             and self._task_supports_dead_letter_discard(task)
         )
+
+    def _task_supports_manual_run(self, task: TaskSpec) -> bool:
+        return task.source is not None and bool(getattr(task.source, "supports_manual_run", False))
 
     def _build_dead_letter_replay_envelope(self, dead_letter_envelope: Envelope) -> Envelope:
         if not isinstance(dead_letter_envelope.body, Mapping):

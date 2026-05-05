@@ -39,6 +39,7 @@ DEFAULT_COMMAND_CAPABILITIES = [
     "command.resume_task",
     "command.discard_dead_letters",
     "command.replay_dead_letters",
+    "command.run_task_once",
     "command.sync_now",
     "command.flush_metrics",
     "command.flush_events",
@@ -732,6 +733,11 @@ class ControlPlaneWsSender:
                 self._app is not None
                 and self._app.supports_dead_letter_replay_commands()
             )
+        if kind == "run_task_once":
+            return (
+                self._app is not None
+                and self._app.supports_manual_run_commands()
+            )
         if kind in {"shutdown", "restart", "drain", "pause_task", "resume_task"}:
             return self._app is not None
         if kind in {"sync_now", "flush_metrics", "flush_events"}:
@@ -792,6 +798,12 @@ class ControlPlaneWsSender:
             task_name = _require_task_name_arg(command)
             replay_limit = _require_positive_int_arg(command, "limit", default=10)
             return await self._app.replay_task_dead_letters(task_name, limit=replay_limit)
+        if command.kind == "run_task_once":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            task_name = _require_task_name_arg(command)
+            payload = _require_json_object_arg(command, "payload")
+            return await self._app.run_task_once(task_name, payload=payload)
         if self._reporter is None:
             raise RuntimeError("reporter is not bound")
         if command.kind == "sync_now":
@@ -1079,6 +1091,13 @@ def _require_positive_int_arg(command: AgentCommand, key: str, *, default: int |
     value = command.args.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"command args.{key} must be a positive integer")
+    return value
+
+
+def _require_json_object_arg(command: AgentCommand, key: str) -> dict[str, Any]:
+    value = command.args.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"command args.{key} must be a JSON object")
     return value
 
 
