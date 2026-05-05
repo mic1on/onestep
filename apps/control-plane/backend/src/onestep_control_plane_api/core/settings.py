@@ -9,6 +9,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+DEFAULT_DATABASE_URL = (
+    "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
+)
+
 
 class Settings(BaseSettings):
     app_name: str = "onestep-control-plane-api"
@@ -16,9 +20,7 @@ class Settings(BaseSettings):
     debug: bool = False
     instance_offline_after_s: int = Field(default=90, ge=1)
     instance_health_participation_window_s: int = Field(default=3600, ge=1)
-    database_url: str = (
-        "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
-    )
+    database_url: str = DEFAULT_DATABASE_URL
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
     console_auth_username: str = ""
     console_auth_password: str = ""
@@ -49,6 +51,13 @@ class Settings(BaseSettings):
                 if isinstance(loaded, list):
                     return [str(item).strip() for item in loaded if str(item).strip()]
             return [item.strip() for item in candidate.split(",") if item.strip()]
+        return value
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return DEFAULT_DATABASE_URL
         return value
 
     @model_validator(mode="after")

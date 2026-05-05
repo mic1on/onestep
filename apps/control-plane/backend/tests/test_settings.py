@@ -1,5 +1,5 @@
 import pytest
-from onestep_control_plane_api.core.settings import Settings
+from onestep_control_plane_api.core.settings import DEFAULT_DATABASE_URL, Settings
 from pydantic import ValidationError
 
 
@@ -24,8 +24,14 @@ def test_settings_parse_ingest_tokens_from_env(monkeypatch, raw_value, expected)
     ("raw_value", "expected"),
     [
         ("*", ["*"]),
-        ("http://localhost:5173,http://192.168.1.214:5173", ["http://localhost:5173", "http://192.168.1.214:5173"]),
-        ('["http://localhost:5173","http://192.168.1.214:5173"]', ["http://localhost:5173", "http://192.168.1.214:5173"]),
+        (
+            "http://localhost:5173,http://192.168.1.214:5173",
+            ["http://localhost:5173", "http://192.168.1.214:5173"],
+        ),
+        (
+            '["http://localhost:5173","http://192.168.1.214:5173"]',
+            ["http://localhost:5173", "http://192.168.1.214:5173"],
+        ),
     ],
 )
 def test_settings_parse_cors_allow_origins_from_env(monkeypatch, raw_value, expected) -> None:
@@ -88,3 +94,9 @@ def test_settings_reject_health_participation_window_shorter_than_offline_window
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_settings_replace_blank_database_url_with_default() -> None:
+    settings = Settings(database_url="")
+
+    assert settings.database_url == DEFAULT_DATABASE_URL
