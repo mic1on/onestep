@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2
+
+- Adds control plane support for manually running tasks once when the source supports manual runs.
+
 ## 1.2.1
 
 - Adds RabbitMQ `exclusive` queue support and resource configuration.
