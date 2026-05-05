@@ -2949,13 +2949,18 @@ a.ref-detail-table-row:hover {
 
 .ref-inline-pagination {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 2px 0;
-  color: var(--ref-ink-600);
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 2px 0;
+  color: var(--ref-ink-500);
   font-size: 13px;
+  text-align: center;
+}
+
+.ref-inline-pagination > span {
+  line-height: 1.5;
 }
 
 @media (max-width: 1280px) {
@@ -3203,8 +3208,7 @@ a.ref-detail-table-row:hover {
   }
 
   .ref-inline-pagination {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
   }
 
   .ref-overview-grid,
