@@ -42,6 +42,8 @@ export function TaskDetailPage() {
   const [searchParams] = useSearchParams();
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
   const [activityTab, setActivityTab] = useState<TaskActivityTab>("events");
+  const [visibleTaskCommandCount, setVisibleTaskCommandCount] = useState(4);
+  const [visibleTaskCount, setVisibleTaskCount] = useState(100);
 
   if (!serviceName || !taskName) {
     return <EmptyState title={t("taskDetail.missingTitle")} body={t("taskDetail.missingBody")} />;
@@ -53,7 +55,9 @@ export function TaskDetailPage() {
   const lookbackMinutes = parseLookback(searchParams, 60);
 
   const taskQuery = useTaskDetailQuery(resolvedServiceName, resolvedTaskName, environment, lookbackMinutes);
-  const tasksQuery = useServiceTasksQuery(resolvedServiceName, environment, lookbackMinutes);
+  const tasksQuery = useServiceTasksQuery(resolvedServiceName, environment, lookbackMinutes, {
+    limit: visibleTaskCount,
+  });
   const commandsQuery = useServiceCommandsQuery(resolvedServiceName, environment, {
     enabled: !taskQuery.error,
   });
@@ -85,6 +89,7 @@ export function TaskDetailPage() {
       ) &&
       command.args.task_name === resolvedTaskName,
   );
+  const visibleTaskCommands = taskCommands.slice(0, visibleTaskCommandCount);
   const instanceOrder = new Map(taskControlStates.map((state, index) => [state.instance_id, index]));
   const boundInstanceIds = new Set(taskControlStates.map((state) => state.instance_id));
   const boundInstances = sortBoundInstances(instancesQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
@@ -191,6 +196,25 @@ export function TaskDetailPage() {
                     );
                   })}
                 </div>
+                {tasksQuery.data && tasksQuery.data.total > 0 ? (
+                  <div className="ref-inline-pagination">
+                    <span>
+                      {t("common.showingVisibleItems", {
+                        visible: tasks.length,
+                        total: tasksQuery.data.total,
+                      })}
+                    </span>
+                    {tasks.length < tasksQuery.data.total ? (
+                      <button
+                        className="ref-ghost-button"
+                        onClick={() => setVisibleTaskCount((count) => count + 100)}
+                        type="button"
+                      >
+                        {t("common.loadMore")}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </section>
 
               <section className="ref-task-detail-pane">
@@ -300,14 +324,35 @@ export function TaskDetailPage() {
                       ) : null}
 
                       {activityTab === "commands" ? (
-                        <CommandFeed
-                          commands={taskCommands.slice(0, 4)}
-                          emptyBody={t("taskDetail.noCommandsBody")}
-                          emptyTitle={t("taskDetail.noCommandsTitle")}
-                          environment={environment}
-                          lookbackMinutes={lookbackMinutes}
-                          serviceName={resolvedServiceName}
-                        />
+                        <>
+                          <CommandFeed
+                            commands={visibleTaskCommands}
+                            emptyBody={t("taskDetail.noCommandsBody")}
+                            emptyTitle={t("taskDetail.noCommandsTitle")}
+                            environment={environment}
+                            lookbackMinutes={lookbackMinutes}
+                            serviceName={resolvedServiceName}
+                          />
+                          {taskCommands.length > 0 ? (
+                            <div className="ref-inline-pagination">
+                              <span>
+                                {t("common.showingVisibleItems", {
+                                  visible: visibleTaskCommands.length,
+                                  total: taskCommands.length,
+                                })}
+                              </span>
+                              {visibleTaskCommands.length < taskCommands.length ? (
+                                <button
+                                  className="ref-ghost-button"
+                                  onClick={() => setVisibleTaskCommandCount((count) => count + 4)}
+                                  type="button"
+                                >
+                                  {t("common.loadMore")}
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
 
                       {activityTab === "sessions" ? (

@@ -45,6 +45,8 @@ export function InstanceDetailPage() {
   const [reasonDialogKind, setReasonDialogKind] = useState<AgentCommandKind | null>(null);
   const [deliveryModeOverride, setDeliveryModeOverride] = useState<AgentCommandDeliveryMode | null>(null);
   const [activityTab, setActivityTab] = useState<InstanceActivityTab>("commands");
+  const [visibleInstanceCount, setVisibleInstanceCount] = useState(100);
+  const [visibleCommandCount, setVisibleCommandCount] = useState(50);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
 
   if (!serviceName || !instanceId) {
@@ -59,9 +61,11 @@ export function InstanceDetailPage() {
   const detailQuery = useInstanceDetailQuery(resolvedServiceName, resolvedInstanceId, environment, lookbackMinutes);
   const instancesQuery = useServiceInstancesQuery(resolvedServiceName, environment, {
     enabled: !detailQuery.error,
+    limit: visibleInstanceCount,
   });
   const commandsQuery = useInstanceCommandsQuery(resolvedInstanceId, {
     enabled: !detailQuery.error,
+    limit: visibleCommandCount,
   });
   const createCommandMutation = useCreateInstanceCommandMutation(resolvedServiceName, environment, resolvedInstanceId);
 
@@ -238,6 +242,25 @@ export function InstanceDetailPage() {
                     </Link>
                   ))}
                 </div>
+                {instancesQuery.data && instancesQuery.data.total > 0 ? (
+                  <div className="ref-inline-pagination">
+                    <span>
+                      {t("common.showingVisibleItems", {
+                        visible: instances.length,
+                        total: instancesQuery.data.total,
+                      })}
+                    </span>
+                    {instances.length < instancesQuery.data.total ? (
+                      <button
+                        className="ref-ghost-button"
+                        onClick={() => setVisibleInstanceCount((count) => count + 100)}
+                        type="button"
+                      >
+                        {t("common.loadMore")}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </section>
 
               <section className="ref-task-detail-pane">
@@ -314,10 +337,29 @@ export function InstanceDetailPage() {
                             onSubmit={handleCommandSubmit}
                           />
                           <CommandFeed
-                            commands={commandsQuery.data?.items ?? []}
+                            commands={(commandsQuery.data?.items ?? []).slice(0, visibleCommandCount)}
                             emptyBody={t("instanceDetail.noCommandsBody")}
                             emptyTitle={t("instanceDetail.noCommandsTitle")}
                           />
+                          {(commandsQuery.data?.items?.length ?? 0) > 0 ? (
+                            <div className="ref-inline-pagination">
+                              <span>
+                                {t("common.showingVisibleItems", {
+                                  visible: commandsQuery.data?.items.length ?? 0,
+                                  total: commandsQuery.data?.total ?? 0,
+                                })}
+                              </span>
+                              {(commandsQuery.data?.items.length ?? 0) < (commandsQuery.data?.total ?? 0) ? (
+                                <button
+                                  className="ref-ghost-button"
+                                  onClick={() => setVisibleCommandCount((count) => count + 50)}
+                                  type="button"
+                                >
+                                  {t("common.loadMore")}
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </>
                       ) : null}
 

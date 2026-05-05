@@ -48,6 +48,9 @@ export function ServiceDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingQuickAction, setPendingQuickAction] =
     useState<QuickActionKind | null>(null);
+  const [visibleInstanceCount, setVisibleInstanceCount] = useState(100);
+  const [visibleTaskCount, setVisibleTaskCount] = useState(100);
+  const [visibleCommandCount, setVisibleCommandCount] = useState(50);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
@@ -63,10 +66,16 @@ export function ServiceDetailPage() {
   const currentView = parseDetailView(searchParams.get("tab"));
 
   const dashboardQuery = useServiceDashboardQuery(serviceName, environment, lookbackMinutes);
-  const tasksQuery = useServiceTasksQuery(serviceName, environment, lookbackMinutes);
-  const commandsQuery = useServiceCommandsQuery(serviceName, environment);
+  const tasksQuery = useServiceTasksQuery(serviceName, environment, lookbackMinutes, {
+    limit: visibleTaskCount,
+  });
+  const commandsQuery = useServiceCommandsQuery(serviceName, environment, {
+    limit: visibleCommandCount,
+  });
   const sessionsQuery = useServiceSessionsQuery(serviceName, environment);
-  const instancesQuery = useServiceInstancesQuery(serviceName, environment);
+  const instancesQuery = useServiceInstancesQuery(serviceName, environment, {
+    limit: visibleInstanceCount,
+  });
   const quickActionMutation = useCreateServiceCommandFanoutMutation(serviceName, environment);
 
   function updateParam(key: string, value: string) {
@@ -382,6 +391,25 @@ export function ServiceDetailPage() {
                     </Link>
                   ))}
                 </div>
+                {instancesQuery.data && instancesQuery.data.total > 0 ? (
+                  <div className="ref-inline-pagination">
+                    <span>
+                      {t("common.showingVisibleItems", {
+                        visible: instances.length,
+                        total: instancesQuery.data.total,
+                      })}
+                    </span>
+                    {instances.length < instancesQuery.data.total ? (
+                      <button
+                        className="ref-ghost-button"
+                        onClick={() => setVisibleInstanceCount((count) => count + 100)}
+                        type="button"
+                      >
+                        {t("common.loadMore")}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               </section>
             ) : null}
@@ -429,6 +457,25 @@ export function ServiceDetailPage() {
                     </Link>
                   ))}
                 </div>
+                {tasksQuery.data && tasksQuery.data.total > 0 ? (
+                  <div className="ref-inline-pagination">
+                    <span>
+                      {t("common.showingVisibleItems", {
+                        visible: tasks.length,
+                        total: tasksQuery.data.total,
+                      })}
+                    </span>
+                    {tasks.length < tasksQuery.data.total ? (
+                      <button
+                        className="ref-ghost-button"
+                        onClick={() => setVisibleTaskCount((count) => count + 100)}
+                        type="button"
+                      >
+                        {t("common.loadMore")}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               </section>
             ) : null}
@@ -448,23 +495,23 @@ export function ServiceDetailPage() {
                   <span>{isZh ? "耗时" : "Duration"}</span>
                 </div>
                 <div className="ref-detail-table-body">
-                  {commands.slice(0, 6).length ? (
-                    commands.slice(0, 6).map((command) => (
+                  {commands.length ? (
+                    commands.map((command) => (
                       <div className="ref-detail-table-row ref-command-grid" key={command.command_id}>
                         <div className="ref-table-primary">
                           <strong>{t(`commandKind.${command.kind}`, { defaultValue: command.kind })}</strong>
                           <span>{command.reason ?? t("common.notAvailable")}</span>
                         </div>
-                        <div className="ref-table-primary">
+                        <div className="ref-table-primary" data-label={isZh ? "目标实例" : "Instance"}>
                           <strong>{command.node_name ?? formatIdentifierPreview(command.instance_id)}</strong>
                         </div>
-                        <div className="ref-table-status-group">
+                        <div className="ref-table-status-group" data-label={isZh ? "状态" : "Status"}>
                           <StatusBadge value={command.status} />
                         </div>
-                        <div className="ref-table-primary">
+                        <div className="ref-table-primary" data-label={isZh ? "创建时间" : "Created"}>
                           <strong>{formatDateTime(command.created_at)}</strong>
                         </div>
-                        <div className="ref-table-primary">
+                        <div className="ref-table-primary" data-label={isZh ? "耗时" : "Duration"}>
                           <strong>{formatDurationMs(command.duration_ms)}</strong>
                         </div>
                       </div>
@@ -473,6 +520,25 @@ export function ServiceDetailPage() {
                     <div className="ref-empty-inline">{t("serviceDetail.noCommandsBody")}</div>
                   )}
                 </div>
+                {commands.length > 0 ? (
+                  <div className="ref-inline-pagination">
+                    <span>
+                      {t("common.showingVisibleItems", {
+                        visible: commands.length,
+                        total: commandsQuery.data?.total ?? commands.length,
+                      })}
+                    </span>
+                    {commands.length < (commandsQuery.data?.total ?? commands.length) ? (
+                      <button
+                        className="ref-ghost-button"
+                        onClick={() => setVisibleCommandCount((count) => count + 50)}
+                        type="button"
+                      >
+                        {t("common.loadMore")}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
                 </section>
 

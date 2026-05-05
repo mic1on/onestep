@@ -106,6 +106,8 @@ const resources = {
       common: {
         refresh: "Refresh",
         search: "Search",
+        loadMore: "Load more",
+        showingVisibleItems: "Showing {{visible}} of {{total}}",
         close: "Close",
         never: "Never",
         moreDetails: "More details",
@@ -743,6 +745,8 @@ const resources = {
       common: {
         refresh: "刷新",
         search: "搜索",
+        loadMore: "加载更多",
+        showingVisibleItems: "已显示 {{visible}} / {{total}}",
         close: "关闭",
         never: "从未",
         moreDetails: "更多详情",

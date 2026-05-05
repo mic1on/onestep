@@ -22,6 +22,7 @@ import type {
 
 type QueryOptions = {
   enabled?: boolean;
+  limit?: number;
 };
 
 const COMMAND_REFETCH_INTERVAL_MS = 5_000;
@@ -51,8 +52,8 @@ export function useServiceCommandsQuery(
   options: QueryOptions = {},
 ) {
   return useQuery({
-    queryKey: ["service-commands", serviceName, environment],
-    queryFn: () => listServiceCommands(serviceName, environment),
+    queryKey: ["service-commands", serviceName, environment, options.limit ?? null],
+    queryFn: () => listServiceCommands(serviceName, environment, options.limit),
     enabled: options.enabled ?? true,
     refetchInterval: COMMAND_REFETCH_INTERVAL_MS,
   });
@@ -64,8 +65,8 @@ export function useServiceSessionsQuery(
   options: QueryOptions = {},
 ) {
   return useQuery({
-    queryKey: ["service-sessions", serviceName, environment],
-    queryFn: () => listServiceSessions(serviceName, environment),
+    queryKey: ["service-sessions", serviceName, environment, options.limit ?? null],
+    queryFn: () => listServiceSessions(serviceName, environment, options.limit),
     enabled: options.enabled ?? true,
     refetchInterval: COMMAND_REFETCH_INTERVAL_MS,
   });
@@ -73,8 +74,8 @@ export function useServiceSessionsQuery(
 
 export function useInstanceCommandsQuery(instanceId: string, options: QueryOptions = {}) {
   return useQuery({
-    queryKey: ["instance-commands", instanceId],
-    queryFn: () => listInstanceCommands(instanceId),
+    queryKey: ["instance-commands", instanceId, options.limit ?? null],
+    queryFn: () => listInstanceCommands(instanceId, options.limit),
     enabled: options.enabled ?? true,
     refetchInterval: COMMAND_REFETCH_INTERVAL_MS,
   });

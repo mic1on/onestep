@@ -60,7 +60,7 @@ export function AppShell() {
             <>
               <span className="shell-username">{username}</span>
               <button className="shell-logout-btn" onClick={() => void handleLogout()} type="button">
-                {t("logout")}
+                {t("app.logout")}
               </button>
             </>
           )}

@@ -2947,6 +2947,17 @@ a.ref-detail-table-row:hover {
   font-size: 14px;
 }
 
+.ref-inline-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 2px 0;
+  color: var(--ref-ink-600);
+  font-size: 13px;
+}
+
 @media (max-width: 1280px) {
   .ref-overview-grid,
   .ref-access-grid,
@@ -3189,6 +3200,11 @@ a.ref-detail-table-row:hover {
   .ref-action-cell,
   .ref-table-actions {
     justify-content: flex-start;
+  }
+
+  .ref-inline-pagination {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .ref-overview-grid,

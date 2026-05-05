@@ -29,6 +29,12 @@ import type {
 import { getApiBaseUrl } from "../runtime-config";
 
 const API_BASE_URL = getApiBaseUrl();
+const SERVICES_PAGE_SIZE = 100;
+const SERVICE_TASKS_PAGE_SIZE = 100;
+const SERVICE_INSTANCES_PAGE_SIZE = 100;
+const SERVICE_COMMANDS_PAGE_SIZE = 50;
+const SERVICE_SESSIONS_PAGE_SIZE = 50;
+const INSTANCE_COMMANDS_PAGE_SIZE = 50;
 
 type QueryValue = string | number | undefined | null;
 type RequestOptions = {
@@ -49,6 +55,54 @@ export function buildApiUrl(path: string, query: Record<string, QueryValue> = {}
     url.searchParams.set(key, String(value));
   }
   return url;
+}
+
+async function requestPaginatedItems<TItem>(
+  path: string,
+  options: Omit<RequestOptions, "query"> & {
+    query?: Record<string, QueryValue>;
+    pageSize: number;
+    targetCount?: number;
+  },
+) {
+  const items: TItem[] = [];
+  let offset = 0;
+  let total = 0;
+
+  while (true) {
+    const remainingTarget =
+      options.targetCount === undefined ? options.pageSize : Math.max(options.targetCount - items.length, 1);
+    const response = await request<{
+      items: TItem[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(path, {
+      ...options,
+      query: {
+        ...options.query,
+        limit: Math.min(options.pageSize, remainingTarget),
+        offset,
+      },
+    });
+
+    items.push(...response.items);
+    total = response.total;
+    offset += response.items.length;
+
+    if (
+      response.items.length === 0 ||
+      items.length >= total ||
+      (options.targetCount !== undefined && items.length >= options.targetCount)
+    ) {
+      return {
+        items,
+        total,
+        limit: options.targetCount ?? response.limit,
+        offset: 0,
+      };
+    }
+  }
 }
 
 export class ApiError extends Error {
@@ -139,7 +193,10 @@ function normalizeNotificationChannel(channel: {
 }
 
 export function listServices(environment?: Environment) {
-  return request<ServiceListResponse>("/api/v1/services", { query: { environment } });
+  return requestPaginatedItems<ServiceListResponse["items"][number]>("/api/v1/services", {
+    query: { environment },
+    pageSize: SERVICES_PAGE_SIZE,
+  }) as Promise<ServiceListResponse>;
 }
 
 export async function listNotificationChannels() {
@@ -216,41 +273,62 @@ export function getServiceDashboard(serviceName: string, environment: Environmen
   });
 }
 
-export function listServiceTasks(serviceName: string, environment: Environment, lookbackMinutes: number) {
-  return request<TaskDashboardListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/tasks`, {
-    query: {
-      environment,
-      lookback_minutes: lookbackMinutes,
-      limit: 100,
+export function listServiceTasks(
+  serviceName: string,
+  environment: Environment,
+  lookbackMinutes: number,
+  limit?: number,
+) {
+  return requestPaginatedItems<TaskDashboardListResponse["items"][number]>(
+    `/api/v1/services/${encodeURIComponent(serviceName)}/tasks`,
+    {
+      query: {
+        environment,
+        lookback_minutes: lookbackMinutes,
+      },
+      pageSize: SERVICE_TASKS_PAGE_SIZE,
+      targetCount: limit,
     },
-  });
+  ) as Promise<TaskDashboardListResponse>;
 }
 
-export function listServiceInstances(serviceName: string, environment: Environment) {
-  return request<InstanceListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/instances`, {
-    query: {
-      environment,
-      limit: 100,
+export function listServiceInstances(serviceName: string, environment: Environment, limit?: number) {
+  return requestPaginatedItems<InstanceListResponse["items"][number]>(
+    `/api/v1/services/${encodeURIComponent(serviceName)}/instances`,
+    {
+      query: {
+        environment,
+      },
+      pageSize: SERVICE_INSTANCES_PAGE_SIZE,
+      targetCount: limit,
     },
-  });
+  ) as Promise<InstanceListResponse>;
 }
 
-export function listServiceCommands(serviceName: string, environment: Environment) {
-  return request<AgentCommandListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/commands`, {
-    query: {
-      environment,
-      limit: 20,
+export function listServiceCommands(serviceName: string, environment: Environment, limit?: number) {
+  return requestPaginatedItems<AgentCommandListResponse["items"][number]>(
+    `/api/v1/services/${encodeURIComponent(serviceName)}/commands`,
+    {
+      query: {
+        environment,
+      },
+      pageSize: SERVICE_COMMANDS_PAGE_SIZE,
+      targetCount: limit,
     },
-  });
+  ) as Promise<AgentCommandListResponse>;
 }
 
-export function listServiceSessions(serviceName: string, environment: Environment) {
-  return request<AgentSessionListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/sessions`, {
-    query: {
-      environment,
-      limit: 20,
+export function listServiceSessions(serviceName: string, environment: Environment, limit?: number) {
+  return requestPaginatedItems<AgentSessionListResponse["items"][number]>(
+    `/api/v1/services/${encodeURIComponent(serviceName)}/sessions`,
+    {
+      query: {
+        environment,
+      },
+      pageSize: SERVICE_SESSIONS_PAGE_SIZE,
+      targetCount: limit,
     },
-  });
+  ) as Promise<AgentSessionListResponse>;
 }
 
 export function getTaskDetail(
@@ -291,12 +369,14 @@ export function getInstanceDetail(
   );
 }
 
-export function listInstanceCommands(instanceId: string) {
-  return request<AgentCommandListResponse>(`/api/v1/instances/${encodeURIComponent(instanceId)}/commands`, {
-    query: {
-      limit: 20,
+export function listInstanceCommands(instanceId: string, limit?: number) {
+  return requestPaginatedItems<AgentCommandListResponse["items"][number]>(
+    `/api/v1/instances/${encodeURIComponent(instanceId)}/commands`,
+    {
+      pageSize: INSTANCE_COMMANDS_PAGE_SIZE,
+      targetCount: limit,
     },
-  });
+  ) as Promise<AgentCommandListResponse>;
 }
 
 export function createInstanceCommand(

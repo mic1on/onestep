@@ -12,6 +12,10 @@ type QueryOptions = {
   enabled?: boolean;
 };
 
+type PaginatedQueryOptions = QueryOptions & {
+  limit?: number;
+};
+
 const LIVE_REFETCH_INTERVAL_MS = 5_000;
 
 export function useServicesQuery(environment?: Environment) {
@@ -33,11 +37,11 @@ export function useServiceTasksQuery(
   serviceName: string,
   environment: Environment,
   lookbackMinutes: number,
-  options: QueryOptions = {},
+  options: PaginatedQueryOptions = {},
 ) {
   return useQuery({
-    queryKey: ["service-tasks", serviceName, environment, lookbackMinutes],
-    queryFn: () => listServiceTasks(serviceName, environment, lookbackMinutes),
+    queryKey: ["service-tasks", serviceName, environment, lookbackMinutes, options.limit ?? null],
+    queryFn: () => listServiceTasks(serviceName, environment, lookbackMinutes, options.limit),
     enabled: options.enabled ?? true,
   });
 }
@@ -45,11 +49,11 @@ export function useServiceTasksQuery(
 export function useServiceInstancesQuery(
   serviceName: string,
   environment: Environment,
-  options: QueryOptions = {},
+  options: PaginatedQueryOptions = {},
 ) {
   return useQuery({
-    queryKey: ["service-instances", serviceName, environment],
-    queryFn: () => listServiceInstances(serviceName, environment),
+    queryKey: ["service-instances", serviceName, environment, options.limit ?? null],
+    queryFn: () => listServiceInstances(serviceName, environment, options.limit),
     enabled: options.enabled ?? true,
     refetchInterval: LIVE_REFETCH_INTERVAL_MS,
   });

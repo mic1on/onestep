@@ -68,10 +68,6 @@ export function SettingsNotificationsPage() {
 
   useEffect(() => {
     if (selectedChannelId === "new") {
-      if (channels.length > 0) {
-        setSelectedChannelId(channels[0].id);
-        return;
-      }
       setFormState(DEFAULT_FORM_STATE);
       return;
     }
