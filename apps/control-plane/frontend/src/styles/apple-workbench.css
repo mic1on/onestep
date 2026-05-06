@@ -1602,6 +1602,18 @@ body {
   line-height: 1.5;
 }
 
+.notification-services-filter {
+  display: grid;
+  gap: 8px;
+}
+
+.notification-services-filter-note {
+  margin: 0;
+  color: var(--ref-ink-600);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .notification-choice-grid-services {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { useToast } from "../../components/ui/ToastProvider";
 import {
   useCreateNotificationChannelMutation,
@@ -13,7 +14,14 @@ import {
   useTestNotificationChannelMutation,
   useUpdateNotificationChannelMutation,
 } from "../../features/notifications/queries";
-import type { NotificationChannel, NotificationChannelUpsertRequest, NotificationEventType, NotificationProvider, NotificationServiceScope } from "../../lib/api/types";
+import type {
+  Environment,
+  NotificationChannel,
+  NotificationChannelUpsertRequest,
+  NotificationEventType,
+  NotificationProvider,
+  NotificationServiceScope,
+} from "../../lib/api/types";
 
 const EVENT_VALUES: NotificationEventType[] = [
   "task_started",
@@ -21,6 +29,10 @@ const EVENT_VALUES: NotificationEventType[] = [
   "task_failed",
   "task_missed_start",
 ];
+const SERVICE_ENVIRONMENT_FILTERS = ["all", "prod", "staging", "dev"] as const;
+const DEFAULT_SERVICE_ENVIRONMENT_FILTER: ServiceEnvironmentFilter = "prod";
+
+type ServiceEnvironmentFilter = (typeof SERVICE_ENVIRONMENT_FILTERS)[number];
 
 type FormState = {
   id: string | null;
@@ -58,6 +70,7 @@ export function SettingsNotificationsPage() {
   const availableServices = servicesQuery.data?.items ?? [];
 
   const [selectedChannelId, setSelectedChannelId] = useState<string | "new">("new");
+  const [serviceEnvironmentFilter, setServiceEnvironmentFilter] = useState<ServiceEnvironmentFilter>(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
   const [formState, setFormState] = useState<FormState>(DEFAULT_FORM_STATE);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
 
@@ -65,21 +78,39 @@ export function SettingsNotificationsPage() {
     () => channels.find((channel) => channel.id === selectedChannelId) ?? null,
     [channels, selectedChannelId],
   );
+  const visibleServices = useMemo(
+    () =>
+      availableServices.filter(
+        (service) =>
+          serviceEnvironmentFilter === "all" || service.environment === serviceEnvironmentFilter,
+      ),
+    [availableServices, serviceEnvironmentFilter],
+  );
+  const hiddenSelectedServiceCount = useMemo(
+    () =>
+      serviceEnvironmentFilter === "all"
+        ? 0
+        : formState.service_scopes.filter((scope) => scope.environment !== serviceEnvironmentFilter).length,
+    [formState.service_scopes, serviceEnvironmentFilter],
+  );
 
   useEffect(() => {
     if (selectedChannelId === "new") {
       setFormState(DEFAULT_FORM_STATE);
+      setServiceEnvironmentFilter(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
       return;
     }
 
     if (selectedChannel) {
       setFormState(channelToFormState(selectedChannel));
+      setServiceEnvironmentFilter(getInitialServiceEnvironmentFilter(selectedChannel.service_scopes));
       return;
     }
 
     if (channels.length === 0) {
       setSelectedChannelId("new");
       setFormState(DEFAULT_FORM_STATE);
+      setServiceEnvironmentFilter(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
     }
   }, [channels.length, selectedChannel, selectedChannelId]);
 
@@ -415,37 +446,66 @@ export function SettingsNotificationsPage() {
                   {t("notifications.servicesSubtitle")}
                 </span>
               </div>
+              <div className="notification-services-filter">
+                <span className="list-row-label">{t("notifications.servicesEnvironmentLabel")}</span>
+                <SegmentedControl<ServiceEnvironmentFilter>
+                  ariaLabel={t("notifications.servicesFilterAriaLabel")}
+                  onChange={setServiceEnvironmentFilter}
+                  options={SERVICE_ENVIRONMENT_FILTERS.map((value) => ({
+                    label: t(`environment.${value}`),
+                    value,
+                  }))}
+                  value={serviceEnvironmentFilter}
+                />
+                <p className="notification-services-filter-note">
+                  {serviceEnvironmentFilter === "all"
+                    ? t("notifications.servicesFilterSummaryAll", { count: visibleServices.length })
+                    : t("notifications.servicesFilterSummaryScoped", {
+                        count: visibleServices.length,
+                        environment: t(`environment.${serviceEnvironmentFilter}`),
+                      })}
+                </p>
+                {hiddenSelectedServiceCount > 0 ? (
+                  <p className="notification-services-filter-note">
+                    {t("notifications.servicesHiddenSelectionHint", { count: hiddenSelectedServiceCount })}
+                  </p>
+                ) : null}
+              </div>
               {servicesQuery.isPending ? <div className="loading-block">{t("notifications.loadingServices")}</div> : null}
               {servicesQuery.error ? <EmptyState title={t("notifications.loadServicesErrorTitle")} body={String(servicesQuery.error)} /> : null}
               {!servicesQuery.isPending && !servicesQuery.error ? (
-                <div className="notification-choice-grid notification-choice-grid-services">
-                  {availableServices.map((service) => {
-                    const checked = hasServiceScope(formState.service_scopes, service);
-                    return (
-                      <label
-                        key={`${service.environment}:${service.name}`}
-                        className={`notification-choice-card${checked ? " is-selected" : ""}`}
-                      >
-                        <input
-                          className="notification-choice-input"
-                          checked={checked}
-                          onChange={() =>
-                            setFormState((current) => ({
-                              ...current,
-                              service_scopes: toggleServiceScope(current.service_scopes, service),
-                            }))
-                          }
-                          type="checkbox"
-                        />
-                        <span className="notification-choice-indicator" aria-hidden="true" />
-                        <div className="notification-choice-copy">
-                          <strong>{service.name}</strong>
-                          <span>{service.environment}</span>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
+                visibleServices.length > 0 ? (
+                  <div className="notification-choice-grid notification-choice-grid-services">
+                    {visibleServices.map((service) => {
+                      const checked = hasServiceScope(formState.service_scopes, service);
+                      return (
+                        <label
+                          key={`${service.environment}:${service.name}`}
+                          className={`notification-choice-card${checked ? " is-selected" : ""}`}
+                        >
+                          <input
+                            className="notification-choice-input"
+                            checked={checked}
+                            onChange={() =>
+                              setFormState((current) => ({
+                                ...current,
+                                service_scopes: toggleServiceScope(current.service_scopes, service),
+                              }))
+                            }
+                            type="checkbox"
+                          />
+                          <span className="notification-choice-indicator" aria-hidden="true" />
+                          <div className="notification-choice-copy">
+                            <strong>{service.name}</strong>
+                            <span>{service.environment}</span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="notification-services-filter-note">{t("notifications.noServicesInFilter")}</p>
+                )
               ) : null}
             </section>
 
@@ -619,4 +679,9 @@ function formatEventTypes(eventTypes: NotificationEventType[], t: (key: string) 
   }
 
   return eventTypes.map((eventType) => getEventLabel(eventType, t)).join(", ");
+}
+
+function getInitialServiceEnvironmentFilter(serviceScopes: NotificationServiceScope[]): ServiceEnvironmentFilter {
+  const firstEnvironment = serviceScopes[0]?.environment;
+  return firstEnvironment ?? DEFAULT_SERVICE_ENVIRONMENT_FILTER;
 }
