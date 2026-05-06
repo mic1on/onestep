@@ -21,6 +21,7 @@ from onestep_control_plane_api.api.notification_helpers import (
     scheduled_at_from_meta,
 )
 from onestep_control_plane_api.api.notification_payloads import build_webhook_payload
+from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.api.schemas import (
     NotificationChannelCreateRequest,
     NotificationChannelSummary,
@@ -184,7 +185,7 @@ def _build_runtime_notification_event(event: TaskEvent) -> NotificationEventReco
         else None,
         success_summary=success_summary,
         success_metrics=success_metrics,
-        console_url=(
+        console_url=settings.build_console_url(
             f"/services/{event.service.name}/tasks/{event.task_name}"
             f"?environment={event.service.environment}"
         ),
@@ -763,7 +764,7 @@ def scan_and_dispatch_missed_start_notifications(
                     scheduled_at=scheduled_at,
                     detected_at=current_time,
                     missed_start_grace_seconds=channel.missed_start_grace_seconds,
-                    console_url=(
+                    console_url=settings.build_console_url(
                         f"/services/{service.name}/tasks/{task_definition.task_name}"
                         f"?environment={service.environment}"
                     ),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from json import JSONDecodeError
+from urllib.parse import urljoin
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     console_auth_username: str = ""
     console_auth_password: str = ""
     console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
+    console_base_url: str = ""
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     api_response_timezone: str = ""
     notification_missed_start_scan_interval_s: int = Field(default=60, ge=5)
@@ -83,6 +85,20 @@ class Settings(BaseSettings):
     @property
     def console_auth_configured(self) -> bool:
         return bool(self.console_auth_username.strip() and self.console_auth_password.strip())
+
+    def build_console_url(self, path: str | None) -> str | None:
+        if path is None:
+            return None
+        normalized_path = path.strip()
+        if not normalized_path:
+            return None
+        if normalized_path.startswith(("http://", "https://")):
+            return normalized_path
+
+        base_url = self.console_base_url.strip()
+        if not base_url:
+            return normalized_path
+        return urljoin(f"{base_url.rstrip('/')}/", normalized_path.lstrip("/"))
 
     @property
     def effective_api_response_timezone(self) -> ZoneInfo:

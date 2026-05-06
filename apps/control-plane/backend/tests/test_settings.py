@@ -100,3 +100,19 @@ def test_settings_replace_blank_database_url_with_default() -> None:
     settings = Settings(database_url="")
 
     assert settings.database_url == DEFAULT_DATABASE_URL
+
+
+def test_settings_build_console_url_uses_base_url_for_relative_path() -> None:
+    settings = Settings(console_base_url="https://cp.example")
+
+    assert settings.build_console_url("/services/foo/tasks/bar?environment=prod") == (
+        "https://cp.example/services/foo/tasks/bar?environment=prod"
+    )
+
+
+def test_settings_build_console_url_keeps_relative_path_without_base_url() -> None:
+    settings = Settings()
+
+    assert settings.build_console_url("/services/foo/tasks/bar?environment=prod") == (
+        "/services/foo/tasks/bar?environment=prod"
+    )
