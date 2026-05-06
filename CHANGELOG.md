@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.3
+
+- Exposes task-level `notification` payloads on `succeeded` event metadata for control-plane webhook rendering.
+- Sanitizes success notification payloads to JSON-safe values without changing sink or hook return-value behavior.
+
 ## 1.2.2
 
 - Adds control plane support for manually running tasks once when the source supports manual runs.
