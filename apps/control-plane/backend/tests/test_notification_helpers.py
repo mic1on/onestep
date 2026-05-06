@@ -7,6 +7,7 @@ import pytest
 from onestep_control_plane_api.api.notification_helpers import (
     NotificationEventRecord,
     NotificationFailureInfo,
+    NotificationMetricLine,
     build_message_lines,
     event_summary_line,
     format_duration_ms,
@@ -44,6 +45,8 @@ def build_event(
         "attempts": 1,
         "instance_id": "inst-1",
         "failure": None,
+        "success_summary": None,
+        "success_metrics": (),
         "console_url": "https://cp.example/services/billing-worker/tasks/sync_invoice",
         "detected_at": None,
         "missed_start_grace_seconds": None,
@@ -203,6 +206,34 @@ def test_build_message_lines_for_succeeded_event() -> None:
     assert "耗时: 4.2s" in lines
 
 
+def test_build_message_lines_for_succeeded_event_with_summary_and_metrics() -> None:
+    lines = build_message_lines(
+        build_event(
+            "task_succeeded",
+            success_summary="状态同步完成，更新了 12 个设备状态",
+            success_metrics=(
+                NotificationMetricLine(label="总设备数", value="100"),
+                NotificationMetricLine(label="已更新", value="12"),
+            ),
+        )
+    )
+    assert lines == [
+        "[任务成功] prod/billing-worker sync_invoice",
+        "环境: prod",
+        "Service: billing-worker",
+        "Task: sync_invoice",
+        "计划时间: 2026-04-30T02:00:00+00:00",
+        "完成时间: 2026-04-30T02:00:05+00:00",
+        "耗时: 4.2s",
+        "摘要: 状态同步完成，更新了 12 个设备状态",
+        "总设备数: 100",
+        "已更新: 12",
+        "尝试次数: 1",
+        "实例: inst-1",
+        "详情: https://cp.example/services/billing-worker/tasks/sync_invoice",
+    ]
+
+
 def test_build_message_lines_for_failed_event_includes_failure_summary() -> None:
     lines = build_message_lines(
         build_event(
@@ -266,6 +297,29 @@ def test_build_wechat_work_payload_uses_markdown_message() -> None:
     payload = build_wechat_work_payload(build_event("task_failed"))
     assert payload["msgtype"] == "markdown"
     assert payload["markdown"]["content"].startswith("[任务失败]")
+
+
+def test_success_metrics_are_rendered_into_both_webhook_payload_formats() -> None:
+    event = build_event(
+        "task_succeeded",
+        success_summary="状态同步完成，更新了 12 个设备状态",
+        success_metrics=(
+            NotificationMetricLine(label="总设备数", value="100"),
+            NotificationMetricLine(label="已检查", value="100"),
+        ),
+    )
+
+    feishu_payload = build_feishu_payload(event)
+    assert "摘要: 状态同步完成，更新了 12 个设备状态" in feishu_payload["card"]["elements"][0]["text"][
+        "content"
+    ]
+    assert "总设备数: 100" in feishu_payload["card"]["elements"][0]["text"]["content"]
+    assert "已检查: 100" in feishu_payload["card"]["elements"][0]["text"]["content"]
+
+    wecom_payload = build_wechat_work_payload(event)
+    assert "摘要: 状态同步完成，更新了 12 个设备状态" in wecom_payload["markdown"]["content"]
+    assert "总设备数: 100" in wecom_payload["markdown"]["content"]
+    assert "已检查: 100" in wecom_payload["markdown"]["content"]
 
 
 @pytest.mark.parametrize("provider", ["feishu", "wechat_work"])

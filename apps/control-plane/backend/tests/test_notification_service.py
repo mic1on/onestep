@@ -109,6 +109,125 @@ def test_dispatch_runtime_task_event_notifications_creates_one_delivery_per_new_
     assert db_session.query(NotificationDelivery).count() == 1
 
 
+def test_dispatch_runtime_task_event_notifications_renders_success_summary_and_metrics(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    seed_channel(db_session, event_types=["task_succeeded"])
+
+    task_event = TaskEvent(
+        event_id="evt-runtime-succeeded",
+        service_id=service.id,
+        instance_id=instance.instance_id,
+        task_name="sync_users",
+        kind="succeeded",
+        occurred_at=datetime(2026, 4, 30, 2, 5, 8, tzinfo=UTC),
+        attempts=1,
+        duration_ms=8000,
+        meta_json={
+            "scheduled_at": "2026-04-30T02:00:00Z",
+            "notification": {
+                "summary": "状态同步完成，更新了 12 个设备状态",
+                "metrics": [
+                    {"label": "总设备数", "value": 100},
+                    {"label": "已检查", "value": 100},
+                    {"label": "需更新", "value": 20},
+                    {"label": "已更新", "value": 12},
+                ],
+            },
+        },
+        received_at=datetime(2026, 4, 30, 2, 5, 9, tzinfo=UTC),
+    )
+    db_session.add(task_event)
+    db_session.commit()
+    db_session.refresh(task_event)
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 5, 10, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    created_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+    assert created_count == 1
+    assert len(sent_payloads) == 1
+
+    payload = sent_payloads[0]
+    assert payload is not None
+    content = payload["card"]["elements"][0]["text"]["content"]
+    assert "摘要: 状态同步完成，更新了 12 个设备状态" in content
+    assert "总设备数: 100" in content
+    assert "已检查: 100" in content
+    assert "需更新: 20" in content
+    assert "已更新: 12" in content
+
+
+def test_dispatch_runtime_task_event_notifications_ignores_malformed_success_notification_payload(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    seed_channel(db_session, event_types=["task_succeeded"])
+
+    task_event = TaskEvent(
+        event_id="evt-runtime-succeeded-malformed-notification",
+        service_id=service.id,
+        instance_id=instance.instance_id,
+        task_name="sync_users",
+        kind="succeeded",
+        occurred_at=datetime(2026, 4, 30, 2, 5, 8, tzinfo=UTC),
+        attempts=1,
+        duration_ms=8000,
+        meta_json={
+            "scheduled_at": "2026-04-30T02:00:00Z",
+            "notification": {
+                "summary": {"text": "should be ignored"},
+                "metrics": [
+                    {"label": "总设备数", "value": {"count": 100}},
+                    {"label": "已更新", "value": 12},
+                    "bad-item",
+                    {"label": "   ", "value": 1},
+                ],
+            },
+        },
+        received_at=datetime(2026, 4, 30, 2, 5, 9, tzinfo=UTC),
+    )
+    db_session.add(task_event)
+    db_session.commit()
+    db_session.refresh(task_event)
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 5, 10, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    created_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+    assert created_count == 1
+    assert len(sent_payloads) == 1
+    assert db_session.query(NotificationDelivery).count() == 1
+
+    payload = sent_payloads[0]
+    assert payload is not None
+    content = payload["card"]["elements"][0]["text"]["content"]
+    assert "摘要:" not in content
+    assert "总设备数:" not in content
+    assert "已更新: 12" in content
+
+
 def test_scan_and_dispatch_missed_start_notifications_creates_single_delivery(
     db_session, monkeypatch
 ) -> None:

@@ -41,6 +41,12 @@ class NotificationFailureInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class NotificationMetricLine:
+    label: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
 class NotificationEventRecord:
     event_type: NotificationEventType
     service_name: str
@@ -53,6 +59,8 @@ class NotificationEventRecord:
     attempts: int | None = None
     instance_id: str | None = None
     failure: NotificationFailureInfo | None = None
+    success_summary: str | None = None
+    success_metrics: tuple[NotificationMetricLine, ...] = ()
     console_url: str | None = None
     detected_at: datetime | None = None
     missed_start_grace_seconds: int | None = None
@@ -237,6 +245,10 @@ def build_message_lines(event: NotificationEventRecord) -> list[str]:
         duration = format_duration_ms(event.duration_ms)
         if duration is not None:
             lines.append(f"耗时: {duration}")
+        if event.success_summary is not None:
+            lines.append(f"摘要: {event.success_summary}")
+        for metric in event.success_metrics:
+            lines.append(f"{metric.label}: {metric.value}")
     elif event.event_type == "task_failed":
         if scheduled_at is not None:
             lines.append(f"计划时间: {scheduled_at}")

@@ -14,6 +14,7 @@ from onestep_control_plane_api.api.common import utcnow
 from onestep_control_plane_api.api.notification_helpers import (
     NotificationEventRecord,
     NotificationFailureInfo,
+    NotificationMetricLine,
     is_service_in_scope,
     missed_start_dedupe_key,
     raw_task_event_dedupe_key,
@@ -40,6 +41,58 @@ from onestep_control_plane_api.db.models import (
 DEFAULT_WEBHOOK_TIMEOUT_S = 5.0
 DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT = 32
 MISSED_START_SCAN_MAX_WINDOW = timedelta(hours=24)
+
+
+def _normalize_success_summary(raw_summary: Any) -> str | None:
+    if not isinstance(raw_summary, str):
+        return None
+    normalized = raw_summary.strip()
+    return normalized or None
+
+
+def _normalize_success_metric_line(raw_metric: Any) -> NotificationMetricLine | None:
+    if not isinstance(raw_metric, dict):
+        return None
+
+    raw_label = raw_metric.get("label")
+    if not isinstance(raw_label, str):
+        return None
+    label = raw_label.strip()
+    if not label:
+        return None
+
+    raw_value = raw_metric.get("value")
+    if raw_value is None or isinstance(raw_value, dict | list):
+        return None
+
+    value = raw_value.strip() if isinstance(raw_value, str) else str(raw_value)
+    if not value:
+        return None
+    return NotificationMetricLine(label=label, value=value)
+
+
+def _parse_success_notification_payload(
+    meta_json: dict[str, Any] | None,
+) -> tuple[str | None, tuple[NotificationMetricLine, ...]]:
+    if not meta_json:
+        return None, ()
+
+    raw_notification = meta_json.get("notification")
+    if not isinstance(raw_notification, dict):
+        return None, ()
+
+    summary = _normalize_success_summary(raw_notification.get("summary"))
+
+    raw_metrics = raw_notification.get("metrics")
+    if not isinstance(raw_metrics, list):
+        return summary, ()
+
+    metrics = tuple(
+        metric
+        for raw_metric in raw_metrics
+        if (metric := _normalize_success_metric_line(raw_metric)) is not None
+    )
+    return summary, metrics
 
 
 def _build_channel_summary(channel: NotificationChannel) -> NotificationChannelSummary:
@@ -105,6 +158,12 @@ def _build_runtime_notification_event(event: TaskEvent) -> NotificationEventReco
     event_type = event_type_map.get(event.kind)
     if event_type is None:
         return None
+
+    success_summary: str | None = None
+    success_metrics: tuple[NotificationMetricLine, ...] = ()
+    if event.kind == "succeeded":
+        success_summary, success_metrics = _parse_success_notification_payload(event.meta_json)
+
     return NotificationEventRecord(
         event_type=event_type,
         service_name=event.service.name,
@@ -123,6 +182,8 @@ def _build_runtime_notification_event(event: TaskEvent) -> NotificationEventReco
         )
         if event.kind == "failed"
         else None,
+        success_summary=success_summary,
+        success_metrics=success_metrics,
         console_url=(
             f"/services/{event.service.name}/tasks/{event.task_name}"
             f"?environment={event.service.environment}"
