@@ -194,3 +194,126 @@ def test_scan_and_dispatch_missed_start_notifications_skips_started_slot(
     )
     assert created_count == 0
     assert db_session.query(NotificationDelivery).count() == 0
+
+
+def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slot_without_scheduled_at(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    seed_channel(db_session, event_types=["task_missed_start"])
+    task_definition = TaskDefinition(
+        service_id=service.id,
+        task_name="sync_users",
+        source_name="interval:300s",
+        source_kind="interval",
+        source_config_json={"seconds": 300, "immediate": False, "timezone": "UTC"},
+        updated_at=datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC),
+    )
+    db_session.add(task_definition)
+    started_event = TaskEvent(
+        event_id="evt-runtime-started-without-scheduled-at",
+        service_id=service.id,
+        instance_id=instance.instance_id,
+        task_name="sync_users",
+        kind="started",
+        occurred_at=datetime(2026, 4, 30, 2, 5, 4, tzinfo=UTC),
+        meta_json={"source": "interval:300s"},
+        received_at=datetime(2026, 4, 30, 2, 5, 4, tzinfo=UTC),
+    )
+    db_session.add(started_event)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        lambda delivery, *, webhook_url, timeout_s=5.0: None,
+    )
+    created_count = scan_and_dispatch_missed_start_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+    assert created_count == 0
+    assert db_session.query(NotificationDelivery).count() == 0
+
+
+def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slot_with_nearby_scheduled_at(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    service.latest_sync_at = datetime(2026, 5, 6, 2, 41, 22, 819707, tzinfo=UTC)
+    seed_channel(db_session, event_types=["task_missed_start"])
+    task_definition = TaskDefinition(
+        service_id=service.id,
+        task_name="sync_user_record",
+        source_name="interval:3600s",
+        source_kind="interval",
+        source_config_json={"seconds": 3600, "immediate": False, "timezone": "Asia/Shanghai"},
+        updated_at=datetime(2026, 5, 6, 2, 41, 22, 819707, tzinfo=UTC),
+    )
+    db_session.add(task_definition)
+    started_event = TaskEvent(
+        event_id="evt-runtime-started-nearby-scheduled-at",
+        service_id=service.id,
+        instance_id=instance.instance_id,
+        task_name="sync_user_record",
+        kind="started",
+        occurred_at=datetime(2026, 5, 6, 2, 41, 20, 464828, tzinfo=UTC),
+        meta_json={
+            "source": "interval:3600s",
+            "sequence": 1,
+            "scheduled_at": "2026-05-06T10:41:15.672439+08:00",
+        },
+        received_at=datetime(2026, 5, 6, 2, 41, 22, 522608, tzinfo=UTC),
+    )
+    db_session.add(started_event)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        lambda delivery, *, webhook_url, timeout_s=5.0: None,
+    )
+    created_count = scan_and_dispatch_missed_start_notifications(
+        db_session,
+        now=datetime(2026, 5, 6, 2, 46, 39, 929637, tzinfo=UTC),
+    )
+    assert created_count == 0
+    assert db_session.query(NotificationDelivery).count() == 0
+
+
+def test_scan_and_dispatch_missed_start_notifications_keeps_interval_missed_start_when_no_started_event(
+    db_session, monkeypatch
+) -> None:
+    service, _instance = seed_runtime_service(db_session)
+    seed_channel(db_session, event_types=["task_missed_start"])
+    task_definition = TaskDefinition(
+        service_id=service.id,
+        task_name="sync_users",
+        source_name="interval:300s",
+        source_kind="interval",
+        source_config_json={"seconds": 300, "immediate": False, "timezone": "UTC"},
+        updated_at=datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC),
+    )
+    db_session.add(task_definition)
+    db_session.commit()
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 11, 0, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    created_count = scan_and_dispatch_missed_start_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+    assert created_count == 1
+    assert len(sent_payloads) == 1
+    deliveries = db_session.query(NotificationDelivery).all()
+    assert len(deliveries) == 1
+    assert deliveries[0].scheduled_at == datetime(2026, 4, 30, 2, 5, 0, tzinfo=UTC)

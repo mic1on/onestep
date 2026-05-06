@@ -271,6 +271,18 @@ def _derive_interval_anchor(
     return candidate + timedelta(seconds=interval_seconds)
 
 
+def _interval_seconds_from_source_config(source_config: dict[str, Any] | None) -> int | None:
+    if not isinstance(source_config, dict):
+        return None
+    seconds_value = source_config.get("seconds")
+    if isinstance(seconds_value, bool) or not isinstance(seconds_value, (int, float)):
+        return None
+    interval_seconds = int(seconds_value)
+    if interval_seconds <= 0:
+        return None
+    return interval_seconds
+
+
 def _iter_expected_interval_slots(
     *,
     now: datetime,
@@ -296,13 +308,8 @@ def _iter_expected_interval_slots_for_task(
     task_definition: TaskDefinition,
 ) -> list[datetime]:
     source_config = task_definition.source_config_json
-    if not isinstance(source_config, dict):
-        return []
-    seconds_value = source_config.get("seconds")
-    if isinstance(seconds_value, bool) or not isinstance(seconds_value, (int, float)):
-        return []
-    interval_seconds = int(seconds_value)
-    if interval_seconds <= 0:
+    interval_seconds = _interval_seconds_from_source_config(source_config)
+    if interval_seconds is None:
         return []
     service = task_definition.service
     anchor = _derive_interval_anchor(
@@ -451,6 +458,7 @@ def _task_started_for_scheduled_slot(
     service_id,
     task_name: str,
     scheduled_at: datetime,
+    interval_seconds: int | None = None,
 ) -> bool:
     started_events = db.scalars(
         select(TaskEvent)
@@ -463,10 +471,33 @@ def _task_started_for_scheduled_slot(
         )
         .order_by(TaskEvent.occurred_at.desc())
     ).all()
+    slot_match_tolerance = _scheduled_slot_match_tolerance(interval_seconds)
     for started_event in started_events:
-        if scheduled_at_from_meta(started_event.meta_json) == scheduled_at:
+        try:
+            started_scheduled_at = scheduled_at_from_meta(started_event.meta_json)
+        except ValueError:
+            started_scheduled_at = None
+        if started_scheduled_at == scheduled_at:
+            return True
+        if (
+            started_scheduled_at is not None
+            and slot_match_tolerance is not None
+            and abs(started_scheduled_at - scheduled_at) <= slot_match_tolerance
+        ):
+            return True
+        if (
+            started_scheduled_at is None
+            and slot_match_tolerance is not None
+            and abs(started_event.occurred_at - scheduled_at) <= slot_match_tolerance
+        ):
             return True
     return False
+
+
+def _scheduled_slot_match_tolerance(interval_seconds: int | None) -> timedelta | None:
+    if interval_seconds is None:
+        return None
+    return timedelta(seconds=max(1, min(60, (interval_seconds - 1) // 2)))
 
 
 def list_notification_channels(db: Session) -> list[NotificationChannelSummary]:
@@ -641,6 +672,7 @@ def scan_and_dispatch_missed_start_notifications(
     for channel in missed_start_channels:
         for task_definition in task_definitions:
             service = task_definition.service
+            interval_seconds = _interval_seconds_from_source_config(task_definition.source_config_json)
             if not _service_matches_channel(
                 channel,
                 service_name=service.name,
@@ -658,6 +690,7 @@ def scan_and_dispatch_missed_start_notifications(
                     service_id=service.id,
                     task_name=task_definition.task_name,
                     scheduled_at=scheduled_at,
+                    interval_seconds=interval_seconds if task_definition.source_kind == "interval" else None,
                 ):
                     continue
                 notification_event = NotificationEventRecord(
