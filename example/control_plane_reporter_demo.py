@@ -154,6 +154,13 @@ async def process_job(ctx, item) -> dict[str, object]:
         "job_id": job_id,
         "behavior": behavior,
         "status": "processed",
+        "notification": {
+            "summary": f"Processed demo job {job_id} ({behavior})",
+            "metrics": [
+                {"label": "Job ID", "value": job_id},
+                {"label": "Behavior", "value": behavior},
+            ],
+        },
     }
 
 

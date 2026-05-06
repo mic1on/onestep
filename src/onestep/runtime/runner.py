@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import copy
 import inspect
 import logging
+import math
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from onestep.context import TaskContext
 from onestep.envelope import Envelope
@@ -18,6 +20,9 @@ from onestep.task import TaskSpec
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
     from onestep.connectors.base import Delivery
+
+
+_INVALID_NOTIFICATION_VALUE = object()
 
 
 class TaskRunner:
@@ -234,10 +239,12 @@ class TaskRunner:
                 for sink in self.task.sinks:
                     await self._send_to_sink(sink, envelope)
             await delivery.ack()
+            event_meta = self._build_succeeded_event_meta(delivery, result)
             await self._emit_event(
                 TaskEventKind.SUCCEEDED,
                 delivery,
                 duration_s=time.perf_counter() - started_at,
+                event_meta=event_meta,
             )
         except asyncio.CancelledError:
             failure = FailureInfo.from_exception(asyncio.CancelledError(), kind=FailureKind.CANCELLED)
@@ -426,6 +433,7 @@ class TaskRunner:
         *,
         duration_s: float | None = None,
         failure: FailureInfo | None = None,
+        event_meta: dict[str, Any] | None = None,
     ) -> None:
         event = TaskEvent(
             kind=kind,
@@ -435,6 +443,49 @@ class TaskRunner:
             attempts=delivery.envelope.attempts,
             duration_s=duration_s,
             failure=failure,
-            meta=copy.deepcopy(delivery.envelope.meta),
+            meta=copy.deepcopy(event_meta) if event_meta is not None else copy.deepcopy(delivery.envelope.meta),
         )
         await self.app.emit_event(event)
+
+    def _build_succeeded_event_meta(self, delivery: "Delivery", result: Any) -> dict[str, Any]:
+        event_meta = copy.deepcopy(delivery.envelope.meta)
+        notification = self._extract_notification_payload(result)
+        if notification is not None:
+            event_meta["notification"] = notification
+        return event_meta
+
+    def _extract_notification_payload(self, result: Any) -> dict[str, Any] | None:
+        if not isinstance(result, Mapping):
+            return None
+        notification = result.get("notification")
+        if not isinstance(notification, Mapping):
+            return None
+        sanitized = self._sanitize_notification_value(notification)
+        if not isinstance(sanitized, dict) or not sanitized:
+            return None
+        return sanitized
+
+    def _sanitize_notification_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else _INVALID_NOTIFICATION_VALUE
+        if isinstance(value, Mapping):
+            sanitized: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    continue
+                clean_item = self._sanitize_notification_value(item)
+                if clean_item is _INVALID_NOTIFICATION_VALUE:
+                    continue
+                sanitized[key] = clean_item
+            return sanitized
+        if isinstance(value, (list, tuple)):
+            sanitized_items = []
+            for item in value:
+                clean_item = self._sanitize_notification_value(item)
+                if clean_item is _INVALID_NOTIFICATION_VALUE:
+                    continue
+                sanitized_items.append(clean_item)
+            return sanitized_items
+        return _INVALID_NOTIFICATION_VALUE
