@@ -340,6 +340,51 @@ def test_reporter_drops_oldest_events_when_pending_buffer_overflows() -> None:
     assert [event["attempts"] for event in events_payload["events"]] == [2, 3]
 
 
+def test_reporter_preserves_notification_metadata_in_event_payload() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.SUCCEEDED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=0,
+                duration_s=0.2,
+                meta={
+                    "trace_id": "trace-1",
+                    "notification": {
+                        "summary": "sync complete",
+                        "metrics": [
+                            {"label": "updated", "value": 12},
+                        ],
+                    },
+                },
+            )
+        )
+        await reporter._flush_event_batches()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    events_payload = next(payload for channel, payload in recorder.calls if channel == "events")
+    assert events_payload["events"][0]["meta"] == {
+        "trace_id": "trace-1",
+        "notification": {
+            "summary": "sync complete",
+            "metrics": [
+                {"label": "updated", "value": 12},
+            ],
+        },
+        "source": "interval:3600s",
+    }
+
+
 def test_reporter_drops_oldest_metric_batches_when_pending_buffer_overflows() -> None:
     recorder = SenderRecorder()
     config = _make_config()

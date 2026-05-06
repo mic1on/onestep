@@ -687,6 +687,104 @@ def test_task_events_and_metrics_for_success_and_timeout_dead_letter() -> None:
     asyncio.run(scenario())
 
 
+def test_succeeded_event_includes_notification_metadata_when_task_returns_it() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        captured = []
+        app = OneStepApp("events-app")
+
+        @app.on_event
+        def observe(event):
+            captured.append(event)
+
+        @app.on_startup
+        async def seed(app):
+            await source.publish({"kind": "ok"})
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {
+                "done": True,
+                "notification": {
+                    "summary": "processed one item",
+                    "metrics": [
+                        {"label": "processed", "value": 1},
+                    ],
+                },
+            }
+
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        succeeded = [event for event in captured if event.kind is TaskEventKind.SUCCEEDED]
+        assert len(succeeded) == 1
+        assert succeeded[0].meta == {
+            "notification": {
+                "summary": "processed one item",
+                "metrics": [
+                    {"label": "processed", "value": 1},
+                ],
+            }
+        }
+
+    asyncio.run(scenario())
+
+
+def test_succeeded_event_ignores_or_sanitizes_invalid_notification_payload() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        captured = []
+        app = OneStepApp("notification-sanitize")
+
+        @app.on_event
+        def observe(event):
+            captured.append(event)
+
+        @app.on_startup
+        async def seed(app):
+            await source.publish({"kind": "invalid"})
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {
+                "done": True,
+                "notification": {
+                    "summary": "processed one item",
+                    "metrics": [
+                        {"label": "processed", "value": 1, "extra": object()},
+                        {"label": "ratio", "value": float("nan")},
+                        object(),
+                    ],
+                    "details": {
+                        "kept": True,
+                        "dropped": object(),
+                        1: "not-a-string-key",
+                    },
+                    "bad_root_value": object(),
+                },
+            }
+
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        succeeded = [event for event in captured if event.kind is TaskEventKind.SUCCEEDED]
+        assert len(succeeded) == 1
+        assert succeeded[0].meta == {
+            "notification": {
+                "summary": "processed one item",
+                "metrics": [
+                    {"label": "processed", "value": 1},
+                    {"label": "ratio"},
+                ],
+                "details": {
+                    "kept": True,
+                },
+            }
+        }
+
+    asyncio.run(scenario())
+
+
 def test_structured_event_logger_emits_uniform_log_fields() -> None:
     class ListHandler(logging.Handler):
         def __init__(self) -> None:

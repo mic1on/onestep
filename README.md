@@ -495,6 +495,47 @@ print(snapshot["kinds"])
 - `duration_s`
 - `failure_kind`
 
+Tasks can also opt into webhook-friendly success metadata by returning a reserved `notification` object. The task return value sent to sinks stays unchanged; only the emitted `succeeded` event gains `meta["notification"]`.
+
+```python
+from onestep import MemoryQueue, OneStepApp, StructuredEventLogger
+
+source = MemoryQueue("incoming")
+app = OneStepApp("notification-demo")
+app.on_event(StructuredEventLogger())
+
+
+@app.task(source=source)
+async def sync_status(ctx, item):
+    updated = item["updated"]
+    ctx.app.request_shutdown()
+    return {
+        "success": True,
+        "updated": updated,
+        "notification": {
+            "summary": f"Status sync complete, updated {updated} devices",
+            "metrics": [
+                {"label": "Updated", "value": updated},
+            ],
+        },
+    }
+```
+
+The emitted `TaskEventKind.SUCCEEDED` metadata then includes:
+
+```json
+{
+  "notification": {
+    "summary": "Status sync complete, updated 12 devices",
+    "metrics": [
+      {"label": "Updated", "value": 12}
+    ]
+  }
+}
+```
+
+`notification` values must be JSON-safe. Invalid values are dropped from the emitted metadata instead of failing task execution.
+
 ## Memory Queue Example
 
 ```python
