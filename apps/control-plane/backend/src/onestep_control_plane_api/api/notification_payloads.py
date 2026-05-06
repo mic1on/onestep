@@ -28,6 +28,12 @@ def render_notification_message(event: NotificationEventRecord) -> str:
     return "\n".join(build_message_lines(event))
 
 
+def _is_absolute_url(url: str | None) -> bool:
+    if url is None:
+        return False
+    return url.startswith(("http://", "https://"))
+
+
 def _format_wecom_markdown_link(text: str, url: str | None) -> str:
     if url is None:
         return text
@@ -95,6 +101,10 @@ def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
         for line in (
             _field_line("尝试次数", str(event.attempts) if event.attempts is not None else None),
             _field_line("实例", event.instance_id),
+            _field_line(
+                "详情",
+                event.console_url if event.console_url is not None and not _is_absolute_url(event.console_url) else None,
+            ),
         )
         if line is not None
     )
@@ -152,7 +162,7 @@ def _build_feishu_card_elements(event: NotificationEventRecord) -> list[dict[str
             }
         )
 
-    if event.console_url is not None:
+    if _is_absolute_url(event.console_url):
         elements.append(
             {
                 "tag": "action",
@@ -213,12 +223,11 @@ def build_feishu_payload(event: NotificationEventRecord) -> dict[str, Any]:
 def build_wechat_work_payload(event: NotificationEventRecord) -> WeComPayload:
     detail_lines = _build_detail_lines(event)
     metric_lines = _build_success_metric_lines(event)
-    footer = _format_wecom_markdown_link("打开详情", event.console_url)
     parts = [event_summary_line(event), "", *detail_lines]
     if metric_lines:
         parts.extend(["", "**业务指标**", *metric_lines])
-    if event.console_url is not None:
-        parts.extend(["", footer])
+    if _is_absolute_url(event.console_url):
+        parts.extend(["", _format_wecom_markdown_link("打开详情", event.console_url)])
     return {
         "msgtype": "markdown",
         "markdown": {"content": "\n".join(parts)},

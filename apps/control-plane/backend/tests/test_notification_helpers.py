@@ -310,8 +310,16 @@ def test_build_wechat_work_payload_keeps_plain_detail_label_without_absolute_url
     payload = build_wechat_work_payload(
         build_event("task_failed", console_url="/services/billing-worker/tasks/sync_invoice")
     )
-    assert "打开详情" in payload["markdown"]["content"]
-    assert "<a href=\"/services/billing-worker/tasks/sync_invoice\">打开详情</a>" in payload["markdown"][
+    assert "**详情**：/services/billing-worker/tasks/sync_invoice" in payload["markdown"]["content"]
+    assert "<a href=" not in payload["markdown"]["content"]
+
+
+def test_build_feishu_payload_skips_detail_button_without_absolute_url() -> None:
+    payload = build_feishu_payload(
+        build_event("task_started", console_url="/services/billing-worker/tasks/sync_invoice")
+    )
+    assert len(payload["card"]["body"]["elements"]) == 1
+    assert "**详情**：/services/billing-worker/tasks/sync_invoice" in payload["card"]["body"]["elements"][0][
         "content"
     ]
 
