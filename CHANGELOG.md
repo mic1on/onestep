@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4
+
+- Extends transient control-plane HTTP failure handling to include `404` responses.
+
 ## 1.2.3
 
 - Exposes task-level `notification` payloads on `succeeded` event metadata for control-plane webhook rendering.
