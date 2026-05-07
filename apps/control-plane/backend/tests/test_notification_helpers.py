@@ -284,11 +284,32 @@ def test_build_feishu_payload_uses_card_message() -> None:
     assert payload["card"]["header"]["title"]["content"] == "[任务开始] prod/billing-worker sync_invoice"
     assert payload["card"]["header"]["template"] == "blue"
     assert payload["card"]["schema"] == "2.0"
-    assert len(payload["card"]["body"]["elements"]) == 2
+    assert len(payload["card"]["body"]["elements"]) == 1
     assert "**环境**：`prod`" in payload["card"]["body"]["elements"][0]["content"]
-    assert payload["card"]["body"]["elements"][1]["actions"][0]["behaviors"][0]["default_url"] == (
-        "https://cp.example/services/billing-worker/tasks/sync_invoice"
+    assert "**详情**：[打开详情](https://cp.example/services/billing-worker/tasks/sync_invoice)" in payload["card"]["body"][
+        "elements"
+    ][0]["content"]
+
+
+def test_build_feishu_payload_escapes_markdown_control_chars_in_dynamic_fields() -> None:
+    payload = build_feishu_payload(
+        build_event(
+            "task_failed",
+            service_environment="prod*main",
+            service_name="billing_[worker]",
+            task_name="sync(invoice)",
+            failure=NotificationFailureInfo(
+                exception_type="ValueError",
+                kind="invalid*state",
+                message="bad [payload] (retry)!",
+            ),
+        )
     )
+    content = payload["card"]["body"]["elements"][0]["content"]
+    assert "**环境**：`prod*main`" in content
+    assert "**Service**：`billing_[worker]`" in content
+    assert "**Task**：`sync(invoice)`" in content
+    assert "ValueError: invalid&#42;state &#40;bad &#91;payload&#93; &#40;retry&#41;!&#41;" in content
 
 
 def test_build_feishu_payload_uses_red_header_for_failed() -> None:
@@ -319,7 +340,7 @@ def test_build_feishu_payload_skips_detail_button_without_absolute_url() -> None
         build_event("task_started", console_url="/services/billing-worker/tasks/sync_invoice")
     )
     assert len(payload["card"]["body"]["elements"]) == 1
-    assert "**详情**：/services/billing-worker/tasks/sync_invoice" in payload["card"]["body"]["elements"][0][
+    assert "**详情**：`/services/billing-worker/tasks/sync_invoice`" in payload["card"]["body"]["elements"][0][
         "content"
     ]
 

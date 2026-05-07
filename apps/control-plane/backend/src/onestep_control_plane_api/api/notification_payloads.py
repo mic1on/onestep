@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape as html_escape
 from typing import Any, TypedDict
 
 from onestep_control_plane_api.api.notification_helpers import (
@@ -44,6 +45,32 @@ def _field_line(label: str, value: str | None) -> str | None:
     if value is None:
         return None
     return f"**{label}**：{value}"
+
+
+_FEISHU_MARKDOWN_ESCAPE_TABLE = str.maketrans(
+    {
+        "\\": "&#92;",
+        "`": "&#96;",
+        "*": "&#42;",
+        "_": "&#95;",
+        "~": "&sim;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "(": "&#40;",
+        ")": "&#41;",
+    }
+)
+
+
+def _escape_feishu_markdown_text(value: str) -> str:
+    # Feishu markdown requires HTML entity escaping for markdown control chars.
+    return html_escape(value, quote=True).translate(_FEISHU_MARKDOWN_ESCAPE_TABLE)
+
+
+def _format_feishu_code_value(value: str) -> str:
+    if "`" in value or "\n" in value:
+        return _escape_feishu_markdown_text(value)
+    return f"`{value}`"
 
 
 def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
@@ -115,6 +142,97 @@ def _build_success_metric_lines(event: NotificationEventRecord) -> list[str]:
     return [f"• **{metric.label}**：{metric.value}" for metric in event.success_metrics]
 
 
+def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
+    lines: list[str] = [
+        _build_feishu_code_field_line("环境", event.service_environment),
+        _build_feishu_code_field_line("Service", event.service_name),
+        _build_feishu_code_field_line("Task", event.task_name),
+    ]
+    if event.event_type == "task_started":
+        lines.extend(
+            line
+            for line in (
+                _build_feishu_field_line("计划时间", _format_time(event.scheduled_at)),
+                _build_feishu_field_line("开始时间", _format_time(event.occurred_at)),
+            )
+            if line is not None
+        )
+    elif event.event_type == "task_succeeded":
+        lines.extend(
+            line
+            for line in (
+                _build_feishu_field_line("计划时间", _format_time(event.scheduled_at)),
+                _build_feishu_field_line("完成时间", _format_time(event.occurred_at)),
+                _build_feishu_field_line("耗时", _format_duration(event)),
+            )
+            if line is not None
+        )
+        if event.success_summary is not None:
+            lines.append(_build_feishu_field_line("摘要", event.success_summary))
+    elif event.event_type == "task_failed":
+        lines.extend(
+            line
+            for line in (
+                _build_feishu_field_line("计划时间", _format_time(event.scheduled_at)),
+                _build_feishu_field_line("失败时间", _format_time(event.occurred_at)),
+                _build_feishu_field_line("耗时", _format_duration(event)),
+                _build_feishu_field_line("原因", _format_failure(event)),
+            )
+            if line is not None
+        )
+    else:
+        lines.extend(
+            line
+            for line in (
+                _build_feishu_field_line("计划时间", _format_time(event.scheduled_at)),
+                _build_feishu_field_line("宽限时间", _format_grace(event)),
+                _build_feishu_field_line("检测时间", _format_time(event.detected_at)),
+            )
+            if line is not None
+        )
+        lines.append("**说明**：到达预期时间后未检测到 started 事件")
+
+    lines.extend(
+        line
+        for line in (
+            _build_feishu_field_line("尝试次数", str(event.attempts) if event.attempts is not None else None),
+            _build_feishu_field_line("实例", event.instance_id),
+            _build_feishu_detail_link_line(event.console_url),
+            _build_feishu_code_field_line(
+                "详情",
+                event.console_url if event.console_url is not None and not _is_absolute_url(event.console_url) else None,
+            ),
+        )
+        if line is not None
+    )
+    return lines
+
+
+def _build_feishu_field_line(label: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    return f"**{label}**：{_escape_feishu_markdown_text(value)}"
+
+
+def _build_feishu_code_field_line(label: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    return f"**{label}**：{_format_feishu_code_value(value)}"
+
+
+def _build_feishu_detail_link_line(url: str | None) -> str | None:
+    if not _is_absolute_url(url):
+        return None
+    return f"**详情**：[打开详情]({url})"
+
+
+def _build_feishu_success_metric_lines(event: NotificationEventRecord) -> list[str]:
+    return [
+        f"• **{_escape_feishu_markdown_text(metric.label)}**：{_escape_feishu_markdown_text(metric.value)}"
+        for metric in event.success_metrics
+    ]
+
+
 def _format_time(value) -> str | None:
     from onestep_control_plane_api.api.notification_helpers import format_datetime_for_message
 
@@ -143,14 +261,14 @@ def _build_feishu_card_elements(event: NotificationEventRecord) -> list[dict[str
     elements: list[dict[str, Any]] = [
         {
             "tag": "markdown",
-            "content": "\n".join(_build_detail_lines(event)),
+            "content": "\n".join(_build_feishu_detail_lines(event)),
             "text_align": "left",
             "text_size": "normal_v2",
             "margin": "0px 0px 8px 0px",
         }
     ]
 
-    metric_lines = _build_success_metric_lines(event)
+    metric_lines = _build_feishu_success_metric_lines(event)
     if metric_lines:
         elements.append(
             {
@@ -159,32 +277,6 @@ def _build_feishu_card_elements(event: NotificationEventRecord) -> list[dict[str
                 "text_align": "left",
                 "text_size": "normal_v2",
                 "margin": "0px 0px 8px 0px",
-            }
-        )
-
-    if _is_absolute_url(event.console_url):
-        elements.append(
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "打开详情"},
-                        "type": "default",
-                        "width": "default",
-                        "size": "medium",
-                        "behaviors": [
-                            {
-                                "type": "open_url",
-                                "default_url": event.console_url,
-                                "pc_url": "",
-                                "ios_url": "",
-                                "android_url": "",
-                            }
-                        ],
-                    }
-                ],
-                "margin": "8px 0px 0px 0px",
             }
         )
     return elements

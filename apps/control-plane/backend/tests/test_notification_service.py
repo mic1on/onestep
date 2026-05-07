@@ -103,8 +103,9 @@ def test_dispatch_runtime_task_event_notifications_builds_absolute_console_url_w
         assert created_count == 1
         payload = sent_payloads[0]
         assert payload is not None
-        assert payload["card"]["body"]["elements"][1]["actions"][0]["behaviors"][0]["default_url"] == (
-            "https://cp.example/services/billing-sync/tasks/sync_users?environment=prod"
+        assert (
+            "**详情**：[打开详情](https://cp.example/services/billing-sync/tasks/sync_users?environment=prod)"
+            in payload["card"]["body"]["elements"][0]["content"]
         )
     finally:
         settings.console_base_url = original_base_url
