@@ -127,7 +127,7 @@ def _format_exception_summary(exc: BaseException) -> str:
 def _is_transient_ws_connect_failure(exc: BaseException) -> bool:
     status_code = _extract_http_status_code(exc)
     if status_code is not None:
-        return status_code == 429 or 500 <= status_code < 600
+        return status_code in {404, 429} or 500 <= status_code < 600
     return isinstance(exc, (OSError, TimeoutError, asyncio.TimeoutError))
 
 

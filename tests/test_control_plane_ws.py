@@ -1324,8 +1324,8 @@ def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -
     assert [attempt[0] for attempt in transport.send_attempts] == ["sync", "sync"]
 
 
-@pytest.mark.parametrize("status_code", range(500, 600))
-def test_ws_sender_retries_transient_http_5xx_connect_failures_without_traceback(
+@pytest.mark.parametrize("status_code", [404, *range(500, 600)])
+def test_ws_sender_retries_temporary_http_connect_failures_without_traceback(
     caplog,
     status_code: int,
 ) -> None:
