@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import logging
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from onestep import (
     build_control_plane_http_base_url,
     build_control_plane_ws_url,
 )
+from onestep.control_plane_ws import _default_connect_factory
 
 
 def _make_config() -> ControlPlaneReporterConfig:
@@ -93,6 +95,31 @@ def test_build_control_plane_urls_handle_prefixed_ws_endpoints() -> None:
         build_control_plane_http_base_url("wss://control-plane.example.com/control/api/v1/agents/ws")
         == "https://control-plane.example.com/control"
     )
+
+
+def test_default_ws_connect_factory_reports_missing_optional_dependency(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def missing_websockets_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "websockets" or name.startswith("websockets."):
+            raise ImportError("No module named 'websockets'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", missing_websockets_import)
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError) as exc_info:
+            await _default_connect_factory(
+                "wss://control-plane.example.com/api/v1/agents/ws",
+                {"Authorization": "Bearer secret-token"},
+                ["onestep-agent.v1"],
+            )
+        message = str(exc_info.value)
+        assert "websockets is required for OneStep control-plane WebSocket support" in message
+        assert "pip install 'onestep[control-plane]'" in message
+        assert "ControlPlaneReporter" in message
+
+    asyncio.run(scenario())
 
 
 def test_ws_transport_connect_sends_hello_and_parses_hello_ack() -> None:
