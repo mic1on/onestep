@@ -2,6 +2,7 @@ import logging
 from asyncio import CancelledError, create_task, sleep
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,12 +26,16 @@ from onestep_control_plane_api.db.session import SessionLocal
 logger = logging.getLogger("onestep_control_plane_api.startup")
 
 
-async def _run_missed_start_scanner(app: FastAPI) -> None:
+async def _run_missed_start_scanner(app: FastAPI, *, started_at: datetime) -> None:
     session_factory = getattr(app.state, "session_factory", SessionLocal)
+    await sleep(settings.notification_missed_start_scan_interval_s)
     while True:
         try:
             with session_factory() as session:
-                scan_and_dispatch_missed_start_notifications(session)
+                scan_and_dispatch_missed_start_notifications(
+                    session,
+                    min_last_seen_at=started_at,
+                )
         except Exception:
             logger.exception("notification missed-start scan failed")
         await sleep(settings.notification_missed_start_scan_interval_s)
@@ -47,7 +52,9 @@ def create_app() -> FastAPI:
                 "marked stale active agent sessions as disconnected on startup",
                 extra={"disconnected_session_count": disconnected_count},
             )
-        scanner_task = create_task(_run_missed_start_scanner(app))
+        scanner_task = create_task(
+            _run_missed_start_scanner(app, started_at=datetime.now(UTC))
+        )
         yield
         scanner_task.cancel()
         try:
