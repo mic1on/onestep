@@ -451,10 +451,6 @@ wheels = [
 name = "onestep"
 version = "1.2.4"
 source = { editable = "." }
-dependencies = [
-    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
 
 [package.optional-dependencies]
 all = [
@@ -466,6 +462,12 @@ all = [
     { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "sqlalchemy" },
+    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+control-plane = [
+    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 dev = [
     { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -480,6 +482,8 @@ dev = [
     { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "sqlalchemy" },
+    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 integration = [
     { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -556,9 +560,11 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'integration'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", marker = "extra == 'mysql'", specifier = ">=2.0.0" },
     { name = "sqlalchemy", marker = "extra == 'test'", specifier = ">=2.0.0" },
-    { name = "websockets", specifier = ">=12.0" },
+    { name = "websockets", marker = "extra == 'all'", specifier = ">=12.0" },
+    { name = "websockets", marker = "extra == 'control-plane'", specifier = ">=12.0" },
+    { name = "websockets", marker = "extra == 'dev'", specifier = ">=12.0" },
 ]
-provides-extras = ["yaml", "mysql", "rabbitmq", "redis", "sqs", "test", "integration", "all", "dev"]
+provides-extras = ["control-plane", "yaml", "mysql", "rabbitmq", "redis", "sqs", "test", "integration", "all", "dev"]
 
 [[package]]
 name = "packaging"

@@ -216,8 +216,9 @@ async def _default_connect_factory(
             from websockets.client import connect as ws_connect
         except ImportError as exc:  # pragma: no cover - exercised via dependency error path
             raise RuntimeError(
-                "websockets is required for WS control plane transport; install it before "
-                "using ControlPlaneWsTransport"
+                "websockets is required for OneStep control-plane WebSocket support. "
+                "Install it with `pip install 'onestep[control-plane]'` before using "
+                "ControlPlaneWsTransport or ControlPlaneReporter."
             ) from exc
         connection = await ws_connect(
             url,

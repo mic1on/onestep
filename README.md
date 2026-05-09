@@ -45,6 +45,7 @@ Common extras:
 - `pip install 'onestep[rabbitmq]'`
 - `pip install 'onestep[redis]'`
 - `pip install 'onestep[sqs]'`
+- `pip install 'onestep[control-plane]'`
 - `pip install 'onestep[all]'`
 
 From a source checkout:
@@ -277,6 +278,12 @@ The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined
 
 `onestep` can push runtime telemetry to `onestep-control-plane` over a single long-lived
 WebSocket session without adding a new connector or changing task code.
+
+Install the optional control-plane dependency before using the reporter:
+
+```bash
+pip install 'onestep[control-plane]'
+```
 
 The YAML form is intentionally minimal:
 

@@ -21,11 +21,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: System :: Distributed Computing",
 ]
-dependencies = [
-    "websockets>=12.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
+control-plane = [
+    "websockets>=12.0",
+]
 yaml = [
     "PyYAML>=6.0",
 ]
@@ -59,6 +60,7 @@ integration = [
     "PyMySQL>=1.1.0",
 ]
 all = [
+    "websockets>=12.0",
     "PyYAML>=6.0",
     "SQLAlchemy>=2.0.0",
     "PyMySQL>=1.1.0",
@@ -67,6 +69,7 @@ all = [
     "redis>=4.2.0",
 ]
 dev = [
+    "websockets>=12.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",

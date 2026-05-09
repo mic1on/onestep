@@ -206,6 +206,10 @@ tasks:
 
 Use the built-in reporter only when you need control-plane telemetry. Start with the smallest shape:
 
+```bash
+pip install 'onestep[control-plane]'
+```
+
 ```yaml
 reporter: true
 ```
