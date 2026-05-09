@@ -21,7 +21,6 @@ from onestep_control_plane_api.api.notification_helpers import (
     scheduled_at_from_meta,
 )
 from onestep_control_plane_api.api.notification_payloads import build_webhook_payload
-from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.api.schemas import (
     NotificationChannelCreateRequest,
     NotificationChannelSummary,
@@ -31,6 +30,7 @@ from onestep_control_plane_api.api.schemas import (
     NotificationTestRequest,
     NotificationTestResponse,
 )
+from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     Instance,
     NotificationChannel,
@@ -306,8 +306,11 @@ def _online_service_started_at_by_id(
     db: Session,
     *,
     now: datetime,
+    min_last_seen_at: datetime | None = None,
 ) -> dict[object, datetime]:
     online_cutoff = now - timedelta(seconds=settings.instance_offline_after_s)
+    if min_last_seen_at is not None:
+        online_cutoff = max(online_cutoff, _normalize_scan_now(min_last_seen_at))
     rows = db.execute(
         select(
             Instance.service_id,
@@ -345,12 +348,22 @@ def _resolve_task_timezone(raw_value: Any):
 
 def _derive_interval_anchor(
     *,
+    now: datetime,
     source_config: dict[str, Any],
     service: Service,
     interval_seconds: int,
+    online_started_at: datetime | None = None,
 ) -> datetime | None:
     immediate = bool(source_config.get("immediate", False))
-    candidate = service.latest_sync_at or service.created_at
+    current_time = _normalize_scan_now(now)
+    candidates: list[datetime] = []
+    for candidate in (service.latest_sync_at, online_started_at, service.created_at):
+        if candidate is None:
+            continue
+        normalized_candidate = _normalize_scan_now(candidate)
+        if normalized_candidate <= current_time:
+            candidates.append(normalized_candidate)
+    candidate = max(candidates) if candidates else None
     if candidate is None:
         return None
     if immediate:
@@ -393,6 +406,7 @@ def _iter_expected_interval_slots_for_task(
     now: datetime,
     grace_seconds: int,
     task_definition: TaskDefinition,
+    online_started_at: datetime | None = None,
 ) -> list[datetime]:
     source_config = task_definition.source_config_json
     interval_seconds = _interval_seconds_from_source_config(source_config)
@@ -400,9 +414,11 @@ def _iter_expected_interval_slots_for_task(
         return []
     service = task_definition.service
     anchor = _derive_interval_anchor(
+        now=now,
         source_config=source_config,
         service=service,
         interval_seconds=interval_seconds,
+        online_started_at=online_started_at,
     )
     if anchor is None:
         return []
@@ -523,12 +539,14 @@ def _iter_expected_slots_for_task(
     now: datetime,
     task_definition: TaskDefinition,
     grace_seconds: int,
+    online_started_at: datetime | None = None,
 ) -> list[datetime]:
     if task_definition.source_kind == "interval":
         return _iter_expected_interval_slots_for_task(
             now=now,
             grace_seconds=grace_seconds,
             task_definition=task_definition,
+            online_started_at=online_started_at,
         )
     if task_definition.source_kind == "cron":
         return _iter_expected_cron_slots(
@@ -735,9 +753,14 @@ def scan_and_dispatch_missed_start_notifications(
     db: Session,
     *,
     now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
 ) -> int:
     current_time = _normalize_scan_now(now)
-    online_service_started_at_by_id = _online_service_started_at_by_id(db, now=current_time)
+    online_service_started_at_by_id = _online_service_started_at_by_id(
+        db,
+        now=current_time,
+        min_last_seen_at=min_last_seen_at,
+    )
     channels = db.scalars(
         select(NotificationChannel).where(
             NotificationChannel.enabled.is_(True)
@@ -774,6 +797,7 @@ def scan_and_dispatch_missed_start_notifications(
                 now=current_time,
                 task_definition=task_definition,
                 grace_seconds=channel.missed_start_grace_seconds,
+                online_started_at=online_started_at,
             )
             for scheduled_at in expected_slots:
                 if scheduled_at < online_started_at:
@@ -816,6 +840,7 @@ def scan_and_dispatch_missed_start_notifications(
                 )
                 if delivery is not None:
                     pending_deliveries.append((delivery, channel.webhook_url))
+                break
 
     if not pending_deliveries:
         db.commit()
