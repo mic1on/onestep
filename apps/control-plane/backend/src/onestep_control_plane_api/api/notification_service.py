@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,6 +32,7 @@ from onestep_control_plane_api.api.schemas import (
     NotificationTestResponse,
 )
 from onestep_control_plane_api.db.models import (
+    Instance,
     NotificationChannel,
     NotificationDelivery,
     Service,
@@ -299,6 +300,30 @@ def _normalize_scan_now(now: datetime | None) -> datetime:
     if now.tzinfo is None:
         return now.replace(tzinfo=UTC)
     return now.astimezone(UTC)
+
+
+def _online_service_started_at_by_id(
+    db: Session,
+    *,
+    now: datetime,
+) -> dict[object, datetime]:
+    online_cutoff = now - timedelta(seconds=settings.instance_offline_after_s)
+    rows = db.execute(
+        select(
+            Instance.service_id,
+            func.min(func.coalesce(Instance.started_at, Instance.created_at)).label("online_started_at"),
+        )
+        .where(
+            Instance.last_seen_at.is_not(None),
+            Instance.last_seen_at >= online_cutoff,
+        )
+        .group_by(Instance.service_id)
+    ).all()
+    return {
+        row.service_id: row.online_started_at
+        for row in rows
+        if row.online_started_at is not None
+    }
 
 
 def _parse_task_timezone(raw_value: Any) -> str | None:
@@ -712,6 +737,7 @@ def scan_and_dispatch_missed_start_notifications(
     now: datetime | None = None,
 ) -> int:
     current_time = _normalize_scan_now(now)
+    online_service_started_at_by_id = _online_service_started_at_by_id(db, now=current_time)
     channels = db.scalars(
         select(NotificationChannel).where(
             NotificationChannel.enabled.is_(True)
@@ -734,6 +760,9 @@ def scan_and_dispatch_missed_start_notifications(
     for channel in missed_start_channels:
         for task_definition in task_definitions:
             service = task_definition.service
+            online_started_at = online_service_started_at_by_id.get(service.id)
+            if online_started_at is None:
+                continue
             interval_seconds = _interval_seconds_from_source_config(task_definition.source_config_json)
             if not _service_matches_channel(
                 channel,
@@ -747,6 +776,8 @@ def scan_and_dispatch_missed_start_notifications(
                 grace_seconds=channel.missed_start_grace_seconds,
             )
             for scheduled_at in expected_slots:
+                if scheduled_at < online_started_at:
+                    continue
                 if _task_started_for_scheduled_slot(
                     db,
                     service_id=service.id,

@@ -286,7 +286,8 @@ def test_dispatch_runtime_task_event_notifications_ignores_malformed_success_not
 def test_scan_and_dispatch_missed_start_notifications_creates_single_delivery(
     db_session, monkeypatch
 ) -> None:
-    service, _instance = seed_runtime_service(db_session)
+    service, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["task_missed_start"])
     task_definition = TaskDefinition(
         service_id=service.id,
@@ -335,6 +336,7 @@ def test_scan_and_dispatch_missed_start_notifications_skips_started_slot(
     db_session, monkeypatch
 ) -> None:
     service, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["task_missed_start"])
     task_definition = TaskDefinition(
         service_id=service.id,
@@ -374,6 +376,7 @@ def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slo
     db_session, monkeypatch
 ) -> None:
     service, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["task_missed_start"])
     task_definition = TaskDefinition(
         service_id=service.id,
@@ -414,6 +417,7 @@ def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slo
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     service.latest_sync_at = datetime(2026, 5, 6, 2, 41, 22, 819707, tzinfo=UTC)
+    instance.last_seen_at = datetime(2026, 5, 6, 2, 46, 39, 929637, tzinfo=UTC)
     seed_channel(db_session, event_types=["task_missed_start"])
     task_definition = TaskDefinition(
         service_id=service.id,
@@ -456,7 +460,8 @@ def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slo
 def test_scan_and_dispatch_missed_start_notifications_keeps_interval_missed_start_when_no_started_event(
     db_session, monkeypatch
 ) -> None:
-    service, _instance = seed_runtime_service(db_session)
+    service, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["task_missed_start"])
     task_definition = TaskDefinition(
         service_id=service.id,
@@ -491,3 +496,66 @@ def test_scan_and_dispatch_missed_start_notifications_keeps_interval_missed_star
     deliveries = db_session.query(NotificationDelivery).all()
     assert len(deliveries) == 1
     assert deliveries[0].scheduled_at == datetime(2026, 4, 30, 2, 5, 0, tzinfo=UTC)
+
+
+def test_scan_and_dispatch_missed_start_notifications_skips_offline_service(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC)
+    seed_channel(db_session, event_types=["task_missed_start"])
+    task_definition = TaskDefinition(
+        service_id=service.id,
+        task_name="sync_users",
+        source_name="interval:300s",
+        source_kind="interval",
+        source_config_json={"seconds": 300, "immediate": False, "timezone": "UTC"},
+        updated_at=datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC),
+    )
+    db_session.add(task_definition)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        lambda delivery, *, webhook_url, timeout_s=5.0: None,
+    )
+
+    created_count = scan_and_dispatch_missed_start_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+
+    assert created_count == 0
+    assert db_session.query(NotificationDelivery).count() == 0
+
+
+def test_scan_and_dispatch_missed_start_notifications_skips_slots_before_online_restart(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    instance.started_at = datetime(2026, 4, 30, 2, 8, 0, tzinfo=UTC)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+    seed_channel(db_session, event_types=["task_missed_start"])
+    task_definition = TaskDefinition(
+        service_id=service.id,
+        task_name="sync_users",
+        source_name="interval:300s",
+        source_kind="interval",
+        source_config_json={"seconds": 300, "immediate": False, "timezone": "UTC"},
+        updated_at=datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC),
+    )
+    db_session.add(task_definition)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        lambda delivery, *, webhook_url, timeout_s=5.0: None,
+    )
+
+    created_count = scan_and_dispatch_missed_start_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+
+    assert created_count == 0
+    assert db_session.query(NotificationDelivery).count() == 0
