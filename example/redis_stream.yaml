@@ -1,6 +1,9 @@
 # Redis Streams YAML Example
 # Run with: onestep run example/redis_stream.yaml
 
+apiVersion: onestep/v1alpha1
+kind: App
+
 app:
   name: redis-yaml-demo
   shutdown_timeout_s: 10.0

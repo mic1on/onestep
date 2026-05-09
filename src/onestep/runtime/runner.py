@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+from collections.abc import Mapping
 import copy
 import inspect
+import logging
+import math
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from onestep.context import TaskContext
 from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
+from onestep.invoke import invoke_callback
 from onestep.resilience import ConnectorOperationError, connector_retry_delay, is_retryable_connector_error
 from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
 from onestep.task import TaskSpec
@@ -19,19 +22,67 @@ if TYPE_CHECKING:
     from onestep.connectors.base import Delivery
 
 
+_INVALID_NOTIFICATION_VALUE = object()
+
+
 class TaskRunner:
     _SEND_ATTEMPTS = 2
     def __init__(self, app: "OneStepApp", task: TaskSpec) -> None:
         self.app = app
         self.task = task
         self._inflight: set[asyncio.Task[None]] = set()
+        self._fetching = False
+        self._drain_parked = False
+        self._pause_parked = False
         self._logger = logging.getLogger(f"onestep.{app.name}.{task.name}")
+
+    @property
+    def inflight_count(self) -> int:
+        return len(self._inflight)
+
+    @property
+    def is_fetching(self) -> bool:
+        return self._fetching
+
+    @property
+    def is_drain_parked(self) -> bool:
+        return self._drain_parked
+
+    @property
+    def is_pause_parked(self) -> bool:
+        return self._pause_parked
 
     async def run(self) -> None:
         if self.task.source is None:
             return
         try:
             while not self.app.is_stopping:
+                if self.app.is_draining:
+                    if self._inflight:
+                        await self._wait_for_inflight(timeout=self.task.source.poll_interval_s)
+                        continue
+                    self._set_pause_parked(False)
+                    self._set_drain_parked(True)
+                    await self.app.wait_for_shutdown()
+                    break
+
+                if self.app.is_task_paused(self.task.name):
+                    if self._inflight:
+                        await self._wait_for_inflight(timeout=self.task.source.poll_interval_s)
+                        continue
+                    self._set_drain_parked(False)
+                    self._set_pause_parked(True)
+                    try:
+                        await asyncio.wait_for(
+                            self.app.wait_for_shutdown(),
+                            timeout=self.task.source.poll_interval_s,
+                        )
+                    except asyncio.TimeoutError:
+                        continue
+                    break
+
+                self._set_drain_parked(False)
+                self._set_pause_parked(False)
                 available = self.task.concurrency - len(self._inflight)
                 if available <= 0:
                     await self._wait_for_inflight(timeout=self.task.source.poll_interval_s)
@@ -50,9 +101,11 @@ class TaskRunner:
 
                 for delivery in deliveries:
                     pending = asyncio.create_task(self._handle_delivery(delivery))
-                    self._inflight.add(pending)
-                    pending.add_done_callback(self._inflight.discard)
+                    self._track_inflight(pending)
         finally:
+            self._set_drain_parked(False)
+            self._set_pause_parked(False)
+            self._set_fetching(False)
             await self._drain_inflight()
 
     async def _wait_for_inflight(self, timeout: float | None) -> None:
@@ -61,15 +114,25 @@ class TaskRunner:
         await asyncio.wait(self._inflight, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
 
     async def _fetch_deliveries(self, limit: int) -> list["Delivery"]:
-        if self.task.source is None or self.app.is_stopping:
+        if (
+            self.task.source is None
+            or self.app.is_stopping
+            or self.app.is_draining
+            or self.app.is_task_paused(self.task.name)
+        ):
             return []
+        self._set_fetching(True)
         fetch_task = asyncio.create_task(self.task.source.fetch(limit))
-        shutdown_task = asyncio.create_task(self.app.wait_for_shutdown())
+        stop_fetching_task = asyncio.create_task(self.app.wait_for_stop_fetching(self.task.name))
         done, pending = await asyncio.wait(
-            {fetch_task, shutdown_task},
+            {fetch_task, stop_fetching_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
         try:
+            if stop_fetching_task in done:
+                fetch_task.cancel()
+                await asyncio.gather(fetch_task, return_exceptions=True)
+                return []
             if fetch_task in done:
                 try:
                     return fetch_task.result()
@@ -82,9 +145,37 @@ class TaskRunner:
             await asyncio.gather(fetch_task, return_exceptions=True)
             return []
         finally:
+            self._set_fetching(False)
             for pending_task in pending:
                 pending_task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    def _track_inflight(self, task: asyncio.Task[None]) -> None:
+        self._inflight.add(task)
+        self.app.notify_runner_state_changed()
+        task.add_done_callback(self._handle_inflight_done)
+
+    def _handle_inflight_done(self, task: asyncio.Task[None]) -> None:
+        self._inflight.discard(task)
+        self.app.notify_runner_state_changed()
+
+    def _set_fetching(self, value: bool) -> None:
+        if self._fetching == value:
+            return
+        self._fetching = value
+        self.app.notify_runner_state_changed()
+
+    def _set_drain_parked(self, value: bool) -> None:
+        if self._drain_parked == value:
+            return
+        self._drain_parked = value
+        self.app.notify_runner_state_changed()
+
+    def _set_pause_parked(self, value: bool) -> None:
+        if self._pause_parked == value:
+            return
+        self._pause_parked = value
+        self.app.notify_runner_state_changed()
 
     async def _handle_source_fetch_error(self, exc: ConnectorOperationError) -> None:
         fallback_s = self.task.source.poll_interval_s if self.task.source is not None else 1.0
@@ -140,16 +231,20 @@ class TaskRunner:
         try:
             await delivery.start_processing()
             await self._emit_event(TaskEventKind.STARTED, delivery)
+            await self._run_task_hooks(self.task.hooks.before, ctx, delivery.payload)
             result = await self._invoke_handler(ctx, delivery)
+            await self._run_task_hooks(self.task.hooks.after_success, ctx, delivery.payload, result)
             if result is not None and self.task.sinks:
                 envelope = Envelope(body=result)
                 for sink in self.task.sinks:
                     await self._send_to_sink(sink, envelope)
             await delivery.ack()
+            event_meta = self._build_succeeded_event_meta(delivery, result)
             await self._emit_event(
                 TaskEventKind.SUCCEEDED,
                 delivery,
                 duration_s=time.perf_counter() - started_at,
+                event_meta=event_meta,
             )
         except asyncio.CancelledError:
             failure = FailureInfo.from_exception(asyncio.CancelledError(), kind=FailureKind.CANCELLED)
@@ -205,6 +300,15 @@ class TaskRunner:
     ) -> None:
         failure = FailureInfo.from_exception(exc, kind=kind)
         ctx.logger.exception("task failed", extra={"failure_kind": failure.kind.value})
+        await self._run_task_hooks(
+            self.task.hooks.on_failure,
+            ctx,
+            delivery.payload,
+            failure,
+            suppress_exceptions=True,
+            logger=ctx.logger,
+            message="task failure hook failed",
+        )
         action = resolve_retry_action(self.task.retry, delivery.envelope, exc, failure)
         if action.decision is RetryDecision.RETRY:
             await delivery.retry(delay_s=action.delay_s)
@@ -300,6 +404,28 @@ class TaskRunner:
         for delivery in deliveries:
             await self._emit_event(kind, delivery)
 
+    async def _run_task_hooks(
+        self,
+        hooks,
+        *args,
+        suppress_exceptions: bool = False,
+        logger: logging.Logger | None = None,
+        message: str = "task hook failed",
+    ) -> None:
+        for hook in hooks:
+            try:
+                result = invoke_callback(hook, *args)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                if not suppress_exceptions:
+                    raise
+                active_logger = logger or self._logger
+                active_logger.exception(
+                    message,
+                    extra={"task_hook": getattr(hook, "__name__", hook.__class__.__name__)},
+                )
+
     async def _emit_event(
         self,
         kind: TaskEventKind,
@@ -307,6 +433,7 @@ class TaskRunner:
         *,
         duration_s: float | None = None,
         failure: FailureInfo | None = None,
+        event_meta: dict[str, Any] | None = None,
     ) -> None:
         event = TaskEvent(
             kind=kind,
@@ -316,6 +443,49 @@ class TaskRunner:
             attempts=delivery.envelope.attempts,
             duration_s=duration_s,
             failure=failure,
-            meta=copy.deepcopy(delivery.envelope.meta),
+            meta=copy.deepcopy(event_meta) if event_meta is not None else copy.deepcopy(delivery.envelope.meta),
         )
         await self.app.emit_event(event)
+
+    def _build_succeeded_event_meta(self, delivery: "Delivery", result: Any) -> dict[str, Any]:
+        event_meta = copy.deepcopy(delivery.envelope.meta)
+        notification = self._extract_notification_payload(result)
+        if notification is not None:
+            event_meta["notification"] = notification
+        return event_meta
+
+    def _extract_notification_payload(self, result: Any) -> dict[str, Any] | None:
+        if not isinstance(result, Mapping):
+            return None
+        notification = result.get("notification")
+        if not isinstance(notification, Mapping):
+            return None
+        sanitized = self._sanitize_notification_value(notification)
+        if not isinstance(sanitized, dict) or not sanitized:
+            return None
+        return sanitized
+
+    def _sanitize_notification_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else _INVALID_NOTIFICATION_VALUE
+        if isinstance(value, Mapping):
+            sanitized: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    continue
+                clean_item = self._sanitize_notification_value(item)
+                if clean_item is _INVALID_NOTIFICATION_VALUE:
+                    continue
+                sanitized[key] = clean_item
+            return sanitized
+        if isinstance(value, (list, tuple)):
+            sanitized_items = []
+            for item in value:
+                clean_item = self._sanitize_notification_value(item)
+                if clean_item is _INVALID_NOTIFICATION_VALUE:
+                    continue
+                sanitized_items.append(clean_item)
+            return sanitized_items
+        return _INVALID_NOTIFICATION_VALUE

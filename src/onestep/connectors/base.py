@@ -34,6 +34,7 @@ class Delivery(abc.ABC):
 class Source(abc.ABC):
     batch_size: int = 1
     poll_interval_s: float = 1.0
+    supports_manual_run: bool = False
 
     def __init__(self, name: str) -> None:
         self.name = name

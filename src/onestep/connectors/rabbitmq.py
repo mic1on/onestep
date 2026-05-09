@@ -53,6 +53,7 @@ class RabbitMQConnector:
         bind_arguments: dict[str, Any] | None = None,
         durable: bool = True,
         auto_delete: bool = False,
+        exclusive: bool = False,
         arguments: dict[str, Any] | None = None,
         exchange_durable: bool | None = None,
         exchange_auto_delete: bool = False,
@@ -73,6 +74,7 @@ class RabbitMQConnector:
             bind_arguments=bind_arguments or {},
             durable=durable,
             auto_delete=auto_delete,
+            exclusive=exclusive,
             arguments=arguments or {},
             exchange_durable=durable if exchange_durable is None else exchange_durable,
             exchange_auto_delete=exchange_auto_delete,
@@ -140,6 +142,7 @@ class RabbitMQQueue(Source, Sink):
         bind_arguments: dict[str, Any],
         durable: bool,
         auto_delete: bool,
+        exclusive: bool,
         arguments: dict[str, Any],
         exchange_durable: bool,
         exchange_auto_delete: bool,
@@ -160,6 +163,7 @@ class RabbitMQQueue(Source, Sink):
         self.bind_arguments = bind_arguments
         self.durable = durable
         self.auto_delete = auto_delete
+        self.exclusive = exclusive
         self.arguments = arguments
         self.exchange_durable = exchange_durable
         self.exchange_auto_delete = exchange_auto_delete
@@ -189,6 +193,7 @@ class RabbitMQQueue(Source, Sink):
                 self.name,
                 durable=self.durable,
                 auto_delete=self.auto_delete,
+                exclusive=self.exclusive,
                 arguments=self.arguments,
             )
             if self.exchange_name:

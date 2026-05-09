@@ -32,6 +32,8 @@ class MemoryDelivery(Delivery):
 
 
 class MemoryQueue(Source, Sink):
+    supports_manual_run = True
+
     def __init__(
         self,
         name: str,

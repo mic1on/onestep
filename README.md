@@ -45,6 +45,7 @@ Common extras:
 - `pip install 'onestep[rabbitmq]'`
 - `pip install 'onestep[redis]'`
 - `pip install 'onestep[sqs]'`
+- `pip install 'onestep[control-plane]'`
 - `pip install 'onestep[all]'`
 
 From a source checkout:
@@ -113,32 +114,26 @@ Use JSON output when you want the check result in CI or deployment scripts:
 onestep check --json your_package.tasks:app
 ```
 
-You can also load a YAML app definition with `handler.ref` entries that point to Python callables:
+You can also load a YAML app definition. Start with the smallest working shape
+and add fields only when needed. `resources` is the preferred top-level section
+for named runtime objects, while `handler.ref` and `hooks.*.ref` point to
+Python callables:
 
 ```yaml
 app:
   name: billing-sync
 
-connectors:
+resources:
   tick:
     type: interval
     minutes: 5
     immediate: true
-  processed:
-    type: memory
 
 tasks:
   - name: sync_billing
     source: tick
     handler:
       ref: your_package.handlers.billing:sync_billing
-      params:
-        region: cn
-    emit: [processed]
-    retry:
-      type: max_attempts
-      max_attempts: 3
-      delay_s: 10
 ```
 
 Check or run the YAML target the same way:
@@ -148,8 +143,48 @@ onestep check worker.yaml
 onestep run worker.yaml
 ```
 
-YAML resources can reference other resources by name, for example `rabbitmq_queue.connector: rmq`
-or `mysql_incremental.state: cursor_store`.
+Scaffold a minimal standalone YAML project when starting from scratch:
+
+```bash
+onestep init billing-sync
+```
+
+That generates:
+
+- `pyproject.toml`
+- `worker.yaml`
+- `src/<package>/tasks/`
+- `src/<package>/transforms/`
+
+The generated project stays intentionally small. `worker.yaml` only defines
+runtime wiring; business logic still lives in Python. Add `hooks.py` later only
+when you actually wire hooks in YAML.
+
+Use strict checking when you want schema validation for YAML targets, including
+unknown-field detection and contract checks for `reporter`, `hooks`, `tasks`,
+and resource specs:
+
+```bash
+onestep check --strict worker.yaml
+```
+
+YAML resources can reference other resources by name, for example
+`rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.
+
+Task handlers and hooks can read:
+
+- `ctx.config` for app-level config
+- `ctx.task_config` for task-level config
+- `ctx.resources` for named runtime objects
+
+App hooks can read `app.resources` for the same named resource registry.
+
+For a progressive YAML guide from minimal task to fully wired app, including
+strict-check guidance, see
+`docs/yaml-task-definition.md`.
+
+For a standalone project-style example with `worker.yaml` plus
+`tasks.py` / `transforms.py` / `hooks.py`, see `example/yaml_project/`.
 
 Currently supported YAML resource types:
 
@@ -186,6 +221,10 @@ connectors:
 
 The named state resource must support `load/save/delete`; `mysql_state_store`
 and `mysql_cursor_store` both work.
+
+Legacy `connectors`, `sources`, and `sinks` sections are still supported and
+merged into the same internal resource registry. For the full YAML schema and a
+larger task-definition example, see `docs/yaml-task-definition.md`.
 
 Runnable examples live in:
 
@@ -237,7 +276,33 @@ The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined
 
 ## Control Plane Reporter
 
-`onestep` can push runtime telemetry to `onestep-control-plane` without adding a new connector or changing task code.
+`onestep` can push runtime telemetry to `onestep-control-plane` over a single long-lived
+WebSocket session without adding a new connector or changing task code.
+
+Install the optional control-plane dependency before using the reporter:
+
+```bash
+pip install 'onestep[control-plane]'
+```
+
+The YAML form is intentionally minimal:
+
+```yaml
+app:
+  name: billing-sync
+
+reporter: true
+```
+
+That enables `ControlPlaneReporter` using env-backed defaults. When you need explicit
+overrides, keep the field names aligned with `ControlPlaneReporterConfig`:
+
+```yaml
+reporter:
+  base_url: https://control-plane.example.com
+  token: ${ONESTEP_CONTROL_PLANE_TOKEN}
+  service_name: billing-sync-worker
+```
 
 Attach the reporter explicitly:
 
@@ -266,27 +331,59 @@ Common optional environment variables:
 - `ONESTEP_NODE_NAME`
 - `ONESTEP_DEPLOYMENT_VERSION`
 - `ONESTEP_INSTANCE_ID`
+- `ONESTEP_REPLICA_KEY`
+- `ONESTEP_STATE_DIR`
 - `ONESTEP_CONTROL_PLANE_HEARTBEAT_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_METRICS_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_FLUSH_INTERVAL_S`
 - `ONESTEP_CONTROL_PLANE_EVENT_BATCH_SIZE`
+- `ONESTEP_CONTROL_PLANE_MAX_PENDING_EVENTS`
+- `ONESTEP_CONTROL_PLANE_MAX_PENDING_METRIC_BATCHES`
 - `ONESTEP_CONTROL_PLANE_TIMEOUT_S`
+- `ONESTEP_CONTROL_PLANE_RECONNECT_BASE_DELAY_S`
+- `ONESTEP_CONTROL_PLANE_RECONNECT_MAX_DELAY_S`
 
-The reporter currently pushes:
+The reporter now uses:
 
-- `POST /api/v1/agents/sync`
-- `POST /api/v1/agents/heartbeat`
-- `POST /api/v1/agents/metrics`
-- `POST /api/v1/agents/events`
+- `GET /api/v1/agents/ws`
+- `hello` / `hello_ack`
+- `telemetry(sync|heartbeat|metrics|events)`
+- `command` / `command_ack` / `command_result`
 
 Behavior:
 
-- startup sends an initial heartbeat
-- startup also sends a topology sync built from the current app tasks
-- sync is retried on later heartbeat cycles until the current topology hash is accepted
+- startup reuses a stable `instance_id` from local state unless `ONESTEP_INSTANCE_ID` or `ONESTEP_REPLICA_KEY` overrides it
+- startup opens a fresh WS session and negotiates capabilities
+- startup sends a heartbeat and a topology sync built from the current app tasks
+- `sync` and `heartbeat` sequences are tracked independently and persist across restarts
+- sync is resent on later heartbeat cycles until the current topology hash converges
 - task execution events are aggregated into task window metrics
 - important runtime events (`retried`, `failed`, `dead_lettered`, `cancelled`) are batched and pushed
+- remote commands can trigger `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `sync_now`, `flush_metrics`, and `flush_events`
+- transport send failures reset the current session and reconnect with exponential backoff plus jitter
+- low-priority `metrics` and `events` buffers are bounded locally; if the control plane stays down, the oldest buffered telemetry is dropped first
 - reporter failures are logged but do not stop task execution
+
+Identity resolution order:
+
+1. `ONESTEP_INSTANCE_ID`: hard override for tests or explicit pinning.
+2. `ONESTEP_REPLICA_KEY`: derives a deterministic UUIDv5 from `service_name + environment + replica_key`.
+3. local identity state: reuses the `instance_id` stored in the reporter state dir.
+
+By default `ControlPlaneReporterConfig.from_env()` uses a local state dir under:
+
+- `~/.onestep/control-plane-state/<environment>/<service_name>`
+- `~/.onestep/control-plane-state/<environment>/<service_name>/<replica_key>` when `ONESTEP_REPLICA_KEY` is set
+
+Multi-replica rules:
+
+- single worker: the default state dir is enough
+- multiple workers on one host: give each worker a unique `ONESTEP_REPLICA_KEY` or `ONESTEP_STATE_DIR`
+- StatefulSet-style deployments: use the stable ordinal as `ONESTEP_REPLICA_KEY`
+- disposable deployment pod names are not a stable replica key unless you inject one yourself
+
+For an operations-focused guide with deployment patterns and troubleshooting, see
+[`docs/stable-instance-identity.md`](docs/stable-instance-identity.md).
 
 Quick local demo:
 
@@ -305,11 +402,21 @@ cd ../onestep-control-plane
 ./scripts/run-control-plane-demo.sh
 ```
 
-3. Inspect the control plane:
+3. Or run the end-to-end smoke script, which boots the local control plane, starts the
+   demo agent, dispatches a `ping`, and waits for a successful `command_result`:
+
+```bash
+./scripts/run-control-plane-smoke.sh
+```
+
+4. Inspect the control plane. The demo cycles through `ok`, `retry_once`, `fail`, and `slow`
+   jobs so you can see successful runs, retries, terminal failures, timeouts, and dead-letter
+   events without changing any code:
 
 ```text
-http://127.0.0.1:8080/api/v1/services?environment=dev
-http://127.0.0.1:8080/openapi.json
+http://127.0.0.1:8080/services?environment=dev
+http://127.0.0.1:8080/services/control-plane-demo?environment=dev
+http://127.0.0.1:8080/services/control-plane-demo?environment=dev&tab=commands
 ```
 
 ## Runtime
@@ -394,6 +501,47 @@ print(snapshot["kinds"])
 - `attempts`
 - `duration_s`
 - `failure_kind`
+
+Tasks can also opt into webhook-friendly success metadata by returning a reserved `notification` object. The task return value sent to sinks stays unchanged; only the emitted `succeeded` event gains `meta["notification"]`.
+
+```python
+from onestep import MemoryQueue, OneStepApp, StructuredEventLogger
+
+source = MemoryQueue("incoming")
+app = OneStepApp("notification-demo")
+app.on_event(StructuredEventLogger())
+
+
+@app.task(source=source)
+async def sync_status(ctx, item):
+    updated = item["updated"]
+    ctx.app.request_shutdown()
+    return {
+        "success": True,
+        "updated": updated,
+        "notification": {
+            "summary": f"Status sync complete, updated {updated} devices",
+            "metrics": [
+                {"label": "Updated", "value": updated},
+            ],
+        },
+    }
+```
+
+The emitted `TaskEventKind.SUCCEEDED` metadata then includes:
+
+```json
+{
+  "notification": {
+    "summary": "Status sync complete, updated 12 devices",
+    "metrics": [
+      {"label": "Updated", "value": 12}
+    ]
+  }
+}
+```
+
+`notification` values must be JSON-safe. Invalid values are dropped from the emitted metadata instead of failing task execution.
 
 ## Memory Queue Example
 
@@ -539,6 +687,10 @@ sink = db.table_sink(table="processed_orders", mode="upsert", keys=("id",))
 async def process_order(ctx, row):
     return {"id": row["id"], "payload": row["payload"], "status": "done"}
 ```
+
+When you need to write computed fields back to the claimed row itself, call
+`await ctx.update_current_row({...})` inside the task. This is currently
+supported for `MySQLConnector.table_queue(...)` deliveries.
 
 ## MySQL Incremental Sync
 

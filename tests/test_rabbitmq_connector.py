@@ -30,6 +30,10 @@ class FakeQueue:
         self.name = name
         self.messages = []
         self.bindings = []
+        self.durable = None
+        self.auto_delete = None
+        self.exclusive = None
+        self.arguments = None
 
     async def get(self, fail=False, timeout=None):
         if self.messages:
@@ -77,8 +81,13 @@ class FakeChannel:
     async def set_qos(self, prefetch_count):
         self.prefetch_count = prefetch_count
 
-    async def declare_queue(self, name, durable, auto_delete, arguments):
-        return self.queue_registry.setdefault(name, FakeQueue(name))
+    async def declare_queue(self, name, durable, auto_delete, exclusive, arguments):
+        queue = self.queue_registry.setdefault(name, FakeQueue(name))
+        queue.durable = durable
+        queue.auto_delete = auto_delete
+        queue.exclusive = exclusive
+        queue.arguments = arguments
+        return queue
 
     async def declare_exchange(self, name, exchange_type, durable, auto_delete, arguments):
         exchange = self.exchange_registry.get(name)
@@ -160,6 +169,7 @@ def test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding(monkeypatch):
             exchange="jobs.events",
             routing_key="jobs.created",
             bind_arguments={"x-match": "all"},
+            exclusive=True,
         )
         await events.open()
 
@@ -167,6 +177,7 @@ def test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding(monkeypatch):
         publish_channel = events._publish_channel
         assert receive_channel is not None
         assert publish_channel is not None
+        assert receive_channel.queue_registry["jobs_worker"].exclusive is True
         assert receive_channel.queue_registry["jobs_worker"].bindings[0]["routing_key"] == "jobs.created"
         assert receive_channel.queue_registry["jobs_worker"].bindings[0]["arguments"] == {"x-match": "all"}
         assert "jobs.events" in receive_channel.exchange_registry

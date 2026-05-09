@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import copy
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,6 +10,14 @@ from .connectors.base import Sink, Source
 from .retry import NoRetry, RetryPolicy
 
 TaskHandler = Callable[["TaskContext", Any], Any]
+TaskHook = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class TaskHooks:
+    before: tuple[TaskHook, ...] = ()
+    after_success: tuple[TaskHook, ...] = ()
+    on_failure: tuple[TaskHook, ...] = ()
 
 
 @dataclass
@@ -16,9 +25,13 @@ class TaskSpec:
     name: str
     description: str | None
     handler: TaskHandler
+    handler_ref: str | None
     source: Source | None
     sinks: tuple[Sink, ...]
     dead_letter_sinks: tuple[Sink, ...]
+    config: dict[str, Any]
+    metadata: dict[str, Any]
+    hooks: TaskHooks
     concurrency: int
     retry: RetryPolicy
     timeout_s: float | None
@@ -30,9 +43,13 @@ class TaskSpec:
         name: str,
         description: str | None,
         handler: TaskHandler,
+        handler_ref: str | None,
         source: Source | None,
         sinks: Sink | Sequence[Sink] | None,
         dead_letter: Sink | Sequence[Sink] | None,
+        config: Mapping[str, Any] | None,
+        metadata: Mapping[str, Any] | None,
+        hooks: TaskHooks | None,
         concurrency: int,
         retry: RetryPolicy | None,
         timeout_s: float | None,
@@ -47,9 +64,13 @@ class TaskSpec:
             name=name,
             description=_normalize_description(description) or inspect.getdoc(handler),
             handler=handler,
+            handler_ref=handler_ref,
             source=source,
             sinks=resolved_sinks,
             dead_letter_sinks=resolved_dead_letter_sinks,
+            config=copy.deepcopy(dict(config or {})),
+            metadata=copy.deepcopy(dict(metadata or {})),
+            hooks=hooks or TaskHooks(),
             concurrency=concurrency,
             retry=retry or NoRetry(),
             timeout_s=timeout_s,

@@ -3,8 +3,23 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from .app import OneStepApp
 from .config import load_app_config, load_yaml_app
 from .context import TaskContext
+from .control_plane_ws import (
+    AgentHelloAck,
+    AgentProtocolError,
+    ControlPlaneWsSender,
+    ControlPlaneWsTransport,
+    build_control_plane_http_base_url,
+    build_control_plane_ws_url,
+)
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
+from .identity_store import (
+    IdentityLockError,
+    IdentityStateError,
+    IdentityStore,
+    build_default_state_dir,
+    derive_replica_instance_id,
+)
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
 from .resilience import (
     ConnectorErrorKind,
@@ -37,11 +52,15 @@ except PackageNotFoundError:  # pragma: no cover - local source tree before inst
     __version__ = "dev"
 
 __all__ = [
+    "AgentHelloAck",
+    "AgentProtocolError",
     "BearerAuth",
     "CronSource",
     "CursorStore",
     "ControlPlaneReporter",
     "ControlPlaneReporterConfig",
+    "ControlPlaneWsSender",
+    "ControlPlaneWsTransport",
     "ConnectorErrorKind",
     "ConnectorOperation",
     "ConnectorOperationError",
@@ -49,6 +68,9 @@ __all__ = [
     "Envelope",
     "FailureInfo",
     "FailureKind",
+    "IdentityLockError",
+    "IdentityStateError",
+    "IdentityStore",
     "InMemoryMetrics",
     "InMemoryCursorStore",
     "InMemoryStateStore",
@@ -77,6 +99,10 @@ __all__ = [
     "WebhookResponse",
     "WebhookSource",
     "__version__",
+    "build_control_plane_http_base_url",
+    "build_control_plane_ws_url",
+    "build_default_state_dir",
+    "derive_replica_instance_id",
     "load_app_config",
     "load_yaml_app",
 ]

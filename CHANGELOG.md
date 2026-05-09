@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.4
+
+- Extends transient control-plane HTTP failure handling to include `404` responses.
+
+## 1.2.3
+
+- Exposes task-level `notification` payloads on `succeeded` event metadata for control-plane webhook rendering.
+- Sanitizes success notification payloads to JSON-safe values without changing sink or hook return-value behavior.
+
+## 1.2.2
+
+- Adds control plane support for manually running tasks once when the source supports manual runs.
+
+## 1.2.1
+
+- Adds RabbitMQ `exclusive` queue support and resource configuration.
+- Extends task lifecycle event handling with `STARTED` and `SUCCEEDED`.
+- Fixes the reporter metrics/event payload index regression covered by tests.
+
+## 1.2.0
+
+- Adds YAML app definitions with strict validation, named resources, hooks, and
+  `handler.ref` wiring.
+- Adds `onestep init` to scaffold a minimal standalone YAML worker project.
+- Adds `TaskContext.update_current_row()` for mutable current-row deliveries,
+  with MySQL table-queue support for in-place row updates.
+
 ## 1.0.0
 
 First stable release of the rewritten `onestep` runtime.
