@@ -54,6 +54,7 @@ export default defineConfig({
       { text: '连接器', link: '/broker/' },
       { text: 'YAML', link: '/yaml-task-definition' },
       { text: '部署', link: '/guide/deploy' },
+      { text: 'Web 控制台', link: '/control-plane/' },
       {
         text: '版本',
         items: [
@@ -101,6 +102,7 @@ export default defineConfig({
           { text: 'YAML 任务定义', link: '/yaml-task-definition' },
           { text: '稳定实例身份', link: '/stable-instance-identity' },
           { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
+          { text: 'Control Plane', link: '/control-plane/' },
           { text: '跨仓协作', link: '/ws-cross-repo-collaboration' },
         ],
       },
