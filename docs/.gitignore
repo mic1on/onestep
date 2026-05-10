@@ -10,7 +10,6 @@ src/assets/sprites/*.*
 !src/assets/sprites/.gitkeep
 *.log
 package-lock.json
-pnpm-lock.yaml
 
 ### IntelliJ IDEA ###
 .idea
