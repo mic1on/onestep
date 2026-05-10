@@ -4,11 +4,11 @@ title: 入门教程 | 指南
 
 # 入门教程
 
-本教程将帮助你快速上手 onestep 1.0.0。
+本教程将帮助你快速上手 onestep 1.x 当前 API。
 
 ## 核心概念
 
-onestep 1.0.0 围绕四个核心概念构建：
+onestep 1.x 围绕四个核心概念构建：
 
 - **OneStepApp**: 任务注册和生命周期管理器
 - **Source**: 从队列或轮询后端获取数据
@@ -203,7 +203,7 @@ onestep tasks:app
 app:
   name: billing-sync
 
-connectors:
+resources:
   tick:
     type: interval
     minutes: 5

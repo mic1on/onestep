@@ -60,15 +60,8 @@ for i in range(100):
 ### 查看队列长度
 
 ```python
-size = source.qsize()
+size = source.size()
 print(f"队列中有 {size} 条消息")
-```
-
-### 清空队列
-
-```python
-while not source.empty():
-    await source.get()
 ```
 
 ## 使用场景
@@ -133,7 +126,7 @@ async def handle_dead_letter(ctx, item):
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   input:
     type: memory
   

@@ -217,7 +217,7 @@ if __name__ == "__main__":
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   # Interval
   tick:
     type: interval

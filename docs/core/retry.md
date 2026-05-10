@@ -37,29 +37,24 @@ async def might_fail(ctx, _):
 参数：
 - `max_attempts`: 最大重试次数（包含首次执行）
 - `delay_s`: 重试间隔秒数
-- `exponential_backoff`: 是否使用指数退避
-- `max_delay_s`: 最大延迟秒数（配合指数退避）
 
 ### 自定义重试策略
 
 实现 `RetryPolicy` 接口：
 
 ```python
-from onestep import RetryPolicy, FailureInfo
+from onestep import RetryAction, RetryDecision
 
-class MyRetryPolicy(RetryPolicy):
-    def should_retry(self, failure: FailureInfo, attempts: int) -> bool:
-        # 根据失败类型决定是否重试
+
+class MyRetryPolicy:
+    def on_error(self, envelope, exc, failure):
         if failure.kind == "timeout":
-            return attempts < 5
+            next_attempt = envelope.attempts + 1
+            if next_attempt < 5:
+                return RetryAction(RetryDecision.RETRY, delay_s=2.0)
         if failure.kind == "error":
-            # 业务异常不重试
-            return False
-        return False
-    
-    def retry_delay(self, failure: FailureInfo, attempts: int) -> float:
-        # 返回重试延迟秒数
-        return min(2 ** attempts, 60)
+            return RetryAction(RetryDecision.FAIL)
+        return RetryAction(RetryDecision.FAIL)
 
 
 @app.task(source=..., retry=MyRetryPolicy())

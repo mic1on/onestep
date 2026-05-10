@@ -40,7 +40,7 @@ sqs = SQSConnector(region_name="us-east-1")
 # 创建队列 Source
 source = sqs.queue(
     "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue",
-    prefetch=10,
+    batch_size=10,
 )
 
 # 创建队列 Sink
@@ -83,8 +83,9 @@ source = sqs.queue(
 
 ```python
 source = sqs.queue(
-    queue_url="https://sqs.../my-queue",
-    prefetch=50,                    # 预取数量
+    "https://sqs.../my-queue",
+    batch_size=10,                  # 每次拉取数量
+    wait_time_s=20,                 # 长轮询秒数
     delete_batch_size=10,           # 批量删除数量
     delete_flush_interval_s=0.5,    # 批量删除间隔
     heartbeat_interval_s=15,        # 心跳间隔
@@ -174,7 +175,7 @@ async def handle_dead_letter(ctx, item):
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   sqs:
     type: sqs
     region_name: "us-east-1"
@@ -182,12 +183,12 @@ connectors:
   jobs:
     type: sqs_queue
     connector: sqs
-    queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/jobs"
+    url: "https://sqs.us-east-1.amazonaws.com/123456789012/jobs"
   
   results:
     type: sqs_queue
     connector: sqs
-    queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/results"
+    url: "https://sqs.us-east-1.amazonaws.com/123456789012/results"
 
 tasks:
   - name: process_jobs
@@ -213,7 +214,7 @@ sqs = SQSConnector(region_name="us-east-1")
 # 调整批量参数提高吞吐
 source = sqs.queue(
     "https://sqs.../my-queue",
-    prefetch=50,
+    batch_size=10,
     delete_batch_size=10,
     delete_flush_interval_s=0.5,
 )

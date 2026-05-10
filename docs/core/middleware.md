@@ -5,7 +5,7 @@ outline: deep
 
 # Middleware
 
-onestep 1.0.0 使用**事件钩子**替代传统的中间件模式，提供更清晰的生命周期控制。
+onestep 1.x 使用**事件钩子**替代传统的中间件模式，提供更清晰的生命周期控制。
 
 ## 事件钩子
 
@@ -46,21 +46,15 @@ async def my_task(ctx, item):
 实现自定义事件处理器：
 
 ```python
-from onestep import TaskEvent, EventHandler
-
-class MyEventHandler(EventHandler):
-    def on_event(self, event: TaskEvent):
-        if event.kind == "succeeded":
-            print(f"任务成功: {event.task_name}, 耗时: {event.duration_s:.2f}s")
-        elif event.kind == "failed":
-            print(f"任务失败: {event.task_name}, 原因: {event.failure.message}")
-        
-    def on_error(self, error: Exception):
-        # 处理事件处理器本身的错误
-        print(f"事件处理器错误: {error}")
+from onestep import TaskEvent, TaskEventKind
 
 
-app.on_event(MyEventHandler())
+@app.on_event
+def log_event(event: TaskEvent):
+    if event.kind is TaskEventKind.SUCCEEDED:
+        print(f"任务成功: {event.task}, 耗时: {event.duration_s:.2f}s")
+    elif event.kind is TaskEventKind.FAILED and event.failure is not None:
+        print(f"任务失败: {event.task}, 原因: {event.failure.message}")
 ```
 
 ## 内置事件处理器
@@ -170,17 +164,15 @@ def task(message):
 新版事件钩子：
 
 ```python
-# 1.0.0
-class MyEventHandler(EventHandler):
-    def on_event(self, event: TaskEvent):
-        if event.kind == "started":
-            # 相当于 before_consume
-            ...
-        elif event.kind == "succeeded":
-            # 相当于 after_consume
-            ...
-
-app.on_event(MyEventHandler())
+# 1.x
+@app.on_event
+def log_event(event):
+    if event.kind.value == "started":
+        # 相当于 before_consume
+        ...
+    elif event.kind.value == "succeeded":
+        # 相当于 after_consume
+        ...
 
 @app.task(source=...)
 async def task(ctx, item):

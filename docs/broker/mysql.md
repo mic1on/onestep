@@ -196,10 +196,10 @@ source = db.incremental(
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   db:
     type: mysql
-    url: "mysql+pymysql://root:root@localhost:3306/app"
+    dsn: "mysql+pymysql://root:root@localhost:3306/app"
   
   order_queue:
     type: mysql_table_queue

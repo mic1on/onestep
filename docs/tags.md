@@ -1,6 +1,7 @@
 ---
-# layout: false
-title: TAGS
+title: 标签
 ---
 
-<TagPage />
+# 标签
+
+当前文档站使用 VitePress 本地搜索和侧边栏导航，不再维护单独的标签索引页。

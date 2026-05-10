@@ -3,12 +3,12 @@ layout: home
 sidebar: false
 
 title: OneStep
-titleTemplate: 仅需一步，轻松实现分布式异步任务。
+titleTemplate: 轻量级 Python 异步任务运行时
 
 hero:
   name: OneStep
-  text: 仅需一步，轻松实现分布式异步任务。
-  tagline: 简单、强大、灵活。满足您一直想要的任务调度框架。
+  text: 轻量级 Python 异步任务运行时
+  tagline: 用一个应用对象连接队列、定时器、Webhook、数据库和任务处理函数。
   image:
     src: /logo-3.svg
     alt: OneStep
@@ -17,22 +17,19 @@ hero:
       text: 快速开始
       link: /guide/
     - theme: alt
-      text: 功能特性
-      link: /guide/features
+      text: 查看连接器
+      link: /broker/
     - theme: alt
-      text: View on PyPI
-      link: https://pypi.org/project/onestep/
-    - theme: alt
-      text: View on GitHub
-      link: https://github.com/mic1on/OneStep
+      text: GitHub
+      link: https://github.com/mic1on/onestep
 
 features:
-  - title: 多选
-    details: Memory/Cron/RabbitMQ/Redis...
-  - title: 混搭
-    details: 不必拘泥于一种Broker
-  - title: '@step'
-    details: '@step，一步到位。'
-  - title: 可扩展
-    details: middleware、broker、retry...
+  - title: 一个运行时
+    details: OneStepApp 负责注册任务、打开资源、运行 Source 循环并管理关闭流程。
+  - title: 多种 Source/Sink
+    details: 内置 Memory、Interval、Cron、Webhook、RabbitMQ、Redis Streams、AWS SQS 和 MySQL。
+  - title: 可组合流水线
+    details: 任务返回值可以发送到一个或多个 Sink，用队列、数据库或自定义接口串联处理流程。
+  - title: 生产友好
+    details: 支持并发、超时、重试、死信、生命周期钩子、结构化事件和 YAML 配置。
 ---

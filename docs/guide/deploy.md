@@ -95,7 +95,7 @@ sudo journalctl -u onestep-app -f
 app:
   name: billing-sync
 
-connectors:
+resources:
   tick:
     type: interval
     minutes: 5

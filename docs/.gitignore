@@ -1,5 +1,6 @@
 ### Build ###
 node_modules
+.vitepress/cache
 dist*
 dist-ssr
 *.local

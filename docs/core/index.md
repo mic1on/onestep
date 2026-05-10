@@ -125,12 +125,7 @@ class MySink(Sink):
 
 消息传递对象：
 
-```python
-delivery = Delivery(
-    body={"data": "..."},     # 消息体
-    meta={"key": "value"}     # 元数据
-)
-```
+运行时从 `Source.fetch()` 拿到 `Delivery`，再把 `delivery.payload` 传给任务函数。自定义 Source 需要实现 `ack()`、`retry()` 和 `fail()`，内置连接器已经处理好确认、重试和失败语义。
 
 ## Task Context
 

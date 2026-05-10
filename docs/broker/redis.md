@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
 ```python
 source = redis.stream(
-    stream="my_stream",     # Stream 名称
+    "my_stream",            # Stream 名称
     group="my_group",       # 消费者组名称
     consumer=None,          # 消费者名称（默认自动生成）
     batch_size=100,         # 每次拉取的消息数量
@@ -134,21 +134,8 @@ asyncio.run(main())
 Redis Streams 消息在任务成功完成后自动确认（XACK）：
 
 - **成功**: 自动 XACK
-- **重试**: 消息留在 PEL（Pending Entries List）中
-- **失败**: 消息留在 PEL 中，可通过 XCLAIM 重新处理
-
-### Pending 消息处理
-
-```python
-source = redis.stream(
-    "jobs",
-    group="workers",
-    claim_interval_s=60,      # 检查 pending 消息的间隔
-    claim_min_idle_s=300,     # 消息空闲多久后可以被认领
-)
-```
-
-未确认的消息会在下次轮询时被重新认领（XCLAIM）。
+- **重试**: 消息留在 PEL（Pending Entries List）中，下次轮询会优先读取 pending 消息
+- **失败**: 消息被 XACK 移出 PEL；如配置了 onestep `dead_letter`，会先写入死信 Sink
 
 ## 多消费者
 
@@ -165,7 +152,7 @@ async def process(ctx, item):
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   redis:
     type: redis
     url: "redis://localhost:6379"

@@ -1,52 +1,52 @@
 ---
-title: Broker | Broker
+title: 连接器 | Broker
 outline: deep
 ---
 
-# Broker
+# 连接器
 
-Broker 是数据源的抽象，包括 Source（输入）和 Sink（输出）。
+onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多连接器同时实现两者，因此既能被任务消费，也能接收上游任务返回值。
 
-## 内置 Broker
+## 内置连接器
 
 ### 内存
 
-| Broker | Source | Sink | 描述 |
+| 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [Memory](/broker/memory) | ✅ | ✅ | 内存队列，适合开发测试 |
+| [Memory](/broker/memory) | 支持 | 支持 | 内存队列，适合开发测试 |
 
 ### 定时器
 
-| Broker | Source | Sink | 描述 |
+| 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [Interval](/broker/cron) | ✅ | ❌ | 固定间隔触发 |
-| [Cron](/broker/cron) | ✅ | ❌ | Cron 表达式触发 |
+| [Interval](/broker/cron) | 支持 | 不支持 | 固定间隔触发 |
+| [Cron](/broker/cron) | 支持 | 不支持 | Cron 表达式触发 |
 
 ### 消息队列
 
-| Broker | Source | Sink | 描述 |
+| 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [Redis Streams](/broker/redis) | ✅ | ✅ | Redis Streams 消息队列 |
-| [RabbitMQ](/broker/rabbitmq) | ✅ | ✅ | RabbitMQ 队列 |
-| [AWS SQS](/broker/sqs) | ✅ | ✅ | AWS SQS 托管队列 |
+| [Redis Streams](/broker/redis) | 支持 | 支持 | Redis Streams 消息队列 |
+| [RabbitMQ](/broker/rabbitmq) | 支持 | 支持 | RabbitMQ 队列 |
+| [AWS SQS](/broker/sqs) | 支持 | 支持 | AWS SQS 托管队列 |
 
 ### 数据库
 
-| Broker | Source | Sink | 描述 |
+| 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [MySQL](/broker/mysql) | ✅ | ✅ | 表队列/增量同步/表输出 |
+| [MySQL](/broker/mysql) | 支持 | 支持 | 表队列/增量同步/表输出 |
 
 ### Web
 
-| Broker | Source | Sink | 描述 |
+| 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [Webhook](/broker/webhook) | ✅ | ❌ | HTTP 请求接收 |
+| [Webhook](/broker/webhook) | 支持 | 不支持 | HTTP 请求接收 |
 
 ### 自定义
 
-| Broker | Source | Sink | 描述 |
+| 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [Custom](/broker/custom) | ✅ | ✅ | 实现任意数据源 |
+| [Custom](/broker/custom) | 支持 | 支持 | 实现任意数据源 |
 
 ## 选择指南
 
@@ -55,7 +55,6 @@ Broker 是数据源的抽象，包括 Source（输入）和 Sink（输出）。
 ```python
 from onestep import MemoryQueue
 
-# 无需外部依赖，快速测试
 source = MemoryQueue("test")
 ```
 
@@ -64,7 +63,6 @@ source = MemoryQueue("test")
 ```python
 from onestep import RabbitMQConnector
 
-# 可靠的分布式队列
 rmq = RabbitMQConnector("amqp://...")
 source = rmq.queue("jobs")
 ```
@@ -74,7 +72,6 @@ source = rmq.queue("jobs")
 ```python
 from onestep import SQSConnector
 
-# AWS 托管队列
 sqs = SQSConnector(region_name="us-east-1")
 source = sqs.queue("https://sqs...")
 ```
@@ -84,9 +81,15 @@ source = sqs.queue("https://sqs...")
 ```python
 from onestep import MySQLConnector
 
-# 使用数据库表作为队列
-db = MySQLConnector("mysql://...")
-source = db.table_queue("tasks")
+db = MySQLConnector("mysql+pymysql://...")
+source = db.table_queue(
+    table="tasks",
+    key="id",
+    where="status = 0",
+    claim={"status": 1},
+    ack={"status": 2},
+    nack={"status": 0},
+)
 ```
 
 ### 定时任务
@@ -113,22 +116,18 @@ source = WebhookSource(path="/webhooks/github")
 ## YAML 配置
 
 ```yaml
-connectors:
-  # 内存
+resources:
   memory:
     type: memory
   
-  # 定时器
   timer:
     type: interval
     minutes: 5
   
-  # Cron
   cron:
     type: cron
     expression: "0 9 * * *"
   
-  # RabbitMQ
   rmq:
     type: rabbitmq
     url: "amqp://..."
@@ -138,17 +137,15 @@ connectors:
     connector: rmq
     queue: "jobs"
   
-  # MySQL
   db:
     type: mysql
-    url: "mysql://..."
+    dsn: "mysql+pymysql://..."
   
   tasks:
     type: mysql_table_queue
     connector: db
     table: "tasks"
   
-  # Webhook
   webhook:
     type: webhook
     path: "/webhook"
@@ -161,7 +158,7 @@ tasks:
       ref: myapp:process_jobs
 ```
 
-## 自定义 Broker
+## 自定义 Source/Sink
 
 参考 [Custom Broker](/broker/custom) 实现自定义数据源。
 

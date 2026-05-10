@@ -68,13 +68,14 @@ async def process(ctx, item):
 
 | Connector | 用途 | Source | Sink |
 |-----------|------|--------|------|
-| `MemoryQueue` | 内存队列（测试/开发） | ✅ | ✅ |
-| `IntervalSource` | 固定间隔定时器 | ✅ | ❌ |
-| `CronSource` | Cron 定时器 | ✅ | ❌ |
-| `WebhookSource` | HTTP 接收 | ✅ | ❌ |
-| `RabbitMQConnector` | RabbitMQ | ✅ | ✅ |
-| `SQSConnector` | AWS SQS | ✅ | ✅ |
-| `MySQLConnector` | MySQL 表队列 | ✅ | ✅ |
+| `MemoryQueue` | 内存队列（测试/开发） | 支持 | 支持 |
+| `IntervalSource` | 固定间隔定时器 | 支持 | 不支持 |
+| `CronSource` | Cron 定时器 | 支持 | 不支持 |
+| `WebhookSource` | HTTP 接收 | 支持 | 不支持 |
+| `RabbitMQConnector` | RabbitMQ | 支持 | 支持 |
+| `RedisConnector` | Redis Streams | 支持 | 支持 |
+| `SQSConnector` | AWS SQS | 支持 | 支持 |
+| `MySQLConnector` | MySQL 表队列/增量同步/表输出 | 支持 | 支持 |
 
 ## 混合使用
 
@@ -117,14 +118,12 @@ async def save_to_db(ctx, item):
 在 YAML 中定义 Connector：
 
 ```yaml
-connectors:
-  # 定时器
+resources:
   tick:
     type: interval
     minutes: 5
     immediate: true
   
-  # RabbitMQ
   rmq:
     type: rabbitmq
     url: "amqp://guest:guest@localhost/"
@@ -135,10 +134,17 @@ connectors:
     queue: "jobs"
     prefetch: 50
 
+  results_queue:
+    type: rabbitmq_queue
+    connector: rmq
+    queue: "results"
+
 tasks:
   - name: process_jobs
     source: jobs_queue
     emit: results_queue
+    handler:
+      ref: myapp.tasks:process_jobs
 ```
 
 ## 自定义 Connector
@@ -146,30 +152,44 @@ tasks:
 实现 `Source` 或 `Sink` 接口：
 
 ```python
-from onestep import Source, Sink, Delivery
+from onestep import Delivery, Envelope, Sink, Source
 import aiohttp
 
 class HTTPSource(Source):
     """从 HTTP 端点拉取数据"""
     
     def __init__(self, url: str, interval: float = 60.0):
+        super().__init__("http-source")
         self.url = url
         self.interval = interval
     
-    async def fetch(self) -> list[Delivery]:
+    async def fetch(self, limit: int) -> list[Delivery]:
         async with aiohttp.ClientSession() as session:
             async with session.get(self.url) as resp:
                 data = await resp.json()
-                return [Delivery(body=item) for item in data]
+                return [MyDelivery(item) for item in data[:limit]]
     
-    async def ack(self, delivery: Delivery):
-        pass  # HTTP 不需要确认
+class MyDelivery(Delivery):
+    def __init__(self, body):
+        super().__init__(Envelope(body=body))
+
+    async def ack(self):
+        return None
+
+    async def retry(self, *, delay_s: float | None = None):
+        return None
+
+    async def fail(self, exc: Exception | None = None):
+        return None
 
 
 class MySink(Sink):
     """自定义输出"""
     
-    async def publish(self, body, meta=None):
+    def __init__(self):
+        super().__init__("my-sink")
+
+    async def send(self, envelope: Envelope):
         # 发送逻辑
         ...
 ```

@@ -98,7 +98,7 @@ rmq.queue("queue", exchange="fanout_exchange")  # 无需 routing_key
 ```python
 source = rmq.queue(
     "my_queue",
-    queue_args={
+    arguments={
         "x-message-ttl": 60000,      # 消息 TTL (毫秒)
         "x-max-length": 10000,        # 队列最大长度
         "x-dead-letter-exchange": "dlx",  # 死信交换机
@@ -169,7 +169,7 @@ async def process(ctx, item):
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   rmq:
     type: rabbitmq
     url: "amqp://admin:admin@localhost/"
@@ -217,7 +217,7 @@ dead_letter = rmq.queue("dead_letter")
 # 主队列配置死信
 source = rmq.queue(
     "main_queue",
-    queue_args={
+    arguments={
         "x-dead-letter-exchange": "",
         "x-dead-letter-routing-key": "dead_letter",
     }
@@ -237,8 +237,8 @@ source = rmq.queue(
 )
 ```
 
-发布时也可以指定：
+默认发布持久化消息，也可以在队列上关闭：
 
 ```python
-await sink.publish({"data": "..."}, meta={"delivery_mode": 2})  # 持久化消息
+sink = rmq.queue("transient_queue", persistent=False)
 ```

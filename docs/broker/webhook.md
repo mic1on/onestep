@@ -91,7 +91,7 @@ curl -H "Authorization: Bearer your-secret-token" \
 ```python
 source = WebhookSource(
     path="/webhook",
-    body_parser="json",  # json | form | text | raw | auto
+    parser="json",  # json | form | text | raw | auto
 )
 ```
 
@@ -210,7 +210,7 @@ app = OneStepApp("slack-commands")
     source=WebhookSource(
         path="/slack/command",
         methods=("POST",),
-        body_parser="form",
+        parser="form",
     )
 )
 async def handle_slash_command(ctx, event):
@@ -230,7 +230,7 @@ if __name__ == "__main__":
 ## YAML 配置
 
 ```yaml
-connectors:
+resources:
   github_webhook:
     type: webhook
     path: "/webhooks/github"
@@ -267,7 +267,7 @@ server {
 
 ### 2. HTTPS
 
-在生产环境必须使用 HTTPS，可通过 Nginx 配置或使用 `WebhookSource` 的 SSL 选项。
+在生产环境必须使用 HTTPS。推荐在 Nginx、Caddy、ALB 等反向代理层终止 TLS，再转发到 `WebhookSource` 监听的本地端口。
 
 ### 3. 签名验证
 
