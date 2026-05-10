@@ -774,3 +774,51 @@ def test_scan_and_dispatch_missed_start_notifications_checks_pre_plane_restart_c
     )
     assert duplicate_count == 0
     assert db_session.query(NotificationDelivery).count() == 1
+
+
+def test_scan_and_dispatch_missed_start_notifications_falls_back_to_control_plane_timezone(
+    db_session, monkeypatch
+) -> None:
+    original_api_timezone = settings.api_response_timezone
+    settings.api_response_timezone = ""
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    try:
+        service, instance = seed_runtime_service(db_session)
+        instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+        seed_channel(db_session, event_types=["task_missed_start"])
+        task_definition = TaskDefinition(
+            service_id=service.id,
+            task_name="sync_users",
+            source_name="cron:* * * * *",
+            source_kind="cron",
+            source_config_json={"expression": "* * * * *", "timezone": "CST"},
+            updated_at=datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC),
+        )
+        db_session.add(task_definition)
+        db_session.commit()
+
+        sent_payloads: list[dict[str, object] | None] = []
+
+        def fake_post_webhook(delivery, *, webhook_url, timeout_s=5.0) -> None:
+            sent_payloads.append(delivery.request_payload_json)
+            delivery.status = "succeeded"
+            delivery.sent_at = datetime(2026, 4, 30, 2, 11, 0, tzinfo=UTC)
+            delivery.response_status_code = 200
+
+        monkeypatch.setattr(
+            "onestep_control_plane_api.api.notification_service._post_webhook",
+            fake_post_webhook,
+        )
+
+        created_count = scan_and_dispatch_missed_start_notifications(
+            db_session,
+            now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+        )
+
+        assert created_count == 1
+        assert len(sent_payloads) == 1
+        detail_content = sent_payloads[0]["card"]["body"]["elements"][0]["content"]
+        assert "**计划时间**：2026-04-30T10:05:00+08:00" in detail_content
+        assert "**检测时间**：2026-04-30T10:10:00+08:00" in detail_content
+    finally:
+        settings.api_response_timezone = original_api_timezone

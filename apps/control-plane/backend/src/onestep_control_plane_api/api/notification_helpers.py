@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, Literal, TypedDict
 
+from onestep_control_plane_api.core.settings import settings
+
 
 NotificationEventType = Literal[
     "task_started",
@@ -202,7 +204,7 @@ def event_summary_line(event: NotificationEventRecord) -> str:
 def format_datetime_for_message(value: datetime | None) -> str | None:
     if value is None:
         return None
-    return as_utc_datetime(value).isoformat()
+    return as_utc_datetime(value).astimezone(settings.effective_api_response_timezone).isoformat()
 
 
 def format_duration_ms(duration_ms: int | None) -> str | None:
