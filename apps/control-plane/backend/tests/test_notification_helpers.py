@@ -27,6 +27,7 @@ from onestep_control_plane_api.api.notification_payloads import (
     build_wechat_work_payload,
     render_notification_message,
 )
+from onestep_control_plane_api.core.settings import settings
 
 
 def build_event(
@@ -271,6 +272,24 @@ def test_build_message_lines_for_missed_start_event() -> None:
         "说明: 到达预期时间后未检测到 started 事件",
         "详情: https://cp.example/services/billing-worker/tasks/sync_invoice",
     ]
+
+
+def test_build_message_lines_for_missed_start_event_uses_control_plane_timezone(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "api_response_timezone", "")
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    lines = build_message_lines(
+        build_event(
+            "task_missed_start",
+            scheduled_at=datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC),
+            detected_at=datetime(2026, 4, 30, 2, 5, 0, tzinfo=UTC),
+            missed_start_grace_seconds=300,
+            duration_ms=None,
+            attempts=None,
+            instance_id=None,
+        )
+    )
+    assert "计划时间: 2026-04-30T10:00:00+08:00" in lines
+    assert "检测时间: 2026-04-30T10:05:00+08:00" in lines
 
 
 def test_render_notification_message_joins_lines() -> None:

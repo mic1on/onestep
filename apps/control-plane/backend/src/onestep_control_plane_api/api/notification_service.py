@@ -339,11 +339,11 @@ def _parse_task_timezone(raw_value: Any) -> str | None:
 def _resolve_task_timezone(raw_value: Any):
     timezone_name = _parse_task_timezone(raw_value)
     if timezone_name is None:
-        return datetime.now().astimezone().tzinfo or UTC
+        return settings.effective_api_response_timezone
     try:
         return ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError:
-        return UTC
+        return settings.effective_api_response_timezone
 
 
 def _derive_interval_anchor(
