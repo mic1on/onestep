@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.5
+
+- Preserves IANA schedule timezone names in control-plane reporter payloads when apps rely on `TZ`, keeping cron and interval metadata aligned with deployment-local time.
+
 ## 1.2.4
 
 - Extends transient control-plane HTTP failure handling to include `404` responses.
