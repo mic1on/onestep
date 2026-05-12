@@ -131,7 +131,7 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
                     "seconds": 3600,
                     "immediate": True,
                     "overlap": "skip",
-                    "timezone": str(source.timezone),
+                    "timezone": source.timezone_name,
                     "poll_interval_s": source.poll_interval_s,
                 },
             },
@@ -157,6 +157,29 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
             },
         }
     ]
+
+
+def test_reporter_sync_payload_uses_tz_environment_name_for_schedule_timezone(monkeypatch) -> None:
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    recorder = SenderRecorder()
+    source = IntervalSource.every(hours=1)
+    app = OneStepApp("billing-sync")
+
+    @app.task(source=source)
+    async def sync_users(ctx, payload):
+        return payload
+
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_payload = [payload for channel, payload in recorder.calls if channel == "sync"][0]
+    assert sync_payload["app"]["tasks"][0]["source"]["config"]["timezone"] == "Asia/Shanghai"
 
 
 def test_reporter_heartbeat_includes_task_control_states() -> None:

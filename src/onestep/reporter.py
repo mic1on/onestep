@@ -717,7 +717,7 @@ class ControlPlaneReporter:
                 "seconds": _seconds_value(resource.interval.total_seconds()),
                 "immediate": resource.immediate,
                 "overlap": resource.overlap,
-                "timezone": str(resource.timezone),
+                "timezone": resource.timezone_name,
                 "poll_interval_s": resource.poll_interval_s,
             }
         if class_name == "CronSource":
@@ -725,7 +725,7 @@ class ControlPlaneReporter:
                 "expression": resource.schedule.expression,
                 "immediate": resource.immediate,
                 "overlap": resource.overlap,
-                "timezone": str(resource.timezone),
+                "timezone": resource.timezone_name,
                 "poll_interval_s": resource.poll_interval_s,
             }
         if class_name == "MemoryQueue":

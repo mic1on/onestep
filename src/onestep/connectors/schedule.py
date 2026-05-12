@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import heapq
+import os
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -85,6 +86,7 @@ class BaseScheduleSource(Source):
         self.overlap = overlap
         resolved_timezone = timezone if timezone is not None else timezone_name
         self.timezone = resolve_timezone(resolved_timezone)
+        self.timezone_name = resolve_timezone_name(resolved_timezone)
         self.poll_interval_s = max(0.01, poll_interval_s)
         self._clock = clock or self._default_now
         self._initialized = False
@@ -410,6 +412,7 @@ class CronSchedule:
         self.expression = normalized
         resolved_timezone = timezone if timezone is not None else timezone_name
         self.timezone = resolve_timezone(resolved_timezone)
+        self.timezone_name = resolve_timezone_name(resolved_timezone)
         self.minute = CronField(fields[0], minimum=0, maximum=59)
         self.hour = CronField(fields[1], minimum=0, maximum=23)
         self.day_of_month = CronField(fields[2], minimum=1, maximum=31)
@@ -502,6 +505,18 @@ def resolve_timezone(value: str | tzinfo | None) -> tzinfo:
     if isinstance(value, str):
         return ZoneInfo(value)
     return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def resolve_timezone_name(value: str | tzinfo | None) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    key = getattr(value, "key", None)
+    if isinstance(key, str) and key.strip():
+        return key.strip()
+    env_timezone = os.environ.get("TZ", "").strip()
+    if env_timezone:
+        return env_timezone
+    return str(resolve_timezone(value))
 
 
 __all__ = [
