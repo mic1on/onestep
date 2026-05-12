@@ -176,7 +176,7 @@ function buildConnectorSummary(
   }
 
   const kindLabel = kind ? formatConnectorKind(kind, isZh) : null;
-  const highlights = buildConfigHighlights(config, isZh);
+  const highlights = buildConfigHighlights(config, kind, isZh);
   const title = name ?? resolveConnectorTarget(config) ?? kindLabel ?? (isZh ? "未命名" : "unnamed");
   const detailParts = [];
 
@@ -202,6 +202,7 @@ function buildConnectorSummary(
 
 function buildConfigHighlights(
   config: JsonObject | null,
+  kind: string | null,
   isZh: boolean,
 ) {
   if (config === null) {
@@ -222,7 +223,7 @@ function buildConfigHighlights(
   const seconds = getNumberValue(config, "seconds");
   const minutes = getNumberValue(config, "minutes");
   const hours = getNumberValue(config, "hours");
-  const cron = getStringValue(config, "cron");
+  const cron = getStringValue(config, "cron") ?? (kind === "cron" ? getStringValue(config, "expression") : null);
 
   if (seconds !== null) {
     push(
@@ -253,8 +254,9 @@ function buildConfigHighlights(
   push(formatNamedValue(config, "topic", "topic"));
   push(formatNamedValue(config, "subscription", isZh ? "订阅" : "subscription"));
   push(formatNamedValue(config, "subject", "subject"));
-  push(formatNamedValue(config, "stream", "stream"));
   push(formatNamedValue(config, "consumer_group", isZh ? "消费组" : "group"));
+  push(formatNamedValue(config, "group", isZh ? "消费组" : "group"));
+  push(formatNamedValue(config, "stream", "stream"));
   push(formatNamedValue(config, "routing_key", isZh ? "路由键" : "routing key"));
   push(formatNamedValue(config, "table", isZh ? "表" : "table"));
   push(formatNamedValue(config, "bucket", "bucket"));
