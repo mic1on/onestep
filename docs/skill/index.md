@@ -5,11 +5,21 @@ outline: deep
 
 # SKILL
 
-`skills/onestep/` 提供面向 AI 编程代理的 OneStep 工作流说明和可复用资料。它不是运行时 API，也不会被应用进程加载；它用于让 Codex、Claude 等代理在生成、修改、校验 OneStep worker 时遵循同一套边界和命令。
+`skills/onestep/` 提供面向 AI 编程 Agent 的 OneStep 工作流说明和可复用资料。它不是运行时 API，也不会被应用进程加载；它用于让 Codex、Claude 等 Agent 在生成、修改、校验 OneStep worker 时遵循同一套边界和命令。
+
+## 安装
+
+使用 `skills` CLI 从仓库安装 OneStep Skill：
+
+```bash
+npx skills add mic1on/onestep --skill onestep
+```
+
+安装后，Agent即可在涉及 OneStep 应用、YAML worker、连接器和 Control Plane 集成的任务中读取这组说明和参考资料。
 
 ## 适用场景
 
-当任务涉及以下内容时，代理应优先读取 OneStep Skill：
+当任务涉及以下内容时，Agent应优先读取 OneStep Skill：
 
 - 创建或修改 `OneStepApp` 应用。
 - 编写 `worker.yaml`、资源定义、任务处理函数或 hooks。
@@ -40,7 +50,7 @@ skills/onestep/
     └── check_worker.py
 ```
 
-`SKILL.md` 是入口文件，定义代理的判断流程、默认取舍和最小示例。`references/` 按主题拆分资料，代理只需要读取与当前任务相关的文件。`assets/yaml-project-template/` 是脚手架兜底模板，`scripts/` 提供本地创建和校验 worker 的辅助命令。
+`SKILL.md` 是入口文件，定义 Agent 的判断流程、默认取舍和最小示例。`references/` 按主题拆分资料，Agent 只需要读取与当前任务相关的文件。`assets/yaml-project-template/` 是脚手架兜底模板，`scripts/` 提供本地创建和校验 worker 的辅助命令。
 
 ## 工作原则
 
