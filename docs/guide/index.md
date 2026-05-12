@@ -7,7 +7,7 @@ outline: deep
 
 onestep 是一个轻量级 Python 异步任务运行时。它围绕 `OneStepApp`、`Source`、`Sink` 和任务处理函数组织代码，适合队列消费、定时同步、Webhook 接入和多阶段数据处理。
 
-当前包版本为 `1.2.4`。文档站使用 VitePress `1.6.4`，这是 2026-05-09 npm `latest` 对应的稳定版本；`2.0.0-alpha.17` 仍在 `next` 标签下。
+当前包版本为 `1.2.5`。文档站使用 VitePress `1.6.4`，这是 2026-05-09 npm `latest` 对应的稳定版本；`2.0.0-alpha.17` 仍在 `next` 标签下。
 
 ## 安装
 

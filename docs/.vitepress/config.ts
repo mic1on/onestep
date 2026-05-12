@@ -53,6 +53,7 @@ export default defineConfig({
       { text: '核心', link: '/core/' },
       { text: '连接器', link: '/broker/' },
       { text: 'YAML', link: '/yaml-task-definition' },
+      { text: 'SKILL', link: '/skill/' },
       { text: '部署', link: '/guide/deploy' },
       { text: 'Web 控制台', link: '/control-plane/' },
       {
@@ -100,6 +101,7 @@ export default defineConfig({
         text: '运行与集成',
         items: [
           { text: 'YAML 任务定义', link: '/yaml-task-definition' },
+          { text: 'SKILL', link: '/skill/' },
           { text: '稳定实例身份', link: '/stable-instance-identity' },
           { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
           { text: 'Control Plane', link: '/control-plane/' },
