@@ -1,0 +1,4 @@
+interface:
+  display_name: "onestep"
+  short_description: "Build and validate onestep workers"
+  default_prompt: "Use $onestep to create or validate an onestep worker."

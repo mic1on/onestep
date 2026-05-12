@@ -1,0 +1,18 @@
+apiVersion: onestep/v1alpha1
+kind: App
+
+app:
+  name: __PROJECT_NAME__
+
+resources:
+  tick:
+    type: interval
+    seconds: 30
+    immediate: true
+    overlap: skip
+
+tasks:
+  - name: demo
+    source: tick
+    handler:
+      ref: __PACKAGE_NAME__.tasks.demo:run_demo
