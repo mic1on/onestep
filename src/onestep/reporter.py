@@ -106,6 +106,7 @@ _KIND_OVERRIDES = {
     "MemoryQueue": "memory_queue",
     "NoRetry": "no_retry",
     "RabbitMQQueue": "rabbitmq_queue",
+    "RedisStreamQueue": "redis_stream",
     "SQSQueue": "sqs_queue",
     "TableQueueSource": "mysql_table_queue",
     "TableSink": "mysql_table_sink",
@@ -780,6 +781,19 @@ class ControlPlaneReporter:
                 "delete_flush_interval_s": resource.delete_flush_interval_s,
                 "heartbeat_interval_s": resource.heartbeat_interval_s,
                 "heartbeat_visibility_timeout": resource.heartbeat_visibility_timeout,
+            }
+        if class_name == "RedisStreamQueue":
+            return {
+                "stream": resource.name,
+                "group": resource.group,
+                "consumer": resource.consumer,
+                "batch_size": resource.batch_size,
+                "poll_interval_s": resource.poll_interval_s,
+                "block_ms": resource.block_ms,
+                "start_id": resource.start_id,
+                "create_group": resource.create_group,
+                "maxlen": resource.maxlen,
+                "approximate_trim": resource.approximate_trim,
             }
         if class_name == "TableQueueSource":
             return {
