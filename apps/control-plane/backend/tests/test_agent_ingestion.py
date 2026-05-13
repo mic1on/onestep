@@ -548,6 +548,61 @@ def test_sync_then_query_tasks_returns_topology_data(client, db_session) -> None
     assert by_task_name["sync_users"]["topology_hash"] == "sha256:6d5b0d1f"
 
 
+def test_sync_accepts_http_sink_emit_for_handlerless_task(client, db_session) -> None:
+    ingest_sync(
+        db_session,
+        make_sync_payload(
+            tasks=[
+                {
+                    "name": "forward_webhook_event",
+                    "description": "Forward accepted payloads to the webhook endpoint.",
+                    "source": None,
+                    "emit": [
+                        {
+                            "kind": "http_sink",
+                            "name": "webhook:intake",
+                            "config": {
+                                "url": "https://example.test/hooks/intake",
+                                "method": "POST",
+                            },
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    task_definition = db_session.scalar(select(TaskDefinition))
+    assert task_definition is not None
+    assert task_definition.source_name is None
+    assert task_definition.source_kind is None
+    assert task_definition.emit_json == [
+        {
+            "kind": "http_sink",
+            "name": "webhook:intake",
+            "config": {
+                "url": "https://example.test/hooks/intake",
+                "method": "POST",
+            },
+        }
+    ]
+
+    response = client.get("/api/v1/services/billing-sync/tasks", params={"environment": "prod"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["emit"] == [
+        {
+            "kind": "http_sink",
+            "name": "webhook:intake",
+            "config": {
+                "url": "https://example.test/hooks/intake",
+                "method": "POST",
+            },
+        }
+    ]
+
+
 def test_ensure_service_recovers_when_row_appears_after_initial_lookup(
     monkeypatch,
     db_session,
