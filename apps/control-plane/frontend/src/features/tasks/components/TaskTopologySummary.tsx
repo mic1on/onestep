@@ -263,6 +263,8 @@ function buildConfigHighlights(
   push(formatNamedValue(config, "index", "index"));
   push(formatNamedValue(config, "channel", isZh ? "通道" : "channel"));
   push(formatNamedValue(config, "endpoint", "endpoint"));
+  push(formatNamedValue(config, "url", "URL"));
+  push(formatNamedValue(config, "method", isZh ? "方法" : "method"));
   push(formatNamedValue(config, "path", "path"));
   push(formatNamedValue(config, "mode", "mode"));
 
@@ -313,6 +315,7 @@ function resolveConnectorTarget(config: JsonObject | null) {
     "index",
     "channel",
     "endpoint",
+    "url",
     "path",
   ] as const;
 
@@ -347,6 +350,7 @@ function formatConnectorKind(kind: string, isZh: boolean) {
     interval: { zh: "定时任务", en: "Interval" },
     rabbitmq_queue: { zh: "RabbitMQ 队列", en: "RabbitMQ queue" },
     mysql_table_sink: { zh: "MySQL 表写入", en: "MySQL table sink" },
+    http_sink: { zh: "HTTP 请求", en: "HTTP sink" },
   };
 
   const direct = labels[kind];
