@@ -38,6 +38,7 @@ from .retry import (
 from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedState, StateStore
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 from .connectors.base import Delivery, Sink, Source
+from .connectors.http import HttpSink, HttpSinkStatusError
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
@@ -68,6 +69,8 @@ __all__ = [
     "Envelope",
     "FailureInfo",
     "FailureKind",
+    "HttpSink",
+    "HttpSinkStatusError",
     "IdentityLockError",
     "IdentityStateError",
     "IdentityStore",
