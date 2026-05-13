@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.61
+
+- Adds `HttpSink` query-parameter support for `GET` and `DELETE` requests.
+- Stops sending HTTP request bodies for `GET` and `DELETE` sink methods.
+- Extends HTTP sink coverage with focused tests and updates the bundled skill references.
+
 ## 1.2.6
 
 - Adds an HTTP sink connector and passthrough YAML tasks for forwarding deliveries to HTTP endpoints.
