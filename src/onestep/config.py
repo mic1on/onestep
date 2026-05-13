@@ -11,6 +11,7 @@ from typing import Any
 
 from .app import OneStepApp
 from .connectors.base import Sink, Source
+from .connectors.http import HttpSink
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
@@ -116,6 +117,9 @@ _STRICT_RESOURCE_FIELDS: dict[str, frozenset[str]] = {
             "batch_size",
             "poll_interval_s",
         }
+    ),
+    "http_sink": frozenset(
+        {"type", "name", "url", "method", "headers", "timeout_s", "success_statuses"}
     ),
     "rabbitmq": frozenset({"type", "url", "options"}),
     "rabbitmq_queue": frozenset(
@@ -309,18 +313,27 @@ def load_app_config(
         if not isinstance(task_config, Mapping):
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         task_name = _optional_string(task_config, "name")
-        handler, handler_ref = _build_handler(task_config.get("handler"), task_name=task_name)
+        source = _resolve_optional_source(resources, task_config.get("source"), task_index=index)
+        emit = _resolve_optional_sinks(resources, task_config.get("emit"), field="emit", task_index=index)
+        dead_letter = _resolve_optional_sinks(
+            resources,
+            task_config.get("dead_letter"),
+            field="dead_letter",
+            task_index=index,
+        )
+        handler, handler_ref = _build_task_handler(
+            task_config.get("handler"),
+            has_handler="handler" in task_config,
+            has_emit=bool(emit),
+            task_name=task_name,
+            task_index=index,
+        )
         app.task(
             name=task_name,
             description=_optional_string(task_config, "description"),
-            source=_resolve_optional_source(resources, task_config.get("source"), task_index=index),
-            emit=_resolve_optional_sinks(resources, task_config.get("emit"), field="emit", task_index=index),
-            dead_letter=_resolve_optional_sinks(
-                resources,
-                task_config.get("dead_letter"),
-                field="dead_letter",
-                task_index=index,
-            ),
+            source=source,
+            emit=emit,
+            dead_letter=dead_letter,
             config=_mapping_value(task_config.get("config"), field=f"tasks[{index}].config"),
             metadata=_mapping_value(task_config.get("metadata"), field=f"tasks[{index}].metadata"),
             handler_ref=handler_ref,
@@ -435,6 +448,15 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             batch_size=spec.get("batch_size", 100),
             poll_interval_s=spec.get("poll_interval_s", 0.1),
             name=resource_name,
+        )
+    if resource_type == "http_sink":
+        return HttpSink(
+            resource_name,
+            url=_require_string(spec, "url"),
+            method=spec.get("method", "POST"),
+            headers=_mapping_value(spec.get("headers"), field=f"resources.{name}.headers"),
+            timeout_s=spec.get("timeout_s", 5.0),
+            success_statuses=spec.get("success_statuses"),
         )
     if resource_type == "rabbitmq":
         return RabbitMQConnector(
@@ -591,6 +613,29 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
         )
 
     raise ValueError(f"unsupported resource type {resource_type!r} for resource {name!r}")
+
+
+def _build_task_handler(
+    raw_handler: Any,
+    *,
+    has_handler: bool,
+    has_emit: bool,
+    task_name: str | None,
+    task_index: int,
+):
+    if has_handler:
+        return _build_handler(raw_handler, task_name=task_name)
+    if not has_emit:
+        raise ValueError(f"tasks[{task_index}] must define either 'handler' or 'emit'")
+    return _build_passthrough_handler(task_name), None
+
+
+def _build_passthrough_handler(task_name: str | None):
+    async def passthrough(ctx, payload):
+        return payload
+
+    passthrough.__name__ = task_name or "passthrough"
+    return passthrough
 
 
 def _build_handler(raw_handler: Any, *, task_name: str | None):
@@ -844,6 +889,8 @@ def _validate_resource_sections(config: Mapping[str, Any]) -> None:
             _validate_unknown_fields(raw_spec, allowed, field=field)
             if normalized_type == "webhook":
                 _validate_webhook_resource(raw_spec, field=field)
+            elif normalized_type == "http_sink":
+                _validate_http_sink_resource(raw_spec, field=field)
 
 
 def _validate_tasks(raw_tasks: Any) -> None:
@@ -856,7 +903,10 @@ def _validate_tasks(raw_tasks: Any) -> None:
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         field = f"tasks[{index}]"
         _validate_unknown_fields(raw_task, _STRICT_TASK_FIELDS, field=field)
-        _validate_ref_entry(raw_task.get("handler"), field=f"{field}.handler")
+        if "handler" in raw_task:
+            _validate_ref_entry(raw_task.get("handler"), field=f"{field}.handler")
+        elif not _task_emit_configured(raw_task.get("emit")):
+            raise ValueError(f"{field} must define either 'handler' or 'emit'")
         _validate_hooks_config(
             raw_task.get("hooks"),
             field=f"{field}.hooks",
@@ -946,6 +996,40 @@ def _validate_webhook_resource(spec: Mapping[str, Any], *, field: str) -> None:
         if not isinstance(raw_response, Mapping):
             raise TypeError(f"'{field}.response' must be a mapping")
         _validate_unknown_fields(raw_response, _STRICT_WEBHOOK_RESPONSE_FIELDS, field=f"{field}.response")
+
+
+def _validate_http_sink_resource(spec: Mapping[str, Any], *, field: str) -> None:
+    _require_string(spec, "url")
+    if "method" in spec:
+        _string_value(spec.get("method"), field=f"{field}.method")
+    raw_headers = spec.get("headers")
+    if raw_headers is not None and not isinstance(raw_headers, Mapping):
+        raise TypeError(f"'{field}.headers' must be a mapping")
+    raw_timeout = spec.get("timeout_s")
+    if raw_timeout is not None:
+        if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
+            raise TypeError(f"'{field}.timeout_s' must be a number")
+        if raw_timeout <= 0:
+            raise ValueError(f"'{field}.timeout_s' must be > 0")
+    raw_success_statuses = spec.get("success_statuses")
+    if raw_success_statuses is not None:
+        if not isinstance(raw_success_statuses, Sequence) or isinstance(raw_success_statuses, (str, bytes)):
+            raise TypeError(f"'{field}.success_statuses' must be a list of integers")
+        if not raw_success_statuses:
+            raise ValueError(f"'{field}.success_statuses' must not be empty")
+        for index, status in enumerate(raw_success_statuses):
+            if isinstance(status, bool) or not isinstance(status, int):
+                raise TypeError(f"'{field}.success_statuses[{index}]' must be an integer")
+            if status < 100 or status > 599:
+                raise ValueError(f"'{field}.success_statuses[{index}]' must be an HTTP status code")
+
+
+def _task_emit_configured(raw_emit: Any) -> bool:
+    if raw_emit is None:
+        return False
+    if isinstance(raw_emit, Sequence) and not isinstance(raw_emit, (str, bytes)):
+        return bool(raw_emit)
+    return True
 
 
 def _validate_unknown_fields(mapping: Mapping[str, Any], allowed: frozenset[str], *, field: str) -> None:

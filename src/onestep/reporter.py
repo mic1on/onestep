@@ -100,6 +100,7 @@ def _read_env(*names: str) -> str | None:
 
 _KIND_OVERRIDES = {
     "CronSource": "cron",
+    "HttpSink": "http_sink",
     "IncrementalTableSource": "mysql_incremental",
     "IntervalSource": "interval",
     "MaxAttempts": "max_attempts",

@@ -1,4 +1,5 @@
 from .base import Delivery, Sink, Source
+from .http import HttpSink, HttpSinkStatusError
 from .memory import MemoryQueue
 from .mysql import MySQLConnector
 from .rabbitmq import RabbitMQConnector
@@ -11,6 +12,8 @@ __all__ = [
     "BearerAuth",
     "CronSource",
     "Delivery",
+    "HttpSink",
+    "HttpSinkStatusError",
     "IntervalSource",
     "MemoryQueue",
     "MySQLConnector",
