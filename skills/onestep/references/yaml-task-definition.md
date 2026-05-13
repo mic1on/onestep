@@ -112,6 +112,29 @@ tasks:
       delay_s: 10
 ```
 
+## Passthrough Tasks
+
+If a YAML task only forwards the incoming payload to sinks, it may omit `handler`.
+The runtime uses a passthrough handler that returns the source payload unchanged.
+
+```yaml
+resources:
+  incoming:
+    type: memory
+
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/events"
+
+tasks:
+  - name: forward_events
+    source: incoming
+    emit: notify
+```
+
+Strict mode requires each task to define either `handler` or a non-empty `emit`.
+Use a Python handler when the task must transform, validate, sign, or enrich the payload.
+
 ## Task Config Vs Handler Params
 
 Use `tasks[].config` for task definition data visible as `ctx.task_config`.
@@ -172,6 +195,7 @@ Common stable resource types:
 - `interval`
 - `cron`
 - `webhook`
+- `http_sink`
 - `rabbitmq`
 - `rabbitmq_queue`
 - `redis`

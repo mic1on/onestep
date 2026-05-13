@@ -23,7 +23,7 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
    - New app or basic usage: `references/quickstart.md`
    - YAML worker definitions: `references/yaml-task-definition.md`
    - Python API usage: `references/python-api.md`
-   - MySQL/RabbitMQ/Redis/SQS/webhook/schedule wiring: `references/connectors.md`
+   - MySQL/RabbitMQ/Redis/SQS/webhook/HTTP sink/schedule wiring: `references/connectors.md`
    - Control-plane reporter or WebSocket telemetry: `references/control-plane.md`
    - Tests and validation commands: `references/testing.md`
    - Migration from old `step` / broker APIs: `references/migration-0.5-to-1.0.md`
@@ -34,6 +34,7 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
 
 - Prefer YAML for runtime wiring and Python for business logic.
 - Do not put transforms, branching logic, or workflow DSLs in YAML.
+- For pure forwarding tasks, YAML may omit `handler` when `emit` is configured.
 - Use `tasks[].config` for task definition data available as `ctx.task_config`.
 - Use `handler.params` for call-time arguments passed into a handler or hook.
 - Do not enable `reporter` or control-plane integration unless explicitly needed.

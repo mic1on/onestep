@@ -29,6 +29,14 @@ reporter:
 
 Do not add reporter config to local examples unless the user asks for control-plane integration.
 
+## Topology Descriptors
+
+Reporter sync payloads include task source/sink descriptors. Built-in connector kinds include `redis_stream` and `http_sink`.
+
+Redis Streams report stream, group, consumer, batch, blocking, start ID, group creation, and trimming options. `HttpSink` reports redacted URL, method, header names with redacted values, timeout, and success status codes.
+
+Do not include secrets in custom descriptors. Redact DSNs, tokens, passwords, headers, query strings, and fragments before sending topology payloads.
+
 ## Runtime Identity
 
 onestep supports stable runtime/replica identity for control-plane coordination. Preserve existing identity-store or instance-id behavior when editing deployed workers. Do not invent a new identity scheme unless the task is specifically about identity behavior.
