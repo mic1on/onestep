@@ -184,6 +184,19 @@ notify = HttpSink(
 )
 ```
 
+For `GET` or `DELETE`, `HttpSink` does not send a request body. Static `params`
+and mapping payload fields are encoded into the query string instead:
+
+```python
+lookup = HttpSink(
+    "lookup",
+    url="https://example.com/users",
+    method="GET",
+    params={"api_key": os.environ["API_KEY"]},
+    success_statuses=[200],
+)
+```
+
 YAML:
 
 ```yaml
@@ -194,8 +207,12 @@ resources:
     method: POST
     headers:
       Authorization: "Bearer ${NOTIFY_TOKEN}"
+    params:
+      source: onestep
     timeout_s: 5
     success_statuses: [200, 202]
 ```
 
-`http_sink` sends task results as JSON. It is a sink only, not a source. Use `WebhookSource` for inbound HTTP and `HttpSink` for outbound HTTP.
+`http_sink` sends task results as JSON for body methods such as `POST`, `PUT`,
+and `PATCH`. It is a sink only, not a source. Use `WebhookSource` for inbound
+HTTP and `HttpSink` for outbound HTTP.

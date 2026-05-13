@@ -33,7 +33,7 @@ Do not add reporter config to local examples unless the user asks for control-pl
 
 Reporter sync payloads include task source/sink descriptors. Built-in connector kinds include `redis_stream` and `http_sink`.
 
-Redis Streams report stream, group, consumer, batch, blocking, start ID, group creation, and trimming options. `HttpSink` reports redacted URL, method, header names with redacted values, timeout, and success status codes.
+Redis Streams report stream, group, consumer, batch, blocking, start ID, group creation, and trimming options. `HttpSink` reports redacted URL, method, header names with redacted values, query parameter names with redacted values, timeout, and success status codes.
 
 Do not include secrets in custom descriptors. Redact DSNs, tokens, passwords, headers, query strings, and fragments before sending topology payloads.
 

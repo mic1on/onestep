@@ -119,7 +119,7 @@ _STRICT_RESOURCE_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "http_sink": frozenset(
-        {"type", "name", "url", "method", "headers", "timeout_s", "success_statuses"}
+        {"type", "name", "url", "method", "headers", "params", "timeout_s", "success_statuses"}
     ),
     "rabbitmq": frozenset({"type", "url", "options"}),
     "rabbitmq_queue": frozenset(
@@ -455,6 +455,7 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             url=_require_string(spec, "url"),
             method=spec.get("method", "POST"),
             headers=_mapping_value(spec.get("headers"), field=f"resources.{name}.headers"),
+            params=_mapping_value(spec.get("params"), field=f"resources.{name}.params"),
             timeout_s=spec.get("timeout_s", 5.0),
             success_statuses=spec.get("success_statuses"),
         )
@@ -1005,6 +1006,9 @@ def _validate_http_sink_resource(spec: Mapping[str, Any], *, field: str) -> None
     raw_headers = spec.get("headers")
     if raw_headers is not None and not isinstance(raw_headers, Mapping):
         raise TypeError(f"'{field}.headers' must be a mapping")
+    raw_params = spec.get("params")
+    if raw_params is not None and not isinstance(raw_params, Mapping):
+        raise TypeError(f"'{field}.params' must be a mapping")
     raw_timeout = spec.get("timeout_s")
     if raw_timeout is not None:
         if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
