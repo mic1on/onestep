@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.6
+
+- Adds an HTTP sink connector and passthrough YAML tasks for forwarding deliveries to HTTP endpoints.
+- Reports Redis stream source topology details to the control plane.
+- Adds an onestep worker project skill with scaffold templates and reference documentation.
+
 ## 1.2.5
 
 - Preserves IANA schedule timezone names in control-plane reporter payloads when apps rely on `TZ`, keeping cron and interval metadata aligned with deployment-local time.
