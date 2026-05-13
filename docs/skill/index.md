@@ -23,7 +23,7 @@ npx skills add mic1on/onestep --skill onestep
 
 - 创建或修改 `OneStepApp` 应用。
 - 编写 `worker.yaml`、资源定义、任务处理函数或 hooks。
-- 配置 Memory、Cron、Webhook、RabbitMQ、Redis Streams、AWS SQS、MySQL 等连接器。
+- 配置 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis Streams、AWS SQS、MySQL 等连接器。
 - 添加重试、死信、并发、超时或 Control Plane reporter。
 - 从旧版 `step` / broker API 迁移到当前运行时。
 - 为 worker 选择校验命令和测试范围。
@@ -58,6 +58,7 @@ OneStep Skill 的默认取舍是保持 worker 足够小：
 
 - 优先用 YAML 表达运行时 wiring，用 Python 承载业务逻辑。
 - 不把 transform、条件分支、工作流 DSL 或表达式引擎塞进 YAML。
+- 仅转发 payload 时，YAML 任务可以省略 `handler` 并只配置 `emit`。
 - `tasks[].config` 用于任务定义数据，运行时通过 `ctx.task_config` 读取。
 - `handler.params` 用于调用 Python handler 或 hook 时传入参数。
 - 不默认启用 reporter、hooks、死信、复杂重试或额外资源，除非任务需要。
@@ -111,6 +112,26 @@ tasks:
 onestep check --strict worker.yaml
 ```
 
+## YAML 直接转发
+
+当任务只需要把 Source 收到的 payload 原样发送到 Sink 时，可以省略 `handler`：
+
+```yaml
+resources:
+  incoming:
+    type: memory
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/events"
+
+tasks:
+  - name: forward_events
+    source: incoming
+    emit: notify
+```
+
+需要 transform、签名、校验或补充字段时，继续使用 Python handler。
+
 ## 辅助脚本
 
 从仓库根目录可以直接运行 Skill 中的辅助脚本：
@@ -138,5 +159,5 @@ python skills/onestep/scripts/check_worker.py . --app-target your_package.tasks:
 
 - [快速开始](/guide/)：面向普通使用者的安装、运行和第一条任务。
 - [YAML 任务定义](/yaml-task-definition)：完整 YAML 边界、字段和严格校验。
-- [连接器概览](/broker/)：Memory、Cron、Webhook、RabbitMQ、Redis、SQS 和 MySQL。
+- [连接器概览](/broker/)：Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS 和 MySQL。
 - [Control Plane](/control-plane/)：运行时 telemetry 和 WebSocket 控制面集成。

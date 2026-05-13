@@ -29,6 +29,7 @@ The V1 stable surface includes:
 - `IntervalSource.every(...)`
 - `CronSource(...)`
 - `WebhookSource(...)`
+- `HttpSink(...)`
 
 ## Install
 
@@ -192,6 +193,7 @@ Currently supported YAML resource types:
 - `interval`
 - `cron`
 - `webhook`
+- `http_sink`
 - `rabbitmq`
 - `rabbitmq_queue`
 - `redis`
@@ -204,6 +206,23 @@ Currently supported YAML resource types:
 - `mysql_table_queue`
 - `mysql_incremental`
 - `mysql_table_sink`
+
+YAML tasks can also omit `handler` when they only forward the incoming payload
+to sinks:
+
+```yaml
+resources:
+  incoming:
+    type: memory
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/events"
+
+tasks:
+  - name: forward_events
+    source: incoming
+    emit: notify
+```
 
 YAML apps can also bind app-level state explicitly:
 

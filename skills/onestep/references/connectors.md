@@ -1,6 +1,6 @@
 # Connectors
 
-Use this reference when wiring onestep resources to queues, polling backends, schedule sources, or webhook sources.
+Use this reference when wiring onestep resources to queues, polling backends, schedule sources, webhook sources, or HTTP sinks.
 
 ## General Rules
 
@@ -165,3 +165,37 @@ resources:
 ```
 
 Use webhooks when inbound HTTP should become task deliveries. Keep parsing and business validation in Python unless the built-in parser option is enough.
+
+## HTTP Sink
+
+Python:
+
+```python
+import os
+
+from onestep import HttpSink
+
+notify = HttpSink(
+    "notify",
+    url="https://example.com/hooks/events",
+    headers={"Authorization": f"Bearer {os.environ['NOTIFY_TOKEN']}"},
+    timeout_s=5.0,
+    success_statuses=[200, 202],
+)
+```
+
+YAML:
+
+```yaml
+resources:
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/events"
+    method: POST
+    headers:
+      Authorization: "Bearer ${NOTIFY_TOKEN}"
+    timeout_s: 5
+    success_statuses: [200, 202]
+```
+
+`http_sink` sends task results as JSON. It is a sink only, not a source. Use `WebhookSource` for inbound HTTP and `HttpSink` for outbound HTTP.

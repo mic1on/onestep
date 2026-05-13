@@ -7,7 +7,7 @@ outline: deep
 
 onestep 是一个轻量级 Python 异步任务运行时。它围绕 `OneStepApp`、`Source`、`Sink` 和任务处理函数组织代码，适合队列消费、定时同步、Webhook 接入和多阶段数据处理。
 
-当前包版本为 `1.2.5`。文档站使用 VitePress `1.6.4`，这是 2026-05-09 npm `latest` 对应的稳定版本；`2.0.0-alpha.17` 仍在 `next` 标签下。
+当前包版本为 `1.2.6`。文档站使用 VitePress `1.6.4`，这是 2026-05-09 npm `latest` 对应的稳定版本；`2.0.0-alpha.17` 仍在 `next` 标签下。
 
 ## 安装
 
@@ -128,7 +128,7 @@ async def main():
 asyncio.run(main())
 ```
 
-真实部署时通常把 `MemoryQueue` 换成外部系统连接器，例如 RabbitMQ、Redis Streams、AWS SQS 或 MySQL。
+真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL，或把结果发送到 HTTP Sink。
 
 ## 使用外部连接器
 
@@ -181,9 +181,25 @@ onestep run worker.yaml
 
 `resources` 是推荐写法。旧的 `connectors`、`sources` 和 `sinks` 仍可读取，但新文档统一使用 `resources`。
 
+YAML 也支持把消息直接转发到 Sink。下面的任务没有 `handler`，运行时会把 `incoming` 的 payload 原样发送到 HTTP 端点：
+
+```yaml
+resources:
+  incoming:
+    type: memory
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/billing"
+
+tasks:
+  - name: forward_billing_event
+    source: incoming
+    emit: notify
+```
+
 ## 下一步
 
 - [入门教程](/guide/tutorial) 通过几个完整例子串起核心概念。
-- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、RabbitMQ、Redis、SQS 或 MySQL。
+- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS 或 MySQL。
 - [YAML 任务定义](/yaml-task-definition) 说明完整配置字段和严格校验。
 - [生产部署](/guide/deploy) 介绍 CLI、systemd 和持久化状态。

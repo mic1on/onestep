@@ -27,6 +27,7 @@ async def my_task(ctx, item):
 | 内存队列 | 支持 | 支持 | 开发测试 |
 | 定时器 | 支持 | 不支持 | Cron/Interval |
 | Webhook | 支持 | 不支持 | HTTP 接收 |
+| HTTP Sink | 不支持 | 支持 | HTTP JSON 输出 |
 | RabbitMQ | 支持 | 支持 | 分布式队列 |
 | Redis Streams | 支持 | 支持 | 轻量级流队列 |
 | AWS SQS | 支持 | 支持 | 云队列 |
@@ -173,11 +174,14 @@ resources:
     type: rabbitmq_queue
     connector: rmq
     queue: jobs
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/jobs"
 
 tasks:
   - name: process_jobs
     source: timer
-    emit: queue
+    emit: [queue, notify]
     handler:
       ref: myapp.tasks:process_jobs
     retry:

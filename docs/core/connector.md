@@ -49,7 +49,7 @@ async def process(ctx, item):
 ## 创建 Sink
 
 ```python
-from onestep import MemoryQueue, RabbitMQConnector
+from onestep import HttpSink, MemoryQueue, RabbitMQConnector
 
 # 内存队列
 memory_sink = MemoryQueue("output")
@@ -57,6 +57,9 @@ memory_sink = MemoryQueue("output")
 # RabbitMQ
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")
 rabbit_sink = rmq.queue("results")
+
+# HTTP
+http_sink = HttpSink("notify", url="https://example.com/hooks/results")
 
 
 @app.task(source=..., emit=rabbit_sink)
@@ -72,6 +75,7 @@ async def process(ctx, item):
 | `IntervalSource` | 固定间隔定时器 | 支持 | 不支持 |
 | `CronSource` | Cron 定时器 | 支持 | 不支持 |
 | `WebhookSource` | HTTP 接收 | 支持 | 不支持 |
+| `HttpSink` | HTTP JSON 输出 | 不支持 | 支持 |
 | `RabbitMQConnector` | RabbitMQ | 支持 | 支持 |
 | `RedisConnector` | Redis Streams | 支持 | 支持 |
 | `SQSConnector` | AWS SQS | 支持 | 支持 |
@@ -139,10 +143,14 @@ resources:
     connector: rmq
     queue: "results"
 
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/results"
+
 tasks:
   - name: process_jobs
     source: jobs_queue
-    emit: results_queue
+    emit: [results_queue, notify]
     handler:
       ref: myapp.tasks:process_jobs
 ```
@@ -199,3 +207,4 @@ class MySink(Sink):
 - [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
 - [MySQL](/broker/mysql) - 数据库表队列
 - [Webhook](/broker/webhook) - HTTP 接收
+- [HTTP Sink](/broker/http) - HTTP 输出

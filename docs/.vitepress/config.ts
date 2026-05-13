@@ -13,7 +13,7 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#303f9f' }],
     ['meta', {
       name: 'keywords',
-      content: 'onestep, python, async task, queue, schedule, cron, webhook, rabbitmq, redis, sqs, mysql'
+      content: 'onestep, python, async task, queue, schedule, cron, webhook, http sink, rabbitmq, redis, sqs, mysql'
     }],
     ['link', { rel: 'icon', href: '/favicon.ico' }],
     ['meta', { property: 'og:title', content: 'OneStep' }],
@@ -90,6 +90,7 @@ export default defineConfig({
           { text: 'Memory', link: '/broker/memory' },
           { text: 'Cron & Interval', link: '/broker/cron' },
           { text: 'Webhook', link: '/broker/webhook' },
+          { text: 'HTTP Sink', link: '/broker/http' },
           { text: 'RabbitMQ', link: '/broker/rabbitmq' },
           { text: 'Redis Streams', link: '/broker/redis' },
           { text: 'AWS SQS', link: '/broker/sqs' },

@@ -116,7 +116,33 @@ This is the default mental model:
 - no hooks
 - no extra config
 
-### Level 2: Add Sinks And Runtime Policy
+### Level 2: Add Passthrough Sinks
+
+If a task only forwards the incoming payload to one or more sinks, `handler` can be omitted. The runtime will use a passthrough handler that returns the source payload unchanged.
+
+```yaml
+app:
+  name: event-forwarder
+
+resources:
+  incoming:
+    type: memory
+
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/events"
+    headers:
+      X-Api-Key: "${NOTIFY_TOKEN}"
+
+tasks:
+  - name: forward_events
+    source: incoming
+    emit: notify
+```
+
+Strict mode still requires each task to define either `handler` or a non-empty `emit`. Use a Python handler when the payload needs transform, validation, signing, or enrichment.
+
+### Level 3: Add Sinks And Runtime Policy
 
 ```yaml
 app:
@@ -155,7 +181,7 @@ tasks:
       delay_s: 10
 ```
 
-### Level 3: Add Task Config
+### Level 4: Add Task Config
 
 Use `tasks[].config` for task definition data that should be visible at runtime through `ctx.task_config`.
 
@@ -178,7 +204,7 @@ Rule of thumb:
 - `handler.params`: call-time parameters for the Python function
 - `task.config`: task definition data the runtime and handler may inspect
 
-### Level 4: Add Hooks
+### Level 5: Add Hooks
 
 Only add hooks when task wiring or lifecycle behavior cannot live inside the main handler.
 
@@ -202,7 +228,7 @@ tasks:
         - ref: worker.task_hooks:on_sync_users_failed
 ```
 
-### Level 5: Add Built-In Reporter
+### Level 6: Add Built-In Reporter
 
 Use the built-in reporter only when you need control-plane telemetry. Start with the smallest shape:
 
@@ -229,7 +255,7 @@ reporter:
   service_name: billing-sync-worker
 ```
 
-### Level 6: Full Wiring Example
+### Level 7: Full Wiring Example
 
 ```yaml
 apiVersion: onestep/v1alpha1
@@ -275,6 +301,13 @@ resources:
     mode: upsert
     keys: [id]
 
+  notify_api:
+    type: http_sink
+    url: "${NOTIFY_URL}"
+    headers:
+      Authorization: "Bearer ${NOTIFY_TOKEN}"
+    success_statuses: [200, 202]
+
   audit_stream:
     type: redis_stream
     connector: redis_main
@@ -306,7 +339,7 @@ tasks:
   - name: sync_users
     description: Sync incremental users into DW
     source: users_source
-    emit: [users_sink, audit_stream]
+    emit: [users_sink, audit_stream, notify_api]
     dead_letter: [users_dead]
     config:
       target_table: dw_users
@@ -417,6 +450,7 @@ Supported resource types today:
 - `interval`
 - `cron`
 - `webhook`
+- `http_sink`
 - `rabbitmq`
 - `rabbitmq_queue`
 - `redis`
