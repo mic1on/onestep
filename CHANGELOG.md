@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.62
+
+- Adds pure YAML `app.logging.level` support for framework logger control.
+- Emits uniform DEBUG-level sink success logs from the shared runtime send path.
+
 ## 1.2.61
 
 - Adds `HttpSink` query-parameter support for `GET` and `DELETE` requests.
