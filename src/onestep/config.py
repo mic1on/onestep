@@ -4,6 +4,7 @@ import copy
 import functools
 import importlib
 import inspect
+import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -46,7 +47,8 @@ _STRICT_TOP_LEVEL_FIELDS = frozenset(
         *_LEGACY_APP_FIELDS,
     }
 )
-_STRICT_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state"})
+_STRICT_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state", "logging"})
+_STRICT_APP_LOGGING_FIELDS = frozenset({"level"})
 _STRICT_HANDLER_FIELDS = frozenset({"ref", "params"})
 _STRICT_APP_HOOK_FIELDS = frozenset({"startup", "shutdown", "events"})
 _STRICT_TASK_HOOK_FIELDS = frozenset({"before", "after_success", "on_failure"})
@@ -300,6 +302,7 @@ def load_app_config(
     )
     if source_path is not None:
         app.config.setdefault("config_path", source_path)
+    _apply_app_logging(app, app_section.get("logging") if app_section is not None else None)
 
     resources = _build_resources(config)
     app.bind_resources(resources)
@@ -858,6 +861,7 @@ def validate_app_config(config: Mapping[str, Any]) -> None:
         if not isinstance(app_section, Mapping):
             raise TypeError("'app' must be a mapping")
         _validate_unknown_fields(app_section, _STRICT_APP_FIELDS, field="app")
+        _validate_app_logging(app_section.get("logging"))
         legacy_fields = sorted(field for field in _LEGACY_APP_FIELDS if field in config)
         if legacy_fields:
             raise ValueError(
@@ -922,6 +926,31 @@ def _validate_reporter_config(raw_reporter: Any) -> None:
     if not isinstance(raw_reporter, Mapping):
         raise TypeError("'reporter' must be a boolean or mapping")
     _validate_unknown_fields(raw_reporter, _STRICT_REPORTER_FIELDS, field="reporter")
+
+
+def _validate_app_logging(raw_logging: Any) -> None:
+    if raw_logging is None:
+        return
+    if not isinstance(raw_logging, Mapping):
+        raise TypeError("'app.logging' must be a mapping")
+    _validate_unknown_fields(raw_logging, _STRICT_APP_LOGGING_FIELDS, field="app.logging")
+    level = _require_string(raw_logging, "level")
+    resolved = getattr(logging, level.strip().upper(), None)
+    if not isinstance(resolved, int):
+        raise ValueError(f"unsupported logging level {level!r}")
+
+
+def _apply_app_logging(app: OneStepApp, raw_logging: Any) -> None:
+    if raw_logging is None:
+        return
+    if not isinstance(raw_logging, Mapping):
+        raise TypeError("'app.logging' must be a mapping")
+    _validate_unknown_fields(raw_logging, _STRICT_APP_LOGGING_FIELDS, field="app.logging")
+    level = _require_string(raw_logging, "level")
+    resolved = getattr(logging, level.strip().upper(), None)
+    if not isinstance(resolved, int):
+        raise ValueError(f"unsupported logging level {level!r}")
+    logging.getLogger("onestep").setLevel(resolved)
 
 
 def _validate_hooks_config(raw_hooks: Any, *, field: str, allowed: frozenset[str]) -> None:

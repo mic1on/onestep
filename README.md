@@ -122,6 +122,8 @@ Python callables:
 ```yaml
 app:
   name: billing-sync
+  logging:
+    level: DEBUG
 
 resources:
   tick:
@@ -167,6 +169,10 @@ and resource specs:
 ```bash
 onestep check --strict worker.yaml
 ```
+
+`app.logging.level` is optional and only controls the `onestep` logger
+namespace. It does not configure handlers or formatters, but setting it to
+`DEBUG` makes framework-level sink success logs visible.
 
 YAML resources can reference other resources by name, for example
 `rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.

@@ -9,7 +9,7 @@
 
 YAML is responsible for:
 
-- `app`: name, global config, shutdown timeout, state store binding
+- `app`: name, global config, shutdown timeout, state store binding, framework log level
 - `reporter`: built-in control-plane telemetry wiring
 - `resources`: named runtime objects and their dependencies
 - `hooks`: app-level startup, shutdown, and event observers
@@ -37,6 +37,24 @@ Strict mode is intended to catch configuration drift early:
 - unknown task, hook, reporter, and resource fields
 - invalid `apiVersion` / `kind` values when they are present
 - silent mixing of legacy top-level app fields with the `app:` section
+- invalid `app.logging.level` values when YAML opts into framework log control
+
+## Framework Logging
+
+Pure YAML workers can set the `onestep` logger namespace level directly:
+
+```yaml
+app:
+  name: hello-worker
+  logging:
+    level: DEBUG
+```
+
+Notes:
+
+- this only sets the `onestep` logger namespace
+- it does not configure the root logger, handlers, or formatters
+- `DEBUG` enables low-level framework logs such as successful sink sends
 
 For long-lived configs, prefer adding:
 
@@ -94,6 +112,8 @@ Start with the smallest shape that runs. Add fields only when the task actually 
 ```yaml
 app:
   name: hello-worker
+  logging:
+    level: DEBUG
 
 resources:
   tick:

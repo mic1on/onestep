@@ -202,6 +202,17 @@ class TaskRunner:
         for attempt in range(self._SEND_ATTEMPTS):
             try:
                 await sink.send(envelope)
+                self._logger.debug(
+                    "sink send succeeded",
+                    extra={
+                        "sink_name": getattr(sink, "name", sink.__class__.__name__),
+                        "sink_kind": sink.__class__.__name__,
+                        "connector_backend": getattr(getattr(sink, "connector", None), "__class__", type(None)).__name__
+                        if getattr(sink, "connector", None) is not None
+                        else None,
+                        "delivery_attempts": envelope.attempts,
+                    },
+                )
                 return
             except ConnectorOperationError as exc:
                 if not is_retryable_connector_error(exc) or attempt == self._SEND_ATTEMPTS - 1:

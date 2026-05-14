@@ -1,12 +1,15 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 import types
 from contextlib import contextmanager
 
+import pytest
+
 import onestep.config as config_module
-from onestep import MemoryQueue, OneStepApp
+from onestep import MemoryQueue, OneStepApp, load_app_config
 from onestep.cli import main
 from onestep.connectors.base import Sink, Source
 
@@ -548,6 +551,76 @@ def test_cli_check_strict_rejects_unknown_reporter_fields(capsys, tmp_path) -> N
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "unsupported fields for reporter: url" in captured.err
+
+
+def test_load_app_config_strict_applies_yaml_logging_level() -> None:
+    logger = logging.getLogger("onestep")
+    previous_level = logger.level
+    try:
+        app = load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging",
+                    "logging": {"level": "debug"},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+        assert app.name == "yaml-logging"
+        assert logger.level == logging.DEBUG
+    finally:
+        logger.setLevel(previous_level)
+
+
+def test_load_app_config_strict_rejects_invalid_yaml_logging_level_type() -> None:
+    with pytest.raises(ValueError, match="'level' must be a non-empty string"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-invalid-type",
+                    "logging": {"level": 123},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_invalid_yaml_logging_level_value() -> None:
+    with pytest.raises(ValueError, match="unsupported logging level 'verbose'"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-invalid-value",
+                    "logging": {"level": "verbose"},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_unknown_yaml_logging_fields() -> None:
+    with pytest.raises(ValueError, match="unsupported fields for app.logging: unexpected"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-invalid-field",
+                    "logging": {"unexpected": True},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
 
 
 def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_path) -> None:
