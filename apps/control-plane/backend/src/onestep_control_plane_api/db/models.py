@@ -341,6 +341,7 @@ class AgentCommand(Base):
             "status",
             "created_at",
         ),
+        sa.Index("ix_agent_commands_status_updated_at", "status", "updated_at"),
     )
 
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -403,6 +404,7 @@ class TaskMetricWindow(Base):
             "task_name",
             "window_ended_at",
         ),
+        sa.Index("ix_task_metric_windows_window_ended_at", "window_ended_at"),
     )
 
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -449,6 +451,7 @@ class TaskEvent(Base):
             "task_name",
             "occurred_at",
         ),
+        sa.Index("ix_task_events_occurred_at", "occurred_at"),
     )
 
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
