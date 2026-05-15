@@ -192,11 +192,10 @@ function normalizeNotificationChannel(channel: {
   };
 }
 
-export function listServices(environment?: Environment) {
-  return requestPaginatedItems<ServiceListResponse["items"][number]>("/api/v1/services", {
-    query: { environment },
-    pageSize: SERVICES_PAGE_SIZE,
-  }) as Promise<ServiceListResponse>;
+export function listServices(environment?: Environment, sourceKind?: string) {
+  return request<ServiceListResponse>("/api/v1/services", {
+    query: { environment, source_kind: sourceKind, limit: SERVICES_PAGE_SIZE, offset: 0 },
+  });
 }
 
 export async function listNotificationChannels() {

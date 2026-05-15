@@ -74,6 +74,8 @@ export interface ServiceSummary {
   instance_count: number;
   online_instance_count: number;
   last_seen_at: string | null;
+  source_kinds: string[];
+  task_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -83,6 +85,7 @@ export interface ServiceListResponse {
   total: number;
   limit: number;
   offset: number;
+  source_kind_counts: Record<string, number>;
 }
 
 export interface NotificationServiceScope {

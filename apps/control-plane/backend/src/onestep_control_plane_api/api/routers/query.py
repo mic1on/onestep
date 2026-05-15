@@ -29,6 +29,9 @@ from onestep_control_plane_api.api.query_support import (
     build_metric_window_summary,
     build_service_stats_subquery,
     build_service_summary,
+    build_source_kind_counts_map,
+    build_source_kinds_map,
+    build_task_counts_map,
     build_task_control_summary,
     build_task_event_summary,
     build_task_summary_map,
@@ -87,6 +90,7 @@ router = APIRouter(
 @router.get("/services", response_model=ServiceListResponse)
 def list_services(
     environment: Environment | None = Query(default=None),
+    source_kind: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db_session),
@@ -97,6 +101,26 @@ def list_services(
     filters = []
     if environment is not None:
         filters.append(Service.environment == environment)
+
+    # Build source_kinds lookup for all services
+    source_kinds_map = build_source_kinds_map(db)
+    source_kind_counts = build_source_kind_counts_map(db)
+    task_counts_map = build_task_counts_map(db)
+
+    # If filtering by source_kind, only include services that have it
+    if source_kind is not None:
+        service_ids_with_kind = {
+            sid for sid, kinds in source_kinds_map.items() if source_kind in kinds
+        }
+        if not service_ids_with_kind:
+            return ServiceListResponse(
+                items=[],
+                total=0,
+                limit=limit,
+                offset=offset,
+                source_kind_counts=source_kind_counts,
+            )
+        filters.append(Service.id.in_(service_ids_with_kind))
 
     count_stmt = select(func.count()).select_from(Service)
     if filters:
@@ -129,10 +153,18 @@ def list_services(
             instance_count=instance_count,
             online_instance_count=online_instance_count,
             last_seen_at=last_seen_at,
+            source_kinds=source_kinds_map.get(service.id, []),
+            task_count=task_counts_map.get(service.id, 0),
         )
         for service, instance_count, online_instance_count, last_seen_at in rows
     ]
-    return ServiceListResponse(items=items, total=total, limit=limit, offset=offset)
+    return ServiceListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        source_kind_counts=source_kind_counts,
+    )
 
 
 @router.get("/services/{service_name}", response_model=ServiceSummary)

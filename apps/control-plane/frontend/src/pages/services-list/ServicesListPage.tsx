@@ -17,11 +17,13 @@ export function ServicesListPage() {
     environmentParam === "all" || environmentParam === "dev" || environmentParam === "staging" || environmentParam === "prod"
       ? environmentParam
       : "all";
+  const sourceKindParam = searchParams.get("source_kind") ?? undefined;
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const deferredSearch = useDeferredValue(search);
 
   const { data, isPending, error } = useServicesQuery(
     selectedEnvironment === "all" ? undefined : selectedEnvironment,
+    sourceKindParam,
   );
 
   const query = deferredSearch.trim().toLowerCase();
@@ -32,6 +34,7 @@ export function ServicesListPage() {
   const totalInstances = sortedItems.reduce((sum, service) => sum + service.instance_count, 0);
   const onlineInstances = sortedItems.reduce((sum, service) => sum + service.online_instance_count, 0);
   const attentionCount = sortedItems.filter(serviceNeedsAttention).length;
+  const sourceKindCounts = data?.source_kind_counts ?? {};
 
   function updateSearchParam(key: string, value: string | undefined) {
     const next = new URLSearchParams(searchParams);
@@ -90,6 +93,39 @@ export function ServicesListPage() {
         }
       />
 
+      {/* Tag filter bar */}
+      {Object.keys(sourceKindCounts).length > 0 ? (
+        <nav className="ref-tag-bar">
+          {Object.entries(sourceKindCounts)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([kind, count]) => {
+              const isActive = sourceKindParam === kind;
+              return (
+                <button
+                  key={kind}
+                  className={`ref-tag-chip${isActive ? " is-active" : ""}`}
+                  onClick={() =>
+                    updateSearchParam("source_kind", isActive ? undefined : kind)
+                  }
+                  type="button"
+                >
+                  <span className="ref-tag-chip-kind">{kind}</span>
+                  <span className="ref-tag-chip-count">{count}</span>
+                </button>
+              );
+            })}
+          {sourceKindParam ? (
+            <button
+              className="ref-tag-chip ref-tag-chip-clear"
+              onClick={() => updateSearchParam("source_kind", undefined)}
+              type="button"
+            >
+              clear filter
+            </button>
+          ) : null}
+        </nav>
+      ) : null}
+
       <section className="ref-summary-strip">
         <SummaryChip
           label={t("servicesList.summaryServices")}
@@ -131,54 +167,72 @@ export function ServicesListPage() {
 
           <div className="ref-table-body">
             {sortedItems.map((service) => (
-              <article className="ref-table-row" key={`${service.environment}:${service.name}`}>
-                <div className="ref-service-cell">
-                  <Link
-                    className="ref-service-link"
-                    to={servicePath(service.name, {
-                      environment: service.environment,
-                      lookback_minutes: 60,
-                    })}
-                  >
-                    <strong>{service.name}</strong>
-                    <span>{t(`environment.${service.environment}`)}</span>
-                  </Link>
-                </div>
-
-                <div className="ref-meta-cell">
-                  <strong>{formatDateTime(service.created_at)}</strong>
-                </div>
-
-                <div className="ref-meta-cell">
-                  <strong title={formatDateTime(service.last_seen_at)}>
-                    {formatRelativeTime(service.last_seen_at)}
-                  </strong>
-                  <span>{getActivityHint(service, t)}</span>
-                </div>
-
-                <div className="ref-meta-cell">
-                  <strong>{service.latest_deployment_version}</strong>
-                </div>
-
-                <div className="ref-coverage-cell">
-                  <div className="ref-usage-bar">
-                    <span
-                      className={getCoverageBarClass(service)}
-                      style={{
-                        width: `${service.instance_count > 0 ? (service.online_instance_count / service.instance_count) * 100 : 0}%`,
-                      }}
-                    />
-                  </div>
-                  <strong>
-                    {t("servicesList.instanceLive")}: {service.online_instance_count}/{service.instance_count}
-                  </strong>
-                </div>
-              </article>
+              <ServiceRow key={`${service.environment}:${service.name}`} service={service} t={t} />
             ))}
           </div>
         </section>
       ) : null}
     </div>
+  );
+}
+
+function ServiceRow({ service, t }: { service: ServiceSummary; t: (key: string) => string }) {
+  return (
+    <article className="ref-table-row" key={`${service.environment}:${service.name}`}>
+      <div className="ref-service-cell">
+        <Link
+          className="ref-service-link"
+          to={servicePath(service.name, {
+            environment: service.environment,
+            lookback_minutes: 60,
+          })}
+        >
+          <strong>{service.name}</strong>
+          <span>{t(`environment.${service.environment}`)}</span>
+          {service.task_count > 0 || service.source_kinds.length > 0 ? (
+            <span className="ref-service-tags">
+              {service.task_count > 0 ? (
+                <span className="ref-mini-tag ref-mini-tag-tasks">
+                  {service.task_count} {service.task_count === 1 ? "task" : "tasks"}
+                </span>
+              ) : null}
+              {service.source_kinds.map((kind) => (
+                <span key={kind} className="ref-mini-tag">{kind}</span>
+              ))}
+            </span>
+          ) : null}
+        </Link>
+      </div>
+
+      <div className="ref-meta-cell">
+        <strong>{formatDateTime(service.created_at)}</strong>
+      </div>
+
+      <div className="ref-meta-cell">
+        <strong title={formatDateTime(service.last_seen_at)}>
+          {formatRelativeTime(service.last_seen_at)}
+        </strong>
+        <span>{getActivityHint(service, t)}</span>
+      </div>
+
+      <div className="ref-meta-cell">
+        <strong>{service.latest_deployment_version}</strong>
+      </div>
+
+      <div className="ref-coverage-cell">
+        <div className="ref-usage-bar">
+          <span
+            className={getCoverageBarClass(service)}
+            style={{
+              width: `${service.instance_count > 0 ? (service.online_instance_count / service.instance_count) * 100 : 0}%`,
+            }}
+          />
+        </div>
+        <strong>
+          {t("servicesList.instanceLive")}: {service.online_instance_count}/{service.instance_count}
+        </strong>
+      </div>
+    </article>
   );
 }
 

@@ -1408,6 +1408,111 @@ body {
   background: var(--ref-surface-accent);
 }
 
+/* ── Tag filter bar ── */
+
+.ref-tag-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+}
+
+.ref-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--ref-border-strong);
+  border-radius: 10px;
+  background: var(--ref-surface-soft);
+  color: var(--ref-ink-950);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.ref-tag-chip:hover {
+  border-color: var(--ref-border-emphasis);
+  background: var(--ref-surface-accent);
+}
+
+.ref-tag-chip.is-active {
+  border-color: var(--ref-stroke-deep);
+  background: var(--ref-ink-950);
+  color: #fff;
+}
+
+.ref-tag-chip.is-active .ref-tag-chip-count {
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.ref-tag-chip-kind {
+  font-weight: 700;
+}
+
+.ref-tag-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--ref-surface-muted);
+  color: var(--ref-ink-600);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ref-tag-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ref-ink-600);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.ref-tag-chip-clear:hover {
+  border-color: var(--ref-border-strong);
+  color: var(--ref-ink-950);
+}
+
+/* ── Service tags & mini-tags ── */
+
+.ref-service-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ref-mini-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--ref-border);
+  border-radius: 6px;
+  background: var(--ref-surface-subtle);
+  color: var(--ref-ink-600);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.ref-mini-tag-tasks {
+  background: var(--ref-surface-accent);
+  color: var(--ref-ink-950);
+  border-color: var(--ref-border-strong);
+}
+
 .notification-channel-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3271,6 +3376,19 @@ a.ref-detail-table-row:hover {
 }
 
 @media (max-width: 560px) {
+  .ref-tag-bar {
+    gap: 6px;
+  }
+
+  .ref-tag-chip {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  .ref-service-tags {
+    gap: 3px;
+  }
+
   .ref-instance-grid,
   .ref-task-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

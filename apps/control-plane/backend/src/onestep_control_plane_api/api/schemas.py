@@ -692,12 +692,15 @@ class ServiceSummary(APIModel):
     instance_count: int = Field(ge=0)
     online_instance_count: int = Field(ge=0)
     last_seen_at: datetime | None = None
+    source_kinds: list[str] = Field(default_factory=list)
+    task_count: int = Field(default=0, ge=0)
     created_at: datetime
     updated_at: datetime
 
 
 class ServiceListResponse(PaginatedResponse):
     items: list[ServiceSummary]
+    source_kind_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class NotificationServiceScope(APIModel):

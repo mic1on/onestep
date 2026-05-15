@@ -206,6 +206,8 @@ def build_service_summary(
     instance_count: int,
     online_instance_count: int,
     last_seen_at: datetime | None,
+    source_kinds: list[str] | None = None,
+    task_count: int = 0,
 ) -> ServiceSummary:
     return ServiceSummary(
         name=service.name,
@@ -216,9 +218,52 @@ def build_service_summary(
         instance_count=instance_count,
         online_instance_count=online_instance_count,
         last_seen_at=last_seen_at,
+        source_kinds=source_kinds or [],
+        task_count=task_count,
         created_at=service.created_at,
         updated_at=service.updated_at,
     )
+
+
+def build_source_kinds_map(db: Session) -> dict[UUID, list[str]]:
+    """Return a mapping of service_id -> sorted distinct source_kinds."""
+    rows = db.execute(
+        select(
+            TaskDefinition.service_id,
+            TaskDefinition.source_kind,
+        )
+        .where(TaskDefinition.source_kind.is_not(None))
+        .distinct()
+        .order_by(TaskDefinition.service_id, TaskDefinition.source_kind)
+    ).all()
+    result: dict[UUID, list[str]] = {}
+    for service_id, source_kind in rows:
+        result.setdefault(service_id, []).append(source_kind)
+    return result
+
+
+def build_source_kind_counts_map(db: Session) -> dict[str, int]:
+    """Return a mapping of source_kind -> count of distinct services using it."""
+    rows = db.execute(
+        select(
+            TaskDefinition.source_kind,
+            func.count(func.distinct(TaskDefinition.service_id)),
+        )
+        .where(TaskDefinition.source_kind.is_not(None))
+        .group_by(TaskDefinition.source_kind)
+    ).all()
+    return {source_kind: count for source_kind, count in rows}
+
+
+def build_task_counts_map(db: Session) -> dict[UUID, int]:
+    """Return a mapping of service_id -> count of distinct task definitions."""
+    rows = db.execute(
+        select(
+            TaskDefinition.service_id,
+            func.count(func.distinct(TaskDefinition.task_name)),
+        ).group_by(TaskDefinition.service_id)
+    ).all()
+    return {service_id: count for service_id, count in rows}
 
 
 def build_agent_session_summary(
