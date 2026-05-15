@@ -98,7 +98,7 @@ trap cleanup EXIT INT TERM
 
 if [ "$SMOKE_MANAGE_STACK" = "1" ] || [ "$SMOKE_MANAGE_STACK" = "true" ]; then
   if [ "$SMOKE_BUILD" = "1" ] || [ "$SMOKE_BUILD" = "true" ]; then
-    compose build api frontend migrate
+    compose build api frontend
   fi
   compose up -d postgres
   compose run --rm migrate

@@ -136,7 +136,7 @@ docker compose up -d postgres
 Wait for the healthcheck to pass, then apply schema migrations:
 
 ```bash
-docker compose run --rm migrate
+docker compose run --rm --build migrate
 ```
 
 If port `5432` is already occupied locally, change `ONESTEP_CP_POSTGRES_PORT` and
@@ -152,7 +152,8 @@ Bring the full stack up:
 ```bash
 cp .env.example .env
 bash scripts/release-preflight.sh --compose-file docker-compose.yml --env-file .env
-docker compose up --build -d postgres
+docker compose build api frontend
+docker compose up -d postgres
 docker compose run --rm migrate
 docker compose up --build -d api frontend
 bash scripts/run-smoke.sh --compose-file docker-compose.yml --env-file .env
@@ -174,6 +175,8 @@ runtime API base is `/`, which works with the bundled reverse proxy. If
 `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and
 `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` are set in `.env`, this local full-stack compose flow
 also serves the login page and enforces console auth.
+The local `migrate` service now reuses the same `onestep-control-plane-api:latest` image
+as the `api` service, so rebuilding `api` also refreshes the migration runner.
 
 To create database-backed local console users, use the helper scripts from the repo root:
 

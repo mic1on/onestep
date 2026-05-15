@@ -61,7 +61,7 @@ services:
       ONESTEP_CP_APP_ENV: ${ONESTEP_CP_APP_ENV:-docker}
       ONESTEP_CP_DATABASE_URL: ${ONESTEP_CP_DATABASE_URL:-}
       TZ: ${ONESTEP_CP_TIMEZONE:-Asia/Shanghai}
-    command: ["alembic", "upgrade", "head"]
+    command: ["/app/.venv/bin/python", "-m", "alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
     restart: "no"
     profiles: ["tools"]
 

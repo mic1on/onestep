@@ -342,6 +342,49 @@ def test_list_services_and_get_service_summary(client, db_session) -> None:
     assert detail.json()["online_instance_count"] == 1
 
 
+def test_list_services_scopes_source_kind_counts_to_environment(client, db_session) -> None:
+    prod_service = seed_service(db_session, name="billing-sync", environment="prod")
+    staging_service = seed_service(db_session, name="billing-sync", environment="staging")
+    dev_service = seed_service(db_session, name="audit-sync", environment="dev")
+    seed_task_definition(
+        db_session,
+        prod_service,
+        task_name="sync_users",
+        source_name="cron:prod",
+        source_kind="cron",
+    )
+    seed_task_definition(
+        db_session,
+        staging_service,
+        task_name="consume_webhooks",
+        source_name="webhook:staging",
+        source_kind="webhook",
+    )
+    seed_task_definition(
+        db_session,
+        dev_service,
+        task_name="sync_invoices",
+        source_name="cron:dev",
+        source_kind="cron",
+    )
+    db_session.commit()
+
+    prod_response = client.get("/api/v1/services", params={"environment": "prod"})
+    assert prod_response.status_code == 200
+    assert prod_response.json()["source_kind_counts"] == {"cron": 1}
+
+    staging_response = client.get("/api/v1/services", params={"environment": "staging"})
+    assert staging_response.status_code == 200
+    assert staging_response.json()["source_kind_counts"] == {"webhook": 1}
+
+    all_response = client.get("/api/v1/services")
+    assert all_response.status_code == 200
+    assert all_response.json()["source_kind_counts"] == {
+        "cron": 2,
+        "webhook": 1,
+    }
+
+
 def test_list_service_instances_returns_connectivity_and_filters(client, db_session) -> None:
     now = datetime.now(UTC)
     service = seed_service(db_session)

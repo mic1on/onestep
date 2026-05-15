@@ -31,8 +31,8 @@ from onestep_control_plane_api.api.query_support import (
     build_service_summary,
     build_source_kind_counts_map,
     build_source_kinds_map,
-    build_task_counts_map,
     build_task_control_summary,
+    build_task_counts_map,
     build_task_event_summary,
     build_task_summary_map,
     get_active_sessions_by_instance_id,
@@ -104,7 +104,7 @@ def list_services(
 
     # Build source_kinds lookup for all services
     source_kinds_map = build_source_kinds_map(db)
-    source_kind_counts = build_source_kind_counts_map(db)
+    source_kind_counts = build_source_kind_counts_map(db, environment=environment)
     task_counts_map = build_task_counts_map(db)
 
     # If filtering by source_kind, only include services that have it

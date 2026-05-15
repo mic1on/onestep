@@ -1,3 +1,8 @@
+x-api-build: &api-build
+  context: .
+  dockerfile: Dockerfile
+  target: api
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -22,10 +27,8 @@ services:
       - onestep-control-plane-postgres-data:/var/lib/postgresql/data
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: api
+    build: *api-build
+    image: onestep-control-plane-api:latest
     restart: unless-stopped
     depends_on:
       postgres:
@@ -56,10 +59,8 @@ services:
       start_period: 10s
 
   migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: api
+    build: *api-build
+    image: onestep-control-plane-api:latest
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,7 +68,7 @@ services:
       ONESTEP_CP_APP_ENV: ${ONESTEP_CP_APP_ENV:-docker}
       ONESTEP_CP_DATABASE_URL: postgresql+psycopg://${ONESTEP_CP_POSTGRES_USER:-postgres}:${ONESTEP_CP_POSTGRES_PASSWORD:-postgres}@postgres:5432/${ONESTEP_CP_POSTGRES_DB:-onestep_control_plane}
       TZ: ${ONESTEP_CP_TIMEZONE:-Asia/Shanghai}
-    command: ["alembic", "upgrade", "head"]
+    command: ["/app/.venv/bin/python", "-m", "alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
     restart: "no"
     profiles: ["tools"]
 

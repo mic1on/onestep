@@ -242,16 +242,25 @@ def build_source_kinds_map(db: Session) -> dict[UUID, list[str]]:
     return result
 
 
-def build_source_kind_counts_map(db: Session) -> dict[str, int]:
+def build_source_kind_counts_map(
+    db: Session,
+    *,
+    environment: Environment | None = None,
+) -> dict[str, int]:
     """Return a mapping of source_kind -> count of distinct services using it."""
-    rows = db.execute(
+    stmt = (
         select(
             TaskDefinition.source_kind,
             func.count(func.distinct(TaskDefinition.service_id)),
         )
         .where(TaskDefinition.source_kind.is_not(None))
         .group_by(TaskDefinition.source_kind)
-    ).all()
+    )
+    if environment is not None:
+        stmt = stmt.join(Service, TaskDefinition.service_id == Service.id).where(
+            Service.environment == environment
+        )
+    rows = db.execute(stmt).all()
     return {source_kind: count for source_kind, count in rows}
 
 
