@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-type ToastTone = "success" | "error";
+export type ToastTone = "success" | "error" | "warning" | "info";
 
 type ToastItem = {
   id: number;

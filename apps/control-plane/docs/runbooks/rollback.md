@@ -67,6 +67,12 @@ If smoke still fails, keep the rollback in place and escalate to manual investig
 Only execute this step if the previous application version is incompatible with the migrated schema.
 
 - Preferred: restore the database from the most recent verified backup or snapshot.
+- If you are using repository-managed backup artifacts, restore with:
+
+```bash
+bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.dump --yes
+```
+
 - If an Alembic downgrade exists and has already been validated for this release, run it explicitly:
 
 ```bash

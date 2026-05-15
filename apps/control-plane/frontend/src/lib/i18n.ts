@@ -452,6 +452,33 @@ const resources = {
           flush_events: "Flush events",
         },
       },
+      controlPlaneStatus: {
+        banner: {
+          streamReconnectingTitle: "Live updates are reconnecting",
+          streamReconnectingBody:
+            "The command stream disconnected. Query polling is still active, but command and session updates may lag.",
+          streamStaleTitle: "Live updates are degraded",
+          streamStaleBody:
+            "The command stream has not recovered yet. Treat this page as stale until the live connection returns.",
+          streamErrorTitle: "Live updates failed to start",
+          streamErrorBody:
+            "The control plane could not open the live command stream. Polling continues, but real-time updates are unavailable.",
+          staleDataTitle: "{{label}} data may be stale",
+          staleDataBody:
+            "The latest successful refresh is {{age}}. Reconfirm control-plane health before making risky changes.",
+          timeoutTitle: "API request timed out",
+          timeoutBody:
+            "The control plane did not finish refreshing {{label}} before the request timeout. The last successful snapshot remains visible when available.",
+          commandFailedTitle: "Command review failed",
+          commandFailedBody:
+            "The control plane rejected or could not submit the latest command. Review the error before retrying.",
+        },
+        toast: {
+          reconnecting: "Live command updates disconnected. Polling fallback is active.",
+          stale: "Live command updates are still degraded. Treat this view as stale.",
+          recovered: "Live command updates recovered.",
+        },
+      },
       taskCommandControls: {
         scopeLabel: "Target scope",
         targetScopeAriaLabel: "Task command target scope",
@@ -553,6 +580,24 @@ const resources = {
         reasonRequired: "A reason is required before this command can be sent.",
         cancel: "Cancel",
         confirm: "Send command",
+        submitting: "Sending...",
+      },
+      destructiveCommandReview: {
+        commandLabel: "Command",
+        targetLabel: "Target scope",
+        riskLabel: "Risk level",
+        risk: {
+          elevated: "Elevated",
+          critical: "Critical",
+        },
+        reasonLabel: "Operator reason",
+        reasonPlaceholder: "Explain what will change, why it is safe, and who approved it.",
+        reasonRequired: "A reason is required before this command can be sent.",
+        acknowledgment:
+          "I reviewed the target scope and understand that this action may interrupt live work or discard data.",
+        acknowledgmentRequired: "Confirm that you reviewed the scope and impact before sending this command.",
+        cancel: "Cancel",
+        confirm: "Review and send",
         submitting: "Sending...",
       },
       notFound: {
@@ -1096,6 +1141,27 @@ const resources = {
           flush_events: "刷新事件",
         },
       },
+      controlPlaneStatus: {
+        banner: {
+          streamReconnectingTitle: "实时更新正在重连",
+          streamReconnectingBody: "命令流刚刚断开。查询轮询仍在继续，但命令和会话更新可能会有延迟。",
+          streamStaleTitle: "实时更新已降级",
+          streamStaleBody: "命令流还没有恢复。连接回来前，请把当前页面视为陈旧快照。",
+          streamErrorTitle: "实时更新启动失败",
+          streamErrorBody: "控制面无法建立实时命令流。轮询还在继续，但现在没有实时更新能力。",
+          staleDataTitle: "{{label}} 数据可能已经过期",
+          staleDataBody: "最近一次成功刷新发生在 {{age}}。执行高风险操作前，请先确认控制面连接正常。",
+          timeoutTitle: "API 请求超时",
+          timeoutBody: "控制面在请求超时时间内没有完成 {{label}} 刷新。若有历史快照，会继续展示最后一次成功结果。",
+          commandFailedTitle: "命令审核提交失败",
+          commandFailedBody: "控制面拒绝了最近一次命令，或者没有成功提交。请先检查错误，再决定是否重试。",
+        },
+        toast: {
+          reconnecting: "实时命令更新已断开，当前使用轮询兜底。",
+          stale: "实时命令更新仍未恢复，请将当前页面视为陈旧状态。",
+          recovered: "实时命令更新已恢复。",
+        },
+      },
       taskCommandControls: {
         scopeLabel: "目标范围",
         targetScopeAriaLabel: "任务命令目标范围",
@@ -1196,6 +1262,23 @@ const resources = {
         reasonRequired: "发送命令前必须填写原因。",
         cancel: "取消",
         confirm: "发送命令",
+        submitting: "发送中...",
+      },
+      destructiveCommandReview: {
+        commandLabel: "命令",
+        targetLabel: "目标范围",
+        riskLabel: "风险等级",
+        risk: {
+          elevated: "高风险",
+          critical: "严重风险",
+        },
+        reasonLabel: "操作原因",
+        reasonPlaceholder: "说明会发生什么、为什么当前这样做是安全的，以及是谁批准了这次操作。",
+        reasonRequired: "发送这条命令前必须填写原因。",
+        acknowledgment: "我已经核对了目标范围，并理解这次操作可能会中断在线工作或丢弃数据。",
+        acknowledgmentRequired: "发送这条命令前，请先确认你已核对影响范围和风险。",
+        cancel: "取消",
+        confirm: "审核后发送",
         submitting: "发送中...",
       },
       notFound: {

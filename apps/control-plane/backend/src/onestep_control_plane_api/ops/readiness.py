@@ -33,6 +33,11 @@ class BackgroundTaskReadinessState:
     last_success_at: datetime | None = None
     last_failure_at: datetime | None = None
     last_error: str | None = None
+    leadership_mode: str | None = None
+    leadership_status: str | None = None
+    lease_acquired_at: datetime | None = None
+    last_leadership_change_at: datetime | None = None
+    last_lease_error: str | None = None
 
     def mark_started(self, when: datetime | None = None) -> None:
         timestamp = when or utcnow()
@@ -53,6 +58,55 @@ class BackgroundTaskReadinessState:
         self.last_tick_at = timestamp
         self.last_failure_at = timestamp
         self.last_error = str(exc)
+
+    def mark_starting(self, mode: str, when: datetime | None = None) -> None:
+        timestamp = when or utcnow()
+        if self.leadership_status != "starting":
+            self.last_leadership_change_at = timestamp
+        self.leadership_mode = mode
+        self.leadership_status = "starting"
+        self.lease_acquired_at = None
+        self.last_lease_error = None
+
+    def mark_leader(
+        self,
+        mode: str,
+        *,
+        acquired_at: datetime | None = None,
+        when: datetime | None = None,
+    ) -> None:
+        timestamp = when or utcnow()
+        previous_status = self.leadership_status
+        self.leadership_mode = mode
+        self.leadership_status = "leader"
+        if previous_status != "leader":
+            self.last_leadership_change_at = timestamp
+        if previous_status != "leader" or self.lease_acquired_at is None:
+            self.lease_acquired_at = acquired_at or timestamp
+        self.last_lease_error = None
+
+    def mark_standby(self, mode: str, when: datetime | None = None) -> None:
+        timestamp = when or utcnow()
+        if self.leadership_status != "standby":
+            self.last_leadership_change_at = timestamp
+        self.leadership_mode = mode
+        self.leadership_status = "standby"
+        self.lease_acquired_at = None
+        self.last_lease_error = None
+
+    def mark_lease_failure(
+        self,
+        mode: str,
+        exc: Exception,
+        when: datetime | None = None,
+    ) -> None:
+        timestamp = when or utcnow()
+        if self.leadership_status != "error":
+            self.last_leadership_change_at = timestamp
+        self.leadership_mode = mode
+        self.leadership_status = "error"
+        self.lease_acquired_at = None
+        self.last_lease_error = str(exc)
 
 
 @dataclass(frozen=True)
@@ -190,6 +244,7 @@ def _check_background_task(
     stale_after_s = max(
         settings.readiness_task_stale_after_s,
         settings.notification_missed_start_scan_interval_s,
+        settings.background_worker_leader_poll_interval_s,
     )
     age_s = max(0.0, (utcnow() - last_seen_at).total_seconds())
     if age_s > stale_after_s:
@@ -209,12 +264,44 @@ def _check_background_task(
         "last_seen_at": last_seen_at.isoformat(),
         "stale_after_s": stale_after_s,
     }
+    if state.leadership_mode is not None:
+        meta["leadership_mode"] = state.leadership_mode
+    if state.leadership_status is not None:
+        meta["leadership_status"] = state.leadership_status
+    if state.lease_acquired_at is not None:
+        meta["lease_acquired_at"] = state.lease_acquired_at.isoformat()
+    if state.last_leadership_change_at is not None:
+        meta["last_leadership_change_at"] = state.last_leadership_change_at.isoformat()
     if state.last_success_at is not None:
         meta["last_success_at"] = state.last_success_at.isoformat()
     if state.last_failure_at is not None:
         meta["last_failure_at"] = state.last_failure_at.isoformat()
     if state.last_error is not None:
         meta["last_error"] = state.last_error
+    if state.last_lease_error is not None:
+        meta["last_lease_error"] = state.last_lease_error
+
+    if state.leadership_status == "error":
+        return CheckResult(
+            ready=False,
+            detail="background task lease check failed",
+            meta=meta,
+        )
+    if state.leadership_status == "standby":
+        return CheckResult(
+            ready=True,
+            detail="background task standing by for lease",
+            meta=meta,
+        )
+    if state.leadership_status == "starting":
+        return CheckResult(ready=True, detail="background task starting", meta=meta)
+    if state.leadership_status == "leader":
+        detail = (
+            "background task running in local mode"
+            if state.leadership_mode == "local"
+            else "background task running as leader"
+        )
+        return CheckResult(ready=True, detail=detail, meta=meta)
     return CheckResult(ready=True, detail="background task running", meta=meta)
 
 

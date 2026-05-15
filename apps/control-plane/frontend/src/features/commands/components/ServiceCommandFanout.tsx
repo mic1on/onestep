@@ -5,9 +5,11 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { SegmentedControl } from "../../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../../components/ui/StatusBadge";
 import { useToast } from "../../../components/ui/ToastProvider";
+import { ApiTimeoutError } from "../../../lib/api/client";
 import { CommandReasonDialog } from "./CommandReasonDialog";
+import { DestructiveCommandReviewDialog } from "./DestructiveCommandReviewDialog";
 import { useCreateServiceCommandFanoutMutation } from "../queries";
-import { commandSupportsQueueing } from "../capabilities";
+import { commandSupportsQueueing, getCommandRiskLevel, isDestructiveCommand } from "../capabilities";
 import type {
   AgentCommandKind,
   Environment,
@@ -21,6 +23,7 @@ type ServiceCommandFanoutProps = {
   serviceName: string;
   environment: Environment;
   instances: InstanceSummary[];
+  onIssueChange?: (issue: { message: string; timeout: boolean } | null) => void;
 };
 
 const FANOUT_COMMANDS: Exclude<AgentCommandKind, "shutdown">[] = [
@@ -36,6 +39,7 @@ export function ServiceCommandFanout({
   serviceName,
   environment,
   instances,
+  onIssueChange,
 }: ServiceCommandFanoutProps) {
   const { t } = useTranslation();
   const { pushToast } = useToast();
@@ -43,7 +47,6 @@ export function ServiceCommandFanout({
   const [targetMode, setTargetMode] = useState<ServiceCommandTargetMode>("all_online");
   const [offlineBehavior, setOfflineBehavior] = useState<"skip" | "queue">("skip");
   const [selectedInstanceIds, setSelectedInstanceIds] = useState<string[]>([]);
-  const [submitError, setSubmitError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ServiceCommandFanoutResponse | null>(null);
   const [pendingKind, setPendingKind] = useState<Exclude<AgentCommandKind, "shutdown"> | null>(null);
   const [reasonDialogKind, setReasonDialogKind] = useState<Exclude<AgentCommandKind, "shutdown"> | null>(null);
@@ -64,7 +67,7 @@ export function ServiceCommandFanout({
   }
 
   async function dispatchFanout(kind: Exclude<AgentCommandKind, "shutdown">, reason: string) {
-    setSubmitError(null);
+    onIssueChange?.(null);
     setPendingKind(kind);
     try {
       const result = await mutation.mutateAsync({
@@ -84,9 +87,13 @@ export function ServiceCommandFanout({
           total: result.counts.total,
         }),
       });
+      onIssueChange?.(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setSubmitError(message);
+      onIssueChange?.({
+        message,
+        timeout: error instanceof ApiTimeoutError,
+      });
       pushToast({ tone: "error", message });
       throw error;
     } finally {
@@ -290,7 +297,32 @@ export function ServiceCommandFanout({
           await dispatchFanout(reasonDialogKind, reason);
           setReasonDialogKind(null);
         }}
-        open={reasonDialogKind !== null}
+        open={reasonDialogKind !== null && !isDestructiveCommand(reasonDialogKind)}
+        title={t("commandReasonDialog.serviceFanoutTitle", {
+          kind: reasonDialogKind ? t(`commandKind.${reasonDialogKind}`, { defaultValue: reasonDialogKind }) : "",
+        })}
+      />
+      <DestructiveCommandReviewDialog
+        commandLabel={reasonDialogKind ? t(`commandKind.${reasonDialogKind}`, { defaultValue: reasonDialogKind }) : ""}
+        description={t("commandReasonDialog.serviceFanoutBody", {
+          count: targetCount,
+        })}
+        isSubmitting={mutation.isPending}
+        onCancel={() => setReasonDialogKind(null)}
+        onConfirm={async (reason) => {
+          if (!reasonDialogKind) {
+            return;
+          }
+          await dispatchFanout(reasonDialogKind, reason);
+          setReasonDialogKind(null);
+        }}
+        open={reasonDialogKind !== null && isDestructiveCommand(reasonDialogKind)}
+        riskLevel={reasonDialogKind ? getCommandRiskLevel(reasonDialogKind) : "critical"}
+        targetSummary={
+          targetMode === "all_online"
+            ? t("serviceCommandFanout.targetScopeSummary", { count: onlineInstances.length })
+            : t("serviceCommandFanout.selectedSummary", { count: selectedInstances.length })
+        }
         title={t("commandReasonDialog.serviceFanoutTitle", {
           kind: reasonDialogKind ? t(`commandKind.${reasonDialogKind}`, { defaultValue: reasonDialogKind }) : "",
         })}

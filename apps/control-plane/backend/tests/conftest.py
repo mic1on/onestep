@@ -83,6 +83,7 @@ def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, 
     for state in app.state.background_task_states.values():
         now = datetime.now(UTC)
         state.mark_started(now)
+        state.mark_leader("local", when=now)
         state.mark_success(now)
     app.state.background_task_refs = {
         "notification_missed_start_scanner": object(),

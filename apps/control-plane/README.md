@@ -92,6 +92,10 @@ Docker Compose files, deploy flow, and `scripts/start-local.sh`.
 | `ONESTEP_CP_CORS_ALLOW_ORIGINS` | Backend CORS | empty | Browser origins allowed to call the query API. Use explicit origins instead of `*` when console auth is enabled across origins. |
 | `ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S` | Backend health | `90` | Threshold after which an instance with no fresh heartbeat is considered `offline`. |
 | `ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S` | Backend health | `3600` | How long a recently seen or recently synced instance stays in the service health denominator. Must be greater than or equal to `ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S`. |
+| `ONESTEP_CP_RETENTION_TASK_EVENTS_DAYS` | Backend retention | `30` | Retention window for raw `task_events`, based on `occurred_at`. Older rows become cleanup candidates. |
+| `ONESTEP_CP_RETENTION_TASK_METRIC_WINDOWS_DAYS` | Backend retention | `90` | Retention window for aggregated `task_metric_windows`, based on `window_ended_at`. |
+| `ONESTEP_CP_RETENTION_AGENT_COMMANDS_DAYS` | Backend retention | `30` | Retention window for terminal `agent_commands`, based on `updated_at`. Pending or otherwise non-terminal commands are not deleted. |
+| `ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE` | Backend retention | `1000` | Maximum number of rows deleted per batch when retention runs in execute mode. |
 | `ONESTEP_CP_API_RESPONSE_TIMEZONE` | Backend API | unset | Explicit timezone for datetime fields returned by the API. If unset, the backend falls back to container `TZ`, then `UTC`. |
 | `ONESTEP_CP_DEBUG` | Backend API | `false` | Enables FastAPI debug mode. Advanced troubleshooting option. |
 | `ONESTEP_CP_TIMEZONE` | Compose / deploy helper | `Asia/Shanghai` | Compose-level helper used to set container `TZ`. This indirectly affects API timestamp rendering when `ONESTEP_CP_API_RESPONSE_TIMEZONE` is unset. |
@@ -194,6 +198,23 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm \
   api /app/.venv/bin/python /app/scripts/create_local_admin.py --username admin
 ```
 
+Review or apply retention cleanup from the repo root:
+
+```bash
+uv run python scripts/run-retention.py --dry-run
+uv run python scripts/run-retention.py --execute
+```
+
+`--dry-run` is the default safe mode. Use `--batch-size` if you need to override
+`ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE` for a one-off cleanup run.
+
+PostgreSQL backup and restore helpers are also available from the repo root:
+
+```bash
+bash scripts/backup-postgres.sh --env-file .env.deploy
+bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.dump --yes
+```
+
 ## Registry Deployment
 
 If you have already pushed the API and frontend images to a registry, use
@@ -248,6 +269,8 @@ Release and rollback procedures are documented in:
 
 - `docs/runbooks/release.md`
 - `docs/runbooks/rollback.md`
+- `docs/runbooks/backup-restore.md`
+- `docs/runbooks/alerts.md`
 
 ## Development
 

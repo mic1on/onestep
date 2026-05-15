@@ -43,11 +43,13 @@ type RequestOptions = {
   query?: Record<string, QueryValue>;
   body?: unknown;
   redirectOnUnauthorized?: boolean;
+  timeoutMs?: number;
 };
 
 type SessionExpiredListener = () => void;
 
 const sessionExpiredListeners = new Set<SessionExpiredListener>();
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 export function buildApiUrl(path: string, query: Record<string, QueryValue> = {}) {
   const url = /^https?:\/\//.test(API_BASE_URL)
@@ -127,6 +129,16 @@ export class SessionExpiredError extends ApiError {
   }
 }
 
+export class ApiTimeoutError extends ApiError {
+  timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Request timed out after ${Math.round(timeoutMs / 1_000)}s`, 408);
+    this.name = "ApiTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 function redirectToLogin() {
   if (typeof window === "undefined" || window.location.pathname === "/login") {
     return;
@@ -151,15 +163,35 @@ export function subscribeToSessionExpired(listener: SessionExpiredListener) {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const response = await fetch(buildApiUrl(path, options.query), {
-    method: options.method ?? "GET",
-    credentials: "include",
-    headers: {
-      Accept: "application/json",
-      ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+
+  try {
+    response = await fetch(buildApiUrl(path, options.query), {
+      method: options.method ?? "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "AbortError"
+    ) {
+      throw new ApiTimeoutError(timeoutMs);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let detail = response.statusText;

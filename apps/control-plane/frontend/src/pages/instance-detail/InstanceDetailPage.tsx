@@ -11,17 +11,21 @@ import { useToast } from "../../components/ui/ToastProvider";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { canViewCommandControls, canViewDestructiveControls } from "../../features/auth/session";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
-import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
 import { CommandQuickActions } from "../../features/commands/components/CommandQuickActions";
+import { ConnectionStatusBanner } from "../../features/commands/components/ConnectionStatusBanner";
+import { DestructiveCommandReviewDialog } from "../../features/commands/components/DestructiveCommandReviewDialog";
 import {
-  commandRequiresReason,
+  getCommandRiskLevel,
+  isDestructiveCommand,
   commandSupportsQueueing,
   getCommandCapability,
   hasCommandCapability,
 } from "../../features/commands/capabilities";
-import { useCreateInstanceCommandMutation, useInstanceCommandsQuery } from "../../features/commands/queries";
+import { isUiQueryDataStale, useCreateInstanceCommandMutation, useInstanceCommandsQuery } from "../../features/commands/queries";
+import { useCommandStreamStatus } from "../../features/commands/useCommandStream";
 import { useInstanceDetailQuery } from "../../features/instances/queries";
 import { useServiceInstancesQuery } from "../../features/services/queries";
+import { ApiTimeoutError } from "../../lib/api/client";
 import type { AgentCommandDeliveryMode, AgentCommandKind, InstanceSummary } from "../../lib/api/types";
 import {
   formatCompactJson,
@@ -36,14 +40,17 @@ import { instancePath, servicePath } from "../../lib/routes";
 
 type ServiceView = "overview" | "instances" | "tasks" | "commands";
 type InstanceActivityTab = "commands" | "metrics" | "events";
+type OperationIssue = {
+  message: string;
+  timeout: boolean;
+};
 
 export function InstanceDetailPage() {
   const { i18n, t } = useTranslation();
   const { pushToast } = useToast();
   const { serviceName, instanceId } = useParams<{ serviceName: string; instanceId: string }>();
   const [searchParams] = useSearchParams();
-  const [submitMessage, setSubmitMessage] = useState<string | null>(null);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitIssue, setSubmitIssue] = useState<OperationIssue | null>(null);
   const [reasonDialogKind, setReasonDialogKind] = useState<AgentCommandKind | null>(null);
   const [deliveryModeOverride, setDeliveryModeOverride] = useState<AgentCommandDeliveryMode | null>(null);
   const [activityTab, setActivityTab] = useState<InstanceActivityTab>("commands");
@@ -51,6 +58,7 @@ export function InstanceDetailPage() {
   const [visibleCommandCount, setVisibleCommandCount] = useState(50);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
   const sessionQuery = useConsoleSessionQuery();
+  const streamStatus = useCommandStreamStatus();
 
   if (!serviceName || !instanceId) {
     return <EmptyState title={t("instanceDetail.missingTitle")} body={t("instanceDetail.missingBody")} />;
@@ -87,6 +95,15 @@ export function InstanceDetailPage() {
   const instanceStatus = instance ? deriveInstanceStatus(instance) : "offline";
   const canViewControls = canViewCommandControls(sessionQuery.data);
   const canViewDestructiveActions = canViewDestructiveControls(sessionQuery.data);
+  const connectionNotice = buildInstanceConnectionNotice(
+    t,
+    instance?.node_name ?? resolvedInstanceId,
+    streamStatus,
+    detailQuery.dataUpdatedAt,
+    Boolean(detailQuery.data),
+    detailQuery.error,
+    submitIssue,
+  );
   const activityTabs: Array<{ label: string; value: InstanceActivityTab }> = [
     { label: t("instanceDetail.activityTabs.commands"), value: "commands" },
     { label: t("instanceDetail.activityTabs.metrics"), value: "metrics" },
@@ -102,13 +119,12 @@ export function InstanceDetailPage() {
   }
 
   async function dispatchCommand(kind: AgentCommandKind, reason?: string) {
-    setSubmitError(null);
-    setSubmitMessage(null);
+    setSubmitIssue(null);
     const capabilitySource = deliveryMode === "queue_until_reconnect" ? latestSession : activeSession;
 
     if (deliveryMode === "dispatch_now_only" && !activeSession) {
       const message = t("commands.disabledReason.noSession");
-      setSubmitError(message);
+      setSubmitIssue({ message, timeout: false });
       throw new Error(message);
     }
 
@@ -116,13 +132,13 @@ export function InstanceDetailPage() {
       const message = t("commands.disabledReason.queueUnavailable", {
         kind: t(`commandKind.${kind}`, { defaultValue: kind }),
       });
-      setSubmitError(message);
+      setSubmitIssue({ message, timeout: false });
       throw new Error(message);
     }
 
     if (deliveryMode === "queue_until_reconnect" && !latestSession) {
       const message = t("commands.disabledReason.noKnownSession");
-      setSubmitError(message);
+      setSubmitIssue({ message, timeout: false });
       throw new Error(message);
     }
 
@@ -130,7 +146,7 @@ export function InstanceDetailPage() {
       const message = t("commands.disabledReason.missingCapability", {
         capability: getCommandCapability(kind),
       });
-      setSubmitError(message);
+      setSubmitIssue({ message, timeout: false });
       throw new Error(message);
     }
 
@@ -150,18 +166,21 @@ export function InstanceDetailPage() {
           : t("instanceDetail.commandDispatchOk", {
               kind: t(`commandKind.${kind}`, { defaultValue: kind }),
             });
-      setSubmitMessage(message);
+      setSubmitIssue(null);
       pushToast({ tone: "success", message });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setSubmitError(message);
+      setSubmitIssue({
+        message,
+        timeout: error instanceof ApiTimeoutError,
+      });
       pushToast({ tone: "error", message });
       throw error;
     }
   }
 
   async function handleCommandSubmit(kind: AgentCommandKind) {
-    if (commandRequiresReason(kind)) {
+    if (isDestructiveCommand(kind)) {
       setReasonDialogKind(kind);
       return;
     }
@@ -198,6 +217,14 @@ export function InstanceDetailPage() {
       </section>
 
       {detailQuery.isPending ? <div className="loading-block hero-block">{t("instanceDetail.loading")}</div> : null}
+      {connectionNotice ? (
+        <ConnectionStatusBanner
+          body={connectionNotice.body}
+          detail={connectionNotice.detail}
+          title={connectionNotice.title}
+          tone={connectionNotice.tone}
+        />
+      ) : null}
 
       {instance ? (
         <div className="ref-detail-layout">
@@ -446,7 +473,8 @@ export function InstanceDetailPage() {
         </div>
       ) : null}
 
-      <CommandReasonDialog
+      <DestructiveCommandReviewDialog
+        commandLabel={reasonDialogKind ? t(`commandKind.${reasonDialogKind}`, { defaultValue: reasonDialogKind }) : ""}
         description={reasonDialogKind ? t(`commandReasonDialog.instanceBody.${reasonDialogKind}`) : ""}
         isSubmitting={createCommandMutation.isPending}
         onCancel={() => setReasonDialogKind(null)}
@@ -458,6 +486,8 @@ export function InstanceDetailPage() {
           setReasonDialogKind(null);
         }}
         open={reasonDialogKind !== null}
+        riskLevel={reasonDialogKind ? getCommandRiskLevel(reasonDialogKind) : "critical"}
+        targetSummary={instance?.node_name ?? resolvedInstanceId}
         title={reasonDialogKind ? t(`commandReasonDialog.instanceTitle.${reasonDialogKind}`) : ""}
       />
     </div>
@@ -570,6 +600,78 @@ function getInstanceStatusBadge(status: "online" | "offline" | "degraded", isZh:
     return { value: "degraded" as const, label: isZh ? "需关注" : "Review" };
   }
   return { value: "offline" as const, label: isZh ? "离线" : "Offline" };
+}
+
+function buildInstanceConnectionNotice(
+  t: ReturnType<typeof useTranslation>["t"],
+  label: string,
+  streamStatus: ReturnType<typeof useCommandStreamStatus>,
+  dataUpdatedAt: number,
+  hasData: boolean,
+  queryError: unknown,
+  issue: OperationIssue | null,
+) {
+  if (issue) {
+    if (issue.timeout) {
+      return {
+        tone: "error" as const,
+        title: t("controlPlaneStatus.banner.timeoutTitle"),
+        body: t("controlPlaneStatus.banner.timeoutBody", { label }),
+        detail: issue.message,
+      };
+    }
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.commandFailedTitle"),
+      body: t("controlPlaneStatus.banner.commandFailedBody"),
+      detail: issue.message,
+    };
+  }
+
+  if (queryError instanceof ApiTimeoutError && hasData) {
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.timeoutTitle"),
+      body: t("controlPlaneStatus.banner.timeoutBody", { label }),
+      detail: queryError.message,
+    };
+  }
+
+  if (streamStatus.phase === "error") {
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.streamErrorTitle"),
+      body: t("controlPlaneStatus.banner.streamErrorBody"),
+    };
+  }
+
+  if (streamStatus.phase === "stale") {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.streamStaleTitle"),
+      body: t("controlPlaneStatus.banner.streamStaleBody"),
+    };
+  }
+
+  if (streamStatus.phase === "reconnecting") {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.streamReconnectingTitle"),
+      body: t("controlPlaneStatus.banner.streamReconnectingBody"),
+    };
+  }
+
+  if (hasData && isUiQueryDataStale(dataUpdatedAt)) {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.staleDataTitle", { label }),
+      body: t("controlPlaneStatus.banner.staleDataBody", {
+        age: formatRelativeTime(new Date(dataUpdatedAt).toISOString()),
+      }),
+    };
+  }
+
+  return null;
 }
 
 function compareDateDesc(left: string | null, right: string | null) {

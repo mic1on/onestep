@@ -117,6 +117,42 @@ def test_settings_reject_too_small_readiness_task_stale_after_seconds(monkeypatc
         Settings(_env_file=None)
 
 
+def test_settings_parse_background_worker_leader_poll_interval(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_BACKGROUND_WORKER_LEADER_POLL_INTERVAL_S", "9")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.background_worker_leader_poll_interval_s == 9
+
+
+def test_settings_reject_too_small_background_worker_leader_poll_interval(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_BACKGROUND_WORKER_LEADER_POLL_INTERVAL_S", "0")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_settings_parse_retention_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_TASK_EVENTS_DAYS", "14")
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_TASK_METRIC_WINDOWS_DAYS", "60")
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_AGENT_COMMANDS_DAYS", "21")
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE", "250")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.retention_task_events_days == 14
+    assert settings.retention_task_metric_windows_days == 60
+    assert settings.retention_agent_commands_days == 21
+    assert settings.retention_delete_batch_size == 250
+
+
+def test_settings_reject_invalid_retention_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_TASK_EVENTS_DAYS", "0")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
 def test_settings_build_console_url_uses_base_url_for_relative_path() -> None:
     settings = Settings(console_base_url="https://cp.example")
 

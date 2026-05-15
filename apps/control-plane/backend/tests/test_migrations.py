@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202605150001"
+HEAD_REVISION = "202605150003"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -274,6 +274,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("agent_commands")} == {
         "ix_agent_commands_instance_id_status_created_at",
+        "ix_agent_commands_status_updated_at",
     }
     assert {index["name"] for index in inspector.get_indexes("notification_deliveries")} == {
         "ix_notification_deliveries_channel_id_created_at",
@@ -290,9 +291,11 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("task_metric_windows")} == {
         "ix_task_metric_windows_service_id_task_name_window_ended_at",
+        "ix_task_metric_windows_window_ended_at",
     }
     assert {index["name"] for index in inspector.get_indexes("task_events")} == {
         "ix_task_events_service_id_task_name_occurred_at",
+        "ix_task_events_occurred_at",
     }
 
     with engine.connect() as connection:

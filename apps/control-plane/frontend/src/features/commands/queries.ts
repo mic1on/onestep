@@ -27,6 +27,11 @@ type QueryOptions = {
 
 const COMMAND_REFETCH_INTERVAL_MS = 5_000;
 const TASK_CONTROL_REVALIDATE_DELAY_MS = 1_500;
+export const COMMAND_QUERY_STALE_AFTER_MS = COMMAND_REFETCH_INTERVAL_MS * 3;
+
+export function isUiQueryDataStale(dataUpdatedAt: number, now = Date.now()) {
+  return dataUpdatedAt > 0 && now - dataUpdatedAt > COMMAND_QUERY_STALE_AFTER_MS;
+}
 
 export async function invalidateCommandStreamQueries(queryClient: QueryClient) {
   await Promise.all([
