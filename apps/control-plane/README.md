@@ -208,6 +208,13 @@ uv run python scripts/run-retention.py --execute
 `--dry-run` is the default safe mode. Use `--batch-size` if you need to override
 `ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE` for a one-off cleanup run.
 
+PostgreSQL backup and restore helpers are also available from the repo root:
+
+```bash
+bash scripts/backup-postgres.sh --env-file .env.deploy
+bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.dump --yes
+```
+
 ## Registry Deployment
 
 If you have already pushed the API and frontend images to a registry, use
@@ -262,6 +269,8 @@ Release and rollback procedures are documented in:
 
 - `docs/runbooks/release.md`
 - `docs/runbooks/rollback.md`
+- `docs/runbooks/backup-restore.md`
+- `docs/runbooks/alerts.md`
 
 ## Development
 

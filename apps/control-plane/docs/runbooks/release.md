@@ -47,7 +47,14 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d postgre
 
 ## 4. Apply Migrations Explicitly
 
-Run Alembic as a one-shot task. If this step fails, stop the release and do not restart the API service.
+Take a fresh backup before applying migrations:
+
+```bash
+bash scripts/backup-postgres.sh --env-file .env.deploy
+```
+
+Then run Alembic as a one-shot task. If this step fails, stop the release and do not
+restart the API service.
 
 ```bash
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migrate
