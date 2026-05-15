@@ -38,6 +38,13 @@ class LocalConsoleSession:
     expires_at: object
 
 
+@dataclass(frozen=True)
+class LocalAuthenticatedConsoleSession:
+    identity: LocalIdentity
+    authenticated_at: datetime
+    expires_at: object
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -137,9 +144,19 @@ class LocalAuthService:
         token = secrets.token_urlsafe(32)
         now = utcnow()
         expires_at = now + timedelta(seconds=settings.console_auth_session_ttl_s)
+        active_sessions = self._db.scalars(
+            select(ConsoleSession).where(
+                ConsoleSession.user_id == identity.user_id,
+                ConsoleSession.revoked_at.is_(None),
+                ConsoleSession.expires_at > now,
+            )
+        ).all()
+        for active_session in active_sessions:
+            active_session.revoked_at = now
         record = ConsoleSession(
             user_id=identity.user_id,
             token_hash=_hash_session_token(token),
+            authenticated_at=now,
             expires_at=expires_at,
             created_at=now,
             last_seen_at=now,
@@ -148,7 +165,9 @@ class LocalAuthService:
         self._db.commit()
         return LocalConsoleSession(token=token, identity=identity, expires_at=expires_at)
 
-    def authenticate_console_session(self, token: str) -> LocalIdentity | None:
+    def authenticate_console_session_state(
+        self, token: str
+    ) -> LocalAuthenticatedConsoleSession | None:
         token_hash = _hash_session_token(token)
         session = self._db.scalar(
             select(ConsoleSession).where(ConsoleSession.token_hash == token_hash)
@@ -160,7 +179,17 @@ class LocalAuthService:
             return None
         session.last_seen_at = utcnow()
         self._db.commit()
-        return self.build_identity(user)
+        return LocalAuthenticatedConsoleSession(
+            identity=self.build_identity(user),
+            authenticated_at=session.authenticated_at,
+            expires_at=session.expires_at,
+        )
+
+    def authenticate_console_session(self, token: str) -> LocalIdentity | None:
+        session_state = self.authenticate_console_session_state(token)
+        if session_state is None:
+            return None
+        return session_state.identity
 
     def revoke_console_session(self, token: str) -> bool:
         token_hash = _hash_session_token(token)
@@ -174,17 +203,18 @@ class LocalAuthService:
         return True
 
     def revoke_user_sessions(self, user_id: object) -> int:
+        now = utcnow()
         sessions = self._db.scalars(
             select(ConsoleSession).where(
                 ConsoleSession.user_id == user_id,
                 ConsoleSession.revoked_at.is_(None),
+                ConsoleSession.expires_at > now,
             )
         ).all()
         if not sessions:
             return 0
-        revoked_at = utcnow()
         for session in sessions:
-            session.revoked_at = revoked_at
+            session.revoked_at = now
         self._db.commit()
         return len(sessions)
 

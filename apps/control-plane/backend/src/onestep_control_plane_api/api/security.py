@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import (
@@ -18,7 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from onestep_control_plane_api.auth.service import LocalAuthService, LocalIdentity
+from onestep_control_plane_api.auth.service import LocalAuthService, LocalIdentity, utcnow
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import LocalUser
 from onestep_control_plane_api.db.session import get_db_session
@@ -37,6 +38,7 @@ CONSOLE_AUTH_COOKIE_NAME = "onestep_cp_console_session"
 DESTRUCTIVE_COMMAND_KINDS = frozenset({"shutdown", "restart", "drain"})
 WRITE_CONSOLE_ROLES = frozenset({"operator", "admin"})
 ADMIN_CONSOLE_ROLES = frozenset({"admin"})
+CONSOLE_AUTHENTICATED_AT_STATE_KEY = "console_authenticated_at"
 
 
 @dataclass(frozen=True)
@@ -166,14 +168,20 @@ def get_console_session_identity(request: Request, db: Session) -> LocalIdentity
     if should_allow_console_dev_bypass(db):
         return None
 
+    setattr(request.state, CONSOLE_AUTHENTICATED_AT_STATE_KEY, None)
     cookie_value = request.cookies.get(CONSOLE_AUTH_COOKIE_NAME)
     if not cookie_value:
         return None
 
     service = LocalAuthService(db)
-    identity = service.authenticate_console_session(cookie_value)
-    if identity is not None:
-        return identity
+    session_state = service.authenticate_console_session_state(cookie_value)
+    if session_state is not None:
+        setattr(
+            request.state,
+            CONSOLE_AUTHENTICATED_AT_STATE_KEY,
+            session_state.authenticated_at,
+        )
+        return session_state.identity
 
     if settings.app_env == "dev" and settings.console_auth_configured:
         if secrets.compare_digest(cookie_value, settings.console_auth_username):
@@ -242,12 +250,26 @@ def require_console_admin(
 def require_command_role(
     command_kind: str,
     identity: LocalIdentity | None,
+    request: Request,
 ) -> LocalIdentity | None:
     if identity is None:
         return None
 
     if command_kind in DESTRUCTIVE_COMMAND_KINDS:
         if any(role in ADMIN_CONSOLE_ROLES for role in identity.roles):
+            authenticated_at = getattr(request.state, CONSOLE_AUTHENTICATED_AT_STATE_KEY, None)
+            if authenticated_at is None and identity.user_id != "dev-shared":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="recent authentication required for destructive commands",
+                )
+            if authenticated_at is not None and utcnow() - authenticated_at > timedelta(
+                seconds=settings.console_sensitive_auth_window_s
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="recent authentication required for destructive commands",
+                )
             return identity
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

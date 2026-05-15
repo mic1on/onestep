@@ -12,6 +12,7 @@ def restore_console_auth_settings() -> Generator[None, None, None]:
     original_username = settings.console_auth_username
     original_password = settings.console_auth_password
     original_ttl = settings.console_auth_session_ttl_s
+    original_sensitive_window = settings.console_sensitive_auth_window_s
     original_env = settings.app_env
     try:
         yield
@@ -19,6 +20,7 @@ def restore_console_auth_settings() -> Generator[None, None, None]:
         settings.console_auth_username = original_username
         settings.console_auth_password = original_password
         settings.console_auth_session_ttl_s = original_ttl
+        settings.console_sensitive_auth_window_s = original_sensitive_window
         settings.app_env = original_env
 
 
@@ -100,6 +102,76 @@ def test_local_console_login_session_and_logout_round_trip(client, db_session) -
     after_logout = client.get("/api/v1/auth/session")
     assert after_logout.status_code == 200
     assert after_logout.json() == {
+        "auth_configured": True,
+        "bootstrap_required": False,
+        "authenticated": False,
+        "username": None,
+        "role": None,
+        "roles": [],
+    }
+
+
+def test_local_console_login_rotates_existing_session(client, db_session) -> None:
+    service = LocalAuthService(db_session)
+    service.create_user(
+        username="admin",
+        password="secret-pass",
+        role_names=["admin"],
+    )
+
+    first = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "secret-pass"},
+    )
+    assert first.status_code == 200
+    first_token = first.cookies.get("onestep_cp_console_session")
+
+    second = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "secret-pass"},
+    )
+    assert second.status_code == 200
+    second_token = second.cookies.get("onestep_cp_console_session")
+
+    assert first_token is not None
+    assert second_token is not None
+    assert first_token != second_token
+    assert service.authenticate_console_session(first_token) is None
+    assert service.authenticate_console_session(second_token) is not None
+
+
+def test_logout_all_revokes_current_console_session(client, db_session) -> None:
+    service = LocalAuthService(db_session)
+    service.create_user(
+        username="admin",
+        password="secret-pass",
+        role_names=["admin"],
+    )
+
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "secret-pass"},
+    )
+    assert login.status_code == 200
+    token = login.cookies.get("onestep_cp_console_session")
+
+    logout_all = client.post("/api/v1/auth/logout-all")
+    assert logout_all.status_code == 200
+    assert logout_all.json() == {
+        "auth_configured": True,
+        "bootstrap_required": False,
+        "authenticated": False,
+        "username": None,
+        "role": None,
+        "roles": [],
+    }
+
+    assert token is not None
+    assert service.authenticate_console_session(token) is None
+
+    session = client.get("/api/v1/auth/session")
+    assert session.status_code == 200
+    assert session.json() == {
         "auth_configured": True,
         "bootstrap_required": False,
         "authenticated": False,

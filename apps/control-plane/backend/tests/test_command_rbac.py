@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from onestep_control_plane_api.api.agent_connection_registry import agent_connection_registry
 from onestep_control_plane_api.auth.service import LocalAuthService
-from onestep_control_plane_api.db.models import AgentCommand, AgentSession, Instance, Service
+from onestep_control_plane_api.core.settings import settings
+from onestep_control_plane_api.db.models import (
+    AgentCommand,
+    AgentSession,
+    ConsoleSession,
+    Instance,
+    Service,
+)
 from sqlalchemy import select
 
 
@@ -171,3 +178,34 @@ def test_admin_can_run_destructive_instance_command(client, db_session) -> None:
     assert command is not None
     assert command.created_by == "admin"
     assert command.kind == "restart"
+
+
+def test_admin_destructive_command_requires_recent_auth(client, db_session) -> None:
+    instance = seed_service_and_instance(db_session)
+    login_role(client, db_session, username="admin", role="admin")
+
+    user = LocalAuthService(db_session).get_user_by_username("admin")
+    assert user is not None
+
+    session = db_session.scalar(
+        select(ConsoleSession).where(
+            ConsoleSession.user_id == user.id,
+            ConsoleSession.revoked_at.is_(None),
+        )
+    )
+    assert session is not None
+    session.authenticated_at = datetime.now(UTC) - timedelta(
+        seconds=settings.console_sensitive_auth_window_s + 1
+    )
+    db_session.commit()
+
+    response = client.post(
+        f"/api/v1/instances/{instance.instance_id}/commands",
+        json={"kind": "restart", "args": {}, "timeout_s": 10, "reason": "maintenance"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "recent authentication required for destructive commands"
+    assert db_session.scalar(
+        select(AgentCommand).where(AgentCommand.instance_id == instance.instance_id)
+    ) is None

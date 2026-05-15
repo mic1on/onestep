@@ -11,6 +11,7 @@ from onestep_control_plane_api.api.security import (
     get_console_session_identity,
     is_console_auth_enforced,
     is_local_auth_configured,
+    require_console_identity,
     set_console_auth_cookie,
     should_allow_console_dev_bypass,
 )
@@ -137,6 +138,21 @@ def logout_console(
     )
     if cookie_value and not is_dev_shared_cookie:
         LocalAuthService(db).revoke_console_session(cookie_value)
+    clear_console_auth_cookie(response)
+    return _build_console_session_response(
+        auth_configured=is_console_auth_enforced(db),
+        authenticated=False,
+    )
+
+
+@router.post("/logout-all", response_model=ConsoleSessionResponse)
+def logout_all_console(
+    response: Response,
+    identity=Depends(require_console_identity),
+    db: Session = Depends(get_db_session),
+) -> ConsoleSessionResponse:
+    if identity.user_id != "dev-shared":
+        LocalAuthService(db).revoke_user_sessions(identity.user_id)
     clear_console_auth_cookie(response)
     return _build_console_session_response(
         auth_configured=is_console_auth_enforced(db),
