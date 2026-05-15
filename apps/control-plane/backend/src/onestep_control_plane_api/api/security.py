@@ -1,16 +1,27 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import secrets
-import time
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import HTTPException, Request, Response, Security, WebSocket, WebSocketException, status
+from fastapi import (
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    Security,
+    WebSocket,
+    WebSocketException,
+    status,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from onestep_control_plane_api.auth.service import LocalAuthService, LocalIdentity
 from onestep_control_plane_api.core.settings import settings
+from onestep_control_plane_api.db.models import LocalUser
+from onestep_control_plane_api.db.session import get_db_session
 
 AGENT_WS_SUBPROTOCOL = "onestep-agent.v1"
 
@@ -23,6 +34,9 @@ bearer_scheme = HTTPBearer(
 )
 
 CONSOLE_AUTH_COOKIE_NAME = "onestep_cp_console_session"
+DESTRUCTIVE_COMMAND_KINDS = frozenset({"shutdown", "restart", "drain"})
+WRITE_CONSOLE_ROLES = frozenset({"operator", "admin"})
+ADMIN_CONSOLE_ROLES = frozenset({"admin"})
 
 
 @dataclass(frozen=True)
@@ -111,76 +125,152 @@ def require_websocket_ingest_token(websocket: WebSocket) -> WebSocketIngestAuth:
     return WebSocketIngestAuth(token=token, accepted_subprotocol=accepted_subprotocol)
 
 
-def validate_console_login(username: str, password: str) -> bool:
-    if not settings.console_auth_configured:
-        return False
-    return secrets.compare_digest(username, settings.console_auth_username) and secrets.compare_digest(
-        password,
-        settings.console_auth_password,
+def is_local_auth_configured(db: Session) -> bool:
+    return db.scalar(select(LocalUser.id).limit(1)) is not None
+
+
+def is_console_auth_enforced(db: Session) -> bool:
+    return is_local_auth_configured(db) or settings.console_auth_configured
+
+
+def should_allow_console_dev_bypass(db: Session) -> bool:
+    return (
+        settings.app_env == "dev"
+        and not is_local_auth_configured(db)
+        and not settings.console_auth_configured
     )
 
 
-def _build_console_session_signature(username: str, expires_at: int) -> str:
-    message = f"{username}:{expires_at}".encode()
-    secret = settings.console_auth_password.encode()
-    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+def authenticate_console_login(
+    db: Session,
+    *,
+    username: str,
+    password: str,
+) -> LocalIdentity | None:
+    service = LocalAuthService(db)
+    if is_local_auth_configured(db):
+        return service.authenticate_user(username=username, password=password)
+
+    if (
+        settings.app_env == "dev"
+        and settings.console_auth_configured
+        and secrets.compare_digest(username, settings.console_auth_username)
+        and secrets.compare_digest(password, settings.console_auth_password)
+    ):
+        return LocalIdentity(user_id="dev-shared", username=username, roles=("admin",))
+
+    return None
 
 
-def build_console_session_cookie_value() -> str:
-    expires_at = int(time.time()) + settings.console_auth_session_ttl_s
-    signature = _build_console_session_signature(settings.console_auth_username, expires_at)
-    return f"{settings.console_auth_username}:{expires_at}:{signature}"
-
-
-def get_console_session_username(request: Request) -> str | None:
-    if not settings.console_auth_configured:
+def get_console_session_identity(request: Request, db: Session) -> LocalIdentity | None:
+    if should_allow_console_dev_bypass(db):
         return None
 
     cookie_value = request.cookies.get(CONSOLE_AUTH_COOKIE_NAME)
     if not cookie_value:
         return None
 
-    username, separator, remainder = cookie_value.partition(":")
-    expires_at_raw, separator_two, signature = remainder.partition(":")
-    if not separator or not separator_two:
-        return None
+    service = LocalAuthService(db)
+    identity = service.authenticate_console_session(cookie_value)
+    if identity is not None:
+        return identity
 
-    if not secrets.compare_digest(username, settings.console_auth_username):
-        return None
+    if settings.app_env == "dev" and settings.console_auth_configured:
+        if secrets.compare_digest(cookie_value, settings.console_auth_username):
+            return LocalIdentity(
+                user_id="dev-shared",
+                username=settings.console_auth_username,
+                roles=("admin",),
+            )
 
-    try:
-        expires_at = int(expires_at_raw)
-    except ValueError:
-        return None
-
-    if expires_at < int(time.time()):
-        return None
-
-    expected_signature = _build_console_session_signature(username, expires_at)
-    if not secrets.compare_digest(signature, expected_signature):
-        return None
-
-    return username
+    return None
 
 
-def require_console_auth(request: Request) -> str | None:
-    if not settings.console_auth_configured:
-        return None
-
-    username = get_console_session_username(request)
-    if username is not None:
-        return username
-
+def _raise_auth_required() -> None:
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="authentication required",
     )
 
 
-def set_console_auth_cookie(response: Response) -> None:
+def require_console_auth(
+    request: Request,
+    db: Session = Depends(get_db_session),
+) -> LocalIdentity | None:
+    if should_allow_console_dev_bypass(db):
+        return None
+
+    identity = get_console_session_identity(request, db)
+    if identity is not None:
+        return identity
+
+    _raise_auth_required()
+
+
+def require_console_identity(
+    request: Request,
+    db: Session = Depends(get_db_session),
+) -> LocalIdentity:
+    identity = require_console_auth(request, db)
+    if identity is None:
+        _raise_auth_required()
+    return identity
+
+
+def require_console_write_access(
+    identity: LocalIdentity = Depends(require_console_identity),
+) -> LocalIdentity:
+    if any(role in WRITE_CONSOLE_ROLES for role in identity.roles):
+        return identity
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="insufficient role for command execution",
+    )
+
+
+def require_console_admin(
+    identity: LocalIdentity = Depends(require_console_identity),
+) -> LocalIdentity:
+    if any(role in ADMIN_CONSOLE_ROLES for role in identity.roles):
+        return identity
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="admin role required",
+    )
+
+
+def require_command_role(
+    command_kind: str,
+    identity: LocalIdentity | None,
+) -> LocalIdentity | None:
+    if identity is None:
+        return None
+
+    if command_kind in DESTRUCTIVE_COMMAND_KINDS:
+        if any(role in ADMIN_CONSOLE_ROLES for role in identity.roles):
+            return identity
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin role required for destructive commands",
+        )
+
+    if any(role in WRITE_CONSOLE_ROLES for role in identity.roles):
+        return identity
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="insufficient role for command execution",
+    )
+
+
+def set_console_auth_cookie(
+    response: Response,
+    *,
+    session_token: str,
+) -> None:
     response.set_cookie(
         key=CONSOLE_AUTH_COOKIE_NAME,
-        value=build_console_session_cookie_value(),
+        value=session_token,
         max_age=settings.console_auth_session_ttl_s,
         httponly=True,
         samesite="lax",

@@ -47,6 +47,7 @@ NotificationEventType = Literal[
 NotificationDeliveryStatus = Literal["pending", "succeeded", "failed"]
 InstanceConnectivity = Literal["online", "offline", "never_reported"]
 TelemetryChannel = Literal["sync", "heartbeat", "metrics", "events"]
+ConsoleRole = Literal["viewer", "operator", "admin"]
 AgentCommandKind = Literal[
     "ping",
     "shutdown",
@@ -462,8 +463,11 @@ class ConsoleLoginRequest(APIModel):
 
 class ConsoleSessionResponse(APIModel):
     auth_configured: bool
+    bootstrap_required: bool = False
     authenticated: bool
     username: str | None = None
+    role: ConsoleRole | None = None
+    roles: list[ConsoleRole] = Field(default_factory=list)
 
 
 class PaginatedResponse(APIModel):

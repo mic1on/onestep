@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202604300001"
+HEAD_REVISION = "202605150001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -32,6 +32,10 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "instances",
         "services",
         "alembic_version",
+        "console_sessions",
+        "local_roles",
+        "local_user_roles",
+        "local_users",
         "notification_channels",
         "notification_deliveries",
         "task_definitions",
@@ -143,6 +147,34 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "sent_at",
     }
+    assert {column["name"] for column in inspector.get_columns("local_roles")} == {
+        "id",
+        "name",
+        "created_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("local_users")} == {
+        "id",
+        "username",
+        "password_hash",
+        "is_active",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("local_user_roles")} == {
+        "id",
+        "user_id",
+        "role_id",
+        "created_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("console_sessions")} == {
+        "id",
+        "user_id",
+        "token_hash",
+        "expires_at",
+        "last_seen_at",
+        "revoked_at",
+        "created_at",
+    }
     assert {column["name"] for column in inspector.get_columns("task_definitions")} == {
         "id",
         "service_id",
@@ -183,7 +215,10 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert isinstance(agent_command_columns["source_surface"]["type"], sa.String)
     assert isinstance(notification_channel_columns["service_scopes_json"]["type"], sa.JSON)
     assert isinstance(notification_channel_columns["event_types_json"]["type"], sa.JSON)
-    assert isinstance(notification_channel_columns["missed_start_grace_seconds"]["type"], sa.Integer)
+    assert isinstance(
+        notification_channel_columns["missed_start_grace_seconds"]["type"],
+        sa.Integer,
+    )
     assert isinstance(notification_delivery_columns["request_payload_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
@@ -243,6 +278,16 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert {index["name"] for index in inspector.get_indexes("notification_deliveries")} == {
         "ix_notification_deliveries_channel_id_created_at",
     }
+    assert {index["name"] for index in inspector.get_indexes("local_users")} == {
+        "ix_local_users_username",
+    }
+    assert {index["name"] for index in inspector.get_indexes("local_user_roles")} == {
+        "ix_local_user_roles_role_id",
+        "ix_local_user_roles_user_id",
+    }
+    assert {index["name"] for index in inspector.get_indexes("console_sessions")} == {
+        "ix_console_sessions_user_id_expires_at",
+    }
     assert {index["name"] for index in inspector.get_indexes("task_metric_windows")} == {
         "ix_task_metric_windows_service_id_task_name_window_ended_at",
     }
@@ -251,8 +296,12 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
 
     with engine.connect() as connection:
+        role_names = connection.execute(
+            text("SELECT name FROM local_roles ORDER BY name")
+        ).scalars().all()
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
+    assert role_names == ["admin", "operator", "viewer"]
     assert version == HEAD_REVISION
     engine.dispose()
 

@@ -65,6 +65,93 @@ class Service(Base):
     )
 
 
+class LocalRole(Base):
+    __tablename__ = "local_roles"
+    __table_args__ = (sa.UniqueConstraint("name", name="uq_local_roles_name"),)
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+    user_links: Mapped[list[LocalUserRole]] = relationship(
+        back_populates="role",
+        cascade="all, delete-orphan",
+    )
+
+
+class LocalUser(Base):
+    __tablename__ = "local_users"
+    __table_args__ = (
+        sa.UniqueConstraint("username", name="uq_local_users_username"),
+        sa.Index("ix_local_users_username", "username"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    username: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    password_hash: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    role_links: Mapped[list[LocalUserRole]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    console_sessions: Mapped[list[ConsoleSession]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class LocalUserRole(Base):
+    __tablename__ = "local_user_roles"
+    __table_args__ = (
+        sa.UniqueConstraint("user_id", "role_id", name="uq_local_user_roles_user_id_role_id"),
+        sa.Index("ix_local_user_roles_user_id", "user_id"),
+        sa.Index("ix_local_user_roles_role_id", "role_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("local_roles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+    user: Mapped[LocalUser] = relationship(back_populates="role_links")
+    role: Mapped[LocalRole] = relationship(back_populates="user_links")
+
+
+class ConsoleSession(Base):
+    __tablename__ = "console_sessions"
+    __table_args__ = (
+        sa.UniqueConstraint("token_hash", name="uq_console_sessions_token_hash"),
+        sa.Index("ix_console_sessions_user_id_expires_at", "user_id", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("local_users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+    user: Mapped[LocalUser] = relationship(back_populates="console_sessions")
+
+
 class NotificationChannel(Base):
     __tablename__ = "notification_channels"
     __table_args__ = (sa.UniqueConstraint("name", name="uq_notification_channels_name"),)

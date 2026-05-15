@@ -3,8 +3,8 @@ import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import { useConsoleSessionQuery } from "../../features/auth/queries";
-import { loginConsole } from "../../lib/api/client";
+import { consoleSessionQueryKey, useConsoleSessionQuery } from "../../features/auth/queries";
+import { SessionExpiredError, loginConsole } from "../../lib/api/client";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Panel } from "../../components/ui/Panel";
 
@@ -33,10 +33,10 @@ export function LoginPage() {
     setSubmitError(null);
     try {
       const session = await loginConsole(username, password);
-      queryClient.setQueryData(["console-session"], session);
+      queryClient.setQueryData(consoleSessionQueryKey, session);
       navigate(nextPath, { replace: true });
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : String(error));
+      setSubmitError(error instanceof SessionExpiredError ? t("auth.checkingSubtitle") : error instanceof Error ? error.message : String(error));
     } finally {
       setIsSubmitting(false);
     }
@@ -53,10 +53,27 @@ export function LoginPage() {
   }
 
   if (sessionQuery.error) {
+    const isExpired = sessionQuery.error instanceof SessionExpiredError;
     return (
       <div className="auth-shell">
         <Panel title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")} className="auth-panel">
-          <EmptyState title={t("auth.checkFailedTitle")} body={String(sessionQuery.error)} />
+          <EmptyState
+            title={isExpired ? t("auth.loginTitle") : t("auth.checkFailedTitle")}
+            body={isExpired ? t("auth.checkingSubtitle") : String(sessionQuery.error)}
+          />
+        </Panel>
+      </div>
+    );
+  }
+
+  if (sessionQuery.data?.bootstrap_required) {
+    return (
+      <div className="auth-shell">
+        <Panel title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")} className="auth-panel">
+          <EmptyState
+            title={t("auth.loginTitle")}
+            body="Local admin bootstrap is required before console login."
+          />
         </Panel>
       </div>
     );

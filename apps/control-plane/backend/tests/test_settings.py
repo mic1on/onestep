@@ -102,6 +102,21 @@ def test_settings_replace_blank_database_url_with_default() -> None:
     assert settings.database_url == DEFAULT_DATABASE_URL
 
 
+def test_settings_parse_readiness_task_stale_after_seconds(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_READINESS_TASK_STALE_AFTER_S", "180")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.readiness_task_stale_after_s == 180
+
+
+def test_settings_reject_too_small_readiness_task_stale_after_seconds(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_READINESS_TASK_STALE_AFTER_S", "1")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
 def test_settings_build_console_url_uses_base_url_for_relative_path() -> None:
     settings = Settings(console_base_url="https://cp.example")
 

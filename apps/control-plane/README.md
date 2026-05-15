@@ -43,10 +43,10 @@ export ONESTEP_CP_INGEST_TOKENS='token-a,token-b'
 export ONESTEP_CP_INGEST_TOKENS='["token-a","token-b"]'
 ```
 
-The monitoring console can require a single shared username/password pair via
-`ONESTEP_CP_CONSOLE_AUTH_USERNAME` and `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. When both are
-set, the frontend shows a login page, query endpoints require the authenticated session
-cookie, and `/docs`, `/redoc`, and `/openapi.json` are protected by the same login.
+In `dev`, the monitoring console can optionally use a single shared username/password pair
+via `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. In
+production-style environments, prefer database-backed local users instead of the shared
+credential fallback.
 
 Browser access to the query API is controlled by `ONESTEP_CP_CORS_ALLOW_ORIGINS`. It defaults to
 no allowed browser origins, so configure it explicitly when the UI is hosted separately. For local
@@ -132,7 +132,7 @@ docker compose up -d postgres
 Wait for the healthcheck to pass, then apply schema migrations:
 
 ```bash
-uv run alembic upgrade head
+docker compose run --rm migrate
 ```
 
 If port `5432` is already occupied locally, change `ONESTEP_CP_POSTGRES_PORT` and
@@ -147,7 +147,11 @@ Bring the full stack up:
 
 ```bash
 cp .env.example .env
-docker compose up --build -d
+bash scripts/release-preflight.sh --compose-file docker-compose.yml --env-file .env
+docker compose up --build -d postgres
+docker compose run --rm migrate
+docker compose up --build -d api frontend
+bash scripts/run-smoke.sh --compose-file docker-compose.yml --env-file .env
 ```
 
 Endpoints after startup:
@@ -156,8 +160,9 @@ Endpoints after startup:
 - API: `http://127.0.0.1:8000`
 - PostgreSQL: `127.0.0.1:5432`
 
-The API container runs `alembic upgrade head` automatically before starting Uvicorn.
-The frontend is built as static assets and served by Nginx, which proxies `/api/*`,
+The API container now starts Uvicorn only. Schema migrations run through the one-shot
+`migrate` compose service so a bad migration can stop the release before the API
+restarts. The frontend is built as static assets and served by Nginx, which proxies `/api/*`,
 `/docs`, `/redoc`, `/healthz`, and `/readyz` back to the API container. At container
 startup, Nginx writes `/app-config.js` from `ONESTEP_CP_UI_API_BASE_URL`, so you can
 reuse the same frontend image across environments without rebuilding it. The default
@@ -165,6 +170,29 @@ runtime API base is `/`, which works with the bundled reverse proxy. If
 `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and
 `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` are set in `.env`, this local full-stack compose flow
 also serves the login page and enforces console auth.
+
+To create database-backed local console users, use the helper scripts from the repo root:
+
+```bash
+uv run python scripts/create_local_admin.py --username admin
+uv run python scripts/create_local_user.py --username viewer1 --role viewer
+uv run python scripts/create_local_user.py --username operator1 --role operator
+```
+
+When using the bundled Docker Compose stack, the same scripts are available inside the
+API container after rebuild:
+
+```bash
+docker exec -it onestep-control-plane-api-1 /app/.venv/bin/python /app/scripts/create_local_user.py --username viewer1 --role viewer
+```
+
+For the first production-style deployment, bootstrap a local admin before opening the
+console to operators:
+
+```bash
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm \
+  api /app/.venv/bin/python /app/scripts/create_local_admin.py --username admin
+```
 
 ## Registry Deployment
 
@@ -196,15 +224,18 @@ Deploy on the target machine:
 
 ```bash
 docker login <registry>
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml pull
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d
+bash scripts/release-preflight.sh --compose-file docker-compose.deploy.yml --env-file .env.deploy
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml pull api frontend
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d postgres
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migrate
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d api frontend
 ```
 
 Verify the rollout:
 
 ```bash
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml ps
-curl -fsS http://127.0.0.1:${ONESTEP_CP_API_PORT:-8000}/readyz
+bash scripts/run-smoke.sh --compose-file docker-compose.deploy.yml --env-file .env.deploy
 ```
 
 When console auth is configured, the browser authenticates through the frontend login
@@ -213,8 +244,10 @@ separate and still authenticates with `ONESTEP_CP_INGEST_TOKENS` only. The deplo
 also binds PostgreSQL and the raw API port to `127.0.0.1`, so external traffic should go
 through the frontend port or an upstream reverse proxy.
 
-The API image still runs `alembic upgrade head` automatically on startup, so schema
-migrations are applied as part of the container restart.
+Release and rollback procedures are documented in:
+
+- `docs/runbooks/release.md`
+- `docs/runbooks/rollback.md`
 
 ## Development
 

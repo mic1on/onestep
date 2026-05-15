@@ -25,7 +25,10 @@ from onestep_control_plane_api.api.schemas import (
     ServiceCommandFanoutResponse,
     TaskCommandFanoutRequest,
 )
-from onestep_control_plane_api.api.security import require_console_auth
+from onestep_control_plane_api.api.security import (
+    require_command_role,
+    require_console_auth,
+)
 from onestep_control_plane_api.api.ui_event_stream import publish_ui_stream_event
 from onestep_control_plane_api.db.session import get_db_session
 
@@ -62,16 +65,17 @@ def list_instance_commands(
 async def create_instance_command(
     instance_id: UUID,
     request: AgentCommandCreateRequest,
-    username: str | None = Depends(require_console_auth),
+    identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> AgentCommandSummary:
+    require_command_role(request.kind, identity)
     instance = get_instance_or_404(db, instance_id)
     command = await dispatch_instance_command(
         db,
         instance=instance,
         request=request,
         audit=CommandAuditMetadata(
-            created_by=username,
+            created_by=identity.username if identity is not None else None,
             reason=request.reason,
             source_surface="instance_detail",
         ),
@@ -88,15 +92,16 @@ async def create_service_command(
     service_name: str,
     request: ServiceCommandFanoutRequest,
     environment: Environment = Query(...),
-    username: str | None = Depends(require_console_auth),
+    identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> ServiceCommandFanoutResponse:
+    require_command_role(request.kind, identity)
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     response = await create_service_command_fanout(
         db,
         service=service,
         request=request,
-        created_by=username,
+        created_by=identity.username if identity is not None else None,
         source_surface="service_detail_fanout",
     )
     if response.counts.total > 0:
@@ -113,9 +118,10 @@ async def create_task_command(
     task_name: str,
     request: TaskCommandFanoutRequest,
     environment: Environment = Query(...),
-    username: str | None = Depends(require_console_auth),
+    identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> ServiceCommandFanoutResponse:
+    require_command_role(request.kind, identity)
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     response = await create_service_command_fanout(
         db,
@@ -129,7 +135,7 @@ async def create_task_command(
             target_instance_ids=request.target_instance_ids,
             offline_behavior=request.offline_behavior,
         ),
-        created_by=username,
+        created_by=identity.username if identity is not None else None,
         source_surface="task_detail",
     )
     if response.counts.total > 0:

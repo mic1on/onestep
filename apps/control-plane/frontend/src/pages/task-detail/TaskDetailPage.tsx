@@ -7,6 +7,8 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
+import { useConsoleSessionQuery } from "../../features/auth/queries";
+import { canViewCommandControls } from "../../features/auth/session";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
 import { SessionList } from "../../features/commands/components/SessionList";
 import { useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
@@ -44,6 +46,7 @@ export function TaskDetailPage() {
   const [activityTab, setActivityTab] = useState<TaskActivityTab>("events");
   const [visibleTaskCommandCount, setVisibleTaskCommandCount] = useState(4);
   const [visibleTaskCount, setVisibleTaskCount] = useState(100);
+  const sessionQuery = useConsoleSessionQuery();
 
   if (!serviceName || !taskName) {
     return <EmptyState title={t("taskDetail.missingTitle")} body={t("taskDetail.missingBody")} />;
@@ -96,6 +99,7 @@ export function TaskDetailPage() {
   const boundSessions = sortBoundSessions(sessionsQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
   const taskStatus: "ok" | "warning" | "degraded" = summary ? deriveTaskStatus(summary) : "ok";
   const retrySummary = summary ? formatRetryPolicySummary(summary.retry_policy, isZh) : t("common.none");
+  const canViewControls = canViewCommandControls(sessionQuery.data);
   const activityTabs: { label: string; value: TaskActivityTab }[] = [
     { label: t("taskDetail.recentEventsTitle"), value: "events" },
     { label: t("taskDetail.boundInstancesTitle"), value: "instances" },
@@ -256,7 +260,7 @@ export function TaskDetailPage() {
                   </div>
                 </Panel>
 
-                {controllableInstances.length > 0 ? (
+                {canViewControls && controllableInstances.length > 0 ? (
                   <Panel
                     className="ref-card-panel"
                     subtitle={t("taskDetail.controlsSubtitle")}

@@ -5,6 +5,7 @@ import pytest
 from onestep_control_plane_api.api.routers.ui_ws import ui_stream
 from onestep_control_plane_api.api.schemas import UiStreamEvent
 from onestep_control_plane_api.api.ui_event_stream import ui_event_stream_broker
+from onestep_control_plane_api.auth.service import LocalAuthService
 from onestep_control_plane_api.core.settings import settings
 
 
@@ -58,8 +59,12 @@ def test_ui_stream_emits_sse_data_frame(monkeypatch) -> None:
 
 
 def test_ui_stream_requires_console_auth_when_configured(client) -> None:
-    settings.console_auth_username = "admin"
-    settings.console_auth_password = "secret-pass"
+    with client.app.state.session_factory() as session:
+        LocalAuthService(session).create_user(
+            username="admin",
+            password="secret-pass",
+            role_names=["admin"],
+        )
 
     response = client.get("/api/v1/ui/stream")
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 
 import pytest
-
+from onestep_control_plane_api.auth.service import LocalAuthService
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import NotificationChannel, Service
 
@@ -20,8 +20,12 @@ def restore_console_auth_settings() -> Generator[None, None, None]:
 
 
 def login_console_admin(client) -> None:
-    settings.console_auth_username = "admin"
-    settings.console_auth_password = "secret-pass"
+    with client.app.state.session_factory() as session:
+        LocalAuthService(session).create_user(
+            username="admin",
+            password="secret-pass",
+            role_names=["admin"],
+        )
     response = client.post(
         "/api/v1/auth/login",
         json={"username": "admin", "password": "secret-pass"},
@@ -200,8 +204,13 @@ def test_notification_channel_name_conflict_and_not_found(client) -> None:
 
 
 def test_notification_routes_require_console_auth(client) -> None:
-    settings.console_auth_username = "admin"
-    settings.console_auth_password = "secret-pass"
+    # create a local user so auth is enforced instead of falling back to dev-open mode
+    with client.app.state.session_factory() as session:
+        LocalAuthService(session).create_user(
+            username="admin",
+            password="secret-pass",
+            role_names=["admin"],
+        )
 
     response = client.get("/api/v1/settings/notifications/channels")
     assert response.status_code == 401

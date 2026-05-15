@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from onestep_control_plane_api.api.agent_connection_registry import agent_connection_registry
+from onestep_control_plane_api.auth.service import LocalAuthService
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     AgentCommand,
@@ -249,8 +250,12 @@ def seed_task_event(
 
 
 def login_console_admin(client) -> None:
-    settings.console_auth_username = "admin"
-    settings.console_auth_password = "secret-pass"
+    with client.app.state.session_factory() as session:
+        LocalAuthService(session).create_user(
+            username="admin",
+            password="secret-pass",
+            role_names=["admin"],
+        )
     response = client.post(
         "/api/v1/auth/login",
         json={"username": "admin", "password": "secret-pass"},
