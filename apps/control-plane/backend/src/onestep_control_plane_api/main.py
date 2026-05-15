@@ -1,5 +1,5 @@
 import logging
-from asyncio import CancelledError, create_task
+from asyncio import CancelledError, create_task, sleep
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,15 +16,14 @@ from fastapi.responses import JSONResponse
 from onestep_control_plane_api import __version__
 from onestep_control_plane_api.api import router
 from onestep_control_plane_api.api.agent_session_service import disconnect_active_sessions
+from onestep_control_plane_api.api.notification_service import (
+    scan_and_dispatch_missed_start_notifications,
+)
 from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.core import settings
 from onestep_control_plane_api.db.session import SessionLocal
 from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
-)
-from onestep_control_plane_api.workers.leader import create_leader
-from onestep_control_plane_api.workers.notification_scanner import (
-    NotificationMissedStartScanner,
 )
 
 logger = logging.getLogger("onestep_control_plane_api.startup")
@@ -61,19 +60,11 @@ def create_app() -> FastAPI:
                 "marked stale active agent sessions as disconnected on startup",
                 extra={"disconnected_session_count": disconnected_count},
             )
-
-        leader = create_leader(session_factory)
-        scanner = NotificationMissedStartScanner(
-            session_factory,
-            leader,
-            app.state.background_task_states["notification_missed_start_scanner"],
-            started_at=datetime.now(UTC),
+        scanner_task = create_task(
+            _run_missed_start_scanner(app, started_at=datetime.now(UTC))
         )
-        app.state.notification_scanner = scanner
-        scanner_task = create_task(scanner.run())
         app.state.background_task_refs["notification_missed_start_scanner"] = scanner_task
         yield
-        scanner.request_shutdown()
         scanner_task.cancel()
         try:
             await scanner_task

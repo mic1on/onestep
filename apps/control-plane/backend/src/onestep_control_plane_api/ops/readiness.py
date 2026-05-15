@@ -79,7 +79,6 @@ class ReadinessReport:
     database: CheckResult
     migrations: CheckResult
     background_tasks: dict[str, CheckResult]
-    leader: CheckResult | None = None
 
     def to_response(self) -> dict[str, Any]:
         checks: dict[str, Any] = {
@@ -90,8 +89,6 @@ class ReadinessReport:
                 for name, result in self.background_tasks.items()
             },
         }
-        if self.leader is not None:
-            checks["leader"] = self.leader.to_response()
         return {
             "status": "ready" if self.ready else "not_ready",
             "environment": self.environment,
@@ -265,7 +262,6 @@ def build_readiness_report(app: FastAPI) -> ReadinessReport:
         )
 
     background_tasks = check_background_tasks(app)
-    leader = _check_leader(app)
     all_ready = (
         database.ready
         and migrations.ready
@@ -278,23 +274,4 @@ def build_readiness_report(app: FastAPI) -> ReadinessReport:
         database=database,
         migrations=migrations,
         background_tasks=background_tasks,
-        leader=leader,
     )
-
-
-def _check_leader(app: FastAPI) -> CheckResult | None:
-    scanner = getattr(app.state, "notification_scanner", None)
-    if scanner is None:
-        return None
-    leader = getattr(scanner, "_leader", None)
-    if leader is None:
-        return None
-    state = leader.state
-    if state.is_leader:
-        meta: dict[str, object] = {}
-        if state.acquired_at is not None:
-            meta["acquired_at"] = state.acquired_at.isoformat()
-        if state.expires_at is not None:
-            meta["expires_at"] = state.expires_at.isoformat()
-        return CheckResult(ready=True, detail="this replica is the leader", meta=meta)
-    return CheckResult(ready=True, detail="this replica is not the leader")
