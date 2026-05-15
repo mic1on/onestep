@@ -55,6 +55,22 @@ services:
       retries: 10
       start_period: 10s
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ONESTEP_CP_APP_ENV: ${ONESTEP_CP_APP_ENV:-docker}
+      ONESTEP_CP_DATABASE_URL: postgresql+psycopg://${ONESTEP_CP_POSTGRES_USER:-postgres}:${ONESTEP_CP_POSTGRES_PASSWORD:-postgres}@postgres:5432/${ONESTEP_CP_POSTGRES_DB:-onestep_control_plane}
+      TZ: ${ONESTEP_CP_TIMEZONE:-Asia/Shanghai}
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    profiles: ["tools"]
+
   frontend:
     build:
       context: .

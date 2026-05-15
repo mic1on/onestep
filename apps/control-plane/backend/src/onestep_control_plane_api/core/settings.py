@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 from json import JSONDecodeError
-from urllib.parse import urljoin
 from typing import Annotated
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     api_response_timezone: str = ""
     notification_missed_start_scan_interval_s: int = Field(default=60, ge=5)
     notification_delivery_timeout_s: float = Field(default=5.0, gt=0)
+    readiness_task_stale_after_s: int = Field(default=120, ge=5)
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",

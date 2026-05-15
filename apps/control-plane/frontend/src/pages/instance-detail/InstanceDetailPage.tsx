@@ -8,6 +8,8 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { useToast } from "../../components/ui/ToastProvider";
+import { useConsoleSessionQuery } from "../../features/auth/queries";
+import { canViewCommandControls, canViewDestructiveControls } from "../../features/auth/session";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
 import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
 import { CommandQuickActions } from "../../features/commands/components/CommandQuickActions";
@@ -48,6 +50,7 @@ export function InstanceDetailPage() {
   const [visibleInstanceCount, setVisibleInstanceCount] = useState(100);
   const [visibleCommandCount, setVisibleCommandCount] = useState(50);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
+  const sessionQuery = useConsoleSessionQuery();
 
   if (!serviceName || !instanceId) {
     return <EmptyState title={t("instanceDetail.missingTitle")} body={t("instanceDetail.missingBody")} />;
@@ -82,6 +85,8 @@ export function InstanceDetailPage() {
     deliveryModeOverride ?? (activeSession ? "dispatch_now_only" : "queue_until_reconnect");
   const runtimeSignals = payload && instance ? buildInstanceRuntimeSignals(payload, instance, isZh) : [];
   const instanceStatus = instance ? deriveInstanceStatus(instance) : "offline";
+  const canViewControls = canViewCommandControls(sessionQuery.data);
+  const canViewDestructiveActions = canViewDestructiveControls(sessionQuery.data);
   const activityTabs: Array<{ label: string; value: InstanceActivityTab }> = [
     { label: t("instanceDetail.activityTabs.commands"), value: "commands" },
     { label: t("instanceDetail.activityTabs.metrics"), value: "metrics" },
@@ -326,16 +331,34 @@ export function InstanceDetailPage() {
 
                       {activityTab === "commands" ? (
                         <>
-                          <CommandQuickActions
-                            activeAcceptedCapabilities={activeSession?.accepted_capabilities ?? []}
-                            deliveryMode={deliveryMode}
-                            hasActiveSession={activeSession !== undefined && activeSession !== null}
-                            hasKnownSession={latestSession !== undefined && latestSession !== null}
-                            isSubmitting={createCommandMutation.isPending}
-                            latestAcceptedCapabilities={latestSession?.accepted_capabilities ?? []}
-                            onDeliveryModeChange={setDeliveryModeOverride}
-                            onSubmit={handleCommandSubmit}
-                          />
+                          {canViewControls ? (
+                            <CommandQuickActions
+                              activeAcceptedCapabilities={
+                                canViewDestructiveActions
+                                  ? activeSession?.accepted_capabilities ?? []
+                                  : (activeSession?.accepted_capabilities ?? []).filter((capability) =>
+                                      capability !== "command.shutdown" &&
+                                      capability !== "command.restart" &&
+                                      capability !== "command.drain"
+                                    )
+                              }
+                              deliveryMode={deliveryMode}
+                              hasActiveSession={activeSession !== undefined && activeSession !== null}
+                              hasKnownSession={latestSession !== undefined && latestSession !== null}
+                              isSubmitting={createCommandMutation.isPending}
+                              latestAcceptedCapabilities={
+                                canViewDestructiveActions
+                                  ? latestSession?.accepted_capabilities ?? []
+                                  : (latestSession?.accepted_capabilities ?? []).filter((capability) =>
+                                      capability !== "command.shutdown" &&
+                                      capability !== "command.restart" &&
+                                      capability !== "command.drain"
+                                    )
+                              }
+                              onDeliveryModeChange={setDeliveryModeOverride}
+                              onSubmit={handleCommandSubmit}
+                            />
+                          ) : null}
                           <CommandFeed
                             commands={(commandsQuery.data?.items ?? []).slice(0, visibleCommandCount)}
                             emptyBody={t("instanceDetail.noCommandsBody")}

@@ -9,12 +9,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 COPY pyproject.toml uv.lock README.md alembic.ini ./
 COPY backend ./backend
+COPY scripts ./scripts
 
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn onestep_control_plane_api.main:app --app-dir backend/src --host 0.0.0.0 --port 8000"]
+CMD ["uvicorn", "onestep_control_plane_api.main:app", "--app-dir", "backend/src", "--host", "0.0.0.0", "--port", "8000"]
 
 
 FROM node:22-alpine AS frontend-build

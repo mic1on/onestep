@@ -4,6 +4,7 @@ import type {
   AgentCommandListResponse,
   AgentCommandSummary,
   AgentSessionListResponse,
+  ConsoleRole,
   ConsoleSessionResponse,
   Environment,
   InstanceDetailResponse,
@@ -43,6 +44,10 @@ type RequestOptions = {
   body?: unknown;
   redirectOnUnauthorized?: boolean;
 };
+
+type SessionExpiredListener = () => void;
+
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
 
 export function buildApiUrl(path: string, query: Record<string, QueryValue> = {}) {
   const url = /^https?:\/\//.test(API_BASE_URL)
@@ -115,6 +120,13 @@ export class ApiError extends Error {
   }
 }
 
+export class SessionExpiredError extends ApiError {
+  constructor(message = "Session expired") {
+    super(message, 401);
+    this.name = "SessionExpiredError";
+  }
+}
+
 function redirectToLogin() {
   if (typeof window === "undefined" || window.location.pathname === "/login") {
     return;
@@ -123,6 +135,19 @@ function redirectToLogin() {
   const loginUrl = new URL("/login", window.location.origin);
   loginUrl.searchParams.set("next", next || "/services?environment=prod");
   window.location.assign(`${loginUrl.pathname}${loginUrl.search}`);
+}
+
+function notifySessionExpired() {
+  for (const listener of sessionExpiredListeners) {
+    listener();
+  }
+}
+
+export function subscribeToSessionExpired(listener: SessionExpiredListener) {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -147,6 +172,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (response.status === 401 && options.redirectOnUnauthorized !== false) {
       redirectToLogin();
     }
+    if (response.status === 401) {
+      notifySessionExpired();
+      throw new SessionExpiredError(detail || "Session expired");
+    }
     throw new ApiError(detail, response.status);
   }
 
@@ -155,6 +184,45 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   return (await response.json()) as T;
+}
+
+type ConsoleSessionPayload = {
+  auth_configured: boolean;
+  bootstrap_required?: boolean;
+  authenticated: boolean;
+  username?: string | null;
+  role?: string | null;
+  primary_role?: string | null;
+  roles?: string[] | null;
+};
+
+function normalizeConsoleRole(value: string | null | undefined): ConsoleRole | null {
+  if (value === "viewer" || value === "operator" || value === "admin") {
+    return value;
+  }
+  return null;
+}
+
+function normalizeConsoleRoles(values: string[] | null | undefined, primaryRole: ConsoleRole | null): ConsoleRole[] {
+  const roles = (values ?? [])
+    .map((value) => normalizeConsoleRole(value))
+    .filter((value): value is ConsoleRole => value !== null);
+  if (primaryRole && !roles.includes(primaryRole)) {
+    roles.unshift(primaryRole);
+  }
+  return roles;
+}
+
+function normalizeConsoleSession(payload: ConsoleSessionPayload): ConsoleSessionResponse {
+  const role = normalizeConsoleRole(payload.role ?? payload.primary_role ?? null);
+  return {
+    auth_configured: payload.auth_configured,
+    bootstrap_required: payload.bootstrap_required ?? false,
+    authenticated: payload.authenticated,
+    username: payload.username ?? null,
+    role,
+    roles: normalizeConsoleRoles(payload.roles, role),
+  };
 }
 
 function normalizeNotificationChannel(channel: {
@@ -464,22 +532,22 @@ export function createTaskCommandFanout(
 }
 
 export function getConsoleSession() {
-  return request<ConsoleSessionResponse>("/api/v1/auth/session", {
+  return request<ConsoleSessionPayload>("/api/v1/auth/session", {
     redirectOnUnauthorized: false,
-  });
+  }).then(normalizeConsoleSession);
 }
 
 export function loginConsole(username: string, password: string) {
-  return request<ConsoleSessionResponse>("/api/v1/auth/login", {
+  return request<ConsoleSessionPayload>("/api/v1/auth/login", {
     method: "POST",
     body: { username, password },
     redirectOnUnauthorized: false,
-  });
+  }).then(normalizeConsoleSession);
 }
 
 export function logoutConsole() {
-  return request<ConsoleSessionResponse>("/api/v1/auth/logout", {
+  return request<ConsoleSessionPayload>("/api/v1/auth/logout", {
     method: "POST",
     redirectOnUnauthorized: false,
-  });
+  }).then(normalizeConsoleSession);
 }

@@ -1,5 +1,6 @@
 .PHONY: docker-build docker-build-api docker-build-frontend docker-push docker-push-api docker-push-frontend docker-print-images \
-	docker-build-multi-arch docker-build-api-multi-arch docker-build-frontend-multi-arch docker-buildx-ensure-builder
+	docker-build-multi-arch docker-build-api-multi-arch docker-build-frontend-multi-arch docker-buildx-ensure-builder \
+	release-preflight release-migrate release-up release-smoke release-down
 
 IMAGE_REPOSITORY ?=
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
@@ -28,6 +29,11 @@ BUILDX_BUILD_ARGS += $(if $(NO_PROXY),--build-arg NO_PROXY=$(NO_PROXY))
 IMAGE_PREFIX := $(if $(IMAGE_REPOSITORY),$(IMAGE_REPOSITORY)/,)
 API_IMAGE := $(IMAGE_PREFIX)$(API_IMAGE_NAME):$(IMAGE_TAG)
 FRONTEND_IMAGE := $(IMAGE_PREFIX)$(FRONTEND_IMAGE_NAME):$(IMAGE_TAG)
+COMPOSE_FILE ?= docker-compose.yml
+ENV_FILE ?= .env
+SMOKE_BUILD ?= 0
+SMOKE_MANAGE_STACK ?= 0
+SMOKE_CLEANUP ?= 0
 
 docker-build: docker-build-api docker-build-frontend
 
@@ -72,3 +78,19 @@ docker-build-frontend-multi-arch: docker-buildx-ensure-builder
 		-t $(FRONTEND_IMAGE) \
 		--push \
 		.
+
+release-preflight:
+	bash scripts/release-preflight.sh --compose-file $(COMPOSE_FILE) --env-file $(ENV_FILE)
+
+release-migrate:
+	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) run --rm migrate
+
+release-up:
+	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) up -d api frontend
+
+release-smoke:
+	SMOKE_BUILD=$(SMOKE_BUILD) SMOKE_MANAGE_STACK=$(SMOKE_MANAGE_STACK) SMOKE_CLEANUP=$(SMOKE_CLEANUP) \
+		bash scripts/run-smoke.sh --compose-file $(COMPOSE_FILE) --env-file $(ENV_FILE)
+
+release-down:
+	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) down --remove-orphans

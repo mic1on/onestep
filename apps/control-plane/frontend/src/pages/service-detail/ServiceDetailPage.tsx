@@ -8,6 +8,8 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useToast } from "../../components/ui/ToastProvider";
+import { useConsoleSessionQuery } from "../../features/auth/queries";
+import { canViewCommandControls, canViewDestructiveControls } from "../../features/auth/session";
 import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
 import { useCreateServiceCommandFanoutMutation, useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
 import { ServiceCommandFanout } from "../../features/commands/components/ServiceCommandFanout";
@@ -54,6 +56,7 @@ export function ServiceDetailPage() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
+  const sessionQuery = useConsoleSessionQuery();
 
   if (!serviceName) {
     return <EmptyState title={t("serviceDetail.missingTitle")} body={t("serviceDetail.missingBody")} />;
@@ -151,6 +154,8 @@ export function ServiceDetailPage() {
   const sessions = sessionsQuery.data?.items ?? [];
   const serviceStatus: "online" | "offline" | "degraded" = dashboard ? deriveServiceStatus(dashboard) : "offline";
   const runtimeSignals = dashboard ? buildRuntimeSignals(dashboard, isZh) : [];
+  const canViewControls = canViewCommandControls(sessionQuery.data);
+  const canViewDestructiveActions = canViewDestructiveControls(sessionQuery.data);
 
   function buildViewHref(view: DetailView) {
     return servicePath(resolvedServiceName, {
@@ -197,43 +202,49 @@ export function ServiceDetailPage() {
               }))}
               value={String(lookbackMinutes)}
             />
-            <div className="ref-action-menu" role="group">
-              <button className="ref-ghost-button ref-action-menu-trigger" disabled={quickActionMutation.isPending} type="button">
-                <span>{t("serviceDetail.syncMenu.trigger")}</span>
-                <span aria-hidden="true" className="ref-action-menu-caret">
-                  ▾
-                </span>
-              </button>
-              <div className="ref-action-menu-panel">
-                {SYNC_ACTIONS.map((kind) => (
+            {canViewControls ? (
+              <>
+                <div className="ref-action-menu" role="group">
+                  <button className="ref-ghost-button ref-action-menu-trigger" disabled={quickActionMutation.isPending} type="button">
+                    <span>{t("serviceDetail.syncMenu.trigger")}</span>
+                    <span aria-hidden="true" className="ref-action-menu-caret">
+                      ▾
+                    </span>
+                  </button>
+                  <div className="ref-action-menu-panel">
+                    {SYNC_ACTIONS.map((kind) => (
+                      <button
+                        className="ref-action-menu-item"
+                        disabled={quickActionMutation.isPending}
+                        key={kind}
+                        onClick={() => setPendingQuickAction(kind)}
+                        type="button"
+                      >
+                        {getQuickActionLabel(kind, t)}
+                      </button>
+                    ))}
+                    <button
+                      className="ref-action-menu-item ref-action-menu-item-strong"
+                      disabled={quickActionMutation.isPending}
+                      onClick={() => setPendingQuickAction("sync_all")}
+                      type="button"
+                    >
+                      {t("serviceDetail.syncMenu.syncAll")}
+                    </button>
+                  </div>
+                </div>
+                {canViewDestructiveActions ? (
                   <button
-                    className="ref-action-menu-item"
+                    className="ref-ghost-button is-danger"
                     disabled={quickActionMutation.isPending}
-                    key={kind}
-                    onClick={() => setPendingQuickAction(kind)}
+                    onClick={() => setPendingQuickAction("restart")}
                     type="button"
                   >
-                    {getQuickActionLabel(kind, t)}
+                    {t("commandKind.restart", { defaultValue: "restart" })}
                   </button>
-                ))}
-                <button
-                  className="ref-action-menu-item ref-action-menu-item-strong"
-                  disabled={quickActionMutation.isPending}
-                  onClick={() => setPendingQuickAction("sync_all")}
-                  type="button"
-                >
-                  {t("serviceDetail.syncMenu.syncAll")}
-                </button>
-              </div>
-            </div>
-            <button
-              className="ref-ghost-button is-danger"
-              disabled={quickActionMutation.isPending}
-              onClick={() => setPendingQuickAction("restart")}
-              type="button"
-            >
-              {t("commandKind.restart", { defaultValue: "restart" })}
-            </button>
+                ) : null}
+              </>
+            ) : null}
           </div>
         </div>
       </section>
@@ -542,25 +553,27 @@ export function ServiceDetailPage() {
               </div>
                 </section>
 
-                <details className="ref-collapse-card">
-                  <summary>
-                    <strong>{isZh ? "高级控制" : "Advanced controls"}</strong>
-                    <span>
-                      {isZh
-                        ? "需要更细粒度的目标选择和离线策略时展开。"
-                        : "Expand for target selection and offline delivery strategy."}
-                    </span>
-                  </summary>
-                  <div className="ref-collapse-body">
-                    {instancesQuery.isPending ? (
-                      <div className="loading-block">{t("serviceDetail.loadingInstanceSnapshots")}</div>
-                    ) : instancesQuery.error ? (
-                      <EmptyState title={t("serviceDetail.instanceLoadErrorTitle")} body={String(instancesQuery.error)} />
-                    ) : (
-                      <ServiceCommandFanout environment={environment} instances={instances} serviceName={serviceName} />
-                    )}
-                  </div>
-                </details>
+                {canViewDestructiveActions ? (
+                  <details className="ref-collapse-card">
+                    <summary>
+                      <strong>{isZh ? "高级控制" : "Advanced controls"}</strong>
+                      <span>
+                        {isZh
+                          ? "需要更细粒度的目标选择和离线策略时展开。"
+                          : "Expand for target selection and offline delivery strategy."}
+                      </span>
+                    </summary>
+                    <div className="ref-collapse-body">
+                      {instancesQuery.isPending ? (
+                        <div className="loading-block">{t("serviceDetail.loadingInstanceSnapshots")}</div>
+                      ) : instancesQuery.error ? (
+                        <EmptyState title={t("serviceDetail.instanceLoadErrorTitle")} body={String(instancesQuery.error)} />
+                      ) : (
+                        <ServiceCommandFanout environment={environment} instances={instances} serviceName={serviceName} />
+                      )}
+                    </div>
+                  </details>
+                ) : null}
 
                 {dashboard.topology_hashes.length > 1 ? (
                   <details className="ref-collapse-card">

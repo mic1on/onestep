@@ -51,6 +51,7 @@ export type TaskEventKind =
   | "dead_lettered"
   | "cancelled"
   | "succeeded";
+export type ConsoleRole = "viewer" | "operator" | "admin";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -142,8 +143,11 @@ export interface NotificationChannelTestResponse {
 
 export interface ConsoleSessionResponse {
   auth_configured: boolean;
+  bootstrap_required: boolean;
   authenticated: boolean;
   username: string | null;
+  role: ConsoleRole | null;
+  roles: ConsoleRole[];
 }
 
 export interface AgentCommandSummary {
