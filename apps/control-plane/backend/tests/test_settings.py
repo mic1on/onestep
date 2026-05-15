@@ -117,6 +117,21 @@ def test_settings_reject_too_small_readiness_task_stale_after_seconds(monkeypatc
         Settings(_env_file=None)
 
 
+def test_settings_parse_background_worker_leader_poll_interval(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_BACKGROUND_WORKER_LEADER_POLL_INTERVAL_S", "9")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.background_worker_leader_poll_interval_s == 9
+
+
+def test_settings_reject_too_small_background_worker_leader_poll_interval(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_BACKGROUND_WORKER_LEADER_POLL_INTERVAL_S", "0")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
 def test_settings_build_console_url_uses_base_url_for_relative_path() -> None:
     settings = Settings(console_base_url="https://cp.example")
 

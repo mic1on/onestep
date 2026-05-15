@@ -1,5 +1,5 @@
 import logging
-from asyncio import CancelledError, create_task, sleep
+from asyncio import CancelledError, create_task
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,37 +16,18 @@ from fastapi.responses import JSONResponse
 from onestep_control_plane_api import __version__
 from onestep_control_plane_api.api import router
 from onestep_control_plane_api.api.agent_session_service import disconnect_active_sessions
-from onestep_control_plane_api.api.notification_service import (
-    scan_and_dispatch_missed_start_notifications,
-)
 from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.core import settings
 from onestep_control_plane_api.db.session import SessionLocal
 from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
 )
+from onestep_control_plane_api.workers.notification_scanner import (
+    NOTIFICATION_MISSED_START_SCANNER_NAME,
+    run_notification_missed_start_scanner,
+)
 
 logger = logging.getLogger("onestep_control_plane_api.startup")
-
-
-async def _run_missed_start_scanner(app: FastAPI, *, started_at: datetime) -> None:
-    session_factory = getattr(app.state, "session_factory", SessionLocal)
-    state = app.state.background_task_states["notification_missed_start_scanner"]
-    state.mark_started(started_at)
-    await sleep(settings.notification_missed_start_scan_interval_s)
-    while True:
-        state.mark_tick()
-        try:
-            with session_factory() as session:
-                scan_and_dispatch_missed_start_notifications(
-                    session,
-                    min_last_seen_at=started_at,
-                )
-            state.mark_success()
-        except Exception as exc:
-            state.mark_failure(exc)
-            logger.exception("notification missed-start scan failed")
-        await sleep(settings.notification_missed_start_scan_interval_s)
 
 
 def create_app() -> FastAPI:
@@ -61,9 +42,12 @@ def create_app() -> FastAPI:
                 extra={"disconnected_session_count": disconnected_count},
             )
         scanner_task = create_task(
-            _run_missed_start_scanner(app, started_at=datetime.now(UTC))
+            run_notification_missed_start_scanner(
+                app,
+                started_at=datetime.now(UTC),
+            )
         )
-        app.state.background_task_refs["notification_missed_start_scanner"] = scanner_task
+        app.state.background_task_refs[NOTIFICATION_MISSED_START_SCANNER_NAME] = scanner_task
         yield
         scanner_task.cancel()
         try:
@@ -71,7 +55,7 @@ def create_app() -> FastAPI:
         except CancelledError:
             pass
         finally:
-            app.state.background_task_refs["notification_missed_start_scanner"] = None
+            app.state.background_task_refs[NOTIFICATION_MISSED_START_SCANNER_NAME] = None
 
     app = FastAPI(
         title="OneStep Control Plane API",
@@ -85,7 +69,7 @@ def create_app() -> FastAPI:
     app.state.session_factory = SessionLocal
     app.state.background_task_states = build_default_background_task_states()
     app.state.background_task_refs = {
-        "notification_missed_start_scanner": None,
+        NOTIFICATION_MISSED_START_SCANNER_NAME: None,
     }
     if settings.cors_allow_origins:
         app.add_middleware(

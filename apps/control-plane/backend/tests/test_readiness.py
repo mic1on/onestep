@@ -38,6 +38,7 @@ def build_app(session_factory) -> FastAPI:
     app = FastAPI()
     state = BackgroundTaskReadinessState(name="notification_missed_start_scanner")
     state.mark_started()
+    state.mark_leader("local")
     state.mark_success()
     app.state.session_factory = session_factory
     app.state.background_task_states = {
@@ -90,3 +91,25 @@ def test_build_readiness_report_fails_without_session_factory() -> None:
     assert report.ready is False
     assert report.database.ready is False
     assert report.database.detail == "session factory is not configured"
+
+
+def test_build_readiness_report_marks_standby_worker_ready(sqlite_session_factory) -> None:
+    app = FastAPI()
+    state = BackgroundTaskReadinessState(name="notification_missed_start_scanner")
+    state.mark_started()
+    state.mark_standby("postgres_advisory_lock")
+    app.state.session_factory = sqlite_session_factory
+    app.state.background_task_states = {
+        "notification_missed_start_scanner": state,
+    }
+    app.state.background_task_refs = {
+        "notification_missed_start_scanner": object(),
+    }
+
+    report = build_readiness_report(app)
+    result = report.background_tasks["notification_missed_start_scanner"]
+
+    assert result.ready is True
+    assert result.detail == "background task standing by for lease"
+    assert result.meta["leadership_mode"] == "postgres_advisory_lock"
+    assert result.meta["leadership_status"] == "standby"

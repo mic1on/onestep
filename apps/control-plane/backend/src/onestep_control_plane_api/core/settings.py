@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     api_response_timezone: str = ""
     notification_missed_start_scan_interval_s: int = Field(default=60, ge=5)
     notification_delivery_timeout_s: float = Field(default=5.0, gt=0)
+    background_worker_leader_poll_interval_s: int = Field(default=5, ge=1)
     readiness_task_stale_after_s: int = Field(default=120, ge=5)
 
     model_config = SettingsConfigDict(
