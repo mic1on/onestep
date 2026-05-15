@@ -32,6 +32,14 @@ export type ServiceCommandTargetMode = "all_online" | "selected_instances";
 export type ServiceCommandOfflineBehavior = "skip" | "queue";
 export type ServiceCommandFanoutOutcome = "dispatched" | "queued" | "skipped" | "rejected";
 export type UiStreamChannel = "commands" | "sessions";
+export type UiStreamConnectionPhase =
+  | "disabled"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "stale"
+  | "error";
+export type CommandRiskLevel = "elevated" | "critical";
 export type AgentCommandAckStatus = "accepted" | "rejected";
 export type AgentCommandStatus =
   | "pending"
@@ -214,6 +222,13 @@ export interface ServiceCommandFanoutResponse {
 export interface UiStreamEvent {
   channel: UiStreamChannel;
   published_at: string;
+}
+
+export interface UiStreamConnectionState {
+  phase: UiStreamConnectionPhase;
+  last_connected_at: number | null;
+  last_event_at: number | null;
+  last_error_at: number | null;
 }
 
 export interface AgentCommandStatusCounts {

@@ -10,8 +10,10 @@ import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDet
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { canViewCommandControls } from "../../features/auth/session";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
+import { ConnectionStatusBanner } from "../../features/commands/components/ConnectionStatusBanner";
 import { SessionList } from "../../features/commands/components/SessionList";
-import { useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
+import { isUiQueryDataStale, useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
+import { useCommandStreamStatus } from "../../features/commands/useCommandStream";
 import { ServiceInstancesList } from "../../features/services/components/ServiceInstancesList";
 import { useServiceInstancesQuery, useServiceTasksQuery } from "../../features/services/queries";
 import { TaskCommandControls } from "../../features/tasks/components/TaskCommandControls";
@@ -23,6 +25,7 @@ import {
   TaskTopologyPreview,
 } from "../../features/tasks/components/TaskTopologySummary";
 import { useTaskDetailQuery } from "../../features/tasks/queries";
+import { ApiTimeoutError } from "../../lib/api/client";
 import {
   formatCompactJson,
   formatCount,
@@ -37,6 +40,10 @@ import type { AgentSessionSummary, InstanceSummary, TaskDashboardSummary } from 
 
 type ServiceView = "overview" | "instances" | "tasks" | "commands";
 type TaskActivityTab = "events" | "instances" | "commands" | "sessions";
+type OperationIssue = {
+  message: string;
+  timeout: boolean;
+};
 
 export function TaskDetailPage() {
   const { i18n, t } = useTranslation();
@@ -46,7 +53,9 @@ export function TaskDetailPage() {
   const [activityTab, setActivityTab] = useState<TaskActivityTab>("events");
   const [visibleTaskCommandCount, setVisibleTaskCommandCount] = useState(4);
   const [visibleTaskCount, setVisibleTaskCount] = useState(100);
+  const [commandIssue, setCommandIssue] = useState<OperationIssue | null>(null);
   const sessionQuery = useConsoleSessionQuery();
+  const streamStatus = useCommandStreamStatus();
 
   if (!serviceName || !taskName) {
     return <EmptyState title={t("taskDetail.missingTitle")} body={t("taskDetail.missingBody")} />;
@@ -100,6 +109,15 @@ export function TaskDetailPage() {
   const taskStatus: "ok" | "warning" | "degraded" = summary ? deriveTaskStatus(summary) : "ok";
   const retrySummary = summary ? formatRetryPolicySummary(summary.retry_policy, isZh) : t("common.none");
   const canViewControls = canViewCommandControls(sessionQuery.data);
+  const connectionNotice = buildTaskConnectionNotice(
+    t,
+    resolvedTaskName,
+    streamStatus,
+    taskQuery.dataUpdatedAt,
+    Boolean(taskQuery.data),
+    taskQuery.error,
+    commandIssue,
+  );
   const activityTabs: { label: string; value: TaskActivityTab }[] = [
     { label: t("taskDetail.recentEventsTitle"), value: "events" },
     { label: t("taskDetail.boundInstancesTitle"), value: "instances" },
@@ -145,6 +163,14 @@ export function TaskDetailPage() {
       </section>
 
       {taskQuery.isPending ? <div className="loading-block hero-block">{t("taskDetail.loading")}</div> : null}
+      {connectionNotice ? (
+        <ConnectionStatusBanner
+          body={connectionNotice.body}
+          detail={connectionNotice.detail}
+          title={connectionNotice.title}
+          tone={connectionNotice.tone}
+        />
+      ) : null}
 
       {summary ? (
         <div className="ref-detail-layout">
@@ -268,6 +294,7 @@ export function TaskDetailPage() {
                   >
                     <TaskCommandControls
                       environment={environment}
+                      onIssueChange={setCommandIssue}
                       serviceName={resolvedServiceName}
                       taskControl={payload.task_control}
                       taskName={resolvedTaskName}
@@ -411,6 +438,78 @@ export function TaskDetailPage() {
       ) : null}
     </div>
   );
+}
+
+function buildTaskConnectionNotice(
+  t: ReturnType<typeof useTranslation>["t"],
+  label: string,
+  streamStatus: ReturnType<typeof useCommandStreamStatus>,
+  dataUpdatedAt: number,
+  hasData: boolean,
+  queryError: unknown,
+  issue: OperationIssue | null,
+) {
+  if (issue) {
+    if (issue.timeout) {
+      return {
+        tone: "error" as const,
+        title: t("controlPlaneStatus.banner.timeoutTitle"),
+        body: t("controlPlaneStatus.banner.timeoutBody", { label }),
+        detail: issue.message,
+      };
+    }
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.commandFailedTitle"),
+      body: t("controlPlaneStatus.banner.commandFailedBody"),
+      detail: issue.message,
+    };
+  }
+
+  if (queryError instanceof ApiTimeoutError && hasData) {
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.timeoutTitle"),
+      body: t("controlPlaneStatus.banner.timeoutBody", { label }),
+      detail: queryError.message,
+    };
+  }
+
+  if (streamStatus.phase === "error") {
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.streamErrorTitle"),
+      body: t("controlPlaneStatus.banner.streamErrorBody"),
+    };
+  }
+
+  if (streamStatus.phase === "stale") {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.streamStaleTitle"),
+      body: t("controlPlaneStatus.banner.streamStaleBody"),
+    };
+  }
+
+  if (streamStatus.phase === "reconnecting") {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.streamReconnectingTitle"),
+      body: t("controlPlaneStatus.banner.streamReconnectingBody"),
+    };
+  }
+
+  if (hasData && isUiQueryDataStale(dataUpdatedAt)) {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.staleDataTitle", { label }),
+      body: t("controlPlaneStatus.banner.staleDataBody", {
+        age: formatRelativeTime(new Date(dataUpdatedAt).toISOString()),
+      }),
+    };
+  }
+
+  return null;
 }
 
 function SummaryChip({

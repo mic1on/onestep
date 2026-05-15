@@ -11,10 +11,22 @@ import { useToast } from "../../components/ui/ToastProvider";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { canViewCommandControls, canViewDestructiveControls } from "../../features/auth/session";
 import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
-import { useCreateServiceCommandFanoutMutation, useServiceCommandsQuery, useServiceSessionsQuery } from "../../features/commands/queries";
+import { ConnectionStatusBanner } from "../../features/commands/components/ConnectionStatusBanner";
+import { DestructiveCommandReviewDialog } from "../../features/commands/components/DestructiveCommandReviewDialog";
+import {
+  getCommandRiskLevel,
+} from "../../features/commands/capabilities";
+import {
+  isUiQueryDataStale,
+  useCreateServiceCommandFanoutMutation,
+  useServiceCommandsQuery,
+  useServiceSessionsQuery,
+} from "../../features/commands/queries";
 import { ServiceCommandFanout } from "../../features/commands/components/ServiceCommandFanout";
+import { useCommandStreamStatus } from "../../features/commands/useCommandStream";
 import { useServiceDashboardQuery, useServiceInstancesQuery, useServiceTasksQuery } from "../../features/services/queries";
 import { TaskTopologyPreview } from "../../features/tasks/components/TaskTopologySummary";
+import { ApiTimeoutError } from "../../lib/api/client";
 import type {
   AgentCommandKind,
   AgentSessionSummary,
@@ -42,6 +54,10 @@ const QUICK_ACTIONS: Array<
 > = [...SYNC_ACTIONS, "sync_all", "restart"];
 type DetailView = (typeof DETAIL_VIEWS)[number];
 type QuickActionKind = (typeof QUICK_ACTIONS)[number];
+type OperationIssue = {
+  message: string;
+  timeout: boolean;
+};
 
 export function ServiceDetailPage() {
   const { i18n, t } = useTranslation();
@@ -53,10 +69,10 @@ export function ServiceDetailPage() {
   const [visibleInstanceCount, setVisibleInstanceCount] = useState(100);
   const [visibleTaskCount, setVisibleTaskCount] = useState(100);
   const [visibleCommandCount, setVisibleCommandCount] = useState(50);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionIssue, setActionIssue] = useState<OperationIssue | null>(null);
   const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
   const sessionQuery = useConsoleSessionQuery();
+  const streamStatus = useCommandStreamStatus();
 
   if (!serviceName) {
     return <EmptyState title={t("serviceDetail.missingTitle")} body={t("serviceDetail.missingBody")} />;
@@ -96,8 +112,7 @@ export function ServiceDetailPage() {
       return;
     }
 
-    setActionError(null);
-    setActionMessage(null);
+    setActionIssue(null);
 
     try {
       if (pendingQuickAction === "sync_all") {
@@ -116,7 +131,7 @@ export function ServiceDetailPage() {
         const message = isZh
           ? `${t("serviceDetail.syncMenu.syncAll")} 已下发，目标 ${targetCount} 个实例。`
           : `${t("serviceDetail.syncMenu.syncAll")} dispatched to ${targetCount} instances.`;
-        setActionMessage(message);
+        setActionIssue(null);
         pushToast({ tone: "success", message });
       } else {
         const result = await quickActionMutation.mutateAsync({
@@ -130,14 +145,17 @@ export function ServiceDetailPage() {
         const message = isZh
           ? `${getQuickActionLabel(pendingQuickAction, t)} 已下发，目标 ${result.counts.dispatched + result.counts.queued} 个实例。`
           : `${getQuickActionLabel(pendingQuickAction, t)} dispatched to ${result.counts.dispatched + result.counts.queued} instances.`;
-        setActionMessage(message);
+        setActionIssue(null);
         pushToast({ tone: "success", message });
       }
 
       setPendingQuickAction(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setActionError(message);
+      setActionIssue({
+        message,
+        timeout: error instanceof ApiTimeoutError,
+      });
       pushToast({ tone: "error", message });
       throw error;
     }
@@ -156,6 +174,16 @@ export function ServiceDetailPage() {
   const runtimeSignals = dashboard ? buildRuntimeSignals(dashboard, isZh) : [];
   const canViewControls = canViewCommandControls(sessionQuery.data);
   const canViewDestructiveActions = canViewDestructiveControls(sessionQuery.data);
+  const isDestructiveQuickAction = pendingQuickAction === "restart";
+  const connectionNotice = buildServiceConnectionNotice(
+    t,
+    resolvedServiceName,
+    streamStatus,
+    dashboardQuery.dataUpdatedAt,
+    Boolean(dashboardQuery.data),
+    dashboardQuery.error,
+    actionIssue,
+  );
 
   function buildViewHref(view: DetailView) {
     return servicePath(resolvedServiceName, {
@@ -250,6 +278,14 @@ export function ServiceDetailPage() {
       </section>
 
       {dashboardQuery.isPending ? <div className="loading-block hero-block">{t("serviceDetail.loading")}</div> : null}
+      {connectionNotice ? (
+        <ConnectionStatusBanner
+          body={connectionNotice.body}
+          detail={connectionNotice.detail}
+          title={connectionNotice.title}
+          tone={connectionNotice.tone}
+        />
+      ) : null}
 
       {dashboard ? (
         <div className="ref-detail-layout">
@@ -569,7 +605,12 @@ export function ServiceDetailPage() {
                       ) : instancesQuery.error ? (
                         <EmptyState title={t("serviceDetail.instanceLoadErrorTitle")} body={String(instancesQuery.error)} />
                       ) : (
-                        <ServiceCommandFanout environment={environment} instances={instances} serviceName={serviceName} />
+                        <ServiceCommandFanout
+                          environment={environment}
+                          instances={instances}
+                          onIssueChange={setActionIssue}
+                          serviceName={serviceName}
+                        />
                       )}
                     </div>
                   </details>
@@ -607,7 +648,36 @@ export function ServiceDetailPage() {
           }
         }}
         onConfirm={handleQuickActionConfirm}
-        open={pendingQuickAction !== null}
+        open={pendingQuickAction !== null && !isDestructiveQuickAction}
+        title={
+          pendingQuickAction
+            ? isZh
+              ? `确认 ${getQuickActionLabel(pendingQuickAction, t)}`
+              : `Confirm ${getQuickActionLabel(pendingQuickAction, t)}`
+            : ""
+        }
+      />
+      <DestructiveCommandReviewDialog
+        commandLabel={
+          pendingQuickAction ? t(`commandKind.${pendingQuickAction}`, { defaultValue: pendingQuickAction }) : ""
+        }
+        description={
+          pendingQuickAction
+            ? isZh
+              ? `为 ${serviceName} 执行 ${getQuickActionLabel(pendingQuickAction, t)}，请填写本次操作原因。`
+              : `Provide a reason for ${getQuickActionLabel(pendingQuickAction, t)} on ${serviceName}.`
+            : ""
+        }
+        isSubmitting={quickActionMutation.isPending}
+        onCancel={() => {
+          if (!quickActionMutation.isPending) {
+            setPendingQuickAction(null);
+          }
+        }}
+        onConfirm={handleQuickActionConfirm}
+        open={pendingQuickAction !== null && isDestructiveQuickAction}
+        riskLevel={pendingQuickAction === "restart" ? getCommandRiskLevel(pendingQuickAction) : "critical"}
+        targetSummary={isZh ? `${serviceName} 的全部在线实例` : `All online instances for ${serviceName}`}
         title={
           pendingQuickAction
             ? isZh
@@ -618,6 +688,78 @@ export function ServiceDetailPage() {
       />
     </div>
   );
+}
+
+function buildServiceConnectionNotice(
+  t: ReturnType<typeof useTranslation>["t"],
+  label: string,
+  streamStatus: ReturnType<typeof useCommandStreamStatus>,
+  dataUpdatedAt: number,
+  hasData: boolean,
+  queryError: unknown,
+  issue: OperationIssue | null,
+) {
+  if (issue) {
+    if (issue.timeout) {
+      return {
+        tone: "error" as const,
+        title: t("controlPlaneStatus.banner.timeoutTitle"),
+        body: t("controlPlaneStatus.banner.timeoutBody", { label }),
+        detail: issue.message,
+      };
+    }
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.commandFailedTitle"),
+      body: t("controlPlaneStatus.banner.commandFailedBody"),
+      detail: issue.message,
+    };
+  }
+
+  if (queryError instanceof ApiTimeoutError && hasData) {
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.timeoutTitle"),
+      body: t("controlPlaneStatus.banner.timeoutBody", { label }),
+      detail: queryError.message,
+    };
+  }
+
+  if (streamStatus.phase === "error") {
+    return {
+      tone: "error" as const,
+      title: t("controlPlaneStatus.banner.streamErrorTitle"),
+      body: t("controlPlaneStatus.banner.streamErrorBody"),
+    };
+  }
+
+  if (streamStatus.phase === "stale") {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.streamStaleTitle"),
+      body: t("controlPlaneStatus.banner.streamStaleBody"),
+    };
+  }
+
+  if (streamStatus.phase === "reconnecting") {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.streamReconnectingTitle"),
+      body: t("controlPlaneStatus.banner.streamReconnectingBody"),
+    };
+  }
+
+  if (hasData && isUiQueryDataStale(dataUpdatedAt)) {
+    return {
+      tone: "warning" as const,
+      title: t("controlPlaneStatus.banner.staleDataTitle", { label }),
+      body: t("controlPlaneStatus.banner.staleDataBody", {
+        age: formatRelativeTime(new Date(dataUpdatedAt).toISOString()),
+      }),
+    };
+  }
+
+  return null;
 }
 
 function InfoPair({ label, value }: { label: string; value: ReactNode }) {

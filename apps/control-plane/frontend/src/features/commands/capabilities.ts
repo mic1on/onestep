@@ -1,4 +1,4 @@
-import type { AgentCommandKind } from "../../lib/api/types";
+import type { AgentCommandKind, CommandRiskLevel, TaskCommandKind } from "../../lib/api/types";
 
 export const COMMAND_CAPABILITY_BY_KIND: Record<AgentCommandKind, string> = {
   ping: "command.ping",
@@ -33,6 +33,20 @@ const REASON_REQUIRED_COMMAND_KINDS = new Set<AgentCommandKind>([
   "run_task_once",
 ]);
 
+const CRITICAL_COMMAND_KINDS = new Set<AgentCommandKind | TaskCommandKind>([
+  "shutdown",
+  "restart",
+  "discard_dead_letters",
+]);
+
+const ELEVATED_COMMAND_KINDS = new Set<AgentCommandKind | TaskCommandKind>([
+  "drain",
+  "pause_task",
+  "resume_task",
+  "replay_dead_letters",
+  "run_task_once",
+]);
+
 export function getCommandCapability(kind: AgentCommandKind): string {
   return COMMAND_CAPABILITY_BY_KIND[kind];
 }
@@ -50,4 +64,15 @@ export function commandSupportsQueueing(kind: AgentCommandKind): boolean {
 
 export function commandRequiresReason(kind: AgentCommandKind): boolean {
   return REASON_REQUIRED_COMMAND_KINDS.has(kind);
+}
+
+export function isDestructiveCommand(kind: AgentCommandKind | TaskCommandKind) {
+  return CRITICAL_COMMAND_KINDS.has(kind) || ELEVATED_COMMAND_KINDS.has(kind);
+}
+
+export function getCommandRiskLevel(kind: AgentCommandKind | TaskCommandKind): CommandRiskLevel {
+  if (CRITICAL_COMMAND_KINDS.has(kind)) {
+    return "critical";
+  }
+  return "elevated";
 }

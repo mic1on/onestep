@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { OverflowDialog } from "../../../components/ui/OverflowDialog";
 import { useToast } from "../../../components/ui/ToastProvider";
+import { ApiTimeoutError } from "../../../lib/api/client";
 import type {
   Environment,
   TaskCommandKind,
@@ -11,6 +12,8 @@ import type {
 } from "../../../lib/api/types";
 import { formatIdentifierPreview } from "../../../lib/formatters";
 import { CommandReasonDialog } from "../../commands/components/CommandReasonDialog";
+import { DestructiveCommandReviewDialog } from "../../commands/components/DestructiveCommandReviewDialog";
+import { getCommandRiskLevel, isDestructiveCommand } from "../../commands/capabilities";
 import { useCreateTaskCommandFanoutMutation } from "../../commands/queries";
 
 type TaskCommandControlsProps = {
@@ -18,6 +21,7 @@ type TaskCommandControlsProps = {
   taskName: string;
   environment: Environment;
   taskControl: TaskControlStateSummary;
+  onIssueChange?: (issue: { message: string; timeout: boolean } | null) => void;
 };
 
 type PendingTaskAction = {
@@ -33,9 +37,11 @@ export function TaskCommandControls({
   taskName,
   environment,
   taskControl,
+  onIssueChange,
 }: TaskCommandControlsProps) {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { pushToast } = useToast();
+  const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
   const mutation = useCreateTaskCommandFanoutMutation(serviceName, taskName, environment);
   const [replayLimit, setReplayLimit] = useState(DEFAULT_REPLAY_LIMIT);
   const [reasonDialogAction, setReasonDialogAction] = useState<PendingTaskAction | null>(null);
@@ -80,6 +86,7 @@ export function TaskCommandControls({
     setSubmitError(null);
     setLastRunSummary(null);
     setManualRunError(null);
+    onIssueChange?.(null);
     setSubmittingAction(action);
     try {
       const response = await mutation.mutateAsync({
@@ -101,10 +108,15 @@ export function TaskCommandControls({
           total: deliveredTargetCount,
         });
       setLastRunSummary(message);
+      onIssueChange?.(null);
       pushToast({ tone: "success", message });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setSubmitError(message);
+      onIssueChange?.({
+        message,
+        timeout: error instanceof ApiTimeoutError,
+      });
       pushToast({ tone: "error", message });
       throw error;
     } finally {
@@ -229,7 +241,41 @@ export function TaskCommandControls({
           await dispatchTaskCommand(reasonDialogAction, reason);
           setReasonDialogAction(null);
         }}
-        open={reasonDialogAction !== null}
+        open={reasonDialogAction !== null && !isDestructiveCommand(reasonDialogAction.kind)}
+        title={t("taskCommandControls.dialogTitle", {
+          kind: reasonDialogAction ? t(`commandKind.${reasonDialogAction.kind}`, { defaultValue: reasonDialogAction.kind }) : "",
+        })}
+      />
+      <DestructiveCommandReviewDialog
+        commandLabel={reasonDialogAction ? t(`commandKind.${reasonDialogAction.kind}`, { defaultValue: reasonDialogAction.kind }) : ""}
+        description={t("taskCommandControls.dialogBody", {
+          kind: reasonDialogAction ? t(`commandKind.${reasonDialogAction.kind}`, { defaultValue: reasonDialogAction.kind }) : "",
+          taskName,
+          count: reasonDialogAction?.targetInstanceIds.length ?? 0,
+        })}
+        isSubmitting={mutation.isPending}
+        onCancel={() => {
+          if (mutation.isPending) {
+            return;
+          }
+          setReasonDialogAction(null);
+        }}
+        onConfirm={async (reason) => {
+          if (!reasonDialogAction) {
+            return;
+          }
+          await dispatchTaskCommand(reasonDialogAction, reason);
+          setReasonDialogAction(null);
+        }}
+        open={reasonDialogAction !== null && isDestructiveCommand(reasonDialogAction.kind)}
+        riskLevel={reasonDialogAction ? getCommandRiskLevel(reasonDialogAction.kind) : "critical"}
+        targetSummary={
+          reasonDialogAction
+            ? isZh
+              ? `目标 ${reasonDialogAction.targetInstanceIds.length} 个实例`
+              : `${reasonDialogAction.targetInstanceIds.length} target instance${reasonDialogAction.targetInstanceIds.length === 1 ? "" : "s"}`
+            : ""
+        }
         title={t("taskCommandControls.dialogTitle", {
           kind: reasonDialogAction ? t(`commandKind.${reasonDialogAction.kind}`, { defaultValue: reasonDialogAction.kind }) : "",
         })}
