@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { useConsoleSessionQuery } from "../../features/auth/queries";
-import { logoutConsole } from "../../lib/api/client";
+import { logoutAllConsole, logoutConsole } from "../../lib/api/client";
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -14,6 +14,17 @@ export function AppShell() {
   const username = sessionQuery.data?.username;
   const authConfigured = sessionQuery.data?.auth_configured;
   const authenticated = sessionQuery.data?.authenticated;
+
+  async function handleLogoutAll() {
+    try {
+      await logoutAllConsole();
+    } catch {
+      // ignore
+    }
+    queryClient.setQueryData(["console-session"], null);
+    queryClient.invalidateQueries({ queryKey: ["console-session"] });
+    navigate("/login", { replace: true });
+  }
 
   async function handleLogout() {
     try {
@@ -59,6 +70,9 @@ export function AppShell() {
           {authConfigured && authenticated && username && (
             <>
               <span className="shell-username">{username}</span>
+              <button className="shell-logout-btn" onClick={() => void handleLogoutAll()} type="button">
+                {t("app.logoutAll")}
+              </button>
               <button className="shell-logout-btn" onClick={() => void handleLogout()} type="button">
                 {t("app.logout")}
               </button>

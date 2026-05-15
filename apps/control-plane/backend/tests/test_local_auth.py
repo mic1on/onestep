@@ -111,6 +111,29 @@ def test_console_session_round_trip_and_revocation(db_session) -> None:
     assert service.revoke_console_session(session.token) is False
 
 
+def test_create_console_session_rotates_existing_user_sessions(db_session) -> None:
+    service = LocalAuthService(db_session)
+    identity = service.create_user(username="admin", password="secret-pass", role_names=["admin"])
+
+    first = service.create_console_session(identity)
+    second = service.create_console_session(identity)
+
+    records = db_session.scalars(
+        select(ConsoleSession)
+        .where(ConsoleSession.user_id == identity.user_id)
+        .order_by(ConsoleSession.created_at)
+    ).all()
+
+    assert len(records) == 2
+    assert first.token != second.token
+    assert records[0].authenticated_at == records[0].created_at
+    assert records[0].revoked_at is not None
+    assert records[1].authenticated_at == records[1].created_at
+    assert records[1].revoked_at is None
+    assert service.authenticate_console_session(first.token) is None
+    assert service.authenticate_console_session(second.token) is not None
+
+
 def test_console_session_expiry_and_bulk_revocation(db_session) -> None:
     service = LocalAuthService(db_session)
     identity = service.create_user(username="admin", password="secret-pass", role_names=["admin"])
@@ -126,5 +149,5 @@ def test_console_session_expiry_and_bulk_revocation(db_session) -> None:
 
     assert service.authenticate_console_session(first.token) is None
     assert service.authenticate_console_session(second.token) is not None
-    assert service.revoke_user_sessions(identity.user_id) == 2
+    assert service.revoke_user_sessions(identity.user_id) == 1
     assert service.authenticate_console_session(second.token) is None

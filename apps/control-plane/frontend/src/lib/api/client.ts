@@ -583,3 +583,10 @@ export function logoutConsole() {
     redirectOnUnauthorized: false,
   }).then(normalizeConsoleSession);
 }
+
+export function logoutAllConsole() {
+  return request<ConsoleSessionPayload>("/api/v1/auth/logout-all", {
+    method: "POST",
+    redirectOnUnauthorized: false,
+  }).then(normalizeConsoleSession);
+}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import (
@@ -65,10 +65,11 @@ def list_instance_commands(
 async def create_instance_command(
     instance_id: UUID,
     request: AgentCommandCreateRequest,
+    http_request: Request,
     identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> AgentCommandSummary:
-    require_command_role(request.kind, identity)
+    require_command_role(request.kind, identity, http_request)
     instance = get_instance_or_404(db, instance_id)
     command = await dispatch_instance_command(
         db,
@@ -91,11 +92,12 @@ async def create_instance_command(
 async def create_service_command(
     service_name: str,
     request: ServiceCommandFanoutRequest,
+    http_request: Request,
     environment: Environment = Query(...),
     identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> ServiceCommandFanoutResponse:
-    require_command_role(request.kind, identity)
+    require_command_role(request.kind, identity, http_request)
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     response = await create_service_command_fanout(
         db,
@@ -117,11 +119,12 @@ async def create_task_command(
     service_name: str,
     task_name: str,
     request: TaskCommandFanoutRequest,
+    http_request: Request,
     environment: Environment = Query(...),
     identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> ServiceCommandFanoutResponse:
-    require_command_role(request.kind, identity)
+    require_command_role(request.kind, identity, http_request)
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     response = await create_service_command_fanout(
         db,

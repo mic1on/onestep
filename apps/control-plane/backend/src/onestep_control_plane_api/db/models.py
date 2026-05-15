@@ -144,6 +144,7 @@ class ConsoleSession(Base):
         nullable=False,
     )
     token_hash: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    authenticated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
