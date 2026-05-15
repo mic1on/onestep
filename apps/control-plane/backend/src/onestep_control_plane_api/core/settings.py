@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 from json import JSONDecodeError
-from urllib.parse import urljoin
 from typing import Annotated
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
