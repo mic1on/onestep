@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     retention_task_metric_windows_days: int = Field(default=90, ge=1)
     retention_agent_commands_days: int = Field(default=30, ge=1)
     retention_delete_batch_size: int = Field(default=1000, ge=1)
+    retention_run_interval_s: int = Field(default=60 * 60 * 24, ge=60)
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",

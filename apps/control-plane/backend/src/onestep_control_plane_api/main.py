@@ -26,6 +26,10 @@ from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
     run_notification_missed_start_scanner,
 )
+from onestep_control_plane_api.workers.retention_worker import (
+    RETENTION_WORKER_NAME,
+    run_retention_worker,
+)
 
 logger = logging.getLogger("onestep_control_plane_api.startup")
 
@@ -47,15 +51,26 @@ def create_app() -> FastAPI:
                 started_at=datetime.now(UTC),
             )
         )
+        retention_task = create_task(
+            run_retention_worker(
+                app,
+                started_at=datetime.now(UTC),
+            )
+        )
         app.state.background_task_refs[NOTIFICATION_MISSED_START_SCANNER_NAME] = scanner_task
+        app.state.background_task_refs[RETENTION_WORKER_NAME] = retention_task
         yield
-        scanner_task.cancel()
-        try:
-            await scanner_task
-        except CancelledError:
-            pass
-        finally:
-            app.state.background_task_refs[NOTIFICATION_MISSED_START_SCANNER_NAME] = None
+        for name, task in (
+            (NOTIFICATION_MISSED_START_SCANNER_NAME, scanner_task),
+            (RETENTION_WORKER_NAME, retention_task),
+        ):
+            task.cancel()
+            try:
+                await task
+            except CancelledError:
+                pass
+            finally:
+                app.state.background_task_refs[name] = None
 
     app = FastAPI(
         title="OneStep Control Plane API",
@@ -70,6 +85,7 @@ def create_app() -> FastAPI:
     app.state.background_task_states = build_default_background_task_states()
     app.state.background_task_refs = {
         NOTIFICATION_MISSED_START_SCANNER_NAME: None,
+        RETENTION_WORKER_NAME: None,
     }
     if settings.cors_allow_origins:
         app.add_middleware(

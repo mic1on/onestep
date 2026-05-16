@@ -12,6 +12,10 @@ from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
     get_expected_migration_heads,
 )
+from onestep_control_plane_api.workers.notification_scanner import (
+    NOTIFICATION_MISSED_START_SCANNER_NAME,
+)
+from onestep_control_plane_api.workers.retention_worker import RETENTION_WORKER_NAME
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -86,7 +90,8 @@ def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, 
         state.mark_leader("local", when=now)
         state.mark_success(now)
     app.state.background_task_refs = {
-        "notification_missed_start_scanner": object(),
+        NOTIFICATION_MISSED_START_SCANNER_NAME: object(),
+        RETENTION_WORKER_NAME: object(),
     }
     with TestClient(app) as test_client:
         yield test_client
@@ -94,7 +99,8 @@ def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, 
     app.state.session_factory = SessionLocal
     app.state.background_task_states = build_default_background_task_states()
     app.state.background_task_refs = {
-        "notification_missed_start_scanner": None,
+        NOTIFICATION_MISSED_START_SCANNER_NAME: None,
+        RETENTION_WORKER_NAME: None,
     }
     settings.console_auth_username = original_username
     settings.console_auth_password = original_password
