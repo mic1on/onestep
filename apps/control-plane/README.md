@@ -96,6 +96,7 @@ Docker Compose files, deploy flow, and `scripts/start-local.sh`.
 | `ONESTEP_CP_RETENTION_TASK_METRIC_WINDOWS_DAYS` | Backend retention | `90` | Retention window for aggregated `task_metric_windows`, based on `window_ended_at`. |
 | `ONESTEP_CP_RETENTION_AGENT_COMMANDS_DAYS` | Backend retention | `30` | Retention window for terminal `agent_commands`, based on `updated_at`. Pending or otherwise non-terminal commands are not deleted. |
 | `ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE` | Backend retention | `1000` | Maximum number of rows deleted per batch when retention runs in execute mode. |
+| `ONESTEP_CP_RETENTION_RUN_INTERVAL_S` | Backend retention | `86400` | How often the API retention background worker executes automatic cleanup. The worker still participates in leader election so only one replica deletes rows at a time. |
 | `ONESTEP_CP_API_RESPONSE_TIMEZONE` | Backend API | unset | Explicit timezone for datetime fields returned by the API. If unset, the backend falls back to container `TZ`, then `UTC`. |
 | `ONESTEP_CP_DEBUG` | Backend API | `false` | Enables FastAPI debug mode. Advanced troubleshooting option. |
 | `ONESTEP_CP_TIMEZONE` | Compose / deploy helper | `Asia/Shanghai` | Compose-level helper used to set container `TZ`. This indirectly affects API timestamp rendering when `ONESTEP_CP_API_RESPONSE_TIMEZONE` is unset. |
@@ -201,7 +202,9 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm \
   api /app/.venv/bin/python /app/scripts/create_local_admin.py --username admin
 ```
 
-Review or apply retention cleanup from the repo root:
+The API now runs retention cleanup automatically in the background every
+`ONESTEP_CP_RETENTION_RUN_INTERVAL_S` seconds. Manual runs remain available from the
+repo root for dry-run review or one-off forced execution:
 
 ```bash
 uv run python scripts/run-retention.py --dry-run

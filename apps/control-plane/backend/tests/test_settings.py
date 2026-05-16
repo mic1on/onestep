@@ -137,6 +137,7 @@ def test_settings_parse_retention_configuration(monkeypatch) -> None:
     monkeypatch.setenv("ONESTEP_CP_RETENTION_TASK_METRIC_WINDOWS_DAYS", "60")
     monkeypatch.setenv("ONESTEP_CP_RETENTION_AGENT_COMMANDS_DAYS", "21")
     monkeypatch.setenv("ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE", "250")
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_RUN_INTERVAL_S", "7200")
 
     settings = Settings(_env_file=None)
 
@@ -144,10 +145,18 @@ def test_settings_parse_retention_configuration(monkeypatch) -> None:
     assert settings.retention_task_metric_windows_days == 60
     assert settings.retention_agent_commands_days == 21
     assert settings.retention_delete_batch_size == 250
+    assert settings.retention_run_interval_s == 7200
 
 
 def test_settings_reject_invalid_retention_configuration(monkeypatch) -> None:
     monkeypatch.setenv("ONESTEP_CP_RETENTION_TASK_EVENTS_DAYS", "0")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_settings_reject_too_small_retention_run_interval(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_RETENTION_RUN_INTERVAL_S", "59")
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)

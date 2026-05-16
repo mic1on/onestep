@@ -12,6 +12,10 @@ from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
     run_notification_missed_start_scanner,
 )
+from onestep_control_plane_api.workers.retention_worker import (
+    RETENTION_WORKER_NAME,
+    run_retention_worker,
+)
 
 
 async def _yield_once(_: float) -> None:
@@ -32,6 +36,7 @@ def _build_app() -> FastAPI:
     app.state.background_task_states = build_default_background_task_states()
     app.state.background_task_refs = {
         NOTIFICATION_MISSED_START_SCANNER_NAME: None,
+        RETENTION_WORKER_NAME: None,
     }
     return app
 
@@ -228,6 +233,169 @@ def test_standby_replica_takes_over_after_leader_exit() -> None:
         state_two = app_two.state.background_task_states[
             NOTIFICATION_MISSED_START_SCANNER_NAME
         ]
+        assert lease_one.release_count == 1
+        assert lease_two.release_count == 1
+        assert state_two.leadership_status == "leader"
+        assert coordinator.owner is None
+
+    asyncio.run(scenario())
+
+
+def test_retention_worker_runs_in_local_mode() -> None:
+    async def scenario() -> None:
+        app = _build_app()
+        run_count = 0
+        run_event = asyncio.Event()
+
+        def run_fn(_session, _started_at: datetime) -> object:
+            nonlocal run_count
+            run_count += 1
+            run_event.set()
+            return object()
+
+        task = asyncio.create_task(
+            run_retention_worker(
+                app,
+                sleep_fn=_yield_once,
+                run_fn=run_fn,
+                lease_factory=LocalWorkerLease,
+                run_interval_s=3600,
+                leader_poll_interval_s=0,
+            )
+        )
+        app.state.background_task_refs[RETENTION_WORKER_NAME] = task
+
+        await asyncio.wait_for(run_event.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        state = app.state.background_task_states[RETENTION_WORKER_NAME]
+        assert run_count == 1
+        assert state.leadership_mode == "local"
+        assert state.leadership_status == "leader"
+        assert state.last_success_at is not None
+
+    asyncio.run(scenario())
+
+
+def test_only_one_replica_executes_retention_when_leases_contend() -> None:
+    async def scenario() -> None:
+        coordinator = SharedLeaseCoordinator()
+        app_one = _build_app()
+        app_two = _build_app()
+        lease_one = CoordinatedLease(coordinator=coordinator, replica_id="one")
+        lease_two = CoordinatedLease(coordinator=coordinator, replica_id="two")
+        runs = {"one": 0, "two": 0}
+
+        def run_one(_session, _started_at: datetime) -> object:
+            runs["one"] += 1
+            return object()
+
+        def run_two(_session, _started_at: datetime) -> object:
+            runs["two"] += 1
+            return object()
+
+        task_one = asyncio.create_task(
+            run_retention_worker(
+                app_one,
+                sleep_fn=_yield_once,
+                run_fn=run_one,
+                lease_factory=lambda: lease_one,
+                run_interval_s=3600,
+                leader_poll_interval_s=0,
+            )
+        )
+        task_two = asyncio.create_task(
+            run_retention_worker(
+                app_two,
+                sleep_fn=_yield_once,
+                run_fn=run_two,
+                lease_factory=lambda: lease_two,
+                run_interval_s=3600,
+                leader_poll_interval_s=0,
+            )
+        )
+        app_one.state.background_task_refs[RETENTION_WORKER_NAME] = task_one
+        app_two.state.background_task_refs[RETENTION_WORKER_NAME] = task_two
+
+        await _wait_until(
+            lambda: runs["one"] + runs["two"] >= 1
+            and {
+                app_one.state.background_task_states[RETENTION_WORKER_NAME].leadership_status,
+                app_two.state.background_task_states[RETENTION_WORKER_NAME].leadership_status,
+            }
+            == {"leader", "standby"}
+        )
+
+        task_one.cancel()
+        task_two.cancel()
+        for task in (task_one, task_two):
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert (runs["one"] == 0) != (runs["two"] == 0)
+
+    asyncio.run(scenario())
+
+
+def test_retention_standby_replica_takes_over_after_leader_exit() -> None:
+    async def scenario() -> None:
+        coordinator = SharedLeaseCoordinator()
+        app_one = _build_app()
+        app_two = _build_app()
+        lease_one = CoordinatedLease(coordinator=coordinator, replica_id="one")
+        lease_two = CoordinatedLease(coordinator=coordinator, replica_id="two")
+        first_run_event = asyncio.Event()
+        second_run_event = asyncio.Event()
+
+        def run_one(_session, _started_at: datetime) -> object:
+            first_run_event.set()
+            return object()
+
+        def run_two(_session, _started_at: datetime) -> object:
+            second_run_event.set()
+            return object()
+
+        task_one = asyncio.create_task(
+            run_retention_worker(
+                app_one,
+                sleep_fn=_yield_once,
+                run_fn=run_one,
+                lease_factory=lambda: lease_one,
+                run_interval_s=3600,
+                leader_poll_interval_s=0,
+            )
+        )
+        app_one.state.background_task_refs[RETENTION_WORKER_NAME] = task_one
+        await asyncio.wait_for(first_run_event.wait(), timeout=1)
+
+        task_two = asyncio.create_task(
+            run_retention_worker(
+                app_two,
+                sleep_fn=_yield_once,
+                run_fn=run_two,
+                lease_factory=lambda: lease_two,
+                run_interval_s=3600,
+                leader_poll_interval_s=0,
+            )
+        )
+        app_two.state.background_task_refs[RETENTION_WORKER_NAME] = task_two
+        await _wait_until(
+            lambda: app_two.state.background_task_states[RETENTION_WORKER_NAME].leadership_status
+            == "standby"
+        )
+
+        task_one.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task_one
+
+        await asyncio.wait_for(second_run_event.wait(), timeout=1)
+        task_two.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task_two
+
+        state_two = app_two.state.background_task_states[RETENTION_WORKER_NAME]
         assert lease_one.release_count == 1
         assert lease_two.release_count == 1
         assert state_two.leadership_status == "leader"
