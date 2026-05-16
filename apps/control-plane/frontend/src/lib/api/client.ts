@@ -261,6 +261,8 @@ function normalizeNotificationChannel(channel: {
   id: string;
   name: string;
   provider: NotificationProvider;
+  webhook_url_masked?: string;
+  webhookUrlMasked?: string;
   webhook_url?: string;
   webhookUrl?: string;
   enabled: boolean;
@@ -280,7 +282,12 @@ function normalizeNotificationChannel(channel: {
     id: channel.id,
     name: channel.name,
     provider: channel.provider,
-    webhook_url: channel.webhook_url ?? channel.webhookUrl ?? "",
+    webhook_url_masked:
+      channel.webhook_url_masked ??
+      channel.webhookUrlMasked ??
+      channel.webhook_url ??
+      channel.webhookUrl ??
+      "",
     enabled: channel.enabled,
     service_scopes: channel.service_scopes ?? channel.service_scopes_json ?? channel.serviceScopes ?? [],
     event_types:

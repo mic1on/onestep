@@ -21,15 +21,7 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --extra dev
       - name: Ruff
-        shell: bash
-        run: |
-          git fetch --no-tags origin main
-          mapfile -t py_files < <(git diff --name-only origin/main...HEAD -- '*.py')
-          if [ "${#py_files[@]}" -eq 0 ]; then
-            echo "No changed Python files to lint."
-            exit 0
-          fi
-          uv run ruff check "${py_files[@]}"
+        run: uv run ruff check
       - name: Pytest
         run: uv run pytest
 
@@ -56,8 +48,10 @@ jobs:
           fi
       - name: Frontend build
         run: pnpm ui:build
+      - name: Install Playwright browser
+        run: pnpm --dir frontend exec playwright install --with-deps chromium
       - name: Frontend e2e
-        run: echo "Frontend e2e is temporarily waived for the R1 release."
+        run: pnpm --dir frontend run e2e
 
   docker:
     runs-on: ubuntu-latest

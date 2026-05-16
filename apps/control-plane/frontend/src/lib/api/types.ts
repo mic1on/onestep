@@ -110,7 +110,7 @@ export interface NotificationChannel {
   id: string;
   name: string;
   provider: NotificationProvider;
-  webhook_url: string;
+  webhook_url_masked: string;
   enabled: boolean;
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];

@@ -1,10 +1,9 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
-
 from onestep_control_plane_api.api.agent_session_service import disconnect_active_sessions
 from onestep_control_plane_api.db.models import AgentSession, Instance, Service
+from sqlalchemy import select
 
 
 def test_disconnect_active_sessions_marks_only_active_sessions_disconnected(db_session) -> None:

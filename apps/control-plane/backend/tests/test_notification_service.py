@@ -59,8 +59,9 @@ def seed_channel(db_session, *, event_types: list[str]) -> NotificationChannel:
     return channel
 
 
-def test_dispatch_runtime_task_event_notifications_builds_absolute_console_url_when_base_url_configured(
-    db_session, monkeypatch
+def test_runtime_notifications_build_absolute_console_url_when_base_url_configured(
+    db_session,
+    monkeypatch,
 ) -> None:
     original_base_url = settings.console_base_url
     settings.console_base_url = "https://cp.example"
@@ -149,7 +150,10 @@ def test_dispatch_runtime_task_event_notifications_creates_one_delivery_per_new_
         fake_post_webhook,
     )
 
-    created_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+    created_count = dispatch_runtime_task_event_notifications(
+        db_session,
+        task_events=[task_event],
+    )
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -157,7 +161,10 @@ def test_dispatch_runtime_task_event_notifications_creates_one_delivery_per_new_
     assert deliveries[0].event_type == "task_failed"
     assert deliveries[0].status == "succeeded"
 
-    duplicate_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+    duplicate_count = dispatch_runtime_task_event_notifications(
+        db_session,
+        task_events=[task_event],
+    )
     assert duplicate_count == 0
     assert db_session.query(NotificationDelivery).count() == 1
 
@@ -372,8 +379,9 @@ def test_scan_and_dispatch_missed_start_notifications_skips_started_slot(
     assert db_session.query(NotificationDelivery).count() == 0
 
 
-def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slot_without_scheduled_at(
-    db_session, monkeypatch
+def test_missed_start_scan_skips_interval_started_slot_without_scheduled_at(
+    db_session,
+    monkeypatch,
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
@@ -412,8 +420,9 @@ def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slo
     assert db_session.query(NotificationDelivery).count() == 0
 
 
-def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slot_with_nearby_scheduled_at(
-    db_session, monkeypatch
+def test_missed_start_scan_skips_interval_started_slot_with_nearby_scheduled_at(
+    db_session,
+    monkeypatch,
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     service.latest_sync_at = datetime(2026, 5, 6, 2, 41, 22, 819707, tzinfo=UTC)
@@ -457,8 +466,9 @@ def test_scan_and_dispatch_missed_start_notifications_skips_interval_started_slo
     assert db_session.query(NotificationDelivery).count() == 0
 
 
-def test_scan_and_dispatch_missed_start_notifications_keeps_interval_missed_start_when_no_started_event(
-    db_session, monkeypatch
+def test_missed_start_scan_keeps_interval_missed_start_when_no_started_event(
+    db_session,
+    monkeypatch,
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)

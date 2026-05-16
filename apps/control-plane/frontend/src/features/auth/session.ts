@@ -18,6 +18,10 @@ export function canViewCommandControls(session: ConsoleSessionResponse | null | 
   return role === "operator" || role === "admin";
 }
 
+export function canManageNotificationSettings(session: ConsoleSessionResponse | null | undefined) {
+  return canViewCommandControls(session);
+}
+
 export function canViewDestructiveControls(session: ConsoleSessionResponse | null | undefined) {
   const role = getConsoleRole(session);
   if (role === null) {

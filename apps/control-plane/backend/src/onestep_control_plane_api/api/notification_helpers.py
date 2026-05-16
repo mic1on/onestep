@@ -6,7 +6,6 @@ from typing import Any, Final, Literal, TypedDict
 
 from onestep_control_plane_api.core.settings import settings
 
-
 NotificationEventType = Literal[
     "task_started",
     "task_succeeded",
@@ -87,7 +86,9 @@ def normalize_notification_event_types(raw_values: list[str]) -> list[Notificati
     return normalized
 
 
-def normalize_service_scope(scope: ServiceScope | NotificationServiceRef | dict[str, Any]) -> ServiceScope:
+def normalize_service_scope(
+    scope: ServiceScope | NotificationServiceRef | dict[str, Any],
+) -> ServiceScope:
     name = _normalize_required_string(_get_scope_value(scope, "name"), field_name="name")
     environment = _normalize_required_string(
         _get_scope_value(scope, "environment"), field_name="environment"
@@ -198,7 +199,10 @@ def event_display_label(event_type: NotificationEventType) -> str:
 
 
 def event_summary_line(event: NotificationEventRecord) -> str:
-    return f"[{event_display_label(event.event_type)}] {event.service_environment}/{event.service_name} {event.task_name}"
+    return (
+        f"[{event_display_label(event.event_type)}] "
+        f"{event.service_environment}/{event.service_name} {event.task_name}"
+    )
 
 
 def format_datetime_for_message(value: datetime | None) -> str | None:
@@ -289,7 +293,10 @@ def _normalize_required_string(value: Any, *, field_name: str) -> str:
     return normalized
 
 
-def _get_scope_value(scope: ServiceScope | NotificationServiceRef | dict[str, Any], field_name: str) -> Any:
+def _get_scope_value(
+    scope: ServiceScope | NotificationServiceRef | dict[str, Any],
+    field_name: str,
+) -> Any:
     if isinstance(scope, dict):
         return scope.get(field_name)
     return getattr(scope, field_name, None)

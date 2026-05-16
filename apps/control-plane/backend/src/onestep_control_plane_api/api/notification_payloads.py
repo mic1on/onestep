@@ -130,7 +130,12 @@ def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
             _field_line("实例", event.instance_id),
             _field_line(
                 "详情",
-                event.console_url if event.console_url is not None and not _is_absolute_url(event.console_url) else None,
+                (
+                    event.console_url
+                    if event.console_url is not None
+                    and not _is_absolute_url(event.console_url)
+                    else None
+                ),
             ),
         )
         if line is not None
@@ -195,12 +200,20 @@ def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
     lines.extend(
         line
         for line in (
-            _build_feishu_field_line("尝试次数", str(event.attempts) if event.attempts is not None else None),
+            _build_feishu_field_line(
+                "尝试次数",
+                str(event.attempts) if event.attempts is not None else None,
+            ),
             _build_feishu_field_line("实例", event.instance_id),
             _build_feishu_detail_link_line(event.console_url),
             _build_feishu_code_field_line(
                 "详情",
-                event.console_url if event.console_url is not None and not _is_absolute_url(event.console_url) else None,
+                (
+                    event.console_url
+                    if event.console_url is not None
+                    and not _is_absolute_url(event.console_url)
+                    else None
+                ),
             ),
         )
         if line is not None
@@ -228,7 +241,10 @@ def _build_feishu_detail_link_line(url: str | None) -> str | None:
 
 def _build_feishu_success_metric_lines(event: NotificationEventRecord) -> list[str]:
     return [
-        f"• **{_escape_feishu_markdown_text(metric.label)}**：{_escape_feishu_markdown_text(metric.value)}"
+        (
+            f"• **{_escape_feishu_markdown_text(metric.label)}**："
+            f"{_escape_feishu_markdown_text(metric.value)}"
+        )
         for metric in event.success_metrics
     ]
 

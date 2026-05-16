@@ -828,7 +828,7 @@ class NotificationChannelSummary(APIModel):
     id: UUID
     name: str
     provider: NotificationProvider
-    webhook_url: str
+    webhook_url_masked: str
     enabled: bool
     service_scopes: list[NotificationServiceScope] = Field(default_factory=list)
     event_types: list[NotificationEventType] = Field(default_factory=list)

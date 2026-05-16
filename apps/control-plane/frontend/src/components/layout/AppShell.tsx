@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
+import { canManageNotificationSettings } from "../../features/auth/session";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { logoutAllConsole, logoutConsole } from "../../lib/api/client";
 
@@ -14,6 +15,7 @@ export function AppShell() {
   const username = sessionQuery.data?.username;
   const authConfigured = sessionQuery.data?.auth_configured;
   const authenticated = sessionQuery.data?.authenticated;
+  const canManageNotifications = canManageNotificationSettings(sessionQuery.data);
 
   async function handleLogoutAll() {
     try {
@@ -55,14 +57,16 @@ export function AppShell() {
             >
               {t("app.servicesNav")}
             </NavLink>
-            <NavLink
-              className={({ isActive }) =>
-                isActive ? "shell-nav-link active" : "shell-nav-link"
-              }
-              to="/settings/notifications"
-            >
-              {t("app.notificationsNav")}
-            </NavLink>
+            {canManageNotifications ? (
+              <NavLink
+                className={({ isActive }) =>
+                  isActive ? "shell-nav-link active" : "shell-nav-link"
+                }
+                to="/settings/notifications"
+              >
+                {t("app.notificationsNav")}
+              </NavLink>
+            ) : null}
           </nav>
         </div>
 

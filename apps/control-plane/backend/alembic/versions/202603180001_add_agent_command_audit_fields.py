@@ -26,7 +26,10 @@ def _has_column(table_name: str, column_name: str) -> bool:
 
 def upgrade() -> None:
     if not _has_column("agent_commands", "created_by"):
-        op.add_column("agent_commands", sa.Column("created_by", sa.String(length=255), nullable=True))
+        op.add_column(
+            "agent_commands",
+            sa.Column("created_by", sa.String(length=255), nullable=True),
+        )
     if not _has_column("agent_commands", "reason"):
         op.add_column("agent_commands", sa.Column("reason", sa.Text(), nullable=True))
     if not _has_column("agent_commands", "source_surface"):

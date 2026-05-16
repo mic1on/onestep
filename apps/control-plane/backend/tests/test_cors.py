@@ -1,5 +1,4 @@
 from fastapi.testclient import TestClient
-
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.main import create_app
 

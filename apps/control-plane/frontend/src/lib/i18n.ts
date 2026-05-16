@@ -655,8 +655,12 @@ const resources = {
         namePlaceholder: "Primary Feishu channel",
         providerLabel: "Provider",
         webhookUrlLabel: "Webhook URL",
+        webhookConfiguredHint:
+          "Current webhook is stored securely as {{masked}}. Leave this field blank to keep it unchanged.",
         enabledLabel: "Channel enabled",
         enabledHint: "Disabled channels stay configured but do not receive live or derived notifications.",
+        readOnlyHint:
+          "Viewer accounts can review configured channels but cannot change notification settings.",
         servicesTitle: "Services",
         servicesSubtitle: "Select the services that should fan out notifications through this webhook.",
         servicesEnvironmentLabel: "Environment scope",
@@ -1336,8 +1340,11 @@ const resources = {
         namePlaceholder: "主飞书通知渠道",
         providerLabel: "提供商",
         webhookUrlLabel: "Webhook 地址",
+        webhookConfiguredHint:
+          "当前 Webhook 已安全存储为 {{masked}}。留空则保持不变。",
         enabledLabel: "启用渠道",
         enabledHint: "停用的渠道会保留配置，但不会接收实时或衍生通知。",
+        readOnlyHint: "viewer 账号可以查看已配置渠道，但不能修改通知设置。",
         servicesTitle: "服务",
         servicesSubtitle: "选择应通过此 Webhook 推送通知的服务。",
         servicesEnvironmentLabel: "环境范围",

@@ -6,6 +6,8 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { useToast } from "../../components/ui/ToastProvider";
+import { canManageNotificationSettings } from "../../features/auth/session";
+import { useConsoleSessionQuery } from "../../features/auth/queries";
 import {
   useCreateNotificationChannelMutation,
   useDeleteNotificationChannelMutation,
@@ -17,6 +19,7 @@ import {
 import type {
   Environment,
   NotificationChannel,
+  NotificationChannelPatchRequest,
   NotificationChannelUpsertRequest,
   NotificationEventType,
   NotificationProvider,
@@ -39,6 +42,7 @@ type FormState = {
   name: string;
   provider: NotificationProvider;
   webhook_url: string;
+  webhook_url_masked: string | null;
   enabled: boolean;
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];
@@ -50,6 +54,7 @@ const DEFAULT_FORM_STATE: FormState = {
   name: "",
   provider: "feishu",
   webhook_url: "",
+  webhook_url_masked: null,
   enabled: true,
   service_scopes: [],
   event_types: ["task_failed"],
@@ -59,6 +64,7 @@ const DEFAULT_FORM_STATE: FormState = {
 export function SettingsNotificationsPage() {
   const { t } = useTranslation();
   const { pushToast } = useToast();
+  const sessionQuery = useConsoleSessionQuery();
   const channelsQuery = useNotificationChannelsQuery();
   const servicesQuery = useNotificationServicesQuery();
   const createMutation = useCreateNotificationChannelMutation();
@@ -68,6 +74,7 @@ export function SettingsNotificationsPage() {
 
   const channels = channelsQuery.data?.items ?? [];
   const availableServices = servicesQuery.data?.items ?? [];
+  const canManageNotifications = canManageNotificationSettings(sessionQuery.data);
 
   const [selectedChannelId, setSelectedChannelId] = useState<string | "new">("new");
   const [serviceEnvironmentFilter, setServiceEnvironmentFilter] = useState<ServiceEnvironmentFilter>(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
@@ -131,13 +138,15 @@ export function SettingsNotificationsPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const payload = buildPayload(formState);
 
     try {
       const saved =
         formState.id === null
-          ? await createMutation.mutateAsync(payload)
-          : await updateMutation.mutateAsync({ channelId: formState.id, payload });
+          ? await createMutation.mutateAsync(buildCreatePayload(formState))
+          : await updateMutation.mutateAsync({
+              channelId: formState.id,
+              payload: buildUpdatePayload(formState),
+            });
 
       setSelectedChannelId(saved.id);
       setFormState(channelToFormState(saved));
@@ -228,21 +237,30 @@ export function SettingsNotificationsPage() {
     <div className="ref-console-page settings-notifications-page">
       <PageHeader
         title={t("notifications.title")}
-        subtitle={<p>{t("notifications.subtitle")}</p>}
+        subtitle={
+          <>
+            <p>{t("notifications.subtitle")}</p>
+            {!canManageNotifications ? (
+              <p>{t("notifications.readOnlyHint")}</p>
+            ) : null}
+          </>
+        }
         actions={
-          <div className="page-actions-stack">
-            <button
-              className="notification-action-button notification-action-button-primary"
-              onClick={() => {
-                setSelectedChannelId("new");
-                setFormState(DEFAULT_FORM_STATE);
-                setIsDeleteConfirmOpen(false);
-              }}
-              type="button"
-            >
-              {t("notifications.newChannel")}
-            </button>
-          </div>
+          canManageNotifications ? (
+            <div className="page-actions-stack">
+              <button
+                className="notification-action-button notification-action-button-primary"
+                onClick={() => {
+                  setSelectedChannelId("new");
+                  setFormState(DEFAULT_FORM_STATE);
+                  setIsDeleteConfirmOpen(false);
+                }}
+                type="button"
+              >
+                {t("notifications.newChannel")}
+              </button>
+            </div>
+          ) : null
         }
       />
 
@@ -298,7 +316,7 @@ export function SettingsNotificationsPage() {
                     <div className="notification-channel-actions">
                       <button
                         className={`notification-channel-toggle${channel.enabled ? " is-enabled" : " is-disabled"}${isToggling ? " is-pending" : ""}`}
-                        disabled={isToggling}
+                        disabled={!canManageNotifications || isToggling}
                         onClick={() => void handleToggleEnabled(channel)}
                         type="button"
                       >
@@ -329,7 +347,7 @@ export function SettingsNotificationsPage() {
             <div className="page-actions-inline notification-actions-row">
               <button
                 className="notification-action-button notification-action-button-secondary"
-                disabled={isTesting || isSaving}
+                disabled={!canManageNotifications || isTesting || isSaving}
                 onClick={() => void handleTest()}
                 type="button"
               >
@@ -338,7 +356,7 @@ export function SettingsNotificationsPage() {
               <div className="notification-delete-popconfirm">
                 <button
                   className={formState.id ? "notification-action-button notification-action-button-danger" : "notification-action-button notification-action-button-secondary"}
-                  disabled={isDeleting || isSaving}
+                  disabled={!canManageNotifications || isDeleting || isSaving}
                   onClick={() => {
                     if (!formState.id) {
                       void handleDelete();
@@ -388,6 +406,7 @@ export function SettingsNotificationsPage() {
                 <span>{t("notifications.nameLabel")}</span>
                 <input
                   onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
+                  disabled={!canManageNotifications}
                   placeholder={t("notifications.namePlaceholder")}
                   required
                   type="text"
@@ -398,6 +417,7 @@ export function SettingsNotificationsPage() {
               <label className="ref-inline-control">
                 <span>{t("notifications.providerLabel")}</span>
                 <select
+                  disabled={!canManageNotifications}
                   onChange={(event) =>
                     setFormState((current) => ({
                       ...current,
@@ -417,16 +437,25 @@ export function SettingsNotificationsPage() {
               <input
                 onChange={(event) => setFormState((current) => ({ ...current, webhook_url: event.target.value }))}
                 placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
-                required
+                disabled={!canManageNotifications}
+                required={formState.id === null}
                 type="url"
                 value={formState.webhook_url}
               />
+              {formState.id && formState.webhook_url_masked ? (
+                <p className="notification-services-filter-note">
+                  {t("notifications.webhookConfiguredHint", {
+                    masked: formState.webhook_url_masked,
+                  })}
+                </p>
+              ) : null}
             </label>
 
             <label className={`notification-choice-card notification-choice-card-toggle${formState.enabled ? " is-selected" : ""}`}>
               <input
                 className="notification-choice-input"
                 checked={formState.enabled}
+                disabled={!canManageNotifications}
                 onChange={(event) => setFormState((current) => ({ ...current, enabled: event.target.checked }))}
                 type="checkbox"
               />
@@ -486,6 +515,7 @@ export function SettingsNotificationsPage() {
                           <input
                             className="notification-choice-input"
                             checked={checked}
+                            disabled={!canManageNotifications}
                             onChange={() =>
                               setFormState((current) => ({
                                 ...current,
@@ -527,6 +557,7 @@ export function SettingsNotificationsPage() {
                       <input
                         className="notification-choice-input"
                         checked={checked}
+                        disabled={!canManageNotifications}
                         onChange={() =>
                           setFormState((current) => ({
                             ...current,
@@ -550,6 +581,7 @@ export function SettingsNotificationsPage() {
               <label className="ref-inline-control notification-grace-control">
                 <span>{t("notifications.graceLabel")}</span>
                 <input
+                  disabled={!canManageNotifications}
                   min={1}
                   onChange={(event) =>
                     setFormState((current) => ({
@@ -565,7 +597,11 @@ export function SettingsNotificationsPage() {
             ) : null}
 
             <div className="page-actions-inline notification-actions-row">
-              <button className="notification-action-button notification-action-button-primary" disabled={isSaving} type="submit">
+              <button
+                className="notification-action-button notification-action-button-primary"
+                disabled={!canManageNotifications || isSaving}
+                type="submit"
+              >
                 {isSaving ? t("notifications.saving") : formState.id ? t("notifications.saveChanges") : t("notifications.createChannel")}
               </button>
             </div>
@@ -581,7 +617,8 @@ function channelToFormState(channel: NotificationChannel): FormState {
     id: channel.id,
     name: channel.name,
     provider: channel.provider,
-    webhook_url: channel.webhook_url,
+    webhook_url: "",
+    webhook_url_masked: channel.webhook_url_masked,
     enabled: channel.enabled,
     service_scopes: channel.service_scopes,
     event_types: channel.event_types,
@@ -589,21 +626,39 @@ function channelToFormState(channel: NotificationChannel): FormState {
   };
 }
 
-function buildPayload(formState: FormState): NotificationChannelUpsertRequest {
-  const payload: NotificationChannelUpsertRequest = {
+function buildCreatePayload(formState: FormState): NotificationChannelUpsertRequest {
+  return {
     name: formState.name.trim(),
     provider: formState.provider,
     webhook_url: formState.webhook_url.trim(),
     enabled: formState.enabled,
     service_scopes: [...formState.service_scopes].sort(compareServiceScopes),
     event_types: [...formState.event_types],
+    missed_start_grace_seconds: buildMissedStartGraceSeconds(formState),
   };
+}
 
-  if (formState.event_types.includes("task_missed_start")) {
-    payload.missed_start_grace_seconds = normalizeGraceSeconds(formState.missed_start_grace_seconds);
+function buildUpdatePayload(formState: FormState): NotificationChannelPatchRequest {
+  const payload: NotificationChannelPatchRequest = {
+    name: formState.name.trim(),
+    provider: formState.provider,
+    enabled: formState.enabled,
+    service_scopes: [...formState.service_scopes].sort(compareServiceScopes),
+    event_types: [...formState.event_types],
+    missed_start_grace_seconds: buildMissedStartGraceSeconds(formState),
+  };
+  const webhookUrl = formState.webhook_url.trim();
+  if (webhookUrl) {
+    payload.webhook_url = webhookUrl;
   }
-
   return payload;
+}
+
+function buildMissedStartGraceSeconds(formState: FormState) {
+  if (formState.event_types.includes("task_missed_start")) {
+    return normalizeGraceSeconds(formState.missed_start_grace_seconds);
+  }
+  return 300;
 }
 
 function normalizeGraceSeconds(rawValue: string) {

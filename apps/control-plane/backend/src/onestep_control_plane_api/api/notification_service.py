@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -97,12 +98,27 @@ def _parse_success_notification_payload(
     return summary, metrics
 
 
+def _mask_webhook_url(webhook_url: str) -> str:
+    normalized = webhook_url.strip()
+    if not normalized:
+        return ""
+
+    parsed = urlsplit(normalized)
+    host = parsed.netloc or parsed.path.split("/", 1)[0]
+    suffix = normalized[-4:] if len(normalized) > 4 else normalized
+    if host:
+        return f"{parsed.scheme or 'https'}://{host}/...{suffix}"
+    if len(normalized) <= 12:
+        return "*" * len(normalized)
+    return f"{normalized[:8]}...{suffix}"
+
+
 def _build_channel_summary(channel: NotificationChannel) -> NotificationChannelSummary:
     return NotificationChannelSummary(
         id=channel.id,
         name=channel.name,
         provider=channel.provider,
-        webhook_url=channel.webhook_url,
+        webhook_url_masked=_mask_webhook_url(channel.webhook_url),
         enabled=channel.enabled,
         service_scopes=channel.service_scopes_json,
         event_types=channel.event_types_json,
@@ -314,7 +330,9 @@ def _online_service_started_at_by_id(
     rows = db.execute(
         select(
             Instance.service_id,
-            func.min(func.coalesce(Instance.started_at, Instance.created_at)).label("online_started_at"),
+            func.min(
+                func.coalesce(Instance.started_at, Instance.created_at)
+            ).label("online_started_at"),
         )
         .where(
             Instance.last_seen_at.is_not(None),
@@ -428,7 +446,10 @@ def _iter_expected_interval_slots_for_task(
     elapsed_seconds = int((due_cutoff - anchor_local).total_seconds())
     if elapsed_seconds < 0:
         return []
-    slot_count = min(DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT, (elapsed_seconds // interval_seconds) + 1)
+    slot_count = min(
+        DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT,
+        (elapsed_seconds // interval_seconds) + 1,
+    )
     scheduled_slots: list[datetime] = []
     for offset in range(slot_count):
         slot_index = (elapsed_seconds // interval_seconds) - offset
@@ -607,7 +628,10 @@ def _scheduled_slot_match_tolerance(interval_seconds: int | None) -> timedelta |
 
 def list_notification_channels(db: Session) -> list[NotificationChannelSummary]:
     channels = db.scalars(
-        select(NotificationChannel).order_by(NotificationChannel.created_at, NotificationChannel.name)
+        select(NotificationChannel).order_by(
+            NotificationChannel.created_at,
+            NotificationChannel.name,
+        )
     ).all()
     return [_build_channel_summary(channel) for channel in channels]
 
@@ -667,7 +691,9 @@ def update_notification_channel(
     if "enabled" in update_data:
         channel.enabled = update_data["enabled"]
     if "service_scopes" in update_data:
-        channel.service_scopes_json = [_scope_to_json(scope) for scope in update_data["service_scopes"]]
+        channel.service_scopes_json = [
+            _scope_to_json(scope) for scope in update_data["service_scopes"]
+        ]
     if "event_types" in update_data:
         channel.event_types_json = list(update_data["event_types"])
     if "missed_start_grace_seconds" in update_data:
@@ -786,7 +812,9 @@ def scan_and_dispatch_missed_start_notifications(
             online_started_at = online_service_started_at_by_id.get(service.id)
             if online_started_at is None:
                 continue
-            interval_seconds = _interval_seconds_from_source_config(task_definition.source_config_json)
+            interval_seconds = _interval_seconds_from_source_config(
+                task_definition.source_config_json
+            )
             if not _service_matches_channel(
                 channel,
                 service_name=service.name,
@@ -807,7 +835,11 @@ def scan_and_dispatch_missed_start_notifications(
                     service_id=service.id,
                     task_name=task_definition.task_name,
                     scheduled_at=scheduled_at,
-                    interval_seconds=interval_seconds if task_definition.source_kind == "interval" else None,
+                    interval_seconds=(
+                        interval_seconds
+                        if task_definition.source_kind == "interval"
+                        else None
+                    ),
                 ):
                     continue
                 notification_event = NotificationEventRecord(
@@ -815,7 +847,8 @@ def scan_and_dispatch_missed_start_notifications(
                     service_name=service.name,
                     service_environment=service.environment,
                     task_name=task_definition.task_name,
-                    occurred_at=scheduled_at + timedelta(seconds=channel.missed_start_grace_seconds),
+                    occurred_at=scheduled_at
+                    + timedelta(seconds=channel.missed_start_grace_seconds),
                     scheduled_at=scheduled_at,
                     detected_at=current_time,
                     missed_start_grace_seconds=channel.missed_start_grace_seconds,
