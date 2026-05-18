@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { EmptyState } from "../../components/ui/EmptyState";
-import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
+import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
 import { useToast } from "../../components/ui/ToastProvider";
 import { canManageNotificationSettings } from "../../features/auth/session";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
@@ -75,6 +75,7 @@ export function SettingsNotificationsPage() {
   const channels = channelsQuery.data?.items ?? [];
   const availableServices = servicesQuery.data?.items ?? [];
   const canManageNotifications = canManageNotificationSettings(sessionQuery.data);
+  const enabledChannelCount = channels.filter((channel) => channel.enabled).length;
 
   const [selectedChannelId, setSelectedChannelId] = useState<string | "new">("new");
   const [serviceEnvironmentFilter, setServiceEnvironmentFilter] = useState<ServiceEnvironmentFilter>(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
@@ -234,35 +235,63 @@ export function SettingsNotificationsPage() {
   }
 
   return (
-    <div className="ref-console-page settings-notifications-page">
-      <PageHeader
-        title={t("notifications.title")}
-        subtitle={
-          <>
-            <p>{t("notifications.subtitle")}</p>
-            {!canManageNotifications ? (
-              <p>{t("notifications.readOnlyHint")}</p>
-            ) : null}
-          </>
-        }
-        actions={
-          canManageNotifications ? (
-            <div className="page-actions-stack">
-              <button
-                className="notification-action-button notification-action-button-primary"
-                onClick={() => {
-                  setSelectedChannelId("new");
-                  setFormState(DEFAULT_FORM_STATE);
-                  setIsDeleteConfirmOpen(false);
-                }}
-                type="button"
-              >
-                {t("notifications.newChannel")}
-              </button>
-            </div>
+    <div className="ref-console-page settings-notifications-page signal-console-settings-page">
+      <SignalConsoleHeader
+        className="signal-console-settings-hero"
+        description={<p className="signal-console-hero-note">{t("notifications.subtitle")}</p>}
+        kicker={t("notifications.eyebrow")}
+        secondary={
+          !canManageNotifications ? (
+            <p className="signal-console-hero-note signal-console-settings-readonly">{t("notifications.readOnlyHint")}</p>
           ) : null
         }
+        side={
+          <>
+            {canManageNotifications ? (
+              <div className="signal-console-hero-actions signal-console-settings-hero-actions">
+                <div className="page-actions-stack">
+                  <button
+                    className="notification-action-button notification-action-button-primary"
+                    onClick={() => {
+                      setSelectedChannelId("new");
+                      setFormState(DEFAULT_FORM_STATE);
+                      setIsDeleteConfirmOpen(false);
+                    }}
+                    type="button"
+                  >
+                    {t("notifications.newChannel")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="signal-console-metric signal-console-settings-metric">
+              <span>{t("notifications.channelsTitle")}</span>
+              <strong>{channels.length}</strong>
+            </div>
+          </>
+        }
+        title={t("notifications.title")}
       />
+
+      <section className="signal-console-settings-band">
+        <article className="ref-summary-chip ref-summary-chip-default">
+          <span>{t("notifications.channelsTitle")}</span>
+          <strong>{channels.length}</strong>
+        </article>
+        <article className="ref-summary-chip ref-summary-chip-success">
+          <span>{t("notifications.enabled")}</span>
+          <strong>{enabledChannelCount}</strong>
+        </article>
+        <article className="ref-summary-chip ref-summary-chip-accent">
+          <span>{t("notifications.servicesTitle")}</span>
+          <strong>{formState.service_scopes.length}</strong>
+        </article>
+        <article className="ref-summary-chip ref-summary-chip-default">
+          <span>{t("notifications.eventTypesTitle")}</span>
+          <strong>{formState.event_types.length}</strong>
+        </article>
+      </section>
 
       <div className="notification-settings-layout">
         <Panel
@@ -288,10 +317,6 @@ export function SettingsNotificationsPage() {
                   <article
                     key={channel.id}
                     className={`notification-channel-card${selected ? " is-selected" : ""}`}
-                    style={{
-                      background: selected ? "var(--ref-surface-accent)" : "var(--ref-surface-soft)",
-                      borderColor: selected ? "var(--ref-border-emphasis)" : "var(--ref-border-strong)",
-                    }}
                   >
                     <button
                       onClick={() => {

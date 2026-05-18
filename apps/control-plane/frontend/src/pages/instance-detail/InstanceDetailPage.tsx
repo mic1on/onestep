@@ -93,6 +93,7 @@ export function InstanceDetailPage() {
     deliveryModeOverride ?? (activeSession ? "dispatch_now_only" : "queue_until_reconnect");
   const runtimeSignals = payload && instance ? buildInstanceRuntimeSignals(payload, instance, isZh) : [];
   const instanceStatus = instance ? deriveInstanceStatus(instance) : "offline";
+  const instanceHeroMetric = payload && instance ? buildInstanceHeroMetric(instance, payload, isZh) : null;
   const canViewControls = canViewCommandControls(sessionQuery.data);
   const canViewDestructiveActions = canViewDestructiveControls(sessionQuery.data);
   const connectionNotice = buildInstanceConnectionNotice(
@@ -188,7 +189,7 @@ export function InstanceDetailPage() {
   }
 
   return (
-    <div className="ref-console-page ref-detail-page">
+    <div className="ref-console-page ref-detail-page signal-console-detail-page signal-console-instance-detail">
       <section className="ref-detail-topbar">
         <div className="ref-detail-topbar-rail">
           <Link className="ref-back-button" to={buildServiceViewHref("instances")}>
@@ -202,6 +203,9 @@ export function InstanceDetailPage() {
         <div className="ref-detail-topbar-main">
           <div className="ref-detail-title">
             <div className="ref-detail-title-copy">
+              <span className="signal-console-kicker">
+                {t("instanceDetail.eyebrow", { environment: t(`environment.${environment}`) })}
+              </span>
               <div className="ref-detail-title-row">
                 <h2>{instance?.node_name ?? resolvedInstanceId}</h2>
                 <StatusBadge {...getInstanceStatusBadge(instanceStatus, isZh)} />
@@ -211,6 +215,14 @@ export function InstanceDetailPage() {
                   ? `${resolvedServiceName} · 最近同步 ${formatRelativeTime(instance?.last_sync_at ?? null)}`
                   : `${resolvedServiceName} · last sync ${formatRelativeTime(instance?.last_sync_at ?? null)}`}
               </p>
+            </div>
+          </div>
+
+          <div className="ref-detail-header-actions">
+            <div className="signal-console-detail-topbar-metric">
+              <span>{instanceHeroMetric?.label ?? t("instanceDetail.connectivity")}</span>
+              <strong>{instanceHeroMetric?.value ?? "--"}</strong>
+              {instanceHeroMetric?.note ? <p>{instanceHeroMetric.note}</p> : null}
             </div>
           </div>
         </div>
@@ -230,19 +242,15 @@ export function InstanceDetailPage() {
         <div className="ref-detail-layout">
           <aside className="ref-side-nav">
             <Link className="ref-side-nav-item" to={buildServiceViewHref("overview")}>
-              <span className="ref-side-nav-icon">◫</span>
               <span>{isZh ? "概览" : "Overview"}</span>
             </Link>
             <Link className="ref-side-nav-item is-active" to={buildServiceViewHref("instances")}>
-              <span className="ref-side-nav-icon">≣</span>
               <span>{isZh ? "实例" : "Instances"}</span>
             </Link>
             <Link className="ref-side-nav-item" to={buildServiceViewHref("tasks")}>
-              <span className="ref-side-nav-icon">⌘</span>
               <span>{isZh ? "任务" : "Tasks"}</span>
             </Link>
             <Link className="ref-side-nav-item" to={buildServiceViewHref("commands")}>
-              <span className="ref-side-nav-icon">↻</span>
               <span>{isZh ? "命令" : "Commands"}</span>
             </Link>
           </aside>
@@ -560,6 +568,26 @@ function buildInstanceRuntimeSignals(
       note: isZh ? "来自控制会话状态" : "Control session state",
     },
   ];
+}
+
+function buildInstanceHeroMetric(
+  instance: InstanceSummary,
+  payload: NonNullable<ReturnType<typeof useInstanceDetailQuery>["data"]>,
+  isZh: boolean,
+) {
+  if (instance.connectivity !== "online") {
+    return {
+      label: isZh ? "连通状态" : "Connectivity",
+      value: isZh ? "离线" : "Offline",
+      note: isZh ? "当前实例没有活跃连接，命令只能等待重连后再处理。" : "No active connection is attached. Commands can only proceed after reconnect when supported.",
+    };
+  }
+
+  return {
+    label: isZh ? "最近事件" : "Recent events",
+    value: formatCount(payload.recent_events.length),
+    note: isZh ? "当前时间窗口内的离散事件数。" : "Discrete events visible inside the current lookback window.",
+  };
 }
 
 function getInstanceActivityTitle(tab: InstanceActivityTab, t: ReturnType<typeof useTranslation>["t"]) {

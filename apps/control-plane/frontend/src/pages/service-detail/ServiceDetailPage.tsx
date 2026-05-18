@@ -172,6 +172,7 @@ export function ServiceDetailPage() {
   const sessions = sessionsQuery.data?.items ?? [];
   const serviceStatus: "online" | "offline" | "degraded" = dashboard ? deriveServiceStatus(dashboard) : "offline";
   const runtimeSignals = dashboard ? buildRuntimeSignals(dashboard, isZh) : [];
+  const primaryRuntimeSignal = runtimeSignals[0] ?? null;
   const canViewControls = canViewCommandControls(sessionQuery.data);
   const canViewDestructiveActions = canViewDestructiveControls(sessionQuery.data);
   const isDestructiveQuickAction = pendingQuickAction === "restart";
@@ -194,7 +195,7 @@ export function ServiceDetailPage() {
   }
 
   return (
-    <div className="ref-console-page ref-detail-page">
+    <div className="ref-console-page ref-detail-page signal-console-detail-page signal-console-service-detail">
       <section className="ref-detail-topbar">
         <div className="ref-detail-topbar-rail">
           <Link className="ref-back-button" to={`/services?environment=${environment}`}>
@@ -208,6 +209,9 @@ export function ServiceDetailPage() {
         <div className="ref-detail-topbar-main">
           <div className="ref-detail-title">
             <div className="ref-detail-title-copy">
+              <span className="signal-console-kicker">
+                {t("serviceDetail.eyebrow", { environment: t(`environment.${environment}`) })}
+              </span>
               <div className="ref-detail-title-row">
                 <h2>{serviceName}</h2>
                 <StatusBadge {...getServiceStatusBadge(serviceStatus, isZh)} />
@@ -220,59 +224,69 @@ export function ServiceDetailPage() {
             </div>
           </div>
 
-          <div className="ref-detail-header-actions">
-            <SegmentedControl
-              ariaLabel={t("serviceDetail.lookbackAriaLabel")}
-              onChange={(value) => updateParam("lookback_minutes", String(value))}
-              options={LOOKBACK_OPTIONS.map((value) => ({
-                label: value >= 1440 ? "1d" : `${value}m`,
-                value: String(value),
-              }))}
-              value={String(lookbackMinutes)}
-            />
-            {canViewControls ? (
-              <>
-                <div className="ref-action-menu" role="group">
-                  <button className="ref-ghost-button ref-action-menu-trigger" disabled={quickActionMutation.isPending} type="button">
-                    <span>{t("serviceDetail.syncMenu.trigger")}</span>
-                    <span aria-hidden="true" className="ref-action-menu-caret">
-                      ▾
-                    </span>
-                  </button>
-                  <div className="ref-action-menu-panel">
-                    {SYNC_ACTIONS.map((kind) => (
+          <div className="ref-detail-header-actions signal-console-service-header-actions">
+            <div className="signal-console-detail-actions-row">
+              <SegmentedControl
+                ariaLabel={t("serviceDetail.lookbackAriaLabel")}
+                onChange={(value) => updateParam("lookback_minutes", String(value))}
+                options={LOOKBACK_OPTIONS.map((value) => ({
+                  label: value >= 1440 ? "1d" : `${value}m`,
+                  value: String(value),
+                }))}
+                value={String(lookbackMinutes)}
+              />
+              {canViewControls ? (
+                <>
+                  <div className="ref-action-menu" role="group">
+                    <button className="ref-ghost-button ref-action-menu-trigger" disabled={quickActionMutation.isPending} type="button">
+                      <span>{t("serviceDetail.syncMenu.trigger")}</span>
+                      <span aria-hidden="true" className="ref-action-menu-caret">
+                        ▾
+                      </span>
+                    </button>
+                    <div className="ref-action-menu-panel">
+                      {SYNC_ACTIONS.map((kind) => (
+                        <button
+                          className="ref-action-menu-item"
+                          disabled={quickActionMutation.isPending}
+                          key={kind}
+                          onClick={() => setPendingQuickAction(kind)}
+                          type="button"
+                        >
+                          {getQuickActionLabel(kind, t)}
+                        </button>
+                      ))}
                       <button
-                        className="ref-action-menu-item"
+                        className="ref-action-menu-item ref-action-menu-item-strong"
                         disabled={quickActionMutation.isPending}
-                        key={kind}
-                        onClick={() => setPendingQuickAction(kind)}
+                        onClick={() => setPendingQuickAction("sync_all")}
                         type="button"
                       >
-                        {getQuickActionLabel(kind, t)}
+                        {t("serviceDetail.syncMenu.syncAll")}
                       </button>
-                    ))}
+                    </div>
+                  </div>
+                  {canViewDestructiveActions ? (
                     <button
-                      className="ref-action-menu-item ref-action-menu-item-strong"
+                      className="ref-ghost-button is-danger"
                       disabled={quickActionMutation.isPending}
-                      onClick={() => setPendingQuickAction("sync_all")}
+                      onClick={() => setPendingQuickAction("restart")}
                       type="button"
                     >
-                      {t("serviceDetail.syncMenu.syncAll")}
+                      {t("commandKind.restart", { defaultValue: "restart" })}
                     </button>
-                  </div>
-                </div>
-                {canViewDestructiveActions ? (
-                  <button
-                    className="ref-ghost-button is-danger"
-                    disabled={quickActionMutation.isPending}
-                    onClick={() => setPendingQuickAction("restart")}
-                    type="button"
-                  >
-                    {t("commandKind.restart", { defaultValue: "restart" })}
-                  </button>
-                ) : null}
-              </>
-            ) : null}
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+
+            <div
+              className="signal-console-detail-topbar-metric signal-console-service-topbar-metric-inline"
+              title={primaryRuntimeSignal?.note ?? undefined}
+            >
+              <span>{primaryRuntimeSignal?.label ?? (isZh ? "运行信号" : "Runtime signal")}</span>
+              <strong>{primaryRuntimeSignal?.value ?? "--"}</strong>
+            </div>
           </div>
         </div>
       </section>
@@ -291,19 +305,15 @@ export function ServiceDetailPage() {
         <div className="ref-detail-layout">
           <aside className="ref-side-nav">
             <Link className={currentView === "overview" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("overview")}>
-              <span className="ref-side-nav-icon">◫</span>
               <span>{isZh ? "概览" : "Overview"}</span>
             </Link>
             <Link className={currentView === "instances" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("instances")}>
-              <span className="ref-side-nav-icon">≣</span>
               <span>{isZh ? "实例" : "Instances"}</span>
             </Link>
             <Link className={currentView === "tasks" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("tasks")}>
-              <span className="ref-side-nav-icon">⌘</span>
               <span>{isZh ? "任务" : "Tasks"}</span>
             </Link>
             <Link className={currentView === "commands" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("commands")}>
-              <span className="ref-side-nav-icon">↻</span>
               <span>{isZh ? "命令" : "Commands"}</span>
             </Link>
           </aside>
@@ -311,6 +321,13 @@ export function ServiceDetailPage() {
           <div className="ref-detail-content">
             {currentView === "overview" ? (
               <>
+                <section className="ref-summary-band signal-console-summary-band">
+                  <BandStat label={isZh ? "异常任务" : "Failing tasks"} value={String(dashboard.failing_task_count)} />
+                  <BandStat label={isZh ? "拓扑哈希" : "Topology hashes"} value={String(dashboard.topology_hashes.length)} />
+                  <BandStat label={isZh ? "命令总数" : "Commands"} value={String(dashboard.command_overview.statuses.total)} />
+                  <BandStat label={isZh ? "能力数" : "Capabilities"} value={String(summarizeCapabilities(sessions).length)} />
+                </section>
+
                 <section className="ref-overview-grid ref-overview-grid-compact">
                   <Panel
                     className="ref-card-panel ref-card-panel-compact"
@@ -383,13 +400,6 @@ export function ServiceDetailPage() {
                       ))}
                     </div>
                   </Panel>
-                </section>
-
-                <section className="ref-summary-band">
-                  <BandStat label={isZh ? "异常任务" : "Failing tasks"} value={String(dashboard.failing_task_count)} />
-                  <BandStat label={isZh ? "拓扑哈希" : "Topology hashes"} value={String(dashboard.topology_hashes.length)} />
-                  <BandStat label={isZh ? "命令总数" : "Commands"} value={String(dashboard.command_overview.statuses.total)} />
-                  <BandStat label={isZh ? "能力数" : "Capabilities"} value={String(summarizeCapabilities(sessions).length)} />
                 </section>
               </>
             ) : null}

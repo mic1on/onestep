@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
-import { PageHeader } from "../../components/ui/PageHeader";
+import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
 import { useServicesQuery } from "../../features/services/queries";
 import type { ServiceSummary } from "../../lib/api/types";
 import { formatDateTime, formatRelativeTime } from "../../lib/formatters";
@@ -34,6 +34,7 @@ export function ServicesListPage() {
   const totalInstances = sortedItems.reduce((sum, service) => sum + service.instance_count, 0);
   const onlineInstances = sortedItems.reduce((sum, service) => sum + service.online_instance_count, 0);
   const attentionCount = sortedItems.filter(serviceNeedsAttention).length;
+  const readyServices = sortedItems.filter(isServiceFullyOnline).length;
   const sourceKindCounts = data?.source_kind_counts ?? {};
 
   function updateSearchParam(key: string, value: string | undefined) {
@@ -47,50 +48,55 @@ export function ServicesListPage() {
   }
 
   return (
-    <div className="ref-console-page">
-      <PageHeader
-        title={t("servicesList.title")}
-        titleMeta={
-          <span className="service-title-chip">{sortedItems.length}</span>
-        }
-        subtitle={
-          <p>
-            {t("servicesList.subtitle")}
-          </p>
-        }
-        actions={
-          <div className="ref-page-actions">
-            <label className="ref-inline-control ref-inline-control-select">
-              <span>{t("servicesList.filterScope")}</span>
-              <select
-                onChange={(event) => updateSearchParam("environment", event.target.value)}
-                value={selectedEnvironment}
-              >
-                <option value="all">{t("environment.all")}</option>
-                <option value="prod">{t("environment.prod")}</option>
-                <option value="staging">{t("environment.staging")}</option>
-                <option value="dev">{t("environment.dev")}</option>
-              </select>
-            </label>
+    <div className="ref-console-page signal-console-services-page">
+      <SignalConsoleHeader
+        className="signal-console-services-hero"
+        description={<p className="signal-console-hero-note">{t("servicesList.subtitle")}</p>}
+        kicker={t("servicesList.eyebrow")}
+        side={
+          <>
+            <div className="signal-console-hero-actions signal-console-services-hero-actions">
+              <div className="ref-page-actions">
+                <label className="ref-inline-control ref-inline-control-select">
+                  <span>{t("servicesList.filterScope")}</span>
+                  <select
+                    onChange={(event) => updateSearchParam("environment", event.target.value)}
+                    value={selectedEnvironment}
+                  >
+                    <option value="all">{t("environment.all")}</option>
+                    <option value="prod">{t("environment.prod")}</option>
+                    <option value="staging">{t("environment.staging")}</option>
+                    <option value="dev">{t("environment.dev")}</option>
+                  </select>
+                </label>
 
-            <label className="ref-inline-control ref-inline-control-search">
-              <span>{t("common.search")}</span>
-              <input
-                name="service-search"
-                onChange={(event) => {
-                  const nextValue = event.target.value;
-                  setSearch(nextValue);
-                  startTransition(() => {
-                    updateSearchParam("q", nextValue || undefined);
-                  });
-                }}
-                placeholder={t("servicesList.searchPlaceholder")}
-                type="search"
-                value={search}
-              />
-            </label>
-          </div>
+                <label className="ref-inline-control ref-inline-control-search">
+                  <span>{t("common.search")}</span>
+                  <input
+                    name="service-search"
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setSearch(nextValue);
+                      startTransition(() => {
+                        updateSearchParam("q", nextValue || undefined);
+                      });
+                    }}
+                    placeholder={t("servicesList.searchPlaceholder")}
+                    type="search"
+                    value={search}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="signal-console-metric signal-console-services-metric">
+              <span>{t("servicesList.visibleServices")}</span>
+              <strong>{sortedItems.length}</strong>
+              <p className="signal-console-hero-note">{t("common.afterFilters")}</p>
+            </div>
+          </>
         }
+        title={t("servicesList.title")}
       />
 
       {/* Tag filter bar */}
@@ -140,7 +146,7 @@ export function ServicesListPage() {
         <SummaryChip
           label={t("servicesList.summaryReady")}
           tone="accent"
-          value={String(sortedItems.filter(isServiceFullyOnline).length)}
+          value={String(readyServices)}
         />
         <SummaryChip
           label={t("servicesList.summaryAttention")}

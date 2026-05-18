@@ -201,6 +201,8 @@ describe("InstanceDetailPage", () => {
     renderPage();
 
     expect(await screen.findByText("Live updates are reconnecting")).toBeInTheDocument();
+    expect(screen.queryByText("Current lens")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Recent events").length).toBeGreaterThan(0);
   });
 
   it("requires explicit review before submitting a restart command", async () => {

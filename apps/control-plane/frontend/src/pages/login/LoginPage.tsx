@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -44,38 +44,32 @@ export function LoginPage() {
 
   if (sessionQuery.isPending) {
     return (
-      <div className="auth-shell">
-        <Panel title={t("auth.checkingTitle")} subtitle={t("auth.loginSubtitle")} className="auth-panel">
+      <AuthFrame title={t("auth.checkingTitle")} subtitle={t("auth.loginSubtitle")}>
           <div className="loading-block">{t("auth.checkingBody")}</div>
-        </Panel>
-      </div>
+      </AuthFrame>
     );
   }
 
   if (sessionQuery.error) {
     const isExpired = sessionQuery.error instanceof SessionExpiredError;
     return (
-      <div className="auth-shell">
-        <Panel title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")} className="auth-panel">
+      <AuthFrame title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")}>
           <EmptyState
             title={isExpired ? t("auth.loginTitle") : t("auth.checkFailedTitle")}
             body={isExpired ? t("auth.checkingSubtitle") : String(sessionQuery.error)}
           />
-        </Panel>
-      </div>
+      </AuthFrame>
     );
   }
 
   if (sessionQuery.data?.bootstrap_required) {
     return (
-      <div className="auth-shell">
-        <Panel title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")} className="auth-panel">
+      <AuthFrame title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")}>
           <EmptyState
             title={t("auth.loginTitle")}
             body="Local admin bootstrap is required before console login."
           />
-        </Panel>
-      </div>
+      </AuthFrame>
     );
   }
 
@@ -84,8 +78,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="auth-shell">
-      <Panel title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")} className="auth-panel">
+    <AuthFrame title={t("auth.loginTitle")} subtitle={t("auth.loginSubtitle")}>
         <form className="auth-form" onSubmit={(event) => void handleSubmit(event)}>
           <label className="auth-field">
             <span>{t("auth.usernameLabel")}</span>
@@ -118,6 +111,31 @@ export function LoginPage() {
             </button>
           </div>
         </form>
+    </AuthFrame>
+  );
+}
+
+function AuthFrame({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="auth-shell signal-console-auth-shell">
+      <section className="signal-console-auth-brand">
+        <span className="shell-brand-mark">01</span>
+        <div className="signal-console-auth-brand-copy">
+          <strong>OneStep</strong>
+          <span>Control Plane</span>
+        </div>
+      </section>
+
+      <Panel title={title} subtitle={subtitle} className="auth-panel">
+        {children}
       </Panel>
     </div>
   );

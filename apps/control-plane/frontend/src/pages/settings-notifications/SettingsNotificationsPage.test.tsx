@@ -114,6 +114,7 @@ describe("SettingsNotificationsPage", () => {
     renderPage();
     const user = userEvent.setup();
 
+    expect(await screen.findByRole("heading", { name: "Notifications" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /ops-feishu/i }));
     expect(
       await screen.findByText(

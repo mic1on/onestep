@@ -108,6 +108,7 @@ export function TaskDetailPage() {
   const boundSessions = sortBoundSessions(sessionsQuery.data?.items ?? [], boundInstanceIds, instanceOrder);
   const taskStatus: "ok" | "warning" | "degraded" = summary ? deriveTaskStatus(summary) : "ok";
   const retrySummary = summary ? formatRetryPolicySummary(summary.retry_policy, isZh) : t("common.none");
+  const taskHeroMetric = summary ? buildTaskHeroMetric(summary, isZh) : null;
   const canViewControls = canViewCommandControls(sessionQuery.data);
   const connectionNotice = buildTaskConnectionNotice(
     t,
@@ -134,7 +135,7 @@ export function TaskDetailPage() {
   }
 
   return (
-    <div className="ref-console-page ref-detail-page">
+    <div className="ref-console-page ref-detail-page signal-console-detail-page signal-console-task-detail">
       <section className="ref-detail-topbar">
         <div className="ref-detail-topbar-rail">
           <Link className="ref-back-button" to={buildServiceViewHref("tasks")}>
@@ -148,6 +149,9 @@ export function TaskDetailPage() {
         <div className="ref-detail-topbar-main">
           <div className="ref-detail-title">
             <div className="ref-detail-title-copy">
+              <span className="signal-console-kicker">
+                {t("taskDetail.eyebrow", { environment: t(`environment.${environment}`) })}
+              </span>
               <div className="ref-detail-title-row">
                 <h2>{resolvedTaskName}</h2>
                 <StatusBadge {...getTaskStatusBadge(taskStatus, isZh)} />
@@ -157,6 +161,14 @@ export function TaskDetailPage() {
                   ? `${resolvedServiceName} · 最近事件 ${formatRelativeTime(summary?.last_event_at ?? null)}`
                   : `${resolvedServiceName} · last event ${formatRelativeTime(summary?.last_event_at ?? null)}`}
               </p>
+            </div>
+          </div>
+
+          <div className="ref-detail-header-actions">
+            <div className="signal-console-detail-topbar-metric">
+              <span>{taskHeroMetric?.label ?? t("taskDetail.failedDlq")}</span>
+              <strong>{taskHeroMetric?.value ?? "--"}</strong>
+              {taskHeroMetric?.note ? <p>{taskHeroMetric.note}</p> : null}
             </div>
           </div>
         </div>
@@ -176,19 +188,15 @@ export function TaskDetailPage() {
         <div className="ref-detail-layout">
           <aside className="ref-side-nav">
             <Link className="ref-side-nav-item" to={buildServiceViewHref("overview")}>
-              <span className="ref-side-nav-icon">◫</span>
               <span>{isZh ? "概览" : "Overview"}</span>
             </Link>
             <Link className="ref-side-nav-item" to={buildServiceViewHref("instances")}>
-              <span className="ref-side-nav-icon">≣</span>
               <span>{isZh ? "实例" : "Instances"}</span>
             </Link>
             <Link className="ref-side-nav-item is-active" to={buildServiceViewHref("tasks")}>
-              <span className="ref-side-nav-icon">⌘</span>
               <span>{isZh ? "任务" : "Tasks"}</span>
             </Link>
             <Link className="ref-side-nav-item" to={buildServiceViewHref("commands")}>
-              <span className="ref-side-nav-icon">↻</span>
               <span>{isZh ? "命令" : "Commands"}</span>
             </Link>
           </aside>
@@ -562,6 +570,24 @@ function getTaskActivitySubtitle(activityTab: TaskActivityTab, t: ReturnType<typ
     return t("taskDetail.sessionsSubtitle");
   }
   return t("taskDetail.recentEventsSubtitle");
+}
+
+function buildTaskHeroMetric(summary: TaskDashboardSummary, isZh: boolean) {
+  const issueCount = summary.failed + summary.dead_lettered;
+
+  if (issueCount > 0) {
+    return {
+      label: isZh ? "失败 / 死信" : "Failed / DLQ",
+      value: formatCount(issueCount),
+      note: isZh ? "优先处理异常、死信和重试链路。" : "Prioritize failures, dead letters, and retry paths.",
+    };
+  }
+
+  return {
+    label: isZh ? "成功总数" : "Succeeded",
+    value: formatCount(summary.succeeded),
+    note: isZh ? "当前时间窗口内累计成功执行。" : "Successful runs accumulated in the current window.",
+  };
 }
 
 function deriveTaskStatus(summary: TaskDashboardSummary) {

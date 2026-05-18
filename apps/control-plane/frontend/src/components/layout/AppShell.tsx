@@ -44,8 +44,11 @@ export function AppShell() {
       <header className="shell-topbar">
         <div className="shell-topbar-main">
           <NavLink className="shell-brand" to="/services?environment=all">
-            <span className="shell-brand-mark">CP</span>
-            <strong className="shell-brand-title">OneStep</strong>
+            <span className="shell-brand-mark">01</span>
+            <span className="shell-brand-copy">
+              <strong className="shell-brand-title">{t("app.brand")}</strong>
+              <span className="shell-brand-subtitle">{t("app.title")}</span>
+            </span>
           </NavLink>
 
           <nav className="shell-nav" aria-label={t("app.primaryNavAriaLabel")}>
@@ -86,7 +89,7 @@ export function AppShell() {
       </header>
 
       <main className="app-main">
-        <div className="page-shell">
+        <div className="page-shell signal-console-frame">
           <Outlet />
         </div>
       </main>
