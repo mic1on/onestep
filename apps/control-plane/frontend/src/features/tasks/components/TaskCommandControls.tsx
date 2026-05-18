@@ -284,6 +284,7 @@ export function TaskCommandControls({
       <OverflowDialog
         className="detail-dialog-card task-manual-run-dialog"
         description={t("taskCommandControls.manualRun.subtitle", { count: manualRunStates.length })}
+        overlayClassName="task-manual-run-dialog-overlay"
         onClose={() => {
           if (mutation.isPending) {
             return;
@@ -294,12 +295,8 @@ export function TaskCommandControls({
         title={t("taskCommandControls.manualRun.title")}
       >
         <div className="task-manual-run-dialog-body">
-          <section className="task-manual-run-dialog-section">
-            <div className="task-manual-run-dialog-header">
-              <div>
-                <h4>{t("taskCommandControls.manualRun.title")}</h4>
-                <p>{t("taskCommandControls.manualRun.subtitle", { count: manualRunStates.length })}</p>
-              </div>
+          <section className="task-manual-run-dialog-section task-manual-run-dialog-section-targets">
+            <div className="task-manual-run-dialog-toolbar">
               <div className="fanout-inline-actions">
                 <button
                   className="button-link"
@@ -339,20 +336,24 @@ export function TaskCommandControls({
             </div>
           </section>
 
-          <section className="task-manual-run-dialog-section">
-            <label className="dialog-field">
+          <section className="task-manual-run-dialog-section task-manual-run-dialog-section-payload">
+            <label className="dialog-field task-manual-run-field">
               <span>{t("taskCommandControls.manualRun.payloadLabel")}</span>
               <textarea
                 className="task-manual-run-payload"
                 onChange={(event) => setManualRunPayloadText(event.target.value)}
                 placeholder={t("taskCommandControls.manualRun.payloadPlaceholder")}
-                rows={10}
+                rows={12}
                 value={manualRunPayloadText}
               />
             </label>
-            <label className="dialog-field">
+          </section>
+
+          <section className="task-manual-run-dialog-section task-manual-run-dialog-section-reason">
+            <label className="dialog-field task-manual-run-field">
               <span>{t("taskCommandControls.manualRun.reasonLabel")}</span>
               <textarea
+                className="task-manual-run-reason"
                 onChange={(event) => setManualRunReason(event.target.value)}
                 placeholder={t("taskCommandControls.manualRun.reasonPlaceholder")}
                 rows={3}
@@ -365,7 +366,7 @@ export function TaskCommandControls({
             <p className="fanout-note inline-feedback inline-feedback-error">{manualRunError ?? submitError}</p>
           ) : null}
 
-          <div className="dialog-actions">
+          <div className="dialog-actions task-manual-run-actions">
             <button
               className="button-link"
               disabled={mutation.isPending}

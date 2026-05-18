@@ -6,6 +6,7 @@ type OverflowDialogProps = {
   title: string;
   description?: string;
   className?: string;
+  overlayClassName?: string;
   onClose: () => void;
   children: ReactNode;
 };
@@ -15,6 +16,7 @@ export function OverflowDialog({
   title,
   description,
   className,
+  overlayClassName,
   onClose,
   children,
 }: OverflowDialogProps) {
@@ -46,7 +48,11 @@ export function OverflowDialog({
   }
 
   return (
-    <div className="dialog-overlay" onClick={onClose} role="presentation">
+    <div
+      className={overlayClassName ? `dialog-overlay ${overlayClassName}` : "dialog-overlay"}
+      onClick={onClose}
+      role="presentation"
+    >
       <div
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}

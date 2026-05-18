@@ -985,6 +985,219 @@ body {
   padding: 0 20px 20px;
 }
 
+.task-manual-run-dialog-overlay {
+  background: rgba(15, 15, 15, 0.36);
+  backdrop-filter: none;
+}
+
+.task-manual-run-dialog.dialog-card {
+  width: min(100%, 46rem);
+  max-height: min(84vh, 48rem);
+  border-color: var(--nd-border);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(215, 25, 33, 0.05), transparent 20%),
+    var(--nd-surface);
+  box-shadow: none;
+}
+
+.task-manual-run-dialog .detail-dialog-heading {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.task-manual-run-dialog .detail-dialog-body {
+  gap: 14px;
+  padding-right: 0;
+}
+
+.task-manual-run-dialog .dialog-copy h3 {
+  color: var(--nd-text);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.task-manual-run-dialog .dialog-copy p,
+.task-manual-run-dialog .dialog-field span,
+.task-manual-run-dialog .task-manual-instance-copy p {
+  color: var(--nd-text-secondary);
+}
+
+.task-manual-run-dialog .dialog-copy p,
+.task-manual-run-dialog .dialog-field span,
+.task-manual-run-dialog .task-manual-instance-state span,
+.task-manual-run-dialog .fanout-inline-actions .button-link {
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-manual-run-dialog .detail-dialog-close {
+  border-color: var(--nd-border);
+  color: var(--nd-text-secondary);
+}
+
+.task-manual-run-dialog .detail-dialog-close:hover {
+  border-color: var(--nd-border-strong);
+  color: var(--nd-text);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.task-manual-run-dialog-body {
+  display: grid;
+  gap: 14px;
+}
+
+.task-manual-run-dialog-section {
+  display: grid;
+  gap: 10px;
+}
+
+.task-manual-run-dialog-section-targets {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.task-manual-run-dialog-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.task-manual-run-dialog .fanout-inline-actions {
+  gap: 12px;
+}
+
+.task-manual-run-dialog .fanout-inline-actions .button-link {
+  color: var(--nd-text-secondary);
+}
+
+.task-manual-run-dialog .fanout-inline-actions .button-link:hover {
+  color: var(--nd-text);
+}
+
+.task-manual-instance-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-manual-instance-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid var(--nd-border);
+  border-radius: 14px;
+  background: var(--nd-surface-strong);
+  cursor: pointer;
+}
+
+.task-manual-instance-row.active {
+  border-color: var(--nd-text);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.task-manual-instance-check {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--nd-border-strong);
+  border-radius: 999px;
+  background: var(--nd-surface);
+  color: var(--nd-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.task-manual-instance-row.active .task-manual-instance-check {
+  border-color: var(--nd-text);
+  background: var(--nd-text);
+  color: var(--nd-surface);
+}
+
+.task-manual-instance-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.task-manual-instance-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-manual-instance-copy strong,
+.task-manual-instance-copy p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-manual-instance-copy strong {
+  color: var(--nd-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.task-manual-instance-copy p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.task-manual-instance-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--nd-text-secondary);
+  white-space: nowrap;
+}
+
+.task-manual-instance-state span {
+  padding: 4px 8px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.task-manual-run-field textarea {
+  border-color: var(--nd-border);
+  border-radius: 16px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-text);
+  box-shadow: none;
+}
+
+.task-manual-run-field textarea:focus {
+  outline: 2px solid rgba(15, 15, 15, 0.1);
+  border-color: var(--nd-border-strong);
+}
+
+.task-manual-run-payload {
+  min-height: 15rem;
+  font-family: "Space Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.task-manual-run-reason {
+  min-height: 5.5rem;
+}
+
+.task-manual-run-actions {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.task-manual-run-actions .button-secondary {
+  min-width: 168px;
+}
+
 .signal-console-detail-page .ref-task-browser-card {
   padding: 10px;
 }
@@ -1515,5 +1728,26 @@ body {
 
   .signal-console-auth-shell {
     padding: 24px 14px;
+  }
+
+  .task-manual-run-dialog.dialog-card {
+    width: min(100%, calc(100vw - 24px));
+  }
+
+  .task-manual-instance-row {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .task-manual-instance-state {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .task-manual-run-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-manual-run-actions .button-secondary {
+    width: 100%;
   }
 }
