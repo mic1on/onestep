@@ -327,7 +327,7 @@ function compareServicesForSurface(left: ServiceSummary, right: ServiceSummary) 
 }
 
 function getCoverageBarClass(service: ServiceSummary) {
-  if (service.instance_count > 0 && service.online_instance_count > 0 && service.online_instance_count === service.instance_count && !isServiceStale(service.latest_sync_at)) {
+  if (service.instance_count > 0 && service.online_instance_count === service.instance_count) {
     return "ref-usage-fill is-healthy";
   }
   if (service.online_instance_count > 0) {

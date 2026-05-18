@@ -119,4 +119,46 @@ describe("ServicesListPage", () => {
     expect(within(inactiveDetails as HTMLElement).getByText("audit-relay")).toBeInTheDocument();
     expect(within(inactiveDetails as HTMLElement).getByText("No activity in the last 3 days.")).toBeInTheDocument();
   });
+
+  it("keeps a fully online service green even when its latest sync is stale", async () => {
+    const now = new Date("2026-05-20T08:00:00Z").toISOString();
+    const staleSync = new Date("2026-05-20T07:30:00Z").toISOString();
+
+    mockUseServicesQuery.mockReturnValue({
+      data: {
+        items: [
+          {
+            name: "orders-api",
+            environment: "prod",
+            latest_deployment_version: "2026.05.20",
+            latest_topology_hash: "hash-orders",
+            latest_sync_at: staleSync,
+            instance_count: 1,
+            online_instance_count: 1,
+            last_seen_at: now,
+            source_kinds: [],
+            task_count: 0,
+            created_at: now,
+            updated_at: now,
+          },
+        ],
+        total: 1,
+        limit: 100,
+        offset: 0,
+        source_kind_counts: {},
+      },
+      isPending: false,
+      error: null,
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText("orders-api")).closest(".ref-table-row");
+    expect(row).not.toBeNull();
+
+    const usageFill = row?.querySelector(".ref-usage-fill");
+    expect(usageFill).not.toBeNull();
+    expect(usageFill).toHaveClass("is-healthy");
+    expect(usageFill).not.toHaveClass("is-warning");
+  });
 });
