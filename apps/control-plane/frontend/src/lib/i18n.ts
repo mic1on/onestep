@@ -170,6 +170,8 @@ const resources = {
         tableHeaderInstances: "Instances",
         instanceLive: "Live",
         noActivityHint: "No instance activity reported yet",
+        inactiveSectionTitle: "Long inactive services ({{count}})",
+        inactiveSectionDescription: "No activity in the last {{days}} days.",
       },
       serviceDetail: {
         missingTitle: "Missing service name",
@@ -864,6 +866,8 @@ const resources = {
         tableHeaderInstances: "实例数",
         instanceLive: "活跃",
         noActivityHint: "实例尚未上报活跃时间",
+        inactiveSectionTitle: "长期未活跃服务（{{count}}）",
+        inactiveSectionDescription: "最近 {{days}} 天无活跃记录。",
       },
       serviceDetail: {
         missingTitle: "缺少服务名",

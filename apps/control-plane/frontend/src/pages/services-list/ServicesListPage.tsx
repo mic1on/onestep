@@ -8,6 +8,10 @@ import { useServicesQuery } from "../../features/services/queries";
 import type { ServiceSummary } from "../../lib/api/types";
 import { formatDateTime, formatRelativeTime } from "../../lib/formatters";
 import { servicePath } from "../../lib/routes";
+import { getInactiveServiceDays } from "../../lib/runtime-config";
+
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 export function ServicesListPage() {
   const { t } = useTranslation();
@@ -25,12 +29,17 @@ export function ServicesListPage() {
     selectedEnvironment === "all" ? undefined : selectedEnvironment,
     sourceKindParam,
   );
+  const inactiveServiceDays = getInactiveServiceDays();
+  const inactiveThresholdMs = inactiveServiceDays * DAY_IN_MS;
 
   const query = deferredSearch.trim().toLowerCase();
   const filteredItems = !query
     ? (data?.items ?? [])
     : (data?.items ?? []).filter((service) => service.name.toLowerCase().includes(query));
-  const sortedItems = [...filteredItems].sort(compareServicesForSurface);
+  const { activeItems, inactiveItems } = partitionServices(filteredItems, inactiveThresholdMs);
+  const sortedActiveItems = [...activeItems].sort(compareServicesForSurface);
+  const sortedInactiveItems = [...inactiveItems].sort(compareServicesForSurface);
+  const sortedItems = [...sortedActiveItems, ...sortedInactiveItems];
   const totalInstances = sortedItems.reduce((sum, service) => sum + service.instance_count, 0);
   const onlineInstances = sortedItems.reduce((sum, service) => sum + service.online_instance_count, 0);
   const attentionCount = sortedItems.filter(serviceNeedsAttention).length;
@@ -161,28 +170,44 @@ export function ServicesListPage() {
         <EmptyState title={t("servicesList.emptyTitle")} body={t("servicesList.emptyBody")} />
       ) : null}
 
-      {!isPending && !error && sortedItems.length > 0 ? (
-        <section className="ref-table-card">
-          <div className="ref-table-head">
-            <span>{t("servicesList.tableHeaderName")}</span>
-            <span>{t("servicesList.tableHeaderCreated")}</span>
-            <span>{t("servicesList.tableHeaderLastActive")}</span>
-            <span>{t("servicesList.tableHeaderDeployment")}</span>
-            <span>{t("servicesList.tableHeaderInstances")}</span>
-          </div>
+      {!isPending && !error && sortedActiveItems.length > 0 ? <ServicesTable items={sortedActiveItems} t={t} /> : null}
 
-          <div className="ref-table-body">
-            {sortedItems.map((service) => (
-              <ServiceRow key={`${service.environment}:${service.name}`} service={service} t={t} />
-            ))}
+      {!isPending && !error && sortedInactiveItems.length > 0 ? (
+        <details className="ref-collapse-card">
+          <summary>
+            <strong>{t("servicesList.inactiveSectionTitle", { count: sortedInactiveItems.length })}</strong>
+            <span>{t("servicesList.inactiveSectionDescription", { days: inactiveServiceDays })}</span>
+          </summary>
+          <div className="ref-collapse-body">
+            <ServicesTable items={sortedInactiveItems} t={t} />
           </div>
-        </section>
+        </details>
       ) : null}
     </div>
   );
 }
 
-function ServiceRow({ service, t }: { service: ServiceSummary; t: (key: string) => string }) {
+function ServicesTable({ items, t }: { items: ServiceSummary[]; t: Translate }) {
+  return (
+    <section className="ref-table-card">
+      <div className="ref-table-head">
+        <span>{t("servicesList.tableHeaderName")}</span>
+        <span>{t("servicesList.tableHeaderCreated")}</span>
+        <span>{t("servicesList.tableHeaderLastActive")}</span>
+        <span>{t("servicesList.tableHeaderDeployment")}</span>
+        <span>{t("servicesList.tableHeaderInstances")}</span>
+      </div>
+
+      <div className="ref-table-body">
+        {items.map((service) => (
+          <ServiceRow key={`${service.environment}:${service.name}`} service={service} t={t} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ServiceRow({ service, t }: { service: ServiceSummary; t: Translate }) {
   return (
     <article className="ref-table-row" key={`${service.environment}:${service.name}`}>
       <div className="ref-service-cell">
@@ -311,11 +336,34 @@ function getCoverageBarClass(service: ServiceSummary) {
   return "ref-usage-fill is-empty";
 }
 
-function getActivityHint(service: ServiceSummary, t: (key: string) => string) {
+function getActivityHint(service: ServiceSummary, t: Translate) {
   if (service.last_seen_at === null) {
     return t("servicesList.noActivityHint");
   }
   return formatDateTime(service.last_seen_at);
+}
+
+function partitionServices(services: ServiceSummary[], inactiveThresholdMs: number) {
+  return services.reduce(
+    (groups, service) => {
+      if (isServiceInactive(service, inactiveThresholdMs)) {
+        groups.inactiveItems.push(service);
+      } else {
+        groups.activeItems.push(service);
+      }
+
+      return groups;
+    },
+    { activeItems: [] as ServiceSummary[], inactiveItems: [] as ServiceSummary[] },
+  );
+}
+
+function isServiceInactive(service: ServiceSummary, inactiveThresholdMs: number) {
+  if (service.last_seen_at === null) {
+    return true;
+  }
+
+  return Date.now() - Date.parse(service.last_seen_at) > inactiveThresholdMs;
 }
 
 function isServiceStale(value: string | null) {

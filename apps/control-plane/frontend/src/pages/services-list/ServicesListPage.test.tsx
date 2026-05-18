@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ServiceListResponse } from "../../lib/api/types";
 import { ServicesListPage } from "./ServicesListPage";
@@ -12,7 +12,8 @@ vi.mock("../../features/services/queries", () => ({
 }));
 
 function buildServicesResponse(): ServiceListResponse {
-  const now = new Date("2026-05-16T08:00:00Z").toISOString();
+  const now = new Date("2026-05-20T08:00:00Z").toISOString();
+  const stale = new Date("2026-05-15T08:00:00Z").toISOString();
   return {
     items: [
       {
@@ -37,7 +38,7 @@ function buildServicesResponse(): ServiceListResponse {
         latest_sync_at: null,
         instance_count: 3,
         online_instance_count: 1,
-        last_seen_at: now,
+        last_seen_at: stale,
         source_kinds: ["scheduler"],
         task_count: 1,
         created_at: now,
@@ -65,8 +66,15 @@ function renderPage() {
 }
 
 describe("ServicesListPage", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-05-20T08:00:00Z").valueOf());
+    vi.stubEnv("VITE_SERVICE_INACTIVE_DAYS", "3");
+  });
+
   afterEach(() => {
     mockUseServicesQuery.mockReset();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("shows the signal-console hero and summary band", async () => {
@@ -86,5 +94,29 @@ describe("ServicesListPage", () => {
     expect(screen.getByText("Attention")).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "Search" })).toBeInTheDocument();
     expect(screen.getByText("billing-sync")).toBeInTheDocument();
+  });
+
+  it("moves long inactive services into the collapsed section", async () => {
+    mockUseServicesQuery.mockReturnValue({
+      data: buildServicesResponse(),
+      isPending: false,
+      error: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("billing-sync")).toBeInTheDocument();
+    expect(screen.getByText("Long inactive services (1)")).toBeInTheDocument();
+
+    const activeTable = document.querySelector(".ref-table-card .ref-table-body");
+    expect(activeTable).not.toBeNull();
+    expect(within(activeTable as HTMLElement).getByText("billing-sync")).toBeInTheDocument();
+    expect(within(activeTable as HTMLElement).queryByText("audit-relay")).not.toBeInTheDocument();
+
+    const inactiveDetails = screen.getByText("Long inactive services (1)").closest("details");
+    expect(inactiveDetails).not.toBeNull();
+    expect(inactiveDetails).not.toHaveAttribute("open");
+    expect(within(inactiveDetails as HTMLElement).getByText("audit-relay")).toBeInTheDocument();
+    expect(within(inactiveDetails as HTMLElement).getByText("No activity in the last 3 days.")).toBeInTheDocument();
   });
 });
