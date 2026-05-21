@@ -1,0 +1,3 @@
+app:
+  name: broken-worker
+tasks: [
