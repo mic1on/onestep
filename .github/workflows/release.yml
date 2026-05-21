@@ -11,6 +11,19 @@ on:
         description: "Existing release tag to build from, for example v1.2.3"
         required: false
         type: string
+      worker_image_source_ref:
+        description: "Branch, tag, or commit SHA containing worker image sources for manual backfills"
+        required: false
+        type: string
+      worker_image_version:
+        description: "Exact worker image version tag to publish, defaults to release_tag"
+        required: false
+        type: string
+      publish_worker_alias_tags:
+        description: "Also publish the worker image's major.minor and latest tags"
+        required: false
+        default: false
+        type: boolean
       publish_worker_image:
         description: "Build and publish the worker image to GHCR"
         required: false
@@ -40,6 +53,10 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       major_minor: ${{ steps.resolve.outputs.major_minor }}
       run_build: ${{ steps.resolve.outputs.run_build }}
+      worker_image_ref: ${{ steps.resolve.outputs.worker_image_ref }}
+      worker_image_version: ${{ steps.resolve.outputs.worker_image_version }}
+      worker_image_major_minor: ${{ steps.resolve.outputs.worker_image_major_minor }}
+      publish_worker_alias_tags: ${{ steps.resolve.outputs.publish_worker_alias_tags }}
       publish_worker_image: ${{ steps.resolve.outputs.publish_worker_image }}
       publish_pypi: ${{ steps.resolve.outputs.publish_pypi }}
       publish_github_release: ${{ steps.resolve.outputs.publish_github_release }}
@@ -51,6 +68,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag || '' }}
+          INPUT_WORKER_IMAGE_SOURCE_REF: ${{ github.event.inputs.worker_image_source_ref || '' }}
+          INPUT_WORKER_IMAGE_VERSION: ${{ github.event.inputs.worker_image_version || '' }}
+          INPUT_PUBLISH_WORKER_ALIAS_TAGS: ${{ github.event.inputs.publish_worker_alias_tags || 'false' }}
           INPUT_PUBLISH_WORKER_IMAGE: ${{ github.event.inputs.publish_worker_image || 'false' }}
           INPUT_PUBLISH_PYPI: ${{ github.event.inputs.publish_pypi || 'false' }}
           INPUT_PUBLISH_GITHUB_RELEASE: ${{ github.event.inputs.publish_github_release || 'false' }}
@@ -85,17 +105,54 @@ jobs:
             return 1
           }
 
+          assign_version_fields() {
+            local raw_version="$1"
+            local version_var="$2"
+            local major_minor_var="$3"
+            local version
+            case "$raw_version" in
+              v[0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*)
+                version="${raw_version#v}"
+                printf -v "$version_var" '%s' "$version"
+                printf -v "$major_minor_var" '%s' "${version%.*}"
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          VERSION=""
+          MAJOR_MINOR=""
+          WORKER_IMAGE_REF=""
+          WORKER_IMAGE_VERSION=""
+          WORKER_IMAGE_MAJOR_MINOR=""
+          PUBLISH_WORKER_ALIAS_TAGS=false
+
           if [ "$EVENT_NAME" = "push" ]; then
             CHECKOUT_REF="$REF_NAME"
             RUN_BUILD=true
             PUBLISH_WORKER_IMAGE=true
             PUBLISH_PYPI=true
             PUBLISH_GITHUB_RELEASE=true
+            WORKER_IMAGE_REF="$CHECKOUT_REF"
+            PUBLISH_WORKER_ALIAS_TAGS=true
           else
             CHECKOUT_REF="${INPUT_RELEASE_TAG:-$REF_NAME}"
             PUBLISH_WORKER_IMAGE="$INPUT_PUBLISH_WORKER_IMAGE"
             PUBLISH_PYPI="$INPUT_PUBLISH_PYPI"
             PUBLISH_GITHUB_RELEASE="$INPUT_PUBLISH_GITHUB_RELEASE"
+            PUBLISH_WORKER_ALIAS_TAGS="$INPUT_PUBLISH_WORKER_ALIAS_TAGS"
+
+            if [ "$PUBLISH_WORKER_IMAGE" != "true" ] && { [ -n "$INPUT_WORKER_IMAGE_SOURCE_REF" ] || [ -n "$INPUT_WORKER_IMAGE_VERSION" ] || [ "$PUBLISH_WORKER_ALIAS_TAGS" = "true" ]; }; then
+              echo "worker_image_source_ref, worker_image_version, and publish_worker_alias_tags require publish_worker_image=true." >&2
+              exit 1
+            fi
+
+            if { [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ]; } && { [ -n "$INPUT_WORKER_IMAGE_SOURCE_REF" ] || [ -n "$INPUT_WORKER_IMAGE_VERSION" ]; }; then
+              echo "worker_image_source_ref and worker_image_version can only be used when publishing the worker image alone." >&2
+              exit 1
+            fi
 
             if [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ]; then
               RUN_BUILD=true
@@ -105,27 +162,42 @@ jobs:
               RUN_BUILD=true
             fi
 
-            if [ "$PUBLISH_WORKER_IMAGE" = "true" ] || [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ]; then
+            if [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ] || [ -n "$INPUT_RELEASE_TAG" ]; then
               if ! CHECKOUT_REF="$(resolve_tag_ref "$CHECKOUT_REF")"; then
                 echo "Could not find a release tag matching '$CHECKOUT_REF'. Try the exact tag name from the repository, for example '1.2.62'." >&2
                 exit 1
               fi
             fi
+
+            if [ "$PUBLISH_WORKER_IMAGE" = "true" ]; then
+              if [ -n "$INPUT_WORKER_IMAGE_SOURCE_REF" ]; then
+                WORKER_IMAGE_REF="$INPUT_WORKER_IMAGE_SOURCE_REF"
+              else
+                WORKER_IMAGE_REF="$CHECKOUT_REF"
+              fi
+            fi
           fi
 
-          VERSION=""
-          MAJOR_MINOR=""
-          if [ "$EVENT_NAME" = "push" ] || [ "$PUBLISH_WORKER_IMAGE" = "true" ] || [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ]; then
-            case "$CHECKOUT_REF" in
-              v[0-9]*.[0-9]*.[0-9]*|[0-9]*.[0-9]*.[0-9]*)
-                VERSION="${CHECKOUT_REF#v}"
-                MAJOR_MINOR="${VERSION%.*}"
-                ;;
-              *)
-                echo "Publishing requires release_tag to look like v1.2.3 or 1.2.3; got '$CHECKOUT_REF'." >&2
+          if [ "$EVENT_NAME" = "push" ] || [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ] || [ -n "$INPUT_RELEASE_TAG" ]; then
+            if ! assign_version_fields "$CHECKOUT_REF" VERSION MAJOR_MINOR; then
+              echo "Publishing requires release_tag to look like v1.2.3 or 1.2.3; got '$CHECKOUT_REF'." >&2
+              exit 1
+            fi
+          fi
+
+          if [ "$PUBLISH_WORKER_IMAGE" = "true" ]; then
+            if [ -n "$INPUT_WORKER_IMAGE_VERSION" ]; then
+              if ! assign_version_fields "$INPUT_WORKER_IMAGE_VERSION" WORKER_IMAGE_VERSION WORKER_IMAGE_MAJOR_MINOR; then
+                echo "worker_image_version must look like v1.2.3 or 1.2.3; got '$INPUT_WORKER_IMAGE_VERSION'." >&2
                 exit 1
-                ;;
-            esac
+              fi
+            elif [ -n "$VERSION" ]; then
+              WORKER_IMAGE_VERSION="$VERSION"
+              WORKER_IMAGE_MAJOR_MINOR="$MAJOR_MINOR"
+            else
+              echo "publish_worker_image requires release_tag or worker_image_version." >&2
+              exit 1
+            fi
           fi
 
           {
@@ -133,6 +205,10 @@ jobs:
             echo "version=$VERSION"
             echo "major_minor=$MAJOR_MINOR"
             echo "run_build=$RUN_BUILD"
+            echo "worker_image_ref=$WORKER_IMAGE_REF"
+            echo "worker_image_version=$WORKER_IMAGE_VERSION"
+            echo "worker_image_major_minor=$WORKER_IMAGE_MAJOR_MINOR"
+            echo "publish_worker_alias_tags=$PUBLISH_WORKER_ALIAS_TAGS"
             echo "publish_worker_image=$PUBLISH_WORKER_IMAGE"
             echo "publish_pypi=$PUBLISH_PYPI"
             echo "publish_github_release=$PUBLISH_GITHUB_RELEASE"
@@ -251,17 +327,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.worker_image_ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Verify worker image sources exist
         env:
-          CHECKOUT_REF: ${{ needs.prepare.outputs.checkout_ref }}
+          WORKER_IMAGE_REF: ${{ needs.prepare.outputs.worker_image_ref }}
         run: |
           if [ ! -f docker/worker/Dockerfile ] || [ ! -f docker/worker/entrypoint.sh ]; then
-            echo "Selected ref '$CHECKOUT_REF' does not include worker image sources. Choose a release tag created after worker image support landed." >&2
+            echo "Selected worker_image_source_ref '$WORKER_IMAGE_REF' does not include worker image sources." >&2
             exit 1
           fi
 
@@ -275,10 +352,19 @@ jobs:
       - name: Derive image tags
         run: |
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/onestep-worker"
+          IMAGE_TAGS="${IMAGE_NAME}:${{ needs.prepare.outputs.worker_image_version }}"
+
+          if [ "${{ needs.prepare.outputs.publish_worker_alias_tags }}" = "true" ]; then
+            IMAGE_TAGS="${IMAGE_TAGS}"$'\n'"${IMAGE_NAME}:${{ needs.prepare.outputs.worker_image_major_minor }}"$'\n'"${IMAGE_NAME}:latest"
+          fi
+
           {
-            echo "VERSION=${{ needs.prepare.outputs.version }}"
-            echo "MAJOR_MINOR=${{ needs.prepare.outputs.major_minor }}"
             echo "IMAGE_NAME=$IMAGE_NAME"
+            echo "VERSION=${{ needs.prepare.outputs.worker_image_version }}"
+            echo "MAJOR_MINOR=${{ needs.prepare.outputs.worker_image_major_minor }}"
+            echo "IMAGE_TAGS<<EOF"
+            printf '%s\n' "$IMAGE_TAGS"
+            echo "EOF"
           } >> "$GITHUB_ENV"
 
       - name: Build and push worker image
@@ -288,10 +374,7 @@ jobs:
           file: docker/worker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.VERSION }}
-            ${{ env.IMAGE_NAME }}:${{ env.MAJOR_MINOR }}
-            ${{ env.IMAGE_NAME }}:latest
+          tags: ${{ env.IMAGE_TAGS }}
 
   pypi:
     name: Publish to PyPI
