@@ -21,3 +21,19 @@ if docker run --rm \
   exit 1
 fi
 grep -F "onestep-worker: running check for /workspace/worker.yaml" "$invalid_yaml_output"
+
+requirements_output="$(mktemp)"
+docker run --rm \
+  -e ONESTEP_TARGET=worker.yaml \
+  -v "$PWD/tests/assets/worker_image/mounted_requirements:/workspace" \
+  "$IMAGE_TAG" >"$requirements_output" 2>&1
+grep -F "onestep-worker: installing requirements from /workspace/requirements.txt" "$requirements_output"
+grep -F '"marker": "mounted-requirements"' "$requirements_output"
+
+pyproject_output="$(mktemp)"
+docker run --rm \
+  -e ONESTEP_TARGET=worker.yaml \
+  -v "$PWD/tests/assets/worker_image/mounted_pyproject:/workspace" \
+  "$IMAGE_TAG" >"$pyproject_output" 2>&1
+grep -F "onestep-worker: installing project from /workspace/pyproject.toml" "$pyproject_output"
+grep -F '"marker": "mounted-pyproject"' "$pyproject_output"
