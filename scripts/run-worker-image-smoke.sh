@@ -2,6 +2,7 @@
 set -euo pipefail
 
 IMAGE_TAG="onestep-worker-local:test"
+DERIVED_TAG="onestep-worker-derived:test"
 
 docker build -f docker/worker/Dockerfile -t "$IMAGE_TAG" .
 
@@ -37,3 +38,13 @@ docker run --rm \
   "$IMAGE_TAG" >"$pyproject_output" 2>&1
 grep -F "onestep-worker: installing project from /workspace/pyproject.toml" "$pyproject_output"
 grep -F '"marker": "mounted-pyproject"' "$pyproject_output"
+
+docker build \
+  -f tests/assets/worker_image/derived/Dockerfile \
+  -t "$DERIVED_TAG" \
+  .
+
+derived_output="$(mktemp)"
+docker run --rm "$DERIVED_TAG" >"$derived_output" 2>&1
+grep -F "onestep-worker: target=/workspace/worker.yaml" "$derived_output"
+grep -F '"marker": "mounted-pyproject"' "$derived_output"
