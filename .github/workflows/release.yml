@@ -54,8 +54,36 @@ jobs:
           INPUT_PUBLISH_WORKER_IMAGE: ${{ github.event.inputs.publish_worker_image || 'false' }}
           INPUT_PUBLISH_PYPI: ${{ github.event.inputs.publish_pypi || 'false' }}
           INPUT_PUBLISH_GITHUB_RELEASE: ${{ github.event.inputs.publish_github_release || 'false' }}
+          REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          resolve_tag_ref() {
+            local requested_ref="$1"
+            local remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git"
+            local stripped_ref="${requested_ref#v}"
+            local prefixed_ref="v${stripped_ref}"
+            local candidate
+            local candidates=("$requested_ref")
+
+            if [ "$stripped_ref" != "$requested_ref" ]; then
+              candidates+=("$stripped_ref")
+            fi
+
+            if [ "$prefixed_ref" != "$requested_ref" ]; then
+              candidates+=("$prefixed_ref")
+            fi
+
+            for candidate in "${candidates[@]}"; do
+              if git ls-remote --exit-code --refs --tags "$remote_url" "refs/tags/$candidate" >/dev/null 2>&1; then
+                echo "$candidate"
+                return 0
+              fi
+            done
+
+            return 1
+          }
 
           if [ "$EVENT_NAME" = "push" ]; then
             CHECKOUT_REF="$REF_NAME"
@@ -75,6 +103,13 @@ jobs:
               RUN_BUILD=false
             else
               RUN_BUILD=true
+            fi
+
+            if [ "$PUBLISH_WORKER_IMAGE" = "true" ] || [ "$PUBLISH_PYPI" = "true" ] || [ "$PUBLISH_GITHUB_RELEASE" = "true" ]; then
+              if ! CHECKOUT_REF="$(resolve_tag_ref "$CHECKOUT_REF")"; then
+                echo "Could not find a release tag matching '$CHECKOUT_REF'. Try the exact tag name from the repository, for example '1.2.62'." >&2
+                exit 1
+              fi
             fi
           fi
 
