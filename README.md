@@ -280,6 +280,35 @@ sudo journalctl -u onestep-app -f
 See `deploy/README.md` for the expected directory layout and the env vars you need to adjust first.
 The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined inside the repo can be imported by the `onestep` console script.
 
+## Official worker image
+
+`onestep` also ships an official worker runtime image for YAML-oriented workers.
+
+Mounted workspace usage:
+
+```bash
+docker run --rm \
+  -e ONESTEP_TARGET=/workspace/worker.yaml \
+  -v "$PWD:/workspace" \
+  ghcr.io/repository-owner/onestep-worker:1.2.62
+```
+
+Derived image usage:
+
+```dockerfile
+FROM ghcr.io/repository-owner/onestep-worker:1.2.62
+
+WORKDIR /workspace
+COPY . /workspace
+ENV ONESTEP_TARGET=/workspace/worker.yaml
+```
+
+`ONESTEP_TARGET` points to the YAML file path or Python import target the container should start.
+The runtime automatically adds `/workspace` and `/workspace/src` to `PYTHONPATH`.
+If `/workspace/requirements.txt` exists it is installed first; otherwise the runtime falls back to installing `/workspace` when `/workspace/pyproject.toml` exists.
+
+See `deploy/worker-runtime-image.md` for the full usage guide and troubleshooting notes.
+
 ## Control Plane Reporter
 
 `onestep` can push runtime telemetry to `onestep-control-plane` over a single long-lived

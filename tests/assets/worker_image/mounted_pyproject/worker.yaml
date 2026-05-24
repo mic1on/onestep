@@ -1,0 +1,16 @@
+app:
+  name: mounted-pyproject
+
+resources:
+  tick:
+    type: interval
+    seconds: 60
+    immediate: true
+    payload:
+      source: mounted-pyproject
+
+tasks:
+  - name: run_once
+    source: tick
+    handler:
+      ref: worker_image_demo_pyproject.tasks:run_once

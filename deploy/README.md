@@ -8,6 +8,7 @@ Included files:
 - `env/onestep-app.env.example`: service environment variables
 - `systemd/onestep-app.service`: example `systemd` unit
 - `bin/onestep-preflight.sh`: startup check script used by `ExecStartPre`
+- `worker-runtime-image.md`: official container runtime guide for mounted and derived worker images
 - `web-service-integration.md`: recommended deployment shape for FastAPI/Django and other web apps
 
 ## Expected layout
