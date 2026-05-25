@@ -6,8 +6,8 @@ Owner: Codex
 
 ## Summary
 
-Publish the existing `api` and `frontend` Docker targets to GitHub Container Registry once a
-commit is pushed to `main`.
+Publish the existing `api` and `frontend` Docker targets to GitHub Container Registry after an
+automatic `main` push pipeline or a manual `workflow_dispatch` run against `main`.
 
 Scope is limited to GitHub Actions release automation and the related release documentation.
 
@@ -26,15 +26,17 @@ The following decisions were validated in conversation:
 - Publish both images, not just one target
 - Reuse the existing `CI` workflow instead of creating a separate publish workflow
 - Publish only after a `push` to `main`
+- Also allow an operator to trigger the same release path manually from GitHub Actions
 - Push both `latest` and commit-specific SHA tags
 - Keep the change minimal and aligned with the current registry deployment flow
 
 ## Goals
 
 1. Automatically publish release-ready API and frontend images to `ghcr.io` after `main` updates.
-2. Ensure images are only published after the existing test, build, and smoke gates succeed.
-3. Produce stable tags for both "most recent release" usage and exact rollback / pinning.
-4. Keep the release operator flow compatible with the existing `ONESTEP_CP_API_IMAGE` and `ONESTEP_CP_FRONTEND_IMAGE` deployment variables.
+2. Allow a manual re-run path for publishing the selected `main` revision without requiring a new push.
+3. Ensure images are only published after the existing test, build, and smoke gates succeed.
+4. Produce stable tags for both "most recent release" usage and exact rollback / pinning.
+5. Keep the release operator flow compatible with the existing `ONESTEP_CP_API_IMAGE` and `ONESTEP_CP_FRONTEND_IMAGE` deployment variables.
 
 ## Non-Goals
 
@@ -43,6 +45,7 @@ The following decisions were validated in conversation:
 - No new registry beyond GHCR
 - No semantic version tagging in this iteration
 - No change to local development compose defaults
+- No manual publishing of non-`main` refs in this iteration
 
 ## Current State
 
@@ -63,8 +66,7 @@ What is missing is the final publish step that turns a green `main` pipeline int
 Add one `publish` job to `.github/workflows/ci.yml` and gate it behind:
 
 - successful completion of the current `smoke` job
-- `github.event_name == 'push'`
-- `github.ref == 'refs/heads/main'`
+- either a `push` event on `main` or a `workflow_dispatch` run against `main`
 
 Why this approach:
 
@@ -72,6 +74,7 @@ Why this approach:
 - it reuses the current test and smoke gates directly
 - it keeps the publish path easy to inspect in one workflow
 - it matches the repository's current CI structure
+- it gives operators a safe retry path when a publish needs to be re-run without a fresh merge
 
 ### Alternative: Separate `publish-images.yml` on `push` to `main`
 
@@ -93,16 +96,22 @@ Why not now:
 
 The existing `CI` workflow remains the single entry point.
 
+Add `workflow_dispatch` to the workflow triggers so an operator can start the workflow from the
+Actions UI.
+
 Add a new `publish` job with:
 
 - `needs: smoke`
-- an `if:` guard that restricts execution to `push` events on `main`
+- an `if:` guard that allows:
+  - `push` events on `main`
+  - `workflow_dispatch` runs whose selected ref is `main`
 
 Result:
 
 - pull requests still validate but never publish
 - feature branch pushes still validate but never publish
-- only merged code that lands on `main` can reach GHCR
+- manually dispatched runs on non-`main` refs validate but do not publish
+- only `main` revisions can reach GHCR
 
 ### Workflow Permissions
 
@@ -163,11 +172,13 @@ Update release documentation so operators know exactly what image references to 
 README changes:
 
 - clarify that `main` pushes publish both images to GHCR
+- clarify that the workflow can also be manually dispatched from GitHub Actions for `main`
 - show example image references using the `sha-<full git sha>` tag form
 
 Release runbook changes:
 
 - note that the CI workflow publishes GHCR images after a successful `main` pipeline
+- note that operators can manually dispatch the workflow to republish a `main` revision
 - update the pull / deploy examples to use explicit GHCR image references when setting
   `ONESTEP_CP_API_IMAGE` and `ONESTEP_CP_FRONTEND_IMAGE`
 
@@ -179,7 +190,7 @@ reserve `latest` for convenience or quick validation flows.
 This change should be verified at the workflow level by:
 
 1. validating the workflow file syntax locally if a suitable tool is available
-2. confirming the `publish` job is guarded to `push` on `main`
+2. confirming the `publish` job is guarded to `push` on `main` or `workflow_dispatch` on `main`
 3. confirming both image targets still build through the existing Docker and smoke gates
 4. confirming documentation examples match the new tag format
 
@@ -192,8 +203,10 @@ No application test changes are expected because runtime behavior is unchanged.
   - `ghcr.io/<owner>/onestep-control-plane-api:sha-<full git sha>`
   - `ghcr.io/<owner>/onestep-control-plane-frontend:latest`
   - `ghcr.io/<owner>/onestep-control-plane-frontend:sha-<full git sha>`
+- A manual `workflow_dispatch` run against `main` publishes the same four tags after `smoke` passes
 - Pull requests do not publish images
 - Feature branch pushes do not publish images
+- Manual runs against non-`main` refs do not publish images
 - Registry deployment docs show how to reference the new GHCR tags
 
 ## Implementation Boundaries
