@@ -10,11 +10,12 @@ type SessionState = {
   roles: ConsoleRole[];
 };
 
-const NOW = "2026-05-15T10:05:00Z";
-const EARLIER = "2026-05-15T10:00:00Z";
-const LOOKBACK_STARTED_AT = "2026-05-15T09:05:00Z";
 const SERVICE_NAME = "billing-service";
 const SERVICE_PATH = `/services/${SERVICE_NAME}?environment=prod`;
+
+function isoMinutesAgo(minutes: number) {
+  return new Date(Date.now() - minutes * 60 * 1000).toISOString();
+}
 
 function buildSession(role: ConsoleRole | null, authenticated = true): SessionState {
   return {
@@ -41,14 +42,14 @@ function buildServiceSummary() {
     environment: "prod",
     latest_deployment_version: "2026.05.15",
     latest_topology_hash: "topo_abc123",
-    latest_sync_at: NOW,
+    latest_sync_at: isoMinutesAgo(0),
     instance_count: 1,
     online_instance_count: 1,
-    last_seen_at: NOW,
+    last_seen_at: isoMinutesAgo(0),
     source_kinds: ["cron"],
     task_count: 1,
-    created_at: EARLIER,
-    updated_at: NOW,
+    created_at: isoMinutesAgo(5),
+    updated_at: isoMinutesAgo(0),
   };
 }
 
@@ -68,7 +69,7 @@ function buildServiceDashboardResponse() {
   return {
     service: buildServiceSummary(),
     lookback_minutes: 60,
-    lookback_started_at: LOOKBACK_STARTED_AT,
+    lookback_started_at: isoMinutesAgo(60),
     instance_connectivity: {
       total: 1,
       online: 1,
@@ -129,16 +130,16 @@ function buildInstancesResponse() {
         onestep_version: null,
         python_version: null,
         started_at: null,
-        last_sync_at: NOW,
+        last_sync_at: isoMinutesAgo(0),
         last_topology_hash: "topo_abc123",
         last_heartbeat_sent_at: null,
         last_heartbeat_sequence: null,
-        last_seen_at: NOW,
+        last_seen_at: isoMinutesAgo(0),
         status: "ok",
         connectivity: "online",
         active_session: null,
-        created_at: EARLIER,
-        updated_at: NOW,
+        created_at: isoMinutesAgo(5),
+        updated_at: isoMinutesAgo(0),
       },
     ],
     total: 1,
