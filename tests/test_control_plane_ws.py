@@ -1351,6 +1351,18 @@ def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -
     assert [attempt[0] for attempt in transport.send_attempts] == ["sync", "sync"]
 
 
+def test_ws_sender_reconnect_backoff_saturates_for_large_attempt_counts(monkeypatch) -> None:
+    transport = FakeTransport()
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    sender._reconnect_attempts = 10**6
+
+    monkeypatch.setattr("onestep.control_plane_ws.random.random", lambda: 1.0)
+
+    assert sender._next_reconnect_delay_s() == pytest.approx(
+        sender._config.reconnect_max_delay_s
+    )
+
+
 @pytest.mark.parametrize("status_code", [404, *range(500, 600)])
 def test_ws_sender_retries_temporary_http_connect_failures_without_traceback(
     caplog,

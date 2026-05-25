@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
@@ -842,7 +843,18 @@ class ControlPlaneWsSender:
     def _next_reconnect_delay_s(self) -> float:
         base_delay = self._config.reconnect_base_delay_s
         max_delay = self._config.reconnect_max_delay_s
-        backoff = min(max_delay, base_delay * (2 ** max(self._reconnect_attempts - 1, 0)))
+        attempts = max(self._reconnect_attempts - 1, 0)
+        if base_delay <= 0:
+            backoff = 0.0
+        elif max_delay <= base_delay:
+            backoff = min(max_delay, base_delay)
+        else:
+            max_multiplier = max_delay / base_delay
+            cap_attempts = math.ceil(math.log2(max_multiplier))
+            if attempts >= cap_attempts:
+                backoff = max_delay
+            else:
+                backoff = min(max_delay, base_delay * (1 << attempts))
         jitter = 0.5 + random.random() * 0.5
         return backoff * jitter
 
