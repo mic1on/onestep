@@ -226,6 +226,11 @@ bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.d
 If you have already pushed the API and frontend images to a registry, use
 `docker-compose.deploy.yml` instead of rebuilding from source on the server.
 
+The `CI` workflow now publishes both images to GitHub Container Registry as multi-architecture
+images for `linux/amd64` and `linux/arm64` after a successful `push` to `main`. If you need to
+republish a `main` revision without creating a new merge commit, open GitHub Actions and manually
+run the `CI` workflow with `workflow_dispatch` against `main`.
+
 Prepare the deployment env file:
 
 ```bash
@@ -246,6 +251,16 @@ Set at least these values in `.env.deploy`:
 service. If you set it to an external PostgreSQL DSN, the API will use that database,
 but this deployment file still starts the bundled `postgres` container unless you trim
 the compose file for your environment.
+
+Prefer commit-pinned image tags for real deployments:
+
+```bash
+ONESTEP_CP_API_IMAGE=ghcr.io/mic1on/onestep-control-plane-api:sha-<full git sha>
+ONESTEP_CP_FRONTEND_IMAGE=ghcr.io/mic1on/onestep-control-plane-frontend:sha-<full git sha>
+```
+
+`latest` is also published for both images, but `sha-<full git sha>` is the safer rollback and
+audit trail for production-style rollouts.
 
 Deploy on the target machine:
 

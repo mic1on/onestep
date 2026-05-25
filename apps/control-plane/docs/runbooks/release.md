@@ -5,9 +5,14 @@ This runbook assumes the API image no longer runs Alembic automatically at conta
 ## Preconditions
 
 - A release candidate commit passed `.github/workflows/ci.yml`.
+- `.github/workflows/ci.yml` publishes multi-architecture `api` and `frontend` images to
+  `ghcr.io` for `linux/amd64` and `linux/arm64` after a successful `push` to `main`.
 - Target host has Docker Engine with the Compose plugin.
 - Registry credentials are available on the target host.
 - Release operator has prepared `.env.deploy` from `.env.deploy.example`.
+
+If a `main` revision needs to be republished without creating a fresh merge commit, manually run
+the `CI` workflow from GitHub Actions with `workflow_dispatch` and select the `main` ref.
 
 ## 1. Preflight
 
@@ -25,6 +30,13 @@ This validates:
 - Bundled PostgreSQL has a password if `ONESTEP_CP_DATABASE_URL` is unset.
 
 ## 2. Pull Images
+
+Prefer commit-pinned image tags in `.env.deploy` before pulling:
+
+```bash
+ONESTEP_CP_API_IMAGE=ghcr.io/mic1on/onestep-control-plane-api:sha-<full git sha>
+ONESTEP_CP_FRONTEND_IMAGE=ghcr.io/mic1on/onestep-control-plane-frontend:sha-<full git sha>
+```
 
 ```bash
 docker login <registry>
