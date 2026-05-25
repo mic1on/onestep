@@ -12,7 +12,7 @@ The official worker image packages `onestep[all]` plus a small startup entrypoin
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/repository-owner/onestep-worker:1.2.62
+  ghcr.io/repository-owner/onestep-worker:1.2.7
 ```
 
 Behavior:
@@ -25,7 +25,7 @@ Behavior:
 ## Mode B: derived image
 
 ```dockerfile
-FROM ghcr.io/repository-owner/onestep-worker:1.2.62
+FROM ghcr.io/repository-owner/onestep-worker:1.2.7
 
 WORKDIR /workspace
 COPY . /workspace
