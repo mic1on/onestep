@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.62
+## 1.2.7
 
 - Adds pure YAML `app.logging.level` support for framework logger control.
 - Emits uniform DEBUG-level sink success logs from the shared runtime send path.

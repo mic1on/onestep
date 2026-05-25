@@ -449,7 +449,7 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.2.62"
+version = "1.2.7"
 source = { editable = "." }
 
 [package.optional-dependencies]
