@@ -59,12 +59,9 @@ export function TaskCommandControls({
   const availableActions = getTaskActions(onlineTaskStates);
   const manualRunStates = onlineTaskStates.filter((state) => canRunTaskCommand(state, "run_task_once"));
   const onlineSupportingStates = onlineTaskStates.filter((state) => supportsTaskControl(state));
-  const pausedOnlineCount = onlineSupportingStates.filter((state) => state.state_known && state.paused).length;
-  const acceptingOnlineCount = onlineSupportingStates.filter(
-    (state) => state.state_known && state.accepting_new_work,
-  ).length;
-  const unknownOnlineCount = onlineSupportingStates.filter((state) => !state.state_known).length;
-  const offlineCount = taskStates.filter((state) => state.connectivity !== "online").length;
+  const pausedOnlineCount = onlineSupportingStates.filter(isTaskInstancePaused).length;
+  const workingOnlineCount = onlineSupportingStates.filter(isTaskInstanceWorking).length;
+  const idleOnlineCount = onlineSupportingStates.length - pausedOnlineCount - workingOnlineCount;
 
   useEffect(() => {
     setManualRunTargetIds((current) => {
@@ -168,16 +165,12 @@ export function TaskCommandControls({
             <p>{pausedOnlineCount}</p>
           </article>
           <article className="fanout-summary-card task-control-summary-card">
-            <strong>{t("taskCommandControls.summary.accepting")}</strong>
-            <p>{acceptingOnlineCount}</p>
+            <strong>{t("taskCommandControls.summary.working")}</strong>
+            <p>{workingOnlineCount}</p>
           </article>
           <article className="fanout-summary-card task-control-summary-card">
-            <strong>{t("taskCommandControls.summary.unknown")}</strong>
-            <p>{unknownOnlineCount}</p>
-          </article>
-          <article className="fanout-summary-card task-control-summary-card">
-            <strong>{t("taskCommandControls.summary.offline")}</strong>
-            <p>{offlineCount}</p>
+            <strong>{t("taskCommandControls.summary.idle")}</strong>
+            <p>{idleOnlineCount}</p>
           </article>
         </div>
       </div>
@@ -327,7 +320,7 @@ export function TaskCommandControls({
                       <p>{formatIdentifierPreview(state.instance_id)}</p>
                     </div>
                     <div className="task-manual-instance-state">
-                      <span>{state.accepting_new_work ? t("taskCommandControls.summary.accepting") : t("taskCommandControls.summary.paused")}</span>
+                      <span>{t(getTaskInstanceActivityLabelKey(state))}</span>
                       <span>{state.runner_count ?? 0}/{state.inflight_task_count ?? 0}</span>
                     </div>
                   </label>
@@ -408,6 +401,23 @@ function resolveTaskCommandTimeoutSeconds(kind: TaskCommandKind) {
 
 function supportsTaskControl(state: TaskInstanceControlState) {
   return state.supported_commands.length > 0;
+}
+
+function isTaskInstancePaused(state: TaskInstanceControlState) {
+  return state.paused === true;
+}
+
+function isTaskInstanceWorking(state: TaskInstanceControlState) {
+  return !isTaskInstancePaused(state) && (state.inflight_task_count ?? 0) > 0;
+}
+
+function getTaskInstanceActivityLabelKey(state: TaskInstanceControlState) {
+  if (isTaskInstancePaused(state)) {
+    return "taskCommandControls.summary.paused";
+  }
+  return isTaskInstanceWorking(state)
+    ? "taskCommandControls.summary.working"
+    : "taskCommandControls.summary.idle";
 }
 
 function getTaskActions(states: TaskInstanceControlState[]) {
