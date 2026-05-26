@@ -290,13 +290,13 @@ Mounted workspace usage:
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/repository-owner/onestep-worker:1.2.7
+  ghcr.io/mic1on/onestep-worker:1.2.7
 ```
 
 Derived image usage:
 
 ```dockerfile
-FROM ghcr.io/repository-owner/onestep-worker:1.2.7
+FROM ghcr.io/mic1on/onestep-worker:1.2.7
 
 WORKDIR /workspace
 COPY . /workspace
