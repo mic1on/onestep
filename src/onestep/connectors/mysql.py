@@ -188,8 +188,13 @@ class TableQueueDelivery(Delivery):
     async def fail(self, exc: Exception | None = None) -> None:
         await self._source.fail_row(self._row_ref, exc=exc)
 
+    async def release_unstarted(self) -> None:
+        await self._source.release_row(self._row_ref)
+
 
 class TableQueueSource(Source):
+    fetch_is_cancel_safe = False
+
     def __init__(
         self,
         *,
@@ -263,6 +268,9 @@ class TableQueueSource(Source):
         await self.update_row(row_ref, self.nack)
 
     async def fail_row(self, row_ref: _TableRowRef, exc: Exception | None = None) -> None:
+        await self.update_row(row_ref, self.nack)
+
+    async def release_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.nack)
 
     async def update_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:

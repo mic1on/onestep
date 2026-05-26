@@ -18,6 +18,9 @@ class Delivery(abc.ABC):
     async def start_processing(self) -> None:
         return None
 
+    async def release_unstarted(self) -> None:
+        return None
+
     @abc.abstractmethod
     async def ack(self) -> None:
         raise NotImplementedError
@@ -35,6 +38,7 @@ class Source(abc.ABC):
     batch_size: int = 1
     poll_interval_s: float = 1.0
     supports_manual_run: bool = False
+    fetch_is_cancel_safe: bool = True
 
     def __init__(self, name: str) -> None:
         self.name = name
