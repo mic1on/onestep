@@ -447,12 +447,19 @@ class TableSink(Sink):
                 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
                 stmt = mysql_insert(table).values(**payload)
+                if not update_payload:
+                    first_key = self.keys[0]
+                    conn.execute(stmt.on_duplicate_key_update(**{first_key: stmt.inserted[first_key]}))
+                    return
                 conn.execute(stmt.on_duplicate_key_update(**update_payload))
                 return
             if dialect == "sqlite":
                 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
                 stmt = sqlite_insert(table).values(**payload)
+                if not update_payload:
+                    conn.execute(stmt.on_conflict_do_nothing(index_elements=list(self.keys)))
+                    return
                 conn.execute(stmt.on_conflict_do_update(index_elements=list(self.keys), set_=update_payload))
                 return
             conn.execute(sa.insert(table).values(**payload))
