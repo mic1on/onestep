@@ -433,7 +433,9 @@ def test_list_services_marks_fully_online_service_as_online_even_when_sync_is_st
     }
 
 
-def test_list_services_marks_service_without_online_instances_as_offline(client, db_session) -> None:
+def test_list_services_marks_service_without_online_instances_as_offline(
+    client, db_session
+) -> None:
     now = datetime.now(UTC)
     service = seed_service(
         db_session,
