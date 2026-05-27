@@ -11,6 +11,8 @@ NotificationEventType = Literal[
     "task_succeeded",
     "task_failed",
     "task_missed_start",
+    "instance_online",
+    "instance_offline",
 ]
 NotificationProvider = Literal["feishu", "wechat_work"]
 
@@ -19,6 +21,8 @@ NOTIFICATION_EVENT_TYPES: Final[tuple[NotificationEventType, ...]] = (
     "task_succeeded",
     "task_failed",
     "task_missed_start",
+    "instance_online",
+    "instance_offline",
 )
 NOTIFICATION_EVENT_TYPE_SET: Final[frozenset[str]] = frozenset(NOTIFICATION_EVENT_TYPES)
 
@@ -52,13 +56,15 @@ class NotificationEventRecord:
     event_type: NotificationEventType
     service_name: str
     service_environment: str
-    task_name: str
+    task_name: str | None
     occurred_at: datetime
     event_id: str | None = None
     scheduled_at: datetime | None = None
     duration_ms: int | None = None
     attempts: int | None = None
     instance_id: str | None = None
+    node_name: str | None = None
+    last_seen_at: datetime | None = None
     failure: NotificationFailureInfo | None = None
     success_summary: str | None = None
     success_metrics: tuple[NotificationMetricLine, ...] = ()
@@ -189,19 +195,52 @@ def missed_start_dedupe_key(
     )
 
 
+def instance_connectivity_dedupe_key(
+    channel_id: str,
+    *,
+    service_name: str,
+    service_environment: str,
+    instance_id: str,
+    event_type: Literal["instance_online", "instance_offline"],
+    occurred_at: datetime,
+) -> str:
+    normalized_name = _normalize_required_string(service_name, field_name="service_name")
+    normalized_environment = _normalize_required_string(
+        service_environment, field_name="service_environment"
+    )
+    normalized_instance_id = _normalize_required_string(instance_id, field_name="instance_id")
+    occurred_at_key = scheduled_at_to_storage_string(occurred_at)
+    assert occurred_at_key is not None
+    return (
+        f"{channel_id}:{normalized_environment}:{normalized_name}:"
+        f"{normalized_instance_id}:{occurred_at_key}:{event_type}"
+    )
+
+
+def is_instance_event_type(event_type: NotificationEventType) -> bool:
+    return event_type in {"instance_online", "instance_offline"}
+
+
 def event_display_label(event_type: NotificationEventType) -> str:
     return {
         "task_started": "任务开始",
         "task_succeeded": "任务成功",
         "task_failed": "任务失败",
         "task_missed_start": "任务未开始",
+        "instance_online": "实例上线",
+        "instance_offline": "实例下线",
     }[event_type]
 
 
 def event_summary_line(event: NotificationEventRecord) -> str:
+    target = (
+        event.task_name
+        if not is_instance_event_type(event.event_type)
+        else event.node_name or event.instance_id or "unknown-instance"
+    )
     return (
         f"[{event_display_label(event.event_type)}] "
-        f"{event.service_environment}/{event.service_name} {event.task_name}"
+        f"{event.service_environment}/{event.service_name} {target}"
     )
 
 
@@ -234,11 +273,13 @@ def build_message_lines(event: NotificationEventRecord) -> list[str]:
     lines = [event_summary_line(event)]
     lines.append(f"环境: {event.service_environment}")
     lines.append(f"Service: {event.service_name}")
-    lines.append(f"Task: {event.task_name}")
+    if event.task_name is not None:
+        lines.append(f"Task: {event.task_name}")
 
     scheduled_at = format_datetime_for_message(event.scheduled_at)
     occurred_at = format_datetime_for_message(event.occurred_at)
     detected_at = format_datetime_for_message(event.detected_at)
+    last_seen_at = format_datetime_for_message(event.last_seen_at)
 
     if event.event_type == "task_started":
         if scheduled_at is not None:
@@ -265,8 +306,7 @@ def build_message_lines(event: NotificationEventRecord) -> list[str]:
         failure_summary = format_failure_summary(event.failure)
         if failure_summary is not None:
             lines.append(f"原因: {failure_summary}")
-    else:
-        assert event.event_type == "task_missed_start"
+    elif event.event_type == "task_missed_start":
         if scheduled_at is not None:
             lines.append(f"计划时间: {scheduled_at}")
         if event.missed_start_grace_seconds is not None:
@@ -274,10 +314,31 @@ def build_message_lines(event: NotificationEventRecord) -> list[str]:
         if detected_at is not None:
             lines.append(f"检测时间: {detected_at}")
         lines.append("说明: 到达预期时间后未检测到 started 事件")
+    elif event.event_type == "instance_online":
+        if event.node_name is not None:
+            lines.append(f"节点: {event.node_name}")
+        if event.instance_id is not None:
+            lines.append(f"实例: {event.instance_id}")
+        lines.append(f"上线时间: {occurred_at}")
+        if detected_at is not None:
+            lines.append(f"检测时间: {detected_at}")
+    else:
+        assert event.event_type == "instance_offline"
+        if event.node_name is not None:
+            lines.append(f"节点: {event.node_name}")
+        if event.instance_id is not None:
+            lines.append(f"实例: {event.instance_id}")
+        if last_seen_at is not None:
+            lines.append(f"最后在线: {last_seen_at}")
+        lines.append(f"离线时间: {occurred_at}")
+        if detected_at is not None:
+            lines.append(f"检测时间: {detected_at}")
 
     if event.attempts is not None:
         lines.append(f"尝试次数: {event.attempts}")
-    if event.instance_id is not None:
+    if event.instance_id is not None and is_instance_event_type(event.event_type):
+        pass
+    elif event.instance_id is not None:
         lines.append(f"实例: {event.instance_id}")
     if event.console_url is not None:
         lines.append(f"详情: {event.console_url}")

@@ -16,12 +16,17 @@ from onestep_control_plane_api.api.notification_helpers import (
     NotificationEventRecord,
     NotificationFailureInfo,
     NotificationMetricLine,
+    instance_connectivity_dedupe_key,
     is_service_in_scope,
     missed_start_dedupe_key,
     raw_task_event_dedupe_key,
     scheduled_at_from_meta,
 )
 from onestep_control_plane_api.api.notification_payloads import build_webhook_payload
+from onestep_control_plane_api.api.query_support import (
+    get_instance_connectivity,
+    online_cutoff,
+)
 from onestep_control_plane_api.api.schemas import (
     NotificationChannelCreateRequest,
     NotificationChannelSummary,
@@ -36,6 +41,7 @@ from onestep_control_plane_api.db.models import (
     Instance,
     NotificationChannel,
     NotificationDelivery,
+    NotificationInstanceState,
     Service,
     TaskDefinition,
     TaskEvent,
@@ -44,6 +50,7 @@ from onestep_control_plane_api.db.models import (
 DEFAULT_WEBHOOK_TIMEOUT_S = 5.0
 DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT = 32
 MISSED_START_SCAN_MAX_WINDOW = timedelta(hours=24)
+INSTANCE_CONNECTIVITY_EVENT_TYPES = frozenset({"instance_online", "instance_offline"})
 
 
 def _normalize_success_summary(raw_summary: Any) -> str | None:
@@ -205,6 +212,48 @@ def _build_runtime_notification_event(event: TaskEvent) -> NotificationEventReco
         console_url=settings.build_console_url(
             f"/services/{event.service.name}/tasks/{event.task_name}"
             f"?environment={event.service.environment}"
+        ),
+    )
+
+
+def _instance_transition_time(
+    instance: Instance,
+    *,
+    connectivity: str,
+    now: datetime,
+) -> datetime:
+    if connectivity == "online":
+        return instance.last_seen_at or now
+    if instance.last_seen_at is None:
+        return now
+    return min(
+        now,
+        instance.last_seen_at + timedelta(seconds=settings.instance_offline_after_s),
+    )
+
+
+def _build_instance_connectivity_notification_event(
+    instance: Instance,
+    *,
+    service: Service,
+    connectivity: str,
+    now: datetime,
+) -> NotificationEventRecord:
+    event_type = "instance_online" if connectivity == "online" else "instance_offline"
+    transition_at = _instance_transition_time(instance, connectivity=connectivity, now=now)
+    return NotificationEventRecord(
+        event_type=event_type,
+        service_name=service.name,
+        service_environment=service.environment,
+        task_name=None,
+        occurred_at=transition_at,
+        instance_id=str(instance.instance_id),
+        node_name=instance.node_name,
+        last_seen_at=instance.last_seen_at,
+        detected_at=now,
+        console_url=settings.build_console_url(
+            f"/services/{service.name}/instances/{instance.instance_id}"
+            f"?environment={service.environment}"
         ),
     )
 
@@ -736,6 +785,124 @@ def list_notification_services(db: Session) -> NotificationServiceListResponse:
             for service in services
         ]
     )
+
+
+def scan_and_dispatch_instance_connectivity_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    current_time = _normalize_scan_now(now)
+    channels = db.scalars(
+        select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
+    ).all()
+    connectivity_channels = [
+        channel
+        for channel in channels
+        if any(
+            event_type in INSTANCE_CONNECTIVITY_EVENT_TYPES
+            for event_type in channel.event_types_json
+        )
+    ]
+    if not connectivity_channels:
+        return 0
+
+    states = db.scalars(
+        select(NotificationInstanceState).where(
+            NotificationInstanceState.channel_id.in_(
+                [channel.id for channel in connectivity_channels]
+            )
+        )
+    ).all()
+    state_by_key = {
+        (state.channel_id, state.instance_id): state
+        for state in states
+    }
+    instances = db.scalars(
+        select(Instance)
+        .options(selectinload(Instance.service))
+        .where(Instance.last_seen_at.is_not(None))
+        .order_by(Instance.node_name, Instance.instance_id)
+    ).all()
+    cutoff = online_cutoff(current_time)
+    pending_deliveries: list[tuple[NotificationDelivery, str]] = []
+
+    for channel in connectivity_channels:
+        for instance in instances:
+            service = instance.service
+            if not _service_matches_channel(
+                channel,
+                service_name=service.name,
+                service_environment=service.environment,
+            ):
+                continue
+
+            connectivity = get_instance_connectivity(instance, cutoff=cutoff)
+            if connectivity == "never_reported":
+                continue
+
+            transition_at = _instance_transition_time(
+                instance,
+                connectivity=connectivity,
+                now=current_time,
+            )
+            state_key = (channel.id, instance.instance_id)
+            state = state_by_key.get(state_key)
+            if state is None:
+                state = NotificationInstanceState(
+                    channel_id=channel.id,
+                    instance_id=instance.instance_id,
+                    last_connectivity=connectivity,
+                    last_transition_at=transition_at,
+                )
+                db.add(state)
+                state_by_key[state_key] = state
+                continue
+
+            if state.last_connectivity == connectivity:
+                continue
+
+            state.last_connectivity = connectivity
+            state.last_transition_at = transition_at
+
+            notification_event = _build_instance_connectivity_notification_event(
+                instance,
+                service=service,
+                connectivity=connectivity,
+                now=current_time,
+            )
+            if notification_event.event_type not in channel.event_types_json:
+                continue
+
+            event_type = (
+                "instance_online" if connectivity == "online" else "instance_offline"
+            )
+            delivery = _persist_pending_delivery(
+                db,
+                channel=channel,
+                notification_event=notification_event,
+                dedupe_key=instance_connectivity_dedupe_key(
+                    str(channel.id),
+                    service_name=service.name,
+                    service_environment=service.environment,
+                    instance_id=str(instance.instance_id),
+                    event_type=event_type,
+                    occurred_at=notification_event.occurred_at,
+                ),
+                task_event_id=None,
+                scheduled_at=None,
+            )
+            if delivery is not None:
+                pending_deliveries.append((delivery, channel.webhook_url))
+
+    if not pending_deliveries:
+        db.commit()
+        return 0
+
+    db.commit()
+    for delivery, webhook_url in pending_deliveries:
+        _dispatch_delivery(db, delivery=delivery, webhook_url=webhook_url)
+    return len(pending_deliveries)
 
 
 def dispatch_runtime_task_event_notifications(

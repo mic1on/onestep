@@ -7,7 +7,9 @@ export type NotificationEventType =
   | "task_started"
   | "task_succeeded"
   | "task_failed"
-  | "task_missed_start";
+  | "task_missed_start"
+  | "instance_online"
+  | "instance_offline";
 export type AgentCommandKind =
   | "ping"
   | "shutdown"

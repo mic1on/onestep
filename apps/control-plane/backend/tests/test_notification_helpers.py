@@ -62,6 +62,8 @@ def build_event(
         (" TASK_SUCCEEDED ", "task_succeeded"),
         ("task_failed", "task_failed"),
         ("task_missed_start", "task_missed_start"),
+        ("instance_online", "instance_online"),
+        (" INSTANCE_OFFLINE ", "instance_offline"),
     ],
 )
 def test_normalize_notification_event_type_accepts_supported_values(raw_value, expected) -> None:
@@ -75,8 +77,14 @@ def test_normalize_notification_event_type_rejects_unknown_value() -> None:
 
 def test_normalize_notification_event_types_dedupes_while_preserving_order() -> None:
     assert normalize_notification_event_types(
-        [" task_started ", "TASK_FAILED", "task_started", "task_missed_start"]
-    ) == ["task_started", "task_failed", "task_missed_start"]
+        [
+            " task_started ",
+            "TASK_FAILED",
+            "task_started",
+            "task_missed_start",
+            "INSTANCE_OFFLINE",
+        ]
+    ) == ["task_started", "task_failed", "task_missed_start", "instance_offline"]
 
 
 def test_normalize_service_scope_trims_fields() -> None:
@@ -294,6 +302,64 @@ def test_build_message_lines_for_missed_start_event_uses_control_plane_timezone(
     )
     assert "计划时间: 2026-04-30T10:00:00+08:00" in lines
     assert "检测时间: 2026-04-30T10:05:00+08:00" in lines
+
+
+def test_build_message_lines_for_instance_online_event() -> None:
+    lines = build_message_lines(
+        build_event(
+            "instance_online",
+            task_name=None,
+            scheduled_at=None,
+            duration_ms=None,
+            attempts=None,
+            event_id=None,
+            node_name="vm-1",
+            instance_id="inst-1",
+            occurred_at=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+            detected_at=datetime(2026, 4, 30, 2, 10, 2, tzinfo=UTC),
+            console_url="https://cp.example/services/billing-worker/instances/inst-1",
+        )
+    )
+    assert lines == [
+        "[实例上线] prod/billing-worker vm-1",
+        "环境: prod",
+        "Service: billing-worker",
+        "节点: vm-1",
+        "实例: inst-1",
+        "上线时间: 2026-04-30T02:10:00+00:00",
+        "检测时间: 2026-04-30T02:10:02+00:00",
+        "详情: https://cp.example/services/billing-worker/instances/inst-1",
+    ]
+
+
+def test_build_message_lines_for_instance_offline_event() -> None:
+    lines = build_message_lines(
+        build_event(
+            "instance_offline",
+            task_name=None,
+            scheduled_at=None,
+            duration_ms=None,
+            attempts=None,
+            event_id=None,
+            node_name="vm-1",
+            instance_id="inst-1",
+            last_seen_at=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+            occurred_at=datetime(2026, 4, 30, 2, 11, 30, tzinfo=UTC),
+            detected_at=datetime(2026, 4, 30, 2, 12, 0, tzinfo=UTC),
+            console_url="https://cp.example/services/billing-worker/instances/inst-1",
+        )
+    )
+    assert lines == [
+        "[实例下线] prod/billing-worker vm-1",
+        "环境: prod",
+        "Service: billing-worker",
+        "节点: vm-1",
+        "实例: inst-1",
+        "最后在线: 2026-04-30T02:10:00+00:00",
+        "离线时间: 2026-04-30T02:11:30+00:00",
+        "检测时间: 2026-04-30T02:12:00+00:00",
+        "详情: https://cp.example/services/billing-worker/instances/inst-1",
+    ]
 
 
 def test_render_notification_message_joins_lines() -> None:

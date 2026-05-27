@@ -67,7 +67,12 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
             "webhook_url": "https://example.com/hook/feishu",
             "enabled": True,
             "service_scopes": [{"name": "billing-worker", "environment": "prod"}],
-            "event_types": ["task_started", "task_failed", "task_missed_start"],
+            "event_types": [
+                "task_started",
+                "task_failed",
+                "task_missed_start",
+                "instance_offline",
+            ],
             "missed_start_grace_seconds": 600,
         },
     )
@@ -79,7 +84,12 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
     assert created["webhook_url_masked"] != "https://example.com/hook/feishu"
     assert created["webhook_url_masked"].endswith("ishu")
     assert created["service_scopes"] == [{"name": "billing-worker", "environment": "prod"}]
-    assert created["event_types"] == ["task_started", "task_failed", "task_missed_start"]
+    assert created["event_types"] == [
+        "task_started",
+        "task_failed",
+        "task_missed_start",
+        "instance_offline",
+    ]
     assert created["missed_start_grace_seconds"] == 600
 
     list_response = client.get("/api/v1/settings/notifications/channels")
@@ -96,7 +106,7 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
                 {"name": "billing-worker", "environment": "prod"},
                 {"name": "invoice-worker", "environment": "staging"},
             ],
-            "event_types": ["task_succeeded"],
+            "event_types": ["task_succeeded", "instance_online"],
             "missed_start_grace_seconds": 300,
         },
     )
@@ -108,7 +118,7 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
         {"name": "billing-worker", "environment": "prod"},
         {"name": "invoice-worker", "environment": "staging"},
     ]
-    assert updated["event_types"] == ["task_succeeded"]
+    assert updated["event_types"] == ["task_succeeded", "instance_online"]
     assert updated["missed_start_grace_seconds"] == 300
 
     test_response = client.post(

@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202605150004"
+HEAD_REVISION = "202605270001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -38,6 +38,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "local_users",
         "notification_channels",
         "notification_deliveries",
+        "notification_instance_states",
         "task_definitions",
         "task_events",
         "task_metric_windows",
@@ -147,6 +148,17 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "sent_at",
     }
+    assert {
+        column["name"] for column in inspector.get_columns("notification_instance_states")
+    } == {
+        "id",
+        "channel_id",
+        "instance_id",
+        "last_connectivity",
+        "last_transition_at",
+        "created_at",
+        "updated_at",
+    }
     assert {column["name"] for column in inspector.get_columns("local_roles")} == {
         "id",
         "name",
@@ -206,6 +218,10 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     notification_delivery_columns = {
         column["name"]: column for column in inspector.get_columns("notification_deliveries")
     }
+    notification_instance_state_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("notification_instance_states")
+    }
     instance_columns = {column["name"]: column for column in inspector.get_columns("instances")}
     assert isinstance(instance_columns["app_snapshot_json"]["type"], sa.JSON)
     assert isinstance(agent_session_columns["capabilities_json"]["type"], sa.JSON)
@@ -221,6 +237,10 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         sa.Integer,
     )
     assert isinstance(notification_delivery_columns["request_payload_json"]["type"], sa.JSON)
+    assert isinstance(
+        notification_instance_state_columns["last_connectivity"]["type"],
+        sa.String,
+    )
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {

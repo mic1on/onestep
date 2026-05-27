@@ -31,6 +31,8 @@ const EVENT_VALUES: NotificationEventType[] = [
   "task_succeeded",
   "task_failed",
   "task_missed_start",
+  "instance_online",
+  "instance_offline",
 ];
 const SERVICE_ENVIRONMENT_FILTERS = ["all", "prod", "staging", "dev"] as const;
 const DEFAULT_SERVICE_ENVIRONMENT_FILTER: ServiceEnvironmentFilter = "prod";
@@ -732,6 +734,8 @@ const EVENT_LABEL_KEYS: Record<NotificationEventType, string> = {
   task_succeeded: "notifications.eventTaskSucceeded",
   task_failed: "notifications.eventTaskFailed",
   task_missed_start: "notifications.eventTaskMissedStart",
+  instance_online: "notifications.eventInstanceOnline",
+  instance_offline: "notifications.eventInstanceOffline",
 };
 
 const EVENT_DESC_KEYS: Record<NotificationEventType, string> = {
@@ -739,6 +743,8 @@ const EVENT_DESC_KEYS: Record<NotificationEventType, string> = {
   task_succeeded: "notifications.eventTaskSucceededDesc",
   task_failed: "notifications.eventTaskFailedDesc",
   task_missed_start: "notifications.eventTaskMissedStartDesc",
+  instance_online: "notifications.eventInstanceOnlineDesc",
+  instance_offline: "notifications.eventInstanceOfflineDesc",
 };
 
 function getEventLabel(eventType: NotificationEventType, t: (key: string) => string) {

@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.notification_service import (
+    scan_and_dispatch_instance_connectivity_notifications,
     scan_and_dispatch_missed_start_notifications,
 )
 from onestep_control_plane_api.core.settings import settings
@@ -35,10 +36,14 @@ LeaseFactory = Callable[[], WorkerLease]
 
 
 def _scan_notifications(session: Session, started_at: datetime) -> int:
-    return scan_and_dispatch_missed_start_notifications(
+    missed_start_count = scan_and_dispatch_missed_start_notifications(
         session,
         min_last_seen_at=started_at,
     )
+    instance_connectivity_count = scan_and_dispatch_instance_connectivity_notifications(
+        session,
+    )
+    return missed_start_count + instance_connectivity_count
 
 
 def _resolve_engine(session_factory: SessionFactory) -> Engine | None:

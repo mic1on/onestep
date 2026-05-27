@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from onestep_control_plane_api.api.notification_service import (
     dispatch_runtime_task_event_notifications,
+    scan_and_dispatch_instance_connectivity_notifications,
     scan_and_dispatch_missed_start_notifications,
 )
 from onestep_control_plane_api.core.settings import settings
@@ -12,6 +13,7 @@ from onestep_control_plane_api.db.models import (
     Instance,
     NotificationChannel,
     NotificationDelivery,
+    NotificationInstanceState,
     Service,
     TaskDefinition,
     TaskEvent,
@@ -832,3 +834,205 @@ def test_scan_and_dispatch_missed_start_notifications_falls_back_to_control_plan
         assert "**检测时间**：2026-04-30T10:10:00+08:00" in detail_content
     finally:
         settings.api_response_timezone = original_api_timezone
+
+
+def test_instance_connectivity_scan_seeds_state_without_delivery(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+    seed_channel(db_session, event_types=["instance_online", "instance_offline"])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        lambda delivery, *, webhook_url, timeout_s=5.0: None,
+    )
+
+    created_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+
+    assert created_count == 0
+    assert db_session.query(NotificationDelivery).count() == 0
+
+    state = db_session.query(NotificationInstanceState).one()
+    assert state.channel_id is not None
+    assert state.instance_id == instance.instance_id
+    assert state.last_connectivity == "online"
+    assert state.last_transition_at == datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+    assert service.name == "billing-sync"
+
+
+def test_instance_connectivity_scan_sends_offline_once(
+    db_session, monkeypatch
+) -> None:
+    _, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+    seed_channel(db_session, event_types=["instance_offline"])
+    db_session.commit()
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 12, 0, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    seed_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+    created_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 12, 0, tzinfo=UTC),
+    )
+    duplicate_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 12, 30, tzinfo=UTC),
+    )
+
+    assert seed_count == 0
+    assert created_count == 1
+    assert duplicate_count == 0
+    assert len(sent_payloads) == 1
+
+    deliveries = db_session.query(NotificationDelivery).all()
+    assert len(deliveries) == 1
+    assert deliveries[0].event_type == "instance_offline"
+
+    payload = sent_payloads[0]
+    assert payload is not None
+    detail_content = payload["card"]["body"]["elements"][0]["content"]
+    assert "**节点**：`vm-1`" in detail_content
+    assert "**离线时间**：2026-04-30T02:11:30+00:00" in detail_content
+
+    state = db_session.query(NotificationInstanceState).one()
+    assert state.last_connectivity == "offline"
+    assert state.last_transition_at == datetime(2026, 4, 30, 2, 11, 30, tzinfo=UTC)
+
+
+def test_instance_connectivity_scan_sends_online_recovery_once(
+    db_session, monkeypatch
+) -> None:
+    _, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+    seed_channel(db_session, event_types=["instance_online", "instance_offline"])
+    db_session.commit()
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+    scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 12, 0, tzinfo=UTC),
+    )
+
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC)
+    db_session.commit()
+
+    created_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC),
+    )
+    duplicate_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 13, 20, tzinfo=UTC),
+    )
+
+    assert created_count == 1
+    assert duplicate_count == 0
+    assert len(sent_payloads) == 2
+
+    deliveries = (
+        db_session.query(NotificationDelivery)
+        .order_by(NotificationDelivery.created_at)
+        .all()
+    )
+    assert [delivery.event_type for delivery in deliveries] == [
+        "instance_offline",
+        "instance_online",
+    ]
+
+    payload = sent_payloads[-1]
+    assert payload is not None
+    detail_content = payload["card"]["body"]["elements"][0]["content"]
+    assert "**上线时间**：2026-04-30T02:13:00+00:00" in detail_content
+
+    state = db_session.query(NotificationInstanceState).one()
+    assert state.last_connectivity == "online"
+    assert state.last_transition_at == datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC)
+
+
+def test_instance_connectivity_scan_updates_state_for_unsubscribed_recovery(
+    db_session, monkeypatch
+) -> None:
+    _, instance = seed_runtime_service(db_session)
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+    seed_channel(db_session, event_types=["instance_offline"])
+    db_session.commit()
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 15, 0, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+    first_offline_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 12, 0, tzinfo=UTC),
+    )
+
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC)
+    db_session.commit()
+
+    recovery_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC),
+    )
+    second_offline_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 15, 0, tzinfo=UTC),
+    )
+
+    assert first_offline_count == 1
+    assert recovery_count == 0
+    assert second_offline_count == 1
+    assert len(sent_payloads) == 2
+    assert db_session.query(NotificationDelivery).count() == 2
+
+    state = db_session.query(NotificationInstanceState).one()
+    assert state.last_connectivity == "offline"
+    assert state.last_transition_at == datetime(2026, 4, 30, 2, 14, 30, tzinfo=UTC)

@@ -185,6 +185,10 @@ class NotificationChannel(Base):
         back_populates="channel",
         cascade="all, delete-orphan",
     )
+    instance_states: Mapped[list[NotificationInstanceState]] = relationship(
+        back_populates="channel",
+        cascade="all, delete-orphan",
+    )
 
 
 class Instance(Base):
@@ -521,3 +525,35 @@ class NotificationDelivery(Base):
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
     channel: Mapped[NotificationChannel] = relationship(back_populates="deliveries")
+
+
+class NotificationInstanceState(Base):
+    __tablename__ = "notification_instance_states"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "channel_id",
+            "instance_id",
+            name="uq_notification_instance_states_channel_id_instance_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    channel_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("notification_channels.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instance_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("instances.instance_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    last_connectivity: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    last_transition_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    channel: Mapped[NotificationChannel] = relationship(back_populates="instance_states")

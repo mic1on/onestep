@@ -9,6 +9,7 @@ from onestep_control_plane_api.api.notification_helpers import (
     NotificationProvider,
     build_message_lines,
     event_summary_line,
+    is_instance_event_type,
 )
 
 
@@ -22,6 +23,8 @@ _EVENT_HEADER_TEMPLATE: dict[NotificationEventType, str] = {
     "task_succeeded": "green",
     "task_failed": "red",
     "task_missed_start": "orange",
+    "instance_online": "green",
+    "instance_offline": "red",
 }
 
 
@@ -77,8 +80,9 @@ def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
     lines: list[str] = [
         f"**环境**：`{event.service_environment}`",
         f"**Service**：`{event.service_name}`",
-        f"**Task**：`{event.task_name}`",
     ]
+    if event.task_name is not None:
+        lines.append(f"**Task**：`{event.task_name}`")
     if event.event_type == "task_started":
         lines.extend(
             line
@@ -111,7 +115,7 @@ def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
             )
             if line is not None
         )
-    else:
+    elif event.event_type == "task_missed_start":
         lines.extend(
             line
             for line in (
@@ -122,12 +126,43 @@ def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
             if line is not None
         )
         lines.append("**说明**：到达预期时间后未检测到 started 事件")
+    elif event.event_type == "instance_online":
+        lines.extend(
+            line
+            for line in (
+                _field_line("节点", event.node_name),
+                _field_line("实例", event.instance_id),
+                _field_line("上线时间", _format_time(event.occurred_at)),
+                _field_line("检测时间", _format_time(event.detected_at)),
+            )
+            if line is not None
+        )
+    else:
+        lines.extend(
+            line
+            for line in (
+                _field_line("节点", event.node_name),
+                _field_line("实例", event.instance_id),
+                _field_line("最后在线", _format_time(event.last_seen_at)),
+                _field_line("离线时间", _format_time(event.occurred_at)),
+                _field_line("检测时间", _format_time(event.detected_at)),
+            )
+            if line is not None
+        )
 
     lines.extend(
         line
         for line in (
             _field_line("尝试次数", str(event.attempts) if event.attempts is not None else None),
-            _field_line("实例", event.instance_id),
+            _field_line(
+                "实例",
+                (
+                    event.instance_id
+                    if event.instance_id is not None
+                    and not is_instance_event_type(event.event_type)
+                    else None
+                ),
+            ),
             _field_line(
                 "详情",
                 (
@@ -151,8 +186,9 @@ def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
     lines: list[str] = [
         _build_feishu_code_field_line("环境", event.service_environment),
         _build_feishu_code_field_line("Service", event.service_name),
-        _build_feishu_code_field_line("Task", event.task_name),
     ]
+    if event.task_name is not None:
+        lines.append(_build_feishu_code_field_line("Task", event.task_name))
     if event.event_type == "task_started":
         lines.extend(
             line
@@ -185,7 +221,7 @@ def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
             )
             if line is not None
         )
-    else:
+    elif event.event_type == "task_missed_start":
         lines.extend(
             line
             for line in (
@@ -196,6 +232,29 @@ def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
             if line is not None
         )
         lines.append("**说明**：到达预期时间后未检测到 started 事件")
+    elif event.event_type == "instance_online":
+        lines.extend(
+            line
+            for line in (
+                _build_feishu_code_field_line("节点", event.node_name),
+                _build_feishu_code_field_line("实例", event.instance_id),
+                _build_feishu_field_line("上线时间", _format_time(event.occurred_at)),
+                _build_feishu_field_line("检测时间", _format_time(event.detected_at)),
+            )
+            if line is not None
+        )
+    else:
+        lines.extend(
+            line
+            for line in (
+                _build_feishu_code_field_line("节点", event.node_name),
+                _build_feishu_code_field_line("实例", event.instance_id),
+                _build_feishu_field_line("最后在线", _format_time(event.last_seen_at)),
+                _build_feishu_field_line("离线时间", _format_time(event.occurred_at)),
+                _build_feishu_field_line("检测时间", _format_time(event.detected_at)),
+            )
+            if line is not None
+        )
 
     lines.extend(
         line
@@ -204,7 +263,12 @@ def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
                 "尝试次数",
                 str(event.attempts) if event.attempts is not None else None,
             ),
-            _build_feishu_field_line("实例", event.instance_id),
+            _build_feishu_field_line(
+                "实例",
+                event.instance_id
+                if event.instance_id is not None and not is_instance_event_type(event.event_type)
+                else None,
+            ),
             _build_feishu_detail_link_line(event.console_url),
             _build_feishu_code_field_line(
                 "详情",

@@ -43,6 +43,8 @@ NotificationEventType = Literal[
     "task_succeeded",
     "task_failed",
     "task_missed_start",
+    "instance_online",
+    "instance_offline",
 ]
 NotificationDeliveryStatus = Literal["pending", "succeeded", "failed"]
 InstanceConnectivity = Literal["online", "offline", "never_reported"]
@@ -152,7 +154,14 @@ LIVE_ONLY_COMMAND_KINDS = frozenset(
     }
 )
 NOTIFICATION_EVENT_TYPES = frozenset(
-    {"task_started", "task_succeeded", "task_failed", "task_missed_start"}
+    {
+        "task_started",
+        "task_succeeded",
+        "task_failed",
+        "task_missed_start",
+        "instance_online",
+        "instance_offline",
+    }
 )
 NOTIFICATION_EVENT_TYPES_REQUIRING_GRACE_PERIOD = frozenset({"task_missed_start"})
 
