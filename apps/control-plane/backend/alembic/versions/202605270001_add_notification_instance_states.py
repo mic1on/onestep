@@ -41,9 +41,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["channel_id"],
             ["notification_channels.id"],
-            name=(
-                "fk_notification_instance_states_channel_id_notification_channels"
-            ),
+            name="fk_notification_inst_states_channel_id_notification_channels",
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
