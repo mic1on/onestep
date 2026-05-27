@@ -46,6 +46,7 @@ NotificationEventType = Literal[
 ]
 NotificationDeliveryStatus = Literal["pending", "succeeded", "failed"]
 InstanceConnectivity = Literal["online", "offline", "never_reported"]
+ServiceListStatus = Literal["online", "attention", "offline"]
 TelemetryChannel = Literal["sync", "heartbeat", "metrics", "events"]
 ConsoleRole = Literal["viewer", "operator", "admin"]
 AgentCommandKind = Literal[
@@ -691,6 +692,7 @@ class ServiceSummary(APIModel):
     name: str
     environment: Environment
     latest_deployment_version: str
+    service_status: ServiceListStatus
     latest_topology_hash: str | None = None
     latest_sync_at: datetime | None = None
     instance_count: int = Field(ge=0)
@@ -702,9 +704,20 @@ class ServiceSummary(APIModel):
     updated_at: datetime
 
 
+class ServiceListSummary(APIModel):
+    total_services: int = Field(ge=0)
+    online_services: int = Field(ge=0)
+    attention_services: int = Field(ge=0)
+    offline_services: int = Field(ge=0)
+    ready_services: int = Field(ge=0)
+    total_instances: int = Field(ge=0)
+    online_instances: int = Field(ge=0)
+
+
 class ServiceListResponse(PaginatedResponse):
     items: list[ServiceSummary]
     source_kind_counts: dict[str, int] = Field(default_factory=dict)
+    summary: ServiceListSummary
 
 
 class NotificationServiceScope(APIModel):

@@ -1,6 +1,7 @@
 export type Environment = "dev" | "staging" | "prod";
 export type HealthStatus = "ok" | "degraded" | "error" | "starting" | "unknown";
 export type InstanceConnectivity = "online" | "offline" | "never_reported";
+export type ServiceListStatus = "online" | "attention" | "offline";
 export type NotificationProvider = "feishu" | "wechat_work";
 export type NotificationEventType =
   | "task_started"
@@ -78,6 +79,7 @@ export interface ServiceSummary {
   name: string;
   environment: Environment;
   latest_deployment_version: string;
+  service_status: ServiceListStatus;
   latest_topology_hash: string | null;
   latest_sync_at: string | null;
   instance_count: number;
@@ -89,12 +91,23 @@ export interface ServiceSummary {
   updated_at: string;
 }
 
+export interface ServiceListSummary {
+  total_services: number;
+  online_services: number;
+  attention_services: number;
+  offline_services: number;
+  ready_services: number;
+  total_instances: number;
+  online_instances: number;
+}
+
 export interface ServiceListResponse {
   items: ServiceSummary[];
   total: number;
   limit: number;
   offset: number;
   source_kind_counts: Record<string, number>;
+  summary: ServiceListSummary;
 }
 
 export interface NotificationServiceScope {

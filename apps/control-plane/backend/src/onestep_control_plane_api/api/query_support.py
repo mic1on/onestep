@@ -23,6 +23,8 @@ from onestep_control_plane_api.api.schemas import (
     InstanceStatusCounts,
     InstanceSummary,
     RetryDescriptor,
+    ServiceListStatus,
+    ServiceListSummary,
     ServiceSummary,
     TaskControlStateSummary,
     TaskDashboardSummary,
@@ -213,6 +215,10 @@ def build_service_summary(
         name=service.name,
         environment=service.environment,
         latest_deployment_version=service.latest_deployment_version,
+        service_status=derive_service_list_status(
+            instance_count=instance_count,
+            online_instance_count=online_instance_count,
+        ),
         latest_topology_hash=service.latest_topology_hash,
         latest_sync_at=service.latest_sync_at,
         instance_count=instance_count,
@@ -222,6 +228,35 @@ def build_service_summary(
         task_count=task_count,
         created_at=service.created_at,
         updated_at=service.updated_at,
+    )
+
+
+def derive_service_list_status(
+    *,
+    instance_count: int,
+    online_instance_count: int,
+) -> ServiceListStatus:
+    if online_instance_count == 0:
+        return "offline"
+    if online_instance_count < instance_count:
+        return "attention"
+    return "online"
+
+
+def build_service_list_summary(items: list[ServiceSummary]) -> ServiceListSummary:
+    total_instances = sum(item.instance_count for item in items)
+    online_instances = sum(item.online_instance_count for item in items)
+    online_services = sum(1 for item in items if item.service_status == "online")
+    attention_services = sum(1 for item in items if item.service_status == "attention")
+    offline_services = sum(1 for item in items if item.service_status == "offline")
+    return ServiceListSummary(
+        total_services=len(items),
+        online_services=online_services,
+        attention_services=attention_services,
+        offline_services=offline_services,
+        ready_services=online_services,
+        total_instances=total_instances,
+        online_instances=online_instances,
     )
 
 

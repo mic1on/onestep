@@ -299,9 +299,9 @@ function normalizeNotificationChannel(channel: {
   };
 }
 
-export function listServices(environment?: Environment, sourceKind?: string) {
+export function listServices(environment?: Environment, sourceKind?: string, query?: string) {
   return request<ServiceListResponse>("/api/v1/services", {
-    query: { environment, source_kind: sourceKind, limit: SERVICES_PAGE_SIZE, offset: 0 },
+    query: { environment, source_kind: sourceKind, q: query, limit: SERVICES_PAGE_SIZE, offset: 0 },
   });
 }
 

@@ -76,6 +76,7 @@ function buildInstanceDetail(): InstanceDetailResponse {
       name: "demo-service",
       environment: "prod",
       latest_deployment_version: "2026.05.15",
+      service_status: "online",
       latest_topology_hash: "topology-hash",
       latest_sync_at: new Date("2026-05-15T08:00:00Z").toISOString(),
       instance_count: 1,

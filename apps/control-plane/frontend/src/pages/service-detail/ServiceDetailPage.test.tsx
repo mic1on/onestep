@@ -67,6 +67,7 @@ function buildDashboard(): ServiceDashboardResponse {
       name: "demo-service",
       environment: "prod",
       latest_deployment_version: "2026.05.16",
+      service_status: "online",
       latest_topology_hash: "hash-a",
       latest_sync_at: now,
       instance_count: 4,

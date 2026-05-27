@@ -18,10 +18,10 @@ type PaginatedQueryOptions = QueryOptions & {
 
 const LIVE_REFETCH_INTERVAL_MS = 5_000;
 
-export function useServicesQuery(environment?: Environment, sourceKind?: string) {
+export function useServicesQuery(environment?: Environment, sourceKind?: string, query?: string) {
   return useQuery({
-    queryKey: ["services", environment ?? "all", sourceKind ?? "all"],
-    queryFn: () => listServices(environment, sourceKind),
+    queryKey: ["services", environment ?? "all", sourceKind ?? "all", query ?? ""],
+    queryFn: () => listServices(environment, sourceKind, query),
   });
 }
 

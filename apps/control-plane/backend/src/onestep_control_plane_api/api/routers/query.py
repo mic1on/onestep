@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import (
@@ -25,6 +25,7 @@ from onestep_control_plane_api.api.constants import (
 from onestep_control_plane_api.api.query_support import (
     build_agent_session_summary,
     build_instance_status_counts,
+    build_service_list_summary,
     build_instance_summary,
     build_metric_window_summary,
     build_service_stats_subquery,
@@ -60,6 +61,7 @@ from onestep_control_plane_api.api.schemas import (
     InstanceDetailResponse,
     InstanceListResponse,
     ServiceDashboardResponse,
+    ServiceListSummary,
     ServiceListResponse,
     ServiceSummary,
     TaskDashboardListResponse,
@@ -91,6 +93,7 @@ router = APIRouter(
 def list_services(
     environment: Environment | None = Query(default=None),
     source_kind: str | None = Query(default=None),
+    q: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db_session),
@@ -101,6 +104,9 @@ def list_services(
     filters = []
     if environment is not None:
         filters.append(Service.environment == environment)
+    normalized_query = q.strip().lower() if q is not None else ""
+    if normalized_query:
+        filters.append(func.lower(Service.name).contains(normalized_query))
 
     # Build source_kinds lookup for all services
     source_kinds_map = build_source_kinds_map(db)
@@ -119,6 +125,7 @@ def list_services(
                 limit=limit,
                 offset=offset,
                 source_kind_counts=source_kind_counts,
+                summary=build_service_list_summary([]),
             )
         filters.append(Service.id.in_(service_ids_with_kind))
 
@@ -131,6 +138,69 @@ def list_services(
         online_cutoff=online_scope_cutoff,
         health_cutoff=health_scope_cutoff,
     )
+    summary_instance_count = func.coalesce(stats.c.instance_count, 0)
+    summary_online_count = func.coalesce(stats.c.online_instance_count, 0)
+    summary_stmt = (
+        select(
+            func.count(Service.id),
+            func.coalesce(func.sum(summary_instance_count), 0),
+            func.coalesce(func.sum(summary_online_count), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                summary_online_count > 0,
+                                summary_online_count == summary_instance_count,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                summary_online_count > 0,
+                                summary_online_count < summary_instance_count,
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            summary_online_count == 0,
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        )
+        .select_from(Service)
+        .outerjoin(stats, Service.id == stats.c.service_id)
+    )
+    if filters:
+        summary_stmt = summary_stmt.where(*filters)
+    (
+        summary_total_services,
+        summary_total_instances,
+        summary_online_instances,
+        summary_online_services,
+        summary_attention_services,
+        summary_offline_services,
+    ) = db.execute(summary_stmt).one()
     services_stmt = (
         select(
             Service,
@@ -164,6 +234,15 @@ def list_services(
         limit=limit,
         offset=offset,
         source_kind_counts=source_kind_counts,
+        summary=ServiceListSummary(
+            total_services=summary_total_services,
+            online_services=summary_online_services,
+            attention_services=summary_attention_services,
+            offline_services=summary_offline_services,
+            ready_services=summary_online_services,
+            total_instances=summary_total_instances,
+            online_instances=summary_online_instances,
+        ),
     )
 
 

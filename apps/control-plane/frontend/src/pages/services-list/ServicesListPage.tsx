@@ -28,22 +28,16 @@ export function ServicesListPage() {
   const { data, isPending, error } = useServicesQuery(
     selectedEnvironment === "all" ? undefined : selectedEnvironment,
     sourceKindParam,
+    deferredSearch.trim() || undefined,
   );
   const inactiveServiceDays = getInactiveServiceDays();
   const inactiveThresholdMs = inactiveServiceDays * DAY_IN_MS;
-
-  const query = deferredSearch.trim().toLowerCase();
-  const filteredItems = !query
-    ? (data?.items ?? [])
-    : (data?.items ?? []).filter((service) => service.name.toLowerCase().includes(query));
+  const filteredItems = data?.items ?? [];
   const { activeItems, inactiveItems } = partitionServices(filteredItems, inactiveThresholdMs);
   const sortedActiveItems = [...activeItems].sort(compareServicesForSurface);
   const sortedInactiveItems = [...inactiveItems].sort(compareServicesForSurface);
   const sortedItems = [...sortedActiveItems, ...sortedInactiveItems];
-  const totalInstances = sortedItems.reduce((sum, service) => sum + service.instance_count, 0);
-  const onlineInstances = sortedItems.reduce((sum, service) => sum + service.online_instance_count, 0);
-  const attentionCount = sortedItems.filter(serviceNeedsAttention).length;
-  const readyServices = sortedItems.filter(isServiceFullyOnline).length;
+  const summary = data?.summary;
   const sourceKindCounts = data?.source_kind_counts ?? {};
 
   function updateSearchParam(key: string, value: string | undefined) {
@@ -150,17 +144,17 @@ export function ServicesListPage() {
         <SummaryChip
           label={t("servicesList.summaryOnline")}
           tone="success"
-          value={`${onlineInstances}/${totalInstances || 0}`}
+          value={`${summary?.online_instances ?? 0}/${summary?.total_instances ?? 0}`}
         />
         <SummaryChip
           label={t("servicesList.summaryReady")}
           tone="accent"
-          value={String(readyServices)}
+          value={String(summary?.ready_services ?? 0)}
         />
         <SummaryChip
           label={t("servicesList.summaryAttention")}
-          tone={attentionCount > 0 ? "danger" : "default"}
-          value={String(attentionCount)}
+          tone={(summary?.attention_services ?? 0) > 0 ? "danger" : "default"}
+          value={String(summary?.attention_services ?? 0)}
         />
       </section>
 
@@ -284,32 +278,14 @@ function SummaryChip({
   );
 }
 
-function serviceNeedsAttention(service: ServiceSummary) {
-  return getServiceAttentionScore(service) > 0;
-}
-
-function isServiceFullyOnline(service: ServiceSummary) {
-  return service.instance_count > 0 && service.online_instance_count > 0 && !isServiceStale(service.latest_sync_at);
-}
-
 function getServiceAttentionScore(service: ServiceSummary) {
-  let score = 0;
-
-  if (service.instance_count === 0 || service.online_instance_count === 0) {
-    score += 5;
+  if (service.service_status === "offline") {
+    return 2;
   }
-
-  if (service.latest_sync_at === null) {
-    score += 4;
-  } else if (isServiceStale(service.latest_sync_at)) {
-    score += 2;
+  if (service.service_status === "attention") {
+    return 1;
   }
-
-  if (!service.latest_topology_hash) {
-    score += 1;
-  }
-
-  return score;
+  return 0;
 }
 
 function compareServicesForSurface(left: ServiceSummary, right: ServiceSummary) {
@@ -364,13 +340,6 @@ function isServiceInactive(service: ServiceSummary, inactiveThresholdMs: number)
   }
 
   return Date.now() - Date.parse(service.last_seen_at) > inactiveThresholdMs;
-}
-
-function isServiceStale(value: string | null) {
-  if (!value) {
-    return true;
-  }
-  return Date.now() - Date.parse(value) > 15 * 60 * 1000;
 }
 
 function compareDateDesc(left: string | null, right: string | null) {

@@ -333,11 +333,22 @@ def test_list_services_and_get_service_summary(client, db_session) -> None:
     assert len(payload["items"]) == 1
     assert payload["items"][0]["name"] == "billing-sync"
     assert payload["items"][0]["environment"] == "prod"
+    assert payload["items"][0]["service_status"] == "attention"
     assert payload["items"][0]["instance_count"] == 2
     assert payload["items"][0]["online_instance_count"] == 1
+    assert payload["summary"] == {
+        "total_services": 1,
+        "online_services": 0,
+        "attention_services": 1,
+        "offline_services": 0,
+        "ready_services": 0,
+        "total_instances": 2,
+        "online_instances": 1,
+    }
 
     detail = client.get("/api/v1/services/billing-sync", params={"environment": "prod"})
     assert detail.status_code == 200
+    assert detail.json()["service_status"] == "attention"
     assert detail.json()["instance_count"] == 2
     assert detail.json()["online_instance_count"] == 1
 
@@ -382,6 +393,77 @@ def test_list_services_scopes_source_kind_counts_to_environment(client, db_sessi
     assert all_response.json()["source_kind_counts"] == {
         "cron": 2,
         "webhook": 1,
+    }
+
+
+def test_list_services_marks_fully_online_service_as_online_even_when_sync_is_stale(
+    client, db_session
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(
+        db_session,
+        name="orders-api",
+        environment="prod",
+        latest_topology_hash="hash-orders",
+        latest_sync_at=now - timedelta(hours=2),
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="orders-api-1",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=20),
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/services", params={"environment": "prod"})
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["items"][0]["name"] == "orders-api"
+    assert payload["items"][0]["service_status"] == "online"
+    assert payload["summary"] == {
+        "total_services": 1,
+        "online_services": 1,
+        "attention_services": 0,
+        "offline_services": 0,
+        "ready_services": 1,
+        "total_instances": 1,
+        "online_instances": 1,
+    }
+
+
+def test_list_services_marks_service_without_online_instances_as_offline(client, db_session) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(
+        db_session,
+        name="ledger-sync",
+        environment="prod",
+        latest_topology_hash="hash-ledger",
+        latest_sync_at=now,
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="ledger-sync-1",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=10),
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/services", params={"environment": "prod"})
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["items"][0]["service_status"] == "offline"
+    assert payload["summary"] == {
+        "total_services": 1,
+        "online_services": 0,
+        "attention_services": 0,
+        "offline_services": 1,
+        "ready_services": 0,
+        "total_instances": 1,
+        "online_instances": 0,
     }
 
 
