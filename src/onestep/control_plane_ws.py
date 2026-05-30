@@ -125,6 +125,17 @@ def _format_exception_summary(exc: BaseException) -> str:
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
 
+def _is_ws_connection_closed(exc: BaseException) -> bool:
+    try:
+        from websockets.exceptions import ConnectionClosed
+
+        return isinstance(exc, ConnectionClosed)
+    except ImportError:
+        cls_name = type(exc).__qualname__
+        module = type(exc).__module__
+        return "ConnectionClosed" in cls_name and "websockets" in module
+
+
 def _is_transient_ws_connect_failure(exc: BaseException) -> bool:
     status_code = _extract_http_status_code(exc)
     if status_code is not None:
@@ -389,12 +400,24 @@ class ControlPlaneWsTransport:
                     server_response = json.loads(await connection.recv())
                 except asyncio.CancelledError:
                     raise
-                except Exception:
-                    self._logger.warning(
-                        "control plane WS receive loop exited unexpectedly",
-                        extra={"ws_url": self._ws_url},
-                        exc_info=True,
-                    )
+                except Exception as exc:
+                    if _is_ws_connection_closed(exc):
+                        code = getattr(exc, "code", None)
+                        reason = getattr(exc, "reason", None)
+                        self._logger.info(
+                            "control plane WS connection closed",
+                            extra={
+                                "ws_url": self._ws_url,
+                                "close_code": code,
+                                "close_reason": reason,
+                            },
+                        )
+                    else:
+                        self._logger.warning(
+                            "control plane WS receive loop exited unexpectedly",
+                            extra={"ws_url": self._ws_url},
+                            exc_info=True,
+                        )
                     return
                 message_type = server_response.get("type")
                 if message_type == "command":
@@ -1033,7 +1056,7 @@ class ControlPlaneWsSender:
         if self._transport.connected:
             return True
         if self._service_descriptor is None or self._runtime_descriptor is None:
-            self._logger.warning(
+            self._logger.debug(
                 "control plane WS sender is missing service/runtime descriptors; deferring connect"
             )
             await asyncio.sleep(self._next_reconnect_delay_s())
@@ -1043,22 +1066,31 @@ class ControlPlaneWsSender:
             set_capabilities(self._advertised_capabilities())
         if self._reconnect_attempts > 0:
             await asyncio.sleep(self._next_reconnect_delay_s())
+        previous_attempts = self._reconnect_attempts
         try:
             await self._transport.connect(
                 service=self._service_descriptor,
                 runtime=self._runtime_descriptor,
             )
         except Exception as exc:
+            self._reconnect_attempts = previous_attempts + 1
             log_message = (
                 "control plane WS connect failed; will retry in background: "
                 f"{_format_exception_summary(exc)}"
             )
-            self._logger.warning(
-                log_message,
-                exc_info=not _is_transient_ws_connect_failure(exc),
-            )
-            self._reconnect_attempts += 1
+            if self._reconnect_attempts == 1:
+                self._logger.warning(
+                    log_message,
+                    exc_info=not _is_transient_ws_connect_failure(exc),
+                )
+            else:
+                self._logger.debug(log_message)
             return False
+        if previous_attempts > 0:
+            self._logger.info(
+                "control plane WS reconnected after %d retries",
+                previous_attempts,
+            )
         self._reconnect_attempts = 0
         return True
 
