@@ -1363,6 +1363,47 @@ def test_ws_sender_reconnect_backoff_saturates_for_large_attempt_counts(monkeypa
     )
 
 
+def test_ws_sender_backpressure_warning_is_throttled(caplog, monkeypatch) -> None:
+    config = _make_config()
+    config.max_pending_events = 10
+    config.event_batch_size = 10
+    sender = ControlPlaneWsSender(config, transport=FakeTransport())
+    now = 100.0
+    monkeypatch.setattr(sender, "_monotonic", lambda: now)
+
+    async def scenario() -> None:
+        nonlocal now
+        with caplog.at_level(logging.WARNING, logger="onestep.control_plane.ws_sender"):
+            for sequence in range(3):
+                await sender(
+                    "events",
+                    {
+                        "events": [{"sequence": sequence}],
+                    },
+                )
+            now += 31.0
+            await sender(
+                "events",
+                {
+                    "events": [{"sequence": 3}],
+                },
+            )
+        await sender.close()
+
+    asyncio.run(scenario())
+
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "dropping control plane WS telemetry due to local sender backpressure"
+    ]
+    assert len(records) == 2
+    assert records[0].dropped_payloads == 1
+    assert records[0].suppressed_log_payloads == 0
+    assert records[1].dropped_payloads == 2
+    assert records[1].suppressed_log_payloads == 1
+
+
 @pytest.mark.parametrize("status_code", [404, *range(500, 600)])
 def test_ws_sender_retries_temporary_http_connect_failures_without_traceback(
     caplog,

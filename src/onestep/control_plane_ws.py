@@ -45,6 +45,7 @@ DEFAULT_COMMAND_CAPABILITIES = [
     "command.flush_metrics",
     "command.flush_events",
 ]
+_BACKPRESSURE_LOG_INTERVAL_S = 30.0
 
 
 def _utcnow() -> datetime:
@@ -657,6 +658,8 @@ class ControlPlaneWsSender:
             1,
             (config.max_pending_events + config.event_batch_size - 1) // config.event_batch_size,
         )
+        self._backpressure_log_deadlines: dict[str, float] = {}
+        self._backpressure_suppressed_drops: dict[str, int] = {}
         set_command_handler = getattr(self._transport, "set_command_handler", None)
         if callable(set_command_handler):
             set_command_handler(self)
@@ -963,14 +966,26 @@ class ControlPlaneWsSender:
                     f"control plane {channel} telemetry was dropped due to local backpressure"
                 ),
             )
+        now = self._monotonic()
+        suppressed = self._backpressure_suppressed_drops.pop(channel, 0)
+        next_log_at = self._backpressure_log_deadlines.get(channel, 0.0)
+        if now < next_log_at:
+            self._backpressure_suppressed_drops[channel] = suppressed + overflow
+            return
+        total_dropped = overflow + suppressed
+        self._backpressure_log_deadlines[channel] = now + _BACKPRESSURE_LOG_INTERVAL_S
         self._logger.warning(
             "dropping control plane WS telemetry due to local sender backpressure",
             extra={
                 "channel": channel,
-                "dropped_payloads": overflow,
+                "dropped_payloads": total_dropped,
                 "retained_payloads": len(queue),
+                "suppressed_log_payloads": suppressed,
             },
         )
+
+    def _monotonic(self) -> float:
+        return asyncio.get_running_loop().time()
 
     async def _run(self) -> None:
         try:
