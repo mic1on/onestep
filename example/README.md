@@ -18,6 +18,7 @@ Files:
 - `runtime_showcase.py`: webhook -> queue -> worker -> dead-letter showcase
 - `mysql_table_queue.py`: table-backed queue using `status` transitions
 - `mysql_incremental.py`: incremental sync using a durable cursor store
+- `feishu_bitable_sync/`: live Feishu Bitable incremental source -> upsert sink debugging project
 - `rabbitmq_queue.py`: RabbitMQ source/sink usage
 - `sqs_queue.py`: SQS source/sink usage
 - `control_plane_reporter_demo.py`: long-running reporter demo for local control plane smoke testing;
