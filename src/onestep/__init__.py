@@ -38,6 +38,13 @@ from .retry import (
 from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedState, StateStore
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 from .connectors.base import Delivery, Sink, Source
+from .connectors.feishu import (
+    FeishuBitableApiError,
+    FeishuBitableConnector,
+    FeishuBitableIncrementalSource,
+    FeishuBitablePayloadError,
+    FeishuBitableTableSink,
+)
 from .connectors.http import HttpSink, HttpSinkStatusError
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
@@ -69,6 +76,11 @@ __all__ = [
     "Envelope",
     "FailureInfo",
     "FailureKind",
+    "FeishuBitableApiError",
+    "FeishuBitableConnector",
+    "FeishuBitableIncrementalSource",
+    "FeishuBitablePayloadError",
+    "FeishuBitableTableSink",
     "HttpSink",
     "HttpSinkStatusError",
     "IdentityLockError",

@@ -12,6 +12,7 @@ from typing import Any
 
 from .app import OneStepApp
 from .connectors.base import Sink, Source
+from .connectors.feishu import FeishuBitableConnector
 from .connectors.http import HttpSink
 from .connectors.memory import MemoryQueue
 from .connectors.mysql import MySQLConnector
@@ -122,6 +123,24 @@ _STRICT_RESOURCE_FIELDS: dict[str, frozenset[str]] = {
     ),
     "http_sink": frozenset(
         {"type", "name", "url", "method", "headers", "params", "timeout_s", "success_statuses"}
+    ),
+    "feishu_bitable": frozenset({"type", "app_id", "app_secret", "base_url", "timeout_s"}),
+    "feishu_bitable_incremental": frozenset(
+        {
+            "type",
+            "connector",
+            "app_token",
+            "table_id",
+            "cursor_field",
+            "batch_size",
+            "poll_interval_s",
+            "state",
+            "state_key",
+            "user_id_type",
+        }
+    ),
+    "feishu_bitable_table_sink": frozenset(
+        {"type", "connector", "app_token", "table_id", "mode", "match_field", "user_id_type"}
     ),
     "rabbitmq": frozenset({"type", "url", "options"}),
     "rabbitmq_queue": frozenset(
@@ -461,6 +480,45 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             params=_mapping_value(spec.get("params"), field=f"resources.{name}.params"),
             timeout_s=spec.get("timeout_s", 5.0),
             success_statuses=spec.get("success_statuses"),
+        )
+    if resource_type == "feishu_bitable":
+        return FeishuBitableConnector(
+            app_id=_require_string(spec, "app_id"),
+            app_secret=_require_string(spec, "app_secret"),
+            base_url=spec.get("base_url", "https://open.feishu.cn"),
+            timeout_s=spec.get("timeout_s", 10.0),
+        )
+    if resource_type == "feishu_bitable_incremental":
+        connector = _resolve_dependency(resolve, spec, "connector")
+        if not isinstance(connector, FeishuBitableConnector):
+            raise TypeError(f"resource {spec['connector']!r} cannot build feishu_bitable_incremental")
+        raw_state_name = spec.get("state")
+        state = None
+        if raw_state_name is not None:
+            state_name = _string_value(raw_state_name, field=f"resources.{name}.state")
+            state = resolve(state_name)
+            if not _is_cursor_store(state):
+                raise TypeError(f"resource {state_name!r} cannot be used as incremental state")
+        return connector.incremental(
+            app_token=_require_string(spec, "app_token"),
+            table_id=_require_string(spec, "table_id"),
+            cursor_field=_require_string(spec, "cursor_field"),
+            user_id_type=spec.get("user_id_type"),
+            batch_size=spec.get("batch_size", 100),
+            poll_interval_s=spec.get("poll_interval_s", 1.0),
+            state=state,
+            state_key=spec.get("state_key"),
+        )
+    if resource_type == "feishu_bitable_table_sink":
+        connector = _resolve_dependency(resolve, spec, "connector")
+        if not isinstance(connector, FeishuBitableConnector):
+            raise TypeError(f"resource {spec['connector']!r} cannot build feishu_bitable_table_sink")
+        return connector.table_sink(
+            app_token=_require_string(spec, "app_token"),
+            table_id=_require_string(spec, "table_id"),
+            mode=spec.get("mode", "upsert"),
+            match_field=spec.get("match_field"),
+            user_id_type=spec.get("user_id_type"),
         )
     if resource_type == "rabbitmq":
         return RabbitMQConnector(
@@ -896,6 +954,12 @@ def _validate_resource_sections(config: Mapping[str, Any]) -> None:
                 _validate_webhook_resource(raw_spec, field=field)
             elif normalized_type == "http_sink":
                 _validate_http_sink_resource(raw_spec, field=field)
+            elif normalized_type == "feishu_bitable":
+                _validate_feishu_bitable_resource(raw_spec, field=field)
+            elif normalized_type == "feishu_bitable_incremental":
+                _validate_feishu_bitable_incremental_resource(raw_spec, field=field)
+            elif normalized_type == "feishu_bitable_table_sink":
+                _validate_feishu_bitable_table_sink_resource(raw_spec, field=field)
 
 
 def _validate_tasks(raw_tasks: Any) -> None:
@@ -1055,6 +1119,78 @@ def _validate_http_sink_resource(spec: Mapping[str, Any], *, field: str) -> None
                 raise TypeError(f"'{field}.success_statuses[{index}]' must be an integer")
             if status < 100 or status > 599:
                 raise ValueError(f"'{field}.success_statuses[{index}]' must be an HTTP status code")
+
+
+def _validate_feishu_bitable_resource(spec: Mapping[str, Any], *, field: str) -> None:
+    _require_string(spec, "app_id")
+    _require_string(spec, "app_secret")
+    if "base_url" in spec:
+        _string_value(spec.get("base_url"), field=f"{field}.base_url")
+    _validate_positive_number(spec.get("timeout_s"), field=f"{field}.timeout_s")
+
+
+def _validate_feishu_bitable_incremental_resource(spec: Mapping[str, Any], *, field: str) -> None:
+    _require_string(spec, "connector")
+    _require_string(spec, "app_token")
+    _require_string(spec, "table_id")
+    _require_string(spec, "cursor_field")
+    _validate_positive_integer(spec.get("batch_size"), field=f"{field}.batch_size")
+    _validate_non_negative_number(spec.get("poll_interval_s"), field=f"{field}.poll_interval_s")
+    if "state" in spec:
+        _string_value(spec.get("state"), field=f"{field}.state")
+    if "state_key" in spec:
+        _string_value(spec.get("state_key"), field=f"{field}.state_key")
+    _validate_feishu_user_id_type(spec.get("user_id_type"), field=f"{field}.user_id_type")
+
+
+def _validate_feishu_bitable_table_sink_resource(spec: Mapping[str, Any], *, field: str) -> None:
+    _require_string(spec, "connector")
+    _require_string(spec, "app_token")
+    _require_string(spec, "table_id")
+    raw_mode = spec.get("mode", "upsert")
+    mode = _string_value(raw_mode, field=f"{field}.mode").strip().lower()
+    if mode not in {"upsert", "create", "update"}:
+        raise ValueError(f"unsupported {field}.mode {raw_mode!r}")
+    if mode in {"upsert", "update"}:
+        _require_string(spec, "match_field")
+    elif "match_field" in spec:
+        _string_value(spec.get("match_field"), field=f"{field}.match_field")
+    _validate_feishu_user_id_type(spec.get("user_id_type"), field=f"{field}.user_id_type")
+
+
+def _validate_feishu_user_id_type(value: Any, *, field: str) -> None:
+    if value is None:
+        return
+    normalized = _string_value(value, field=field).strip().lower()
+    if normalized not in {"open_id", "union_id", "user_id"}:
+        raise ValueError(f"unsupported {field} {value!r}")
+
+
+def _validate_positive_number(value: Any, *, field: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"'{field}' must be a number")
+    if value <= 0:
+        raise ValueError(f"'{field}' must be > 0")
+
+
+def _validate_non_negative_number(value: Any, *, field: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"'{field}' must be a number")
+    if value < 0:
+        raise ValueError(f"'{field}' must be >= 0")
+
+
+def _validate_positive_integer(value: Any, *, field: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"'{field}' must be an integer")
+    if value < 1:
+        raise ValueError(f"'{field}' must be >= 1")
 
 
 def _task_emit_configured(raw_emit: Any) -> bool:

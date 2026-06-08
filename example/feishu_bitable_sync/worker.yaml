@@ -1,0 +1,45 @@
+apiVersion: onestep/v1alpha1
+kind: App
+
+app:
+  name: feishu-bitable-sync
+  logging:
+    level: INFO
+
+resources:
+  feishu:
+    type: feishu_bitable
+    app_id: "${FEISHU_APP_ID}"
+    app_secret: "${FEISHU_APP_SECRET}"
+    base_url: "${FEISHU_BASE_URL:-https://open.feishu.cn}"
+
+  source_orders:
+    type: feishu_bitable_incremental
+    connector: feishu
+    app_token: "${FEISHU_SOURCE_APP_TOKEN}"
+    table_id: "${FEISHU_SOURCE_TABLE_ID}"
+    cursor_field: "${FEISHU_CURSOR_FIELD:-最后更新时间}"
+    user_id_type: "${FEISHU_USER_ID_TYPE:-user_id}"
+    batch_size: 20
+    poll_interval_s: 5
+
+  target_orders:
+    type: feishu_bitable_table_sink
+    connector: feishu
+    app_token: "${FEISHU_TARGET_APP_TOKEN}"
+    table_id: "${FEISHU_TARGET_TABLE_ID}"
+    mode: upsert
+    match_field: "${FEISHU_MATCH_FIELD:-编号}"
+    user_id_type: "${FEISHU_USER_ID_TYPE:-user_id}"
+
+tasks:
+  - name: sync_orders
+    source: source_orders
+    emit: target_orders
+    concurrency: 20
+    config:
+      dry_run: false
+      owner_field: "${FEISHU_OWNER_FIELD:-}"
+      owner_id_field: "${FEISHU_OWNER_ID_FIELD:-}"
+    handler:
+      ref: feishu_bitable_demo.tasks:map_order
