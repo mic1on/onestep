@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- Fixes cancellation cleanup in `wait_for_stop_fetching()` so cancelling a waiter does not leak child tasks.
+
 ## 1.2.7
 
 - Adds pure YAML `app.logging.level` support for framework logger control.

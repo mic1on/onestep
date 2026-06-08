@@ -244,6 +244,33 @@ def test_startup_hook_failure_closes_opened_resources_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_cancelled_stop_fetching_waiter_does_not_leak_child_tasks_contract() -> None:
+    async def scenario() -> None:
+        app = OneStepApp("stop-fetching-cancellation")
+
+        for _ in range(100):
+            wait_task = asyncio.create_task(app.wait_for_stop_fetching("missing-task"))
+            await asyncio.sleep(0)
+            wait_task.cancel()
+            await asyncio.gather(wait_task, return_exceptions=True)
+
+        current_task = asyncio.current_task()
+        leaked_tasks = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not current_task and not task.done()
+        ]
+
+        try:
+            assert leaked_tasks == []
+        finally:
+            for task in leaked_tasks:
+                task.cancel()
+            await asyncio.gather(*leaked_tasks, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 def test_app_created_outside_running_loop_still_serves_contract() -> None:
     source = MemoryQueue("outside-loop.incoming")
     sink = MemoryQueue("outside-loop.processed")
