@@ -9,12 +9,12 @@ both tables contain these fields:
 - `标题`
 - `编号`
 
-The handler uses `onestep.connectors.feishu_bitable.feishu_bitable_text(...)` to convert
+The handler uses `onestep_feishu_bitable.feishu_bitable_text(...)` to convert
 Feishu rich text style values into plain strings before writing them back, which
 avoids common target text-field conversion failures.
 It can also map a Feishu person field with
-`onestep.connectors.feishu_bitable.feishu_bitable_user(...)` when you provide a source
-field that contains Feishu user IDs.
+`onestep_feishu_bitable.feishu_bitable_user(...)` when you provide a source field
+that contains Feishu user IDs.
 You can change the field names in `src/feishu_bitable_demo/tasks.py`.
 
 ## Environment
@@ -56,8 +56,8 @@ From the repo root:
 
 ```bash
 cd example/feishu_bitable_sync
-PYTHONPATH=../../src:src uv run --extra yaml python -m onestep.cli check --strict worker.yaml
-PYTHONPATH=../../src:src uv run --extra yaml python -m onestep.cli run worker.yaml
+PYTHONPATH=src uv run --project ../.. --all-packages --extra yaml python -m onestep.cli check --strict worker.yaml
+PYTHONPATH=src uv run --project ../.. --all-packages --extra yaml python -m onestep.cli run worker.yaml
 ```
 
 To inspect the mapped rows without writing to the target table, change the task

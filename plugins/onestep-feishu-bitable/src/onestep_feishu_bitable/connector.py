@@ -13,10 +13,9 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from onestep.envelope import Envelope
+from onestep.connectors.base import Delivery, Sink, Source
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.state import CursorStore, InMemoryCursorStore
-
-from .base import Delivery, Sink, Source
 
 _DEFAULT_BASE_URL = "https://open.feishu.cn"
 _DEFAULT_TIMEOUT_S = 10.0

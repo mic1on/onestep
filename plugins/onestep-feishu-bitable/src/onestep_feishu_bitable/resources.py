@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.connectors.feishu_bitable import FeishuBitableConnector
 from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
+
+from .connector import FeishuBitableConnector
 
 _FEISHU_BITABLE_FIELDS = frozenset({"type", "app_id", "app_secret", "base_url", "timeout_s"})
 _FEISHU_INCREMENTAL_FIELDS = frozenset(

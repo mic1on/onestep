@@ -5,6 +5,10 @@
 Add first-class Feishu Bitable connectors so onestep workers can sync data from
 MySQL into Feishu Bitable and sync data between Feishu Bitable tables.
 
+Update on 2026-06-09: the implementation now lives in the repo-local
+`plugins/onestep-feishu-bitable` package instead of core. Use the
+`onestep_feishu_bitable` import path.
+
 The design adds a shared `FeishuBitableConnector`, an incremental Bitable source,
 and a table sink whose default write mode is business-field `upsert`. The sink
 does not require callers to store target Feishu `record_id` values in MySQL.
@@ -105,7 +109,7 @@ names, including non-ASCII names, when the target table uses them.
 ## User-Facing Python API
 
 ```python
-from onestep import FeishuBitableConnector
+from onestep_feishu_bitable import FeishuBitableConnector
 
 feishu = FeishuBitableConnector(
     app_id=os.environ["FEISHU_APP_ID"],

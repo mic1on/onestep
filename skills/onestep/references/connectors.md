@@ -219,8 +219,10 @@ HTTP and `HttpSink` for outbound HTTP.
 
 ## Feishu Bitable
 
-Use Feishu Bitable when syncing rows into a Bitable table or incrementally
-copying records between Bitable tables.
+Use the `onestep-feishu-bitable` plugin when syncing rows into a Bitable table
+or incrementally copying records between Bitable tables. Install the plugin in
+the same environment as `onestep`; it registers the YAML resource types through
+the `onestep.resources` entry point group.
 
 ```yaml
 resources:
@@ -312,7 +314,7 @@ return rich text arrays or objects. Use `feishu_bitable_text(...)` in handlers t
 flatten those values before writing them to a target text field:
 
 ```python
-from onestep.connectors.feishu import feishu_bitable_text
+from onestep_feishu_bitable import feishu_bitable_text
 
 
 async def map_row(ctx, payload):
@@ -328,7 +330,7 @@ For Feishu person fields, use `feishu_bitable_user(...)` and set
 has Feishu `user_id` values, configure the sink with `user_id_type: user_id`:
 
 ```python
-from onestep.connectors.feishu import feishu_bitable_user
+from onestep_feishu_bitable import feishu_bitable_text, feishu_bitable_user
 
 
 async def map_row(ctx, payload):
@@ -340,6 +342,5 @@ async def map_row(ctx, payload):
 ```
 
 `feishu_bitable_user("u_xxx")` returns `[{"id": "u_xxx"}]`, which is the value
-shape expected by Feishu Bitable person fields. The helper is intentionally
-defined under `onestep.connectors.feishu`; it is not exported from the root
-`onestep` module.
+shape expected by Feishu Bitable person fields. The helpers are exported by the
+`onestep_feishu_bitable` plugin package, not by the root `onestep` package.

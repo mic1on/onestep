@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from onestep.connectors.feishu_bitable import feishu_bitable_text, feishu_bitable_user
+from onestep_feishu_bitable import feishu_bitable_text, feishu_bitable_user
 
 
 async def map_order(ctx, payload: dict[str, Any]) -> dict[str, Any] | None:

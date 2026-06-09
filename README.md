@@ -23,8 +23,6 @@ The V1 stable surface includes:
 - `MySQLConnector.table_sink(...)`
 - `MySQLConnector.state_store(...)`
 - `MySQLConnector.cursor_store(...)`
-- `FeishuBitableConnector.incremental(...)`
-- `FeishuBitableConnector.table_sink(...)`
 - `RabbitMQConnector.queue(...)`
 - `RedisConnector.stream(...)`
 - `SQSConnector.queue(...)`
@@ -49,6 +47,10 @@ Common extras:
 - `pip install 'onestep[sqs]'`
 - `pip install 'onestep[control-plane]'`
 - `pip install 'onestep[all]'`
+
+Connector plugins:
+
+- Feishu Bitable: install `onestep-feishu-bitable`
 
 From a source checkout:
 
@@ -212,9 +214,6 @@ Currently supported YAML resource types:
 - `mysql_table_queue`
 - `mysql_incremental`
 - `mysql_table_sink`
-- `feishu_bitable`
-- `feishu_bitable_incremental`
-- `feishu_bitable_table_sink`
 
 YAML apps can also bind app-level state explicitly:
 
@@ -761,13 +760,19 @@ async def sync_user(ctx, row):
 For production deployments, prefer `db.cursor_store(...)` or `db.state_store(...)` over the in-memory stores so cursors and task state survive process restarts.
 
 
-## Feishu Bitable
+## Feishu Bitable Plugin
 
-Use Feishu Bitable as an incremental source or upsert sink.
+Install `onestep-feishu-bitable` to use Feishu Bitable as an incremental
+source or upsert sink. In this repository, the plugin source lives under
+`plugins/onestep-feishu-bitable`.
 
 ```python
-from onestep import FeishuBitableConnector, OneStepApp
-from onestep.connectors.feishu import feishu_bitable_text, feishu_bitable_user
+from onestep import OneStepApp
+from onestep_feishu_bitable import (
+    FeishuBitableConnector,
+    feishu_bitable_text,
+    feishu_bitable_user,
+)
 
 app = OneStepApp("feishu-sync")
 feishu = FeishuBitableConnector(app_id="cli_xxx", app_secret="secret")
@@ -799,9 +804,8 @@ async def sync_order(ctx, payload):
 
 For Feishu person fields, pass the matching `user_id_type` (`open_id`,
 `union_id`, or `user_id`) and write values as `[{"id": "..."}]`. The
-`feishu_bitable_text(...)` and `feishu_bitable_user(...)` helpers live under
-`onestep.connectors.feishu`; they are not exported from the root `onestep`
-module.
+`feishu_bitable_text(...)` and `feishu_bitable_user(...)` helpers live in the
+`onestep_feishu_bitable` plugin package.
 
 
 ## RabbitMQ Queue

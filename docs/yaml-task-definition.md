@@ -438,9 +438,6 @@ Supported resource types today:
 - `cron`
 - `webhook`
 - `http_sink`
-- `feishu_bitable`
-- `feishu_bitable_incremental`
-- `feishu_bitable_table_sink`
 - `rabbitmq`
 - `rabbitmq_queue`
 - `redis`
@@ -465,3 +462,9 @@ feishu_bitable = "onestep_feishu_bitable:register"
 The entry point receives the resource registry and registers one or more
 resource handlers. Once the package is installed in the worker environment, YAML
 files can use the provided `type` values without changing onestep core.
+
+The repository includes `plugins/onestep-feishu-bitable`, which registers:
+
+- `feishu_bitable`
+- `feishu_bitable_incremental`
+- `feishu_bitable_table_sink`

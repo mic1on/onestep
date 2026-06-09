@@ -83,6 +83,11 @@ dev = [
 [project.scripts]
 onestep = "onestep.cli:main"
 
+[tool.uv.workspace]
+members = [
+    "plugins/onestep-feishu-bitable",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -106,6 +111,9 @@ include = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
 markers = [
     "integration: live infrastructure tests",
 ]

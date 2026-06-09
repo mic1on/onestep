@@ -1,0 +1,31 @@
+[project]
+name = "onestep-feishu-bitable"
+version = "0.1.0"
+description = "Feishu Bitable connector plugin for onestep."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "onestep>=1.4.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.entry-points."onestep.resources"]
+feishu_bitable = "onestep_feishu_bitable:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onestep_feishu_bitable"]
+
+[tool.uv.sources]
+onestep = { workspace = true }

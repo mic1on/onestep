@@ -6,6 +6,12 @@ resolution-markers = [
     "python_full_version < '3.10'",
 ]
 
+[manifest]
+members = [
+    "onestep",
+    "onestep-feishu-bitable",
+]
+
 [[package]]
 name = "aio-pika"
 version = "9.5.6"
@@ -565,6 +571,32 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'dev'", specifier = ">=12.0" },
 ]
 provides-extras = ["control-plane", "yaml", "mysql", "rabbitmq", "redis", "sqs", "test", "integration", "all", "dev"]
+
+[[package]]
+name = "onestep-feishu-bitable"
+version = "0.1.0"
+source = { editable = "plugins/onestep-feishu-bitable" }
+dependencies = [
+    { name = "onestep" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+]
+provides-extras = ["test", "dev"]
 
 [[package]]
 name = "packaging"

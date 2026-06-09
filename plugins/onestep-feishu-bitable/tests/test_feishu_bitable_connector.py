@@ -2,22 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import json
+from importlib import metadata as importlib_metadata
 from typing import Any
 
 import pytest
 
-from onestep import (
-    Envelope,
+from onestep import Envelope, InMemoryCursorStore
+from onestep.config import load_app_config
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
+from onestep_feishu_bitable import (
     FeishuBitableApiError,
     FeishuBitableConnector,
     FeishuBitableIncrementalSource,
     FeishuBitableTableSink,
-    InMemoryCursorStore,
+    feishu_bitable_text,
+    feishu_bitable_user,
 )
-from onestep.config import load_app_config
-from onestep.connectors.feishu import feishu_bitable_text as legacy_feishu_bitable_text
-from onestep.connectors.feishu_bitable import feishu_bitable_text, feishu_bitable_user
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
+
+
+def test_package_exposes_onestep_resource_entry_point() -> None:
+    entry_points = importlib_metadata.entry_points().select(group="onestep.resources")
+
+    assert any(
+        entry_point.name == "feishu_bitable"
+        and entry_point.value == "onestep_feishu_bitable:register"
+        for entry_point in entry_points
+    )
 
 
 async def _start_json_server(
@@ -117,8 +127,8 @@ def test_feishu_connector_fetches_and_reuses_tenant_token_for_create_sink() -> N
 def test_feishu_bitable_text_flattens_common_field_values() -> None:
     import onestep
 
+    assert not hasattr(onestep, "FeishuBitableConnector")
     assert not hasattr(onestep, "feishu_bitable_text")
-    assert legacy_feishu_bitable_text is feishu_bitable_text
     assert feishu_bitable_text(None) is None
     assert feishu_bitable_text("plain") == "plain"
     assert feishu_bitable_text([{"text": "A"}, {"text": "B"}]) == "AB"

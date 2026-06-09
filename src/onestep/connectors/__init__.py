@@ -1,11 +1,4 @@
 from .base import Delivery, Sink, Source
-from .feishu_bitable import (
-    FeishuBitableApiError,
-    FeishuBitableConnector,
-    FeishuBitableIncrementalSource,
-    FeishuBitablePayloadError,
-    FeishuBitableTableSink,
-)
 from .http import HttpSink, HttpSinkStatusError
 from .memory import MemoryQueue
 from .mysql import MySQLConnector
@@ -19,11 +12,6 @@ __all__ = [
     "BearerAuth",
     "CronSource",
     "Delivery",
-    "FeishuBitableApiError",
-    "FeishuBitableConnector",
-    "FeishuBitableIncrementalSource",
-    "FeishuBitablePayloadError",
-    "FeishuBitableTableSink",
     "HttpSink",
     "HttpSinkStatusError",
     "IntervalSource",
