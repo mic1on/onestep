@@ -7,7 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -146,7 +146,7 @@ class FeishuBitableConnector:
         app_token: str,
         table_id: str,
         mode: str = "upsert",
-        match_field: str | None = None,
+        match_fields: Sequence[str] | None = None,
         user_id_type: str | None = None,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
@@ -154,7 +154,7 @@ class FeishuBitableConnector:
             app_token=app_token,
             table_id=table_id,
             mode=mode,
-            match_field=match_field,
+            match_fields=match_fields,
             user_id_type=user_id_type,
         )
 
@@ -644,20 +644,20 @@ class FeishuBitableTableSink(Sink):
         app_token: str,
         table_id: str,
         mode: str,
-        match_field: str | None,
+        match_fields: Sequence[str] | None,
         user_id_type: str | None,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
         if normalized_mode in {"upsert", "update"}:
-            match_field = _require_non_empty_string(match_field, field="match_field")
-        elif match_field is not None:
-            match_field = _require_non_empty_string(match_field, field="match_field")
+            normalized_match_fields = _normalize_match_fields(match_fields, required=True)
+        else:
+            normalized_match_fields = _normalize_match_fields(match_fields, required=False)
         self.connector = connector
         self.app_token = _require_non_empty_string(app_token, field="app_token")
         self.table_id = _require_non_empty_string(table_id, field="table_id")
         self.mode = normalized_mode
-        self.match_field = match_field
+        self.match_fields = normalized_match_fields
         self.user_id_type = _normalize_user_id_type(user_id_type)
 
     async def send(self, envelope: Envelope) -> None:
@@ -675,14 +675,11 @@ class FeishuBitableTableSink(Sink):
                 )
                 return
 
-            match_field = self.match_field or ""
-            match_value = fields.get(match_field)
-            if _empty_match_value(match_value):
-                raise FeishuBitablePayloadError(f"payload must include non-empty match field {match_field!r}")
-            matches = await self._find_matches(match_field, match_value)
+            match_values = _match_values(fields, self.match_fields)
+            matches = await self._find_matches(match_values)
             if len(matches) > 1:
                 raise FeishuBitablePayloadError(
-                    f"upsert match field {match_field!r} matched {len(matches)} records"
+                    f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
                 )
             if matches:
                 await self.connector.update_record(
@@ -697,7 +694,7 @@ class FeishuBitableTableSink(Sink):
                 )
                 return
             if self.mode == "update":
-                raise FeishuBitablePayloadError(f"no record matched field {match_field!r}")
+                raise FeishuBitablePayloadError(f"no record matched fields {self.match_fields!r}")
             await self.connector.create_record(
                 app_token=self.app_token,
                 table_id=self.table_id,
@@ -728,16 +725,16 @@ class FeishuBitableTableSink(Sink):
                 "app_token": _redact_token(self.app_token),
                 "table_id": self.table_id,
                 "mode": self.mode,
-                "match_field": self.match_field,
+                "match_fields": list(self.match_fields),
                 "user_id_type": self.user_id_type,
             },
         }
 
-    async def _find_matches(self, match_field: str, match_value: Any) -> list[dict[str, Any]]:
+    async def _find_matches(self, match_values: Mapping[str, Any]) -> list[dict[str, Any]]:
         data = await self.connector.search_records(
             app_token=self.app_token,
             table_id=self.table_id,
-            body=_match_search_body(match_field, match_value),
+            body=_match_search_body(match_values),
             page_size=2,
             user_id_type=self.user_id_type,
             operation=ConnectorOperation.SEND,
@@ -765,16 +762,17 @@ def _incremental_search_body(cursor_field: str, *, sort: bool) -> dict[str, Any]
     return body
 
 
-def _match_search_body(match_field: str, match_value: Any) -> dict[str, Any]:
+def _match_search_body(match_values: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "filter": {
             "conjunction": "and",
             "conditions": [
                 {
-                    "field_name": match_field,
+                    "field_name": field_name,
                     "operator": "is",
-                    "value": [match_value],
+                    "value": [field_value],
                 }
+                for field_name, field_value in match_values.items()
             ],
         }
     }
@@ -918,6 +916,31 @@ def _empty_match_value(value: Any) -> bool:
     if isinstance(value, (list, tuple, set, dict)) and not value:
         return True
     return False
+
+
+def _normalize_match_fields(value: Sequence[str] | None, *, required: bool) -> tuple[str, ...]:
+    if value is None:
+        if required:
+            raise ValueError("'match_fields' must be a non-empty list of strings")
+        return ()
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError("'match_fields' must be a non-empty list of strings")
+    fields = tuple(_require_non_empty_string(item, field="match_fields") for item in value)
+    if not fields and required:
+        raise ValueError("'match_fields' must be a non-empty list of strings")
+    if len(set(fields)) != len(fields):
+        raise ValueError("'match_fields' must not contain duplicate field names")
+    return fields
+
+
+def _match_values(fields: Mapping[str, Any], match_fields: Sequence[str]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for field_name in match_fields:
+        field_value = fields.get(field_name)
+        if _empty_match_value(field_value):
+            raise FeishuBitablePayloadError(f"payload must include non-empty match_fields entry {field_name!r}")
+        values[field_name] = field_value
+    return values
 
 
 def _optional_int(value: Any) -> int | None:

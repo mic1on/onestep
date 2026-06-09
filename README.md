@@ -782,7 +782,7 @@ sink = feishu.table_sink(
     app_token="bascnyyy",
     table_id="tbl_target",
     mode="upsert",
-    match_field="编号",
+    match_fields=["编号"],
     user_id_type="user_id",
 )
 

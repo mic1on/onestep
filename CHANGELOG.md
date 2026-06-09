@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3
+
+- Replaces Feishu Bitable sink `match_field` with `match_fields` and supports compound-key upsert/update matching.
+
 ## 1.3.2
 
 - Adds the Feishu Bitable connector, including incremental sources, table sinks, YAML resources, examples, and tests.

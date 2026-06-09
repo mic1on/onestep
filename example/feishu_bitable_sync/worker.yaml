@@ -29,7 +29,8 @@ resources:
     app_token: "${FEISHU_TARGET_APP_TOKEN}"
     table_id: "${FEISHU_TARGET_TABLE_ID}"
     mode: upsert
-    match_field: "${FEISHU_MATCH_FIELD:-编号}"
+    match_fields:
+      - "${FEISHU_MATCH_FIELD:-编号}"
     user_id_type: "${FEISHU_USER_ID_TYPE:-user_id}"
 
 tasks:

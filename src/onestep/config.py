@@ -140,7 +140,7 @@ _STRICT_RESOURCE_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "feishu_bitable_table_sink": frozenset(
-        {"type", "connector", "app_token", "table_id", "mode", "match_field", "user_id_type"}
+        {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type"}
     ),
     "rabbitmq": frozenset({"type", "url", "options"}),
     "rabbitmq_queue": frozenset(
@@ -517,7 +517,7 @@ def _build_resource(name: str, spec: Mapping[str, Any], *, resolve: Callable[[st
             app_token=_require_string(spec, "app_token"),
             table_id=_require_string(spec, "table_id"),
             mode=spec.get("mode", "upsert"),
-            match_field=spec.get("match_field"),
+            match_fields=spec.get("match_fields"),
             user_id_type=spec.get("user_id_type"),
         )
     if resource_type == "rabbitmq":
@@ -864,6 +864,20 @@ def _string_list(value: Any, *, field: str) -> list[str]:
     return [_string_value(item, field=field) for item in value]
 
 
+def _require_non_empty_string_list(mapping: Mapping[str, Any], key: str, *, field: str) -> list[str]:
+    value = mapping.get(key)
+    if value is None:
+        raise ValueError(f"'{field}' must be a non-empty list of strings")
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"'{field}' must be a non-empty list of strings")
+    items = [_string_value(item, field=f"{field}[{index}]").strip() for index, item in enumerate(value)]
+    if not items:
+        raise ValueError(f"'{field}' must be a non-empty list of strings")
+    if len(set(items)) != len(items):
+        raise ValueError(f"'{field}' must not contain duplicate field names")
+    return items
+
+
 def _require_mapping(mapping: Mapping[str, Any], key: str) -> dict[str, Any]:
     value = mapping.get(key)
     if not isinstance(value, Mapping):
@@ -1152,9 +1166,9 @@ def _validate_feishu_bitable_table_sink_resource(spec: Mapping[str, Any], *, fie
     if mode not in {"upsert", "create", "update"}:
         raise ValueError(f"unsupported {field}.mode {raw_mode!r}")
     if mode in {"upsert", "update"}:
-        _require_string(spec, "match_field")
-    elif "match_field" in spec:
-        _string_value(spec.get("match_field"), field=f"{field}.match_field")
+        _require_non_empty_string_list(spec, "match_fields", field=f"{field}.match_fields")
+    elif "match_fields" in spec:
+        _require_non_empty_string_list(spec, "match_fields", field=f"{field}.match_fields")
     _validate_feishu_user_id_type(spec.get("user_id_type"), field=f"{field}.user_id_type")
 
 

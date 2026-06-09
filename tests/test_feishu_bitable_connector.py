@@ -372,7 +372,7 @@ def test_feishu_table_sink_upsert_creates_updates_and_rejects_duplicates() -> No
             app_token="app-token",
             table_id="tbl",
             mode="upsert",
-            match_field="order_no",
+            match_fields=["order_no"],
         )
 
         await sink.send(Envelope(body={"order_no": "A001", "status": "new"}))
@@ -390,6 +390,51 @@ def test_feishu_table_sink_upsert_creates_updates_and_rejects_duplicates() -> No
             "value": ["A001"],
         }
         assert raised.value.kind is ConnectorErrorKind.PERMANENT
+
+    asyncio.run(scenario())
+
+
+def test_feishu_table_sink_upsert_matches_multiple_fields() -> None:
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        search_bodies: list[dict[str, Any]] = []
+        updated: list[dict[str, Any]] = []
+
+        async def search_records(**kwargs):
+            search_bodies.append(kwargs["body"])
+            return {"items": [{"record_id": "rec1", "fields": {"shop_id": "S01", "order_no": "A001"}}]}
+
+        async def update_record(**kwargs):
+            updated.append(kwargs)
+            return {"record": {"record_id": kwargs["record_id"]}}
+
+        connector.search_records = search_records  # type: ignore[method-assign]
+        connector.update_record = update_record  # type: ignore[method-assign]
+        sink = connector.table_sink(
+            app_token="app-token",
+            table_id="tbl",
+            mode="upsert",
+            match_fields=["shop_id", "order_no"],
+        )
+
+        await sink.send(Envelope(body={"shop_id": "S01", "order_no": "A001", "status": "paid"}))
+
+        assert search_bodies[0]["filter"] == {
+            "conjunction": "and",
+            "conditions": [
+                {
+                    "field_name": "shop_id",
+                    "operator": "is",
+                    "value": ["S01"],
+                },
+                {
+                    "field_name": "order_no",
+                    "operator": "is",
+                    "value": ["A001"],
+                },
+            ],
+        }
+        assert updated[0]["record_id"] == "rec1"
 
     asyncio.run(scenario())
 
@@ -478,7 +523,7 @@ def test_feishu_table_sink_update_requires_existing_match() -> None:
             app_token="app-token",
             table_id="tbl",
             mode="update",
-            match_field="order_no",
+            match_fields=["order_no"],
         )
 
         with pytest.raises(ConnectorOperationError) as raised:
@@ -489,18 +534,18 @@ def test_feishu_table_sink_update_requires_existing_match() -> None:
     asyncio.run(scenario())
 
 
-def test_feishu_table_sink_rejects_missing_match_field_payload() -> None:
+def test_feishu_table_sink_rejects_missing_match_fields_payload() -> None:
     async def scenario() -> None:
         connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
         sink = connector.table_sink(
             app_token="app-token",
             table_id="tbl",
             mode="upsert",
-            match_field="order_no",
+            match_fields=["shop_id", "order_no"],
         )
 
         with pytest.raises(ConnectorOperationError) as raised:
-            await sink.send(Envelope(body={"status": "new"}))
+            await sink.send(Envelope(body={"shop_id": "S01", "status": "new"}))
 
         assert raised.value.kind is ConnectorErrorKind.PERMANENT
 
@@ -532,7 +577,7 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
                     "connector": "feishu",
                     "app_token": "app-token",
                     "table_id": "dst",
-                    "match_field": "order_no",
+                    "match_fields": ["shop_id", "order_no"],
                     "user_id_type": "user_id",
                 },
             },
@@ -552,6 +597,7 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
     assert isinstance(app.resources["sink"], FeishuBitableTableSink)
     assert app.resources["source"].user_id_type == "user_id"
     assert app.resources["sink"].user_id_type == "user_id"
+    assert app.resources["sink"].match_fields == ("shop_id", "order_no")
 
 
 def test_yaml_rejects_unknown_feishu_fields_in_strict_mode() -> None:
@@ -575,8 +621,8 @@ def test_yaml_rejects_unknown_feishu_fields_in_strict_mode() -> None:
         )
 
 
-def test_yaml_rejects_upsert_sink_without_match_field_in_strict_mode() -> None:
-    with pytest.raises(ValueError, match="'match_field' must be a non-empty string"):
+def test_yaml_rejects_upsert_sink_without_match_fields_in_strict_mode() -> None:
+    with pytest.raises(ValueError, match="'resources.sink.match_fields' must be a non-empty list of strings"):
         load_app_config(
             {
                 "apiVersion": "onestep/v1alpha1",
@@ -593,6 +639,60 @@ def test_yaml_rejects_upsert_sink_without_match_field_in_strict_mode() -> None:
                         "connector": "feishu",
                         "app_token": "app-token",
                         "table_id": "dst",
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_yaml_rejects_legacy_match_field_in_strict_mode() -> None:
+    with pytest.raises(ValueError, match="unsupported fields for resources.sink: match_field"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "feishu-sync"},
+                "resources": {
+                    "feishu": {
+                        "type": "feishu_bitable",
+                        "app_id": "app-id",
+                        "app_secret": "secret",
+                    },
+                    "sink": {
+                        "type": "feishu_bitable_table_sink",
+                        "connector": "feishu",
+                        "app_token": "app-token",
+                        "table_id": "dst",
+                        "match_field": "order_no",
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_yaml_rejects_invalid_match_fields_in_strict_mode() -> None:
+    with pytest.raises(TypeError, match="'resources.sink.match_fields' must be a non-empty list of strings"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "feishu-sync"},
+                "resources": {
+                    "feishu": {
+                        "type": "feishu_bitable",
+                        "app_id": "app-id",
+                        "app_secret": "secret",
+                    },
+                    "sink": {
+                        "type": "feishu_bitable_table_sink",
+                        "connector": "feishu",
+                        "app_token": "app-token",
+                        "table_id": "dst",
+                        "match_fields": "order_no",
                     },
                 },
                 "tasks": [],
@@ -641,7 +741,7 @@ def test_feishu_descriptors_redact_app_token_and_omit_credentials() -> None:
         app_token="app-token-secret",
         table_id="tbl",
         mode="upsert",
-        match_field="order_no",
+        match_fields=["order_no"],
     )
 
     payload = json.dumps(

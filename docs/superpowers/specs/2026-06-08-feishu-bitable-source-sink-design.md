@@ -68,7 +68,7 @@ resources:
     app_token: "${FEISHU_APP_TOKEN}"
     table_id: "${FEISHU_TABLE_ID}"
     mode: upsert
-    match_field: order_no
+    match_fields: [order_no]
 
 tasks:
   - name: sync_orders_to_feishu
@@ -96,7 +96,7 @@ resources:
     app_token: "${TARGET_FEISHU_APP_TOKEN}"
     table_id: "${TARGET_FEISHU_TABLE_ID}"
     mode: upsert
-    match_field: order_no
+    match_fields: [order_no]
 ```
 
 Field names are passed through exactly as configured and may use Feishu display
@@ -122,7 +122,7 @@ sink = feishu.table_sink(
     app_token=os.environ["TARGET_FEISHU_APP_TOKEN"],
     table_id=os.environ["TARGET_FEISHU_TABLE_ID"],
     mode="upsert",
-    match_field="order_no",
+    match_fields=["order_no"],
 )
 ```
 
@@ -166,9 +166,9 @@ Fields:
 - `app_token`: required, Bitable app token
 - `table_id`: required
 - `mode`: optional, one of `upsert`, `create`, or `update`; default `upsert`
-- `match_field`: required for `upsert` and `update`
+- `match_fields`: required for `upsert` and `update`
 
-`match_field` is a business unique field in the target table. The sink does not
+`match_fields` are business unique fields in the target table. The sink does not
 use source or target `record_id` as its default matching key.
 
 ## Source Payload Shape
@@ -256,7 +256,7 @@ for existing records.
 
 ### `update`
 
-The sink requires `match_field`.
+The sink requires `match_fields`.
 
 - If no record matches, raise a connector operation error.
 - If one record matches, update that record.
@@ -264,14 +264,14 @@ The sink requires `match_field`.
 
 ### `upsert`
 
-The sink requires `match_field`.
+The sink requires `match_fields`.
 
 - If no record matches, create a new record.
 - If one record matches, update that record.
 - If multiple records match, raise a permanent connector operation error.
 
-The payload must contain a non-empty value for `match_field`. Missing or empty
-values are permanent payload errors.
+The payload must contain a non-empty value for every configured `match_fields`
+entry. Missing or empty values are permanent payload errors.
 
 ## Authentication
 
@@ -355,7 +355,7 @@ Validation should reject:
 - unknown fields
 - missing required strings
 - invalid sink `mode`
-- missing `match_field` when mode is `upsert` or `update`
+- missing `match_fields` when mode is `upsert` or `update`
 - non-mapping values where mappings are required
 - invalid numeric timeout, batch size, or poll interval values
 
@@ -366,7 +366,7 @@ Update connector docs with:
 - Feishu Bitable connector overview
 - MySQL to Bitable YAML example
 - Bitable to Bitable YAML example
-- explanation of `cursor_field` versus `match_field`
+- explanation of `cursor_field` versus `match_fields`
 - note that `record_id` is not required for default upsert
 - credential environment variable guidance
 
@@ -387,7 +387,7 @@ Tests:
 - sink `upsert` updates when there is one match
 - sink `upsert` raises permanent error when there are multiple matches
 - sink `update` raises when there is no match
-- sink rejects missing or empty `match_field` payload values
+- sink rejects missing or empty `match_fields` payload values
 - YAML strict mode accepts valid Feishu resources
 - YAML strict mode rejects unknown Feishu fields
 - control-plane descriptors redact credentials

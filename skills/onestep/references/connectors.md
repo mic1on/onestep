@@ -235,7 +235,7 @@ resources:
     app_token: "${FEISHU_APP_TOKEN}"
     table_id: "${FEISHU_TABLE_ID}"
     mode: upsert
-    match_field: order_no
+    match_fields: [order_no]
 ```
 
 For MySQL to Bitable sync, keep the field mapping in Python:
@@ -255,7 +255,7 @@ resources:
     app_token: "${FEISHU_APP_TOKEN}"
     table_id: "${FEISHU_TABLE_ID}"
     mode: upsert
-    match_field: order_no
+    match_fields: [order_no]
 
 tasks:
   - name: sync_orders
@@ -284,12 +284,12 @@ resources:
     app_token: "${TARGET_FEISHU_APP_TOKEN}"
     table_id: "${TARGET_FEISHU_TABLE_ID}"
     mode: upsert
-    match_field: order_no
+    match_fields: [order_no]
     user_id_type: user_id
 ```
 
 `cursor_field` is the source high-water mark for incremental reads.
-`match_field` is the target business unique field for sink upsert. The default
+`match_fields` are the target business unique fields for sink upsert. The default
 upsert path does not require storing Feishu `record_id` values in MySQL.
 At runtime, effective source fetch size is capped by both task `concurrency` and
 source `batch_size`; set them together when debugging larger batches.
