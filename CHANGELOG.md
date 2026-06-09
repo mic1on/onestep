@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+- Adds the Feishu Bitable connector, including incremental sources, table sinks, YAML resources, examples, and tests.
+
 ## 1.3.1
 
 - Fixes cancellation cleanup in `wait_for_stop_fetching()` so cancelling a waiter does not leak child tasks.

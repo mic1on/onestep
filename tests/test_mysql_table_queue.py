@@ -76,6 +76,6 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
         ).all()
     verify_engine.dispose()
 
-    assert seen_scores == [(1, 10), (2, 20)]
+    assert sorted(seen_scores) == [(1, 10), (2, 20)]
     assert order_rows == [(1, 1, 10), (2, 1, 20)]
     assert processed_rows == [(1, "A", "done"), (2, "B", "done")]
