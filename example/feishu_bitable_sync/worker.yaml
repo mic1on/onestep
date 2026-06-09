@@ -7,7 +7,7 @@ app:
     level: INFO
 
 resources:
-  feishu:
+  feishu_bitable:
     type: feishu_bitable
     app_id: "${FEISHU_APP_ID}"
     app_secret: "${FEISHU_APP_SECRET}"
@@ -15,7 +15,7 @@ resources:
 
   source_orders:
     type: feishu_bitable_incremental
-    connector: feishu
+    connector: feishu_bitable
     app_token: "${FEISHU_SOURCE_APP_TOKEN}"
     table_id: "${FEISHU_SOURCE_TABLE_ID}"
     cursor_field: "${FEISHU_CURSOR_FIELD:-最后更新时间}"
@@ -25,7 +25,7 @@ resources:
 
   target_orders:
     type: feishu_bitable_table_sink
-    connector: feishu
+    connector: feishu_bitable
     app_token: "${FEISHU_TARGET_APP_TOKEN}"
     table_id: "${FEISHU_TARGET_TABLE_ID}"
     mode: upsert

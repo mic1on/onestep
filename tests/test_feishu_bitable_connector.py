@@ -15,7 +15,8 @@ from onestep import (
     InMemoryCursorStore,
 )
 from onestep.config import load_app_config
-from onestep.connectors.feishu import feishu_bitable_text, feishu_bitable_user
+from onestep.connectors.feishu import feishu_bitable_text as legacy_feishu_bitable_text
+from onestep.connectors.feishu_bitable import feishu_bitable_text, feishu_bitable_user
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 
 
@@ -117,6 +118,7 @@ def test_feishu_bitable_text_flattens_common_field_values() -> None:
     import onestep
 
     assert not hasattr(onestep, "feishu_bitable_text")
+    assert legacy_feishu_bitable_text is feishu_bitable_text
     assert feishu_bitable_text(None) is None
     assert feishu_bitable_text("plain") == "plain"
     assert feishu_bitable_text([{"text": "A"}, {"text": "B"}]) == "AB"
@@ -559,14 +561,14 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
             "kind": "App",
             "app": {"name": "feishu-sync"},
             "resources": {
-                "feishu": {
+                "feishu_bitable": {
                     "type": "feishu_bitable",
                     "app_id": "app-id",
                     "app_secret": "secret",
                 },
                 "source": {
                     "type": "feishu_bitable_incremental",
-                    "connector": "feishu",
+                    "connector": "feishu_bitable",
                     "app_token": "app-token",
                     "table_id": "src",
                     "cursor_field": "updated_at",
@@ -574,7 +576,7 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
                 },
                 "sink": {
                     "type": "feishu_bitable_table_sink",
-                    "connector": "feishu",
+                    "connector": "feishu_bitable",
                     "app_token": "app-token",
                     "table_id": "dst",
                     "match_fields": ["shop_id", "order_no"],
@@ -592,7 +594,7 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
         strict=True,
     )
 
-    assert isinstance(app.resources["feishu"], FeishuBitableConnector)
+    assert isinstance(app.resources["feishu_bitable"], FeishuBitableConnector)
     assert isinstance(app.resources["source"], FeishuBitableIncrementalSource)
     assert isinstance(app.resources["sink"], FeishuBitableTableSink)
     assert app.resources["source"].user_id_type == "user_id"
@@ -601,14 +603,14 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
 
 
 def test_yaml_rejects_unknown_feishu_fields_in_strict_mode() -> None:
-    with pytest.raises(ValueError, match="unsupported fields for resources.feishu: token"):
+    with pytest.raises(ValueError, match="unsupported fields for resources.feishu_bitable: token"):
         load_app_config(
             {
                 "apiVersion": "onestep/v1alpha1",
                 "kind": "App",
                 "app": {"name": "feishu-sync"},
                 "resources": {
-                    "feishu": {
+                    "feishu_bitable": {
                         "type": "feishu_bitable",
                         "app_id": "app-id",
                         "app_secret": "secret",
@@ -629,14 +631,14 @@ def test_yaml_rejects_upsert_sink_without_match_fields_in_strict_mode() -> None:
                 "kind": "App",
                 "app": {"name": "feishu-sync"},
                 "resources": {
-                    "feishu": {
+                    "feishu_bitable": {
                         "type": "feishu_bitable",
                         "app_id": "app-id",
                         "app_secret": "secret",
                     },
                     "sink": {
                         "type": "feishu_bitable_table_sink",
-                        "connector": "feishu",
+                        "connector": "feishu_bitable",
                         "app_token": "app-token",
                         "table_id": "dst",
                     },
@@ -655,14 +657,14 @@ def test_yaml_rejects_legacy_match_field_in_strict_mode() -> None:
                 "kind": "App",
                 "app": {"name": "feishu-sync"},
                 "resources": {
-                    "feishu": {
+                    "feishu_bitable": {
                         "type": "feishu_bitable",
                         "app_id": "app-id",
                         "app_secret": "secret",
                     },
                     "sink": {
                         "type": "feishu_bitable_table_sink",
-                        "connector": "feishu",
+                        "connector": "feishu_bitable",
                         "app_token": "app-token",
                         "table_id": "dst",
                         "match_field": "order_no",
@@ -682,14 +684,14 @@ def test_yaml_rejects_invalid_match_fields_in_strict_mode() -> None:
                 "kind": "App",
                 "app": {"name": "feishu-sync"},
                 "resources": {
-                    "feishu": {
+                    "feishu_bitable": {
                         "type": "feishu_bitable",
                         "app_id": "app-id",
                         "app_secret": "secret",
                     },
                     "sink": {
                         "type": "feishu_bitable_table_sink",
-                        "connector": "feishu",
+                        "connector": "feishu_bitable",
                         "app_token": "app-token",
                         "table_id": "dst",
                         "match_fields": "order_no",
@@ -709,14 +711,14 @@ def test_yaml_rejects_invalid_feishu_user_id_type_in_strict_mode() -> None:
                 "kind": "App",
                 "app": {"name": "feishu-sync"},
                 "resources": {
-                    "feishu": {
+                    "feishu_bitable": {
                         "type": "feishu_bitable",
                         "app_id": "app-id",
                         "app_secret": "secret",
                     },
                     "sink": {
                         "type": "feishu_bitable_table_sink",
-                        "connector": "feishu",
+                        "connector": "feishu_bitable",
                         "app_token": "app-token",
                         "table_id": "dst",
                         "mode": "create",

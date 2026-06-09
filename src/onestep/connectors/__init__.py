@@ -1,5 +1,5 @@
 from .base import Delivery, Sink, Source
-from .feishu import (
+from .feishu_bitable import (
     FeishuBitableApiError,
     FeishuBitableConnector,
     FeishuBitableIncrementalSource,

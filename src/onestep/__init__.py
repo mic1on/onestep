@@ -47,7 +47,7 @@ from .retry import (
 from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedState, StateStore
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 from .connectors.base import Delivery, Sink, Source
-from .connectors.feishu import (
+from .connectors.feishu_bitable import (
     FeishuBitableApiError,
     FeishuBitableConnector,
     FeishuBitableIncrementalSource,

@@ -459,7 +459,7 @@ register YAML resources through the `onestep.resources` entry point group:
 
 ```toml
 [project.entry-points."onestep.resources"]
-vendor = "onestep_vendor:register"
+feishu_bitable = "onestep_feishu_bitable:register"
 ```
 
 The entry point receives the resource registry and registers one or more

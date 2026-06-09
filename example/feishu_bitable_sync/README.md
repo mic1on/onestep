@@ -9,11 +9,11 @@ both tables contain these fields:
 - `标题`
 - `编号`
 
-The handler uses `onestep.connectors.feishu.feishu_bitable_text(...)` to convert
+The handler uses `onestep.connectors.feishu_bitable.feishu_bitable_text(...)` to convert
 Feishu rich text style values into plain strings before writing them back, which
 avoids common target text-field conversion failures.
 It can also map a Feishu person field with
-`onestep.connectors.feishu.feishu_bitable_user(...)` when you provide a source
+`onestep.connectors.feishu_bitable.feishu_bitable_user(...)` when you provide a source
 field that contains Feishu user IDs.
 You can change the field names in `src/feishu_bitable_demo/tasks.py`.
 
