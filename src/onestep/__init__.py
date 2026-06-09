@@ -21,6 +21,15 @@ from .identity_store import (
     derive_replica_instance_id,
 )
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .resource_registry import (
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+    ResourceValidationContext,
+    get_resource_handler,
+    load_resource_plugins,
+    register_resource_type,
+)
 from .resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
@@ -97,6 +106,10 @@ __all__ = [
     "OneStepApp",
     "RabbitMQConnector",
     "RedisConnector",
+    "ResourceBuildContext",
+    "ResourceRegistry",
+    "ResourceSpecHandler",
+    "ResourceValidationContext",
     "RetryAction",
     "RetryDecision",
     "RetryPolicy",
@@ -118,6 +131,9 @@ __all__ = [
     "build_control_plane_ws_url",
     "build_default_state_dir",
     "derive_replica_instance_id",
+    "get_resource_handler",
     "load_app_config",
+    "load_resource_plugins",
     "load_yaml_app",
+    "register_resource_type",
 ]

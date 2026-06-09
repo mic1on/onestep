@@ -9,6 +9,9 @@ from contextlib import contextmanager
 import pytest
 
 import onestep.config as config_module
+import onestep.resources.mysql as mysql_resources
+import onestep.resources.rabbitmq as rabbitmq_resources
+import onestep.resources.sqs as sqs_resources
 from onestep import MemoryQueue, OneStepApp, load_app_config
 from onestep.cli import main
 from onestep.connectors.base import Sink, Source
@@ -760,9 +763,9 @@ def test_yaml_target_builds_mysql_rabbitmq_sqs_and_state_resources_via_refs(monk
         def table_sink(self, **kwargs):
             return FakeSink(f"mysql.table_sink:{kwargs['table']}", connector=self, kind="mysql_table_sink", kwargs=kwargs)
 
-    monkeypatch.setattr(config_module, "RabbitMQConnector", FakeRabbitMQConnector)
-    monkeypatch.setattr(config_module, "SQSConnector", FakeSQSConnector, raising=False)
-    monkeypatch.setattr(config_module, "MySQLConnector", FakeMySQLConnector)
+    monkeypatch.setattr(rabbitmq_resources, "RabbitMQConnector", FakeRabbitMQConnector)
+    monkeypatch.setattr(sqs_resources, "SQSConnector", FakeSQSConnector)
+    monkeypatch.setattr(mysql_resources, "MySQLConnector", FakeMySQLConnector)
 
     config_path = tmp_path / "advanced.yaml"
     config_path.write_text(

@@ -437,6 +437,10 @@ Supported resource types today:
 - `interval`
 - `cron`
 - `webhook`
+- `http_sink`
+- `feishu_bitable`
+- `feishu_bitable_incremental`
+- `feishu_bitable_table_sink`
 - `rabbitmq`
 - `rabbitmq_queue`
 - `redis`
@@ -449,3 +453,15 @@ Supported resource types today:
 - `mysql_table_queue`
 - `mysql_incremental`
 - `mysql_table_sink`
+
+Additional resource types can be provided by installed packages. A package can
+register YAML resources through the `onestep.resources` entry point group:
+
+```toml
+[project.entry-points."onestep.resources"]
+vendor = "onestep_vendor:register"
+```
+
+The entry point receives the resource registry and registers one or more
+resource handlers. Once the package is installed in the worker environment, YAML
+files can use the provided `type` values without changing onestep core.
