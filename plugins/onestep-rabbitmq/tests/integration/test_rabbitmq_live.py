@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from onestep import RabbitMQConnector
+from onestep_rabbitmq import RabbitMQConnector
 
 
 if not os.getenv("ONESTEP_RABBITMQ_URL"):

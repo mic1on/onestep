@@ -1,8 +1,9 @@
 import asyncio
 from types import SimpleNamespace
 
-from onestep import ConnectorOperation, ConnectorOperationError, RabbitMQConnector
-import onestep.connectors.rabbitmq as rabbitmq_module
+from onestep import ConnectorOperation, ConnectorOperationError
+from onestep_rabbitmq import RabbitMQConnector
+import onestep_rabbitmq.connector as rabbitmq_module
 
 
 class FakeIncomingMessage:

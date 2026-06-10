@@ -1,4 +1,5 @@
-from onestep import RabbitMQConnector, OneStepApp
+from onestep import OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("rabbitmq-demo")
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")

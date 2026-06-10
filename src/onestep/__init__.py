@@ -49,8 +49,6 @@ from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedS
 from .connectors.base import Delivery, Sink, Source
 from .connectors.http import HttpSink, HttpSinkStatusError
 from .connectors.memory import MemoryQueue
-from .connectors.rabbitmq import RabbitMQConnector
-from .connectors.redis import RedisConnector
 from .connectors.schedule import CronSource, IntervalSource
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
 
@@ -89,8 +87,6 @@ __all__ = [
     "MemoryQueue",
     "NoRetry",
     "OneStepApp",
-    "RabbitMQConnector",
-    "RedisConnector",
     "ResourceBuildContext",
     "ResourceRegistry",
     "ResourceSpecHandler",

@@ -165,7 +165,7 @@ def test_load_resource_plugins_rejects_non_callable_entry_point(monkeypatch) -> 
         load_resource_plugins(ResourceRegistry())
 
 
-@pytest.mark.parametrize("resource_type", ["feishu_bitable", "mysql", "sqs"])
+@pytest.mark.parametrize("resource_type", ["feishu_bitable", "mysql", "rabbitmq", "redis", "sqs"])
 def test_core_does_not_register_plugin_resources_without_plugins(monkeypatch, resource_type: str) -> None:
     monkeypatch.setattr(registry_module.importlib_metadata, "entry_points", lambda: FakeEntryPoints(()))
 

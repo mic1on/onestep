@@ -7,8 +7,8 @@ from typing import Any
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
 
-from .base import Delivery, Sink, Source
-from .codec import decode_envelope, encode_envelope
+from onestep.connectors.base import Delivery, Sink, Source
+from onestep.connectors.codec import decode_envelope, encode_envelope
 
 try:  # pragma: no cover - optional dependency
     from redis.asyncio import Redis
@@ -131,7 +131,7 @@ class RedisConnector:
     def _driver(self) -> Any:
         if Redis is None:
             raise RuntimeError(
-                "RedisConnector requires redis>=4.2.0. Install onestep[redis]."
+                "RedisConnector requires redis>=4.2.0. Install onestep-redis."
             )
         return Redis
 

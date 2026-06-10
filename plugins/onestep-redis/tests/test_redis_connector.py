@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from onestep.connectors.redis import RedisConnector, RedisStreamDelivery
+from onestep_redis import RedisConnector, RedisStreamDelivery
 
 
 class TestRedisConnector:

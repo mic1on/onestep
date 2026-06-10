@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.connectors.rabbitmq import RabbitMQConnector
 from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+
+from .connector import RabbitMQConnector
 
 _RABBITMQ_FIELDS = frozenset({"type", "url", "options"})
 _RABBITMQ_QUEUE_FIELDS = frozenset(

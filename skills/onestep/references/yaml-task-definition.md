@@ -189,24 +189,19 @@ This enables `ControlPlaneReporter` and resolves `base_url` and `token` from env
 
 ## Supported Resource Types
 
-Common stable resource types:
+Built-in resource types:
 
 - `memory`
 - `interval`
 - `cron`
 - `webhook`
 - `http_sink`
-- `rabbitmq`
-- `rabbitmq_queue`
-- `redis`
-- `redis_stream`
-- `sqs`
-- `sqs_queue`
-- `mysql`
-- `mysql_state_store`
-- `mysql_cursor_store`
-- `mysql_table_queue`
-- `mysql_incremental`
-- `mysql_table_sink`
+
+Plugin resource types:
+
+- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-rabbitmq`: `rabbitmq`, `rabbitmq_queue`
+- `onestep-redis`: `redis`, `redis_stream`
+- `onestep-sqs`: `sqs`, `sqs_queue`
 
 Resources can reference other resources by name, for example `rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.

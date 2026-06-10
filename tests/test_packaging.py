@@ -62,7 +62,7 @@ import builtins
 original_import = builtins.__import__
 
 def missing_optional_import(name, globals=None, locals=None, fromlist=(), level=0):
-    optional_roots = {"boto3", "botocore", "pymysql", "sqlalchemy", "websockets"}
+    optional_roots = {"aio_pika", "aiormq", "boto3", "botocore", "pymysql", "redis", "sqlalchemy", "websockets"}
     if name.split(".", 1)[0] in optional_roots:
         raise ImportError(f"No module named {name!r}")
     return original_import(name, globals, locals, fromlist, level)

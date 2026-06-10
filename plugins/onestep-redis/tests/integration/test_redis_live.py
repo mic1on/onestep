@@ -10,9 +10,12 @@ import pytest
 import pytest_asyncio
 
 from onestep import OneStepApp
-from onestep.connectors.redis import RedisConnector
+from onestep_redis import RedisConnector
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL")
+
+if not REDIS_URL:
+    pytest.skip("set REDIS_URL to run Redis integration tests", allow_module_level=True)
 
 # Skip all tests in this module if redis not installed
 pytest.importorskip("redis", reason="redis package not installed")

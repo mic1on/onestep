@@ -25,8 +25,17 @@ docker compose -f "$COMPOSE_FILE" up -d
 # shellcheck disable=SC1091
 eval "$("$ROOT_DIR/scripts/setup-integration-env.sh")"
 
-"$PYTHON_BIN" -m pytest \
+test_paths=()
+for path in \
   tests/integration \
+  plugins/onestep-rabbitmq/tests/integration \
+  plugins/onestep-redis/tests/integration \
   plugins/onestep-mysql/tests/integration \
-  plugins/onestep-sqs/tests/integration \
-  -q "$@"
+  plugins/onestep-sqs/tests/integration
+do
+  if find "$ROOT_DIR/$path" -maxdepth 1 -type f -name 'test_*.py' | grep -q .; then
+    test_paths+=("$path")
+  fi
+done
+
+"$PYTHON_BIN" -m pytest "${test_paths[@]}" -q "$@"

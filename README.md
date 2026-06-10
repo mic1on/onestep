@@ -19,8 +19,8 @@ The V1 stable surface includes:
 
 - `MemoryQueue`
 - `onestep-mysql`: `MySQLConnector.table_queue(...)`, incremental sources, table sinks, state stores, and cursor stores
-- `RabbitMQConnector.queue(...)`
-- `RedisConnector.stream(...)`
+- `onestep-rabbitmq`: `RabbitMQConnector.queue(...)`
+- `onestep-redis`: `RedisConnector.stream(...)`
 - `onestep-sqs`: `SQSConnector.queue(...)`
 - `IntervalSource.every(...)`
 - `CronSource(...)`
@@ -38,8 +38,8 @@ Common extras:
 
 - `pip install 'onestep[yaml]'`
 - `pip install onestep-mysql`
-- `pip install 'onestep[rabbitmq]'`
-- `pip install 'onestep[redis]'`
+- `pip install onestep-rabbitmq`
+- `pip install onestep-redis`
 - `pip install onestep-sqs`
 - `pip install 'onestep[control-plane]'`
 - `pip install 'onestep[all]'`
@@ -48,6 +48,8 @@ Connector plugins:
 
 - Feishu Bitable: install `onestep-feishu-bitable`
 - MySQL: install `onestep-mysql`
+- RabbitMQ: install `onestep-rabbitmq`
+- Redis: install `onestep-redis`
 - SQS: install `onestep-sqs`
 
 From a source checkout:
@@ -201,14 +203,12 @@ Built-in YAML resource types:
 - `cron`
 - `webhook`
 - `http_sink`
-- `rabbitmq`
-- `rabbitmq_queue`
-- `redis`
-- `redis_stream`
 
 Plugin YAML resource types:
 
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-rabbitmq`: `rabbitmq`, `rabbitmq_queue`
+- `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
 
@@ -816,7 +816,8 @@ For Feishu person fields, pass the matching `user_id_type` (`open_id`,
 ## RabbitMQ Queue
 
 ```python
-from onestep import OneStepApp, RabbitMQConnector
+from onestep import OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("rabbitmq-demo")
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")
@@ -838,14 +839,15 @@ async def process_job(ctx, item):
     return {"job": item["job"], "status": "done"}
 ```
 
-Install with `pip install '.[rabbitmq]'`.
+Install with `pip install onestep-rabbitmq`.
 
 ## Redis Streams
 
 Use Redis Streams for lightweight, reliable message queuing with consumer groups.
 
 ```python
-from onestep import OneStepApp, RedisConnector
+from onestep import OneStepApp
+from onestep_redis import RedisConnector
 
 app = OneStepApp("redis-demo")
 redis = RedisConnector("redis://localhost:6379")
@@ -870,7 +872,7 @@ Key features:
 - **Pending messages**: Unacked messages stay in PEL for retry via `XCLAIM`
 - **Stream trimming**: `maxlen` option to limit stream size
 
-Install with `pip install '.[redis]'`.
+Install with `pip install onestep-redis`.
 
 ## SQS Queue
 

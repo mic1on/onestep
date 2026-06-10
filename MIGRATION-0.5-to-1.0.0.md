@@ -158,9 +158,10 @@ Check these before rollout:
 
 - Python `>=3.9` is now required
 - optional extras have changed:
-  - `.[mysql]`
-  - `.[rabbitmq]`
-  - `.[sqs]`
+  - `onestep-mysql`
+  - `onestep-rabbitmq`
+  - `onestep-redis`
+  - `onestep-sqs`
   - `.[all]`
 - legacy package integrations such as `use-rabbitmq`, `use-redis`, and
   `use-sqs` are not part of the current v1 dependency model

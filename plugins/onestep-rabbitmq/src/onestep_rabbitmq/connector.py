@@ -7,8 +7,8 @@ from typing import Any
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
 
-from .base import Delivery, Sink, Source
-from .codec import decode_envelope, encode_envelope
+from onestep.connectors.base import Delivery, Sink, Source
+from onestep.connectors.codec import decode_envelope, encode_envelope
 
 try:  # pragma: no cover - optional dependency
     import aio_pika
@@ -93,7 +93,7 @@ class RabbitMQConnector:
 
     def _driver(self) -> Any:
         if aio_pika is None:
-            raise RuntimeError("RabbitMQConnector requires aio-pika. Install onestep[rabbitmq].")
+            raise RuntimeError("RabbitMQConnector requires aio-pika. Install onestep-rabbitmq.")
         return aio_pika
 
     def _runtime_lock(self) -> asyncio.Lock:

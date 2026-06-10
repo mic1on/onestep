@@ -9,10 +9,8 @@ from contextlib import contextmanager
 import pytest
 
 import onestep.config as config_module
-import onestep.resources.rabbitmq as rabbitmq_resources
 from onestep import MemoryQueue, OneStepApp, load_app_config
 from onestep.cli import main
-from onestep.connectors.base import Sink, Source
 
 
 @contextmanager
@@ -676,102 +674,6 @@ def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_pat
 
     asyncio.run(scenario())
     assert seen == [{"value": 42}]
-
-
-def test_yaml_target_builds_builtin_rabbitmq_resources_via_refs(monkeypatch, tmp_path) -> None:
-    class FakeSource(Source):
-        def __init__(self, name: str, *, connector, kind: str, kwargs):
-            super().__init__(name)
-            self.connector = connector
-            self.kind = kind
-            self.kwargs = kwargs
-
-        async def fetch(self, limit: int):
-            return []
-
-    class FakeQueue(FakeSource, Sink):
-        def __init__(self, name: str, *, connector, kind: str, kwargs):
-            FakeSource.__init__(self, name, connector=connector, kind=kind, kwargs=kwargs)
-            Sink.__init__(self, name)
-
-        async def send(self, envelope):
-            return None
-
-    class FakeSink(Sink):
-        def __init__(self, name: str, *, connector, kind: str, kwargs):
-            super().__init__(name)
-            self.connector = connector
-            self.kind = kind
-            self.kwargs = kwargs
-
-        async def send(self, envelope):
-            return None
-
-    class FakeRabbitMQConnector:
-        def __init__(self, url: str, options=None):
-            self.url = url
-            self.options = options
-
-        def queue(self, name: str, **kwargs):
-            return FakeQueue(name, connector=self, kind="rabbitmq_queue", kwargs=kwargs)
-
-    monkeypatch.setattr(rabbitmq_resources, "RabbitMQConnector", FakeRabbitMQConnector)
-
-    config_path = tmp_path / "advanced.yaml"
-    config_path.write_text(
-        json.dumps(
-            {
-                "app": {
-                    "name": "yaml-advanced",
-                    "config": {"environment": "test"},
-                },
-                "connectors": {
-                    "rmq": {
-                        "type": "rabbitmq",
-                        "url": "amqp://guest:guest@localhost/",
-                        "options": {"client_properties": {"connection_name": "yaml-worker"}},
-                    },
-                    "jobs_in": {
-                        "type": "rabbitmq_queue",
-                        "connector": "rmq",
-                        "queue": "incoming_jobs",
-                        "exchange": "jobs.events",
-                        "routing_key": "jobs.created",
-                        "exclusive": True,
-                        "prefetch": 50,
-                    },
-                },
-                "tasks": [
-                    {
-                        "name": "ingest_jobs",
-                        "source": "jobs_in",
-                        "handler": "testsupport_yaml_advanced:ingest_jobs",
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    async def ingest_jobs(ctx, item):
-        return None
-
-    with registered_yaml_module(), registered_module(
-        "testsupport_yaml_advanced",
-        ingest_jobs=ingest_jobs,
-    ):
-        app = OneStepApp.load(str(config_path))
-
-    ingest_task = app.tasks[0]
-
-    assert app.config == {"environment": "test", "config_path": str(config_path)}
-    assert ingest_task.source.kind == "rabbitmq_queue"
-    assert ingest_task.source.name == "incoming_jobs"
-    assert ingest_task.source.connector.url == "amqp://guest:guest@localhost/"
-    assert ingest_task.source.connector.options == {"client_properties": {"connection_name": "yaml-worker"}}
-    assert ingest_task.source.kwargs["exchange"] == "jobs.events"
-    assert ingest_task.source.kwargs["exclusive"] is True
-    assert ingest_task.source.kwargs["prefetch"] == 50
 
 
 def test_yaml_target_builds_webhook_auth_and_response(tmp_path) -> None:
