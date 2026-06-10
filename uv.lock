@@ -560,7 +560,7 @@ provides-extras = ["control-plane", "yaml", "mysql", "rabbitmq", "redis", "sqs",
 
 [[package]]
 name = "onestep-feishu-bitable"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "plugins/onestep-feishu-bitable" }
 dependencies = [
     { name = "onestep" },
