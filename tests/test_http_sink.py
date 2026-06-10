@@ -160,7 +160,7 @@ def test_yaml_http_sink_and_passthrough_task_emit_payload() -> None:
                     "kind": "App",
                     "app": {"name": "yaml-http"},
                     "resources": {
-                        "incoming": {"type": "memory"},
+                        "incoming": {"type": "memory", "maxsize": 100},
                         "notify": {
                             "type": "http_sink",
                             "url": f"{base_url}/notify",
@@ -205,7 +205,7 @@ def test_yaml_http_sink_get_accepts_params_and_emits_query_string() -> None:
                     "kind": "App",
                     "app": {"name": "yaml-http-get"},
                     "resources": {
-                        "incoming": {"type": "memory"},
+                        "incoming": {"type": "memory", "maxsize": 100},
                         "lookup": {
                             "type": "http_sink",
                             "url": f"{base_url}/lookup",
@@ -250,7 +250,7 @@ def test_strict_yaml_rejects_passthrough_task_without_emit() -> None:
                 "kind": "App",
                 "app": {"name": "yaml-invalid"},
                 "resources": {
-                    "incoming": {"type": "memory"},
+                    "incoming": {"type": "memory", "maxsize": 100},
                 },
                 "tasks": [
                     {

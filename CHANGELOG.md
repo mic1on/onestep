@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2
+
+- Requires strict YAML `memory` resources to set a bounded `maxsize`.
+- Caps queued interval and cron schedule runs with `max_queued_runs`, defaulting to `1000`.
+- Limits Feishu Bitable incremental fallback scans with `fallback_scan_page_limit`, defaulting to `100` pages.
+- Raises the Feishu Bitable plugin package version to `0.1.1` and constrains it to `onestep>=1.4.2,<1.5.0`.
+
 ## 1.4.1
 
 - Keeps connector resilience handling backend-neutral in the core runtime.

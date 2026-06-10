@@ -5,7 +5,7 @@ from typing import Any
 
 from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
 
-from .connector import FeishuBitableConnector
+from .connector import DEFAULT_FALLBACK_SCAN_PAGE_LIMIT, FeishuBitableConnector
 
 _FEISHU_BITABLE_FIELDS = frozenset({"type", "app_id", "app_secret", "base_url", "timeout_s"})
 _FEISHU_INCREMENTAL_FIELDS = frozenset(
@@ -17,6 +17,7 @@ _FEISHU_INCREMENTAL_FIELDS = frozenset(
         "cursor_field",
         "batch_size",
         "poll_interval_s",
+        "fallback_scan_page_limit",
         "state",
         "state_key",
         "user_id_type",
@@ -82,6 +83,7 @@ def _build_feishu_bitable_incremental(ctx: ResourceBuildContext, spec: Mapping[s
         user_id_type=spec.get("user_id_type"),
         batch_size=spec.get("batch_size", 100),
         poll_interval_s=spec.get("poll_interval_s", 1.0),
+        fallback_scan_page_limit=spec.get("fallback_scan_page_limit", DEFAULT_FALLBACK_SCAN_PAGE_LIMIT),
         state=state,
         state_key=spec.get("state_key"),
     )
@@ -115,6 +117,12 @@ def _validate_feishu_bitable_incremental(ctx: ResourceValidationContext, spec: M
     ctx.require_string(spec, "cursor_field")
     ctx.validate_positive_integer(spec.get("batch_size"), field=f"{ctx.field}.batch_size")
     ctx.validate_non_negative_number(spec.get("poll_interval_s"), field=f"{ctx.field}.poll_interval_s")
+    if "fallback_scan_page_limit" in spec and spec.get("fallback_scan_page_limit") is None:
+        raise ValueError(f"'{ctx.field}.fallback_scan_page_limit' must be >= 1")
+    ctx.validate_positive_integer(
+        spec.get("fallback_scan_page_limit"),
+        field=f"{ctx.field}.fallback_scan_page_limit",
+    )
     if "state" in spec:
         ctx.string_value(spec.get("state"), field=f"{ctx.field}.state")
     if "state_key" in spec:

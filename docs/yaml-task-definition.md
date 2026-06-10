@@ -439,6 +439,11 @@ Built-in resource types:
 - `webhook`
 - `http_sink`
 
+In strict mode, `memory` resources must set a positive `maxsize`; this keeps
+long-lived YAML workers from creating unbounded in-process queues by accident.
+Scheduled `interval` and `cron` resources accept `max_queued_runs` for
+`overlap: queue`, defaulting to `1000`.
+
 Plugin resource types:
 
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
@@ -446,6 +451,10 @@ Plugin resource types:
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+
+`feishu_bitable_incremental` accepts `fallback_scan_page_limit` to bound the
+fallback scan used when Feishu rejects cursor sorting. The default is `100`
+pages.
 
 Install the corresponding plugin package in the worker environment before
 using plugin resource types in YAML.

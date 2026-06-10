@@ -635,6 +635,9 @@ async def refresh_cache(ctx, item):
 - `skip`: drop missed ticks while the previous run is still running
 - `queue`: serialize missed ticks and run them one by one afterwards
 
+`queue` mode keeps at most `max_queued_runs` missed ticks, defaulting to `1000`,
+and drops the oldest queued ticks first when the backlog exceeds that bound.
+
 ## Cron Source
 
 Use `CronSource` when you care about wall-clock time rather than elapsed duration.
@@ -787,6 +790,7 @@ source = feishu.incremental(
     cursor_field="最后更新时间",
     user_id_type="user_id",
     batch_size=100,
+    fallback_scan_page_limit=100,
 )
 sink = feishu.table_sink(
     app_token="bascnyyy",
@@ -811,6 +815,10 @@ For Feishu person fields, pass the matching `user_id_type` (`open_id`,
 `union_id`, or `user_id`) and write values as `[{"id": "..."}]`. The
 `feishu_bitable_text(...)` and `feishu_bitable_user(...)` helpers live in the
 `onestep_feishu_bitable` plugin package.
+
+When Feishu cannot serve the incremental search with cursor sorting, the source
+falls back to scanning pages and sorting locally. `fallback_scan_page_limit`
+bounds that fallback to avoid high memory use on large tables.
 
 
 ## RabbitMQ Queue

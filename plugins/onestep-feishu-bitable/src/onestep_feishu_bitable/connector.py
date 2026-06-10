@@ -20,6 +20,7 @@ from onestep.state import CursorStore, InMemoryCursorStore
 _DEFAULT_BASE_URL = "https://open.feishu.cn"
 _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_BATCH_SIZE = 100
+DEFAULT_FALLBACK_SCAN_PAGE_LIMIT = 100
 _MAX_PAGE_SIZE = 500
 _TOKEN_REFRESH_MARGIN_S = 60.0
 _REDACTED = "<redacted>"
@@ -119,6 +120,7 @@ class FeishuBitableConnector:
         user_id_type: str | None = None,
         batch_size: int = _DEFAULT_BATCH_SIZE,
         poll_interval_s: float = 1.0,
+        fallback_scan_page_limit: int = DEFAULT_FALLBACK_SCAN_PAGE_LIMIT,
         state: CursorStore | None = None,
         state_key: str | None = None,
     ) -> "FeishuBitableIncrementalSource":
@@ -130,6 +132,7 @@ class FeishuBitableConnector:
             user_id_type=user_id_type,
             batch_size=batch_size,
             poll_interval_s=poll_interval_s,
+            fallback_scan_page_limit=fallback_scan_page_limit,
             state=state or InMemoryCursorStore(),
             state_key=state_key
             or _default_incremental_state_key(
@@ -452,6 +455,7 @@ class FeishuBitableIncrementalSource(Source):
         user_id_type: str | None,
         batch_size: int,
         poll_interval_s: float,
+        fallback_scan_page_limit: int,
         state: CursorStore,
         state_key: str,
     ) -> None:
@@ -463,6 +467,7 @@ class FeishuBitableIncrementalSource(Source):
         self.user_id_type = _normalize_user_id_type(user_id_type)
         self.batch_size = _normalize_batch_size(batch_size)
         self.poll_interval_s = _normalize_poll_interval(poll_interval_s)
+        self.fallback_scan_page_limit = _normalize_fallback_scan_page_limit(fallback_scan_page_limit)
         self.state = state
         self.state_key = state_key
         self._pending: deque[tuple[Any, str]] = deque()
@@ -559,6 +564,7 @@ class FeishuBitableIncrementalSource(Source):
                 "user_id_type": self.user_id_type,
                 "batch_size": self.batch_size,
                 "poll_interval_s": self.poll_interval_s,
+                "fallback_scan_page_limit": self.fallback_scan_page_limit,
                 "state_key": self.state_key,
             },
         }
@@ -589,6 +595,7 @@ class FeishuBitableIncrementalSource(Source):
         read_cursor = self._fetched_cursor or self._committed_cursor
         page_token: str | None = None
         records: list[dict[str, Any]] = []
+        pages_scanned = 0
         while True:
             data = await self.connector.search_records(
                 app_token=self.app_token,
@@ -601,6 +608,7 @@ class FeishuBitableIncrementalSource(Source):
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
             )
+            pages_scanned += 1
             raw_items = data.get("items", [])
             if not isinstance(raw_items, list):
                 raise FeishuBitablePayloadError("feishu_bitable search response data.items must be a list")
@@ -627,6 +635,19 @@ class FeishuBitableIncrementalSource(Source):
             has_more = bool(data.get("has_more"))
             next_page_token = data.get("page_token")
             page_token = next_page_token if isinstance(next_page_token, str) and next_page_token else None
+            if scan_all_pages and has_more and page_token and pages_scanned >= self.fallback_scan_page_limit:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.FETCH,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=self.poll_interval_s,
+                    message=(
+                        "feishu_bitable incremental fallback scan exceeded "
+                        f"fallback_scan_page_limit={self.fallback_scan_page_limit}; "
+                        "make the cursor field sortable or increase fallback_scan_page_limit"
+                    ),
+                )
             if not has_more or not page_token:
                 break
             if not scan_all_pages and len(records) >= limit:
@@ -878,6 +899,14 @@ def _normalize_poll_interval(value: float) -> float:
     if normalized < 0:
         raise ValueError("'poll_interval_s' must be >= 0")
     return normalized
+
+
+def _normalize_fallback_scan_page_limit(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'fallback_scan_page_limit' must be an integer")
+    if value < 1:
+        raise ValueError("'fallback_scan_page_limit' must be >= 1")
+    return value
 
 
 def _normalize_mode(value: str) -> str:

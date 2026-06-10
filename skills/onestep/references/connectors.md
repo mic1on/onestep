@@ -40,15 +40,18 @@ resources:
     minutes: 5
     immediate: true
     overlap: skip
+    max_queued_runs: 1000
 
   nightly:
     type: cron
     expression: "0 2 * * *"
     timezone: Asia/Shanghai
     overlap: skip
+    max_queued_runs: 1000
 ```
 
 Use `overlap: skip` for scheduled jobs that should not run concurrently.
+Use `max_queued_runs` to bound `overlap: queue` backlogs.
 
 ## MySQL
 
@@ -279,6 +282,7 @@ resources:
     cursor_field: updated_at
     user_id_type: user_id
     batch_size: 100
+    fallback_scan_page_limit: 100
 
   target_orders:
     type: feishu_bitable_table_sink
@@ -295,6 +299,8 @@ resources:
 upsert path does not require storing Feishu `record_id` values in MySQL.
 At runtime, effective source fetch size is capped by both task `concurrency` and
 source `batch_size`; set them together when debugging larger batches.
+`fallback_scan_page_limit` bounds the local fallback scan used when Feishu
+rejects cursor sorting.
 
 The Bitable source emits:
 

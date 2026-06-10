@@ -131,6 +131,7 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
                     "seconds": 3600,
                     "immediate": True,
                     "overlap": "skip",
+                    "max_queued_runs": source.max_queued_runs,
                     "timezone": source.timezone_name,
                     "poll_interval_s": source.poll_interval_s,
                 },

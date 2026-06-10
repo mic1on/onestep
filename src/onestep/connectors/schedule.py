@@ -46,6 +46,7 @@ CRON_ALIASES = {
     "@monthly": "0 0 1 * *",
     "@yearly": "0 0 1 1 *",
 }
+DEFAULT_MAX_QUEUED_RUNS = 1000
 
 
 class ScheduleDelivery(Delivery):
@@ -76,14 +77,20 @@ class BaseScheduleSource(Source):
         timezone: str | tzinfo | None = None,
         timezone_name: str | tzinfo | None = None,
         poll_interval_s: float = 1.0,
+        max_queued_runs: int = DEFAULT_MAX_QUEUED_RUNS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         super().__init__(name)
         if overlap not in {"allow", "skip", "queue"}:
             raise ValueError("overlap must be one of: allow, skip, queue")
+        if isinstance(max_queued_runs, bool) or not isinstance(max_queued_runs, int):
+            raise TypeError("max_queued_runs must be an integer")
+        if max_queued_runs < 1:
+            raise ValueError("max_queued_runs must be >= 1")
         self.payload = payload
         self.immediate = immediate
         self.overlap = overlap
+        self.max_queued_runs = max_queued_runs
         resolved_timezone = timezone if timezone is not None else timezone_name
         self.timezone = resolve_timezone(resolved_timezone)
         self.timezone_name = resolve_timezone_name(resolved_timezone)
@@ -221,13 +228,19 @@ class BaseScheduleSource(Source):
             return [self._make_delivery_locked(due_runs[-1])]
 
         if self._inflight > 0:
-            self._queued_runs.extend(due_runs)
+            self._queue_runs_locked(due_runs)
             return []
 
         delivery = self._make_delivery_locked(due_runs[0])
         if len(due_runs) > 1:
-            self._queued_runs.extend(due_runs[1:])
+            self._queue_runs_locked(due_runs[1:])
         return [delivery]
+
+    def _queue_runs_locked(self, runs: list[datetime]) -> None:
+        self._queued_runs.extend(runs)
+        overflow = len(self._queued_runs) - self.max_queued_runs
+        for _ in range(max(0, overflow)):
+            self._queued_runs.popleft()
 
     def _make_delivery_locked(self, scheduled_at: datetime) -> ScheduleDelivery:
         body = self._build_payload()
@@ -267,6 +280,7 @@ class IntervalSource(BaseScheduleSource):
         timezone: str | tzinfo | None = None,
         timezone_name: str | tzinfo | None = None,
         poll_interval_s: float | None = None,
+        max_queued_runs: int = DEFAULT_MAX_QUEUED_RUNS,
         clock: Callable[[], datetime] | None = None,
         name: str | None = None,
     ) -> None:
@@ -281,6 +295,7 @@ class IntervalSource(BaseScheduleSource):
             timezone=timezone,
             timezone_name=timezone_name,
             poll_interval_s=default_poll if poll_interval_s is None else poll_interval_s,
+            max_queued_runs=max_queued_runs,
             clock=clock,
         )
         self.interval = interval
@@ -299,6 +314,7 @@ class IntervalSource(BaseScheduleSource):
         timezone: str | tzinfo | None = None,
         timezone_name: str | tzinfo | None = None,
         poll_interval_s: float | None = None,
+        max_queued_runs: int = DEFAULT_MAX_QUEUED_RUNS,
         clock: Callable[[], datetime] | None = None,
         name: str | None = None,
     ) -> "IntervalSource":
@@ -311,6 +327,7 @@ class IntervalSource(BaseScheduleSource):
             timezone=timezone,
             timezone_name=timezone_name,
             poll_interval_s=poll_interval_s,
+            max_queued_runs=max_queued_runs,
             clock=clock,
             name=name,
         )
@@ -473,6 +490,7 @@ class CronSource(BaseScheduleSource):
         timezone: str | tzinfo | None = None,
         timezone_name: str | tzinfo | None = None,
         poll_interval_s: float = 1.0,
+        max_queued_runs: int = DEFAULT_MAX_QUEUED_RUNS,
         clock: Callable[[], datetime] | None = None,
         name: str | None = None,
     ) -> None:
@@ -489,6 +507,7 @@ class CronSource(BaseScheduleSource):
             timezone=self.schedule.timezone,
             timezone_name=self.schedule.timezone,
             poll_interval_s=poll_interval_s,
+            max_queued_runs=max_queued_runs,
             clock=clock,
         )
 
@@ -521,6 +540,7 @@ def resolve_timezone_name(value: str | tzinfo | None) -> str:
 
 __all__ = [
     "CronSource",
+    "DEFAULT_MAX_QUEUED_RUNS",
     "IntervalSource",
     "ScheduleDelivery",
 ]

@@ -62,10 +62,12 @@ daily = CronSource(
     "0 2 * * *",
     timezone="Asia/Shanghai",
     overlap="skip",
+    max_queued_runs=1000,
 )
 ```
 
 `overlap` is one of `allow`, `skip`, or `queue`.
+`max_queued_runs` bounds the backlog retained by `queue` mode.
 
 ## Hooks
 

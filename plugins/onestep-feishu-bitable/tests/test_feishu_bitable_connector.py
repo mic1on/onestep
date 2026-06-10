@@ -322,6 +322,55 @@ def test_feishu_incremental_source_falls_back_when_sort_is_invalid() -> None:
     asyncio.run(scenario())
 
 
+def test_feishu_incremental_fallback_scan_stops_at_page_limit() -> None:
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+
+        async def search_records(**kwargs):
+            if "sort" in kwargs["body"]:
+                api_error = FeishuBitableApiError(
+                    status=400,
+                    reason="Bad Request",
+                    code=1254000,
+                    message="InvalidSort",
+                    body={"code": 1254000, "msg": "InvalidSort"},
+                )
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.FETCH,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=kwargs["source_name"],
+                    cause=api_error,
+                    message="InvalidSort",
+                ) from api_error
+            return {
+                "items": [
+                    {
+                        "record_id": "rec1",
+                        "last_modified_time": 100,
+                        "fields": {"编号": "A001"},
+                    }
+                ],
+                "has_more": True,
+                "page_token": "next-page",
+            }
+
+        connector.search_records = search_records  # type: ignore[method-assign]
+        source = connector.incremental(
+            app_token="app-token",
+            table_id="tbl",
+            cursor_field="最后更新时间",
+            fallback_scan_page_limit=1,
+        )
+
+        with pytest.raises(ConnectorOperationError, match="fallback_scan_page_limit=1") as exc_info:
+            await source.fetch(10)
+
+        assert exc_info.value.kind is ConnectorErrorKind.PERMANENT
+
+    asyncio.run(scenario())
+
+
 def test_feishu_incremental_source_fetch_limit_caps_batch_size() -> None:
     async def scenario() -> None:
         connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
@@ -590,6 +639,7 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
                     "table_id": "src",
                     "cursor_field": "updated_at",
                     "user_id_type": "user_id",
+                    "fallback_scan_page_limit": 3,
                 },
                 "sink": {
                     "type": "feishu_bitable_table_sink",
@@ -615,6 +665,7 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
     assert isinstance(app.resources["source"], FeishuBitableIncrementalSource)
     assert isinstance(app.resources["sink"], FeishuBitableTableSink)
     assert app.resources["source"].user_id_type == "user_id"
+    assert app.resources["source"].fallback_scan_page_limit == 3
     assert app.resources["sink"].user_id_type == "user_id"
     assert app.resources["sink"].match_fields == ("shop_id", "order_no")
 

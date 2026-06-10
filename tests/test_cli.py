@@ -440,7 +440,7 @@ def test_cli_check_strict_loads_valid_yaml_target(capsys, tmp_path) -> None:
                     "name": "yaml-strict-app",
                 },
                 "resources": {
-                    "incoming": {"type": "memory"},
+                    "incoming": {"type": "memory", "maxsize": 100},
                 },
                 "tasks": [
                     {
@@ -465,6 +465,30 @@ def test_cli_check_strict_loads_valid_yaml_target(capsys, tmp_path) -> None:
     assert "App: yaml-strict-app" in captured.out
 
 
+def test_load_app_config_strict_requires_memory_maxsize() -> None:
+    with pytest.raises(ValueError, match="resources.incoming.maxsize is required"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-strict-memory",
+                },
+                "resources": {
+                    "incoming": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "consume",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_cli_strict:consume",
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
 def test_cli_check_strict_rejects_unknown_task_fields(capsys, tmp_path) -> None:
     config_path = tmp_path / "strict-invalid-task.yaml"
     config_path.write_text(
@@ -474,7 +498,7 @@ def test_cli_check_strict_rejects_unknown_task_fields(capsys, tmp_path) -> None:
                 "kind": "App",
                 "name": "yaml-strict-invalid",
                 "resources": {
-                    "incoming": {"type": "memory"},
+                    "incoming": {"type": "memory", "maxsize": 100},
                 },
                 "tasks": [
                     {

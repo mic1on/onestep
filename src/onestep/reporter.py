@@ -719,6 +719,7 @@ class ControlPlaneReporter:
                 "seconds": _seconds_value(resource.interval.total_seconds()),
                 "immediate": resource.immediate,
                 "overlap": resource.overlap,
+                "max_queued_runs": resource.max_queued_runs,
                 "timezone": resource.timezone_name,
                 "poll_interval_s": resource.poll_interval_s,
             }
@@ -727,6 +728,7 @@ class ControlPlaneReporter:
                 "expression": resource.schedule.expression,
                 "immediate": resource.immediate,
                 "overlap": resource.overlap,
+                "max_queued_runs": resource.max_queued_runs,
                 "timezone": resource.timezone_name,
                 "poll_interval_s": resource.poll_interval_s,
             }
