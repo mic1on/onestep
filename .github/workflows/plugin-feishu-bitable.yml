@@ -1,0 +1,182 @@
+name: Feishu Bitable Plugin
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/plugin-feishu-bitable.yml"
+      - "plugins/onestep-feishu-bitable/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-feishu-bitable.yml"
+      - "plugins/onestep-feishu-bitable/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+    inputs:
+      publish_pypi:
+        description: "Publish the current onestep-feishu-bitable version to PyPI"
+        required: false
+        default: false
+        type: boolean
+      version:
+        description: "Optional expected plugin version, for example 0.1.1"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feishu-bitable-plugin-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_PACKAGE: onestep-feishu-bitable
+  PLUGIN_PATH: plugins/onestep-feishu-bitable
+  PLUGIN_PYPROJECT: plugins/onestep-feishu-bitable/pyproject.toml
+
+jobs:
+  test:
+    name: Test plugin (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install plugin test dependencies
+        run: uv sync --frozen --all-packages --extra test
+
+      - name: Run plugin tests
+        run: uv run --all-packages python -m pytest -q "$PLUGIN_PATH/tests"
+
+      - name: Build plugin distribution
+        run: uv build --package "$PLUGIN_PACKAGE" --out-dir dist/plugin --sdist --wheel --clear
+
+      - name: Check plugin metadata
+        run: uvx twine check dist/plugin/*
+
+  detect-version:
+    name: Detect plugin version change
+    runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.detect.outputs.current_version }}
+      previous_version: ${{ steps.detect.outputs.previous_version }}
+      should_publish: ${{ steps.detect.outputs.should_publish }}
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Detect version change
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          INPUT_PUBLISH_PYPI: ${{ github.event.inputs.publish_pypi || 'false' }}
+          INPUT_VERSION: ${{ github.event.inputs.version || '' }}
+        run: |
+          set -euo pipefail
+
+          read_version() {
+            python3 -c 'import pathlib, sys, tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"])' "$1"
+          }
+
+          CURRENT_VERSION="$(read_version "$PLUGIN_PYPROJECT")"
+          PREVIOUS_VERSION=""
+          SHOULD_PUBLISH=false
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              if git cat-file -e "$BEFORE_SHA:$PLUGIN_PYPROJECT" 2>/dev/null; then
+                git show "$BEFORE_SHA:$PLUGIN_PYPROJECT" > /tmp/previous-plugin-pyproject.toml
+                PREVIOUS_VERSION="$(read_version /tmp/previous-plugin-pyproject.toml)"
+              fi
+            fi
+
+            if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+              SHOULD_PUBLISH=true
+            fi
+          elif [ "$INPUT_PUBLISH_PYPI" = "true" ]; then
+            if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$CURRENT_VERSION" ]; then
+              echo "Requested plugin version '$INPUT_VERSION' does not match current version '$CURRENT_VERSION'." >&2
+              exit 1
+            fi
+            SHOULD_PUBLISH=true
+          fi
+
+          {
+            echo "current_version=$CURRENT_VERSION"
+            echo "previous_version=$PREVIOUS_VERSION"
+            echo "should_publish=$SHOULD_PUBLISH"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Current plugin version: $CURRENT_VERSION"
+          echo "Previous plugin version: ${PREVIOUS_VERSION:-<none>}"
+          echo "Publish plugin: $SHOULD_PUBLISH"
+
+  publish-pypi:
+    name: Publish plugin to PyPI
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - detect-version
+    if: >-
+      ${{
+        needs.test.result == 'success' &&
+        needs.detect-version.outputs.should_publish == 'true'
+      }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build plugin distribution
+        run: uv build --package "$PLUGIN_PACKAGE" --out-dir dist/plugin --sdist --wheel --clear
+
+      - name: Check plugin metadata
+        run: uvx twine check dist/plugin/*
+
+      - name: Publish plugin to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/plugin
+          skip-existing: true
+          password: ${{ secrets.FEISHU_BITABLE_PYPI_API_TOKEN || secrets.PYPI_API_TOKEN || secrets.PYPI_TOKEN }}
