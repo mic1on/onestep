@@ -458,15 +458,18 @@ def test_task_timeout_retries_once_then_fails() -> None:
         source = MemoryQueue("incoming", poll_interval_s=0.01)
         app = OneStepApp("timeout-app")
         attempts: list[int] = []
+        second_attempt_seen = asyncio.Event()
 
         @app.task(source=source, retry=MaxAttempts(2, delay_s=0), timeout_s=0.01)
         async def slow(ctx, item):
             attempts.append(ctx.current.attempts)
+            if len(attempts) == 2:
+                second_attempt_seen.set()
             await asyncio.sleep(0.05)
 
         await source.publish({"value": 1})
         app_task = asyncio.create_task(app.serve())
-        await asyncio.sleep(0.15)
+        await asyncio.wait_for(second_attempt_seen.wait(), timeout=1.0)
         app.request_shutdown()
         await asyncio.wait_for(app_task, timeout=1.0)
 
