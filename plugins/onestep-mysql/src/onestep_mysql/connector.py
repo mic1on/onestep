@@ -338,7 +338,8 @@ class IncrementalTableSource(Source):
         self.state_key = state_key
         self._pending: deque[tuple[Any, ...]] = deque()
         self._acked: set[tuple[Any, ...]] = set()
-        self._commit_lock = asyncio.Lock()
+        self._commit_lock: asyncio.Lock | None = None
+        self._commit_loop: asyncio.AbstractEventLoop | None = None
         self._loaded = False
         self._committed_cursor: tuple[Any, ...] | None = None
         self._fetched_cursor: tuple[Any, ...] | None = None
@@ -394,7 +395,8 @@ class IncrementalTableSource(Source):
         return [dict(row) for row in rows]
 
     async def ack_token(self, token: _CursorToken) -> None:
-        async with self._commit_lock:
+        lock = self._runtime_commit_lock()
+        async with lock:
             self._acked.add(token.value)
             advanced: tuple[Any, ...] | None = None
             while self._pending and self._pending[0] in self._acked:
@@ -405,6 +407,13 @@ class IncrementalTableSource(Source):
                 if not self._pending:
                     self._fetched_cursor = advanced
                 await self.state.save(self.state_key, list(advanced))
+
+    def _runtime_commit_lock(self) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        if self._commit_lock is None or self._commit_loop is not current_loop:
+            self._commit_lock = asyncio.Lock()
+            self._commit_loop = current_loop
+        return self._commit_lock
 
 
 class TableSink(Sink):
