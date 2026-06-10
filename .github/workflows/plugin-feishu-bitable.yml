@@ -105,12 +105,33 @@ jobs:
           set -euo pipefail
 
           read_version() {
-            python3 -c 'import pathlib, sys, tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"])' "$1"
+            python3 -c 'import pathlib, re, sys; text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"); match = re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", text); print(match.group(1) if match else sys.exit(f"project.version not found in {sys.argv[1]}"))' "$1"
           }
 
           CURRENT_VERSION="$(read_version "$PLUGIN_PYPROJECT")"
           PREVIOUS_VERSION=""
           SHOULD_PUBLISH=false
+          VERSION_EXISTS_ON_PYPI=false
+
+          if python3 - "$CURRENT_VERSION" <<'PY'
+          import json
+          import sys
+          import urllib.error
+          import urllib.request
+
+          version = sys.argv[1]
+          try:
+              with urllib.request.urlopen("https://pypi.org/pypi/onestep-feishu-bitable/json", timeout=20) as response:
+                  releases = json.load(response).get("releases", {})
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  raise SystemExit(1)
+              raise
+          raise SystemExit(0 if releases.get(version) else 1)
+          PY
+          then
+            VERSION_EXISTS_ON_PYPI=true
+          fi
 
           if [ "$EVENT_NAME" = "push" ]; then
             if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
@@ -121,6 +142,8 @@ jobs:
             fi
 
             if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+              SHOULD_PUBLISH=true
+            elif [ "$VERSION_EXISTS_ON_PYPI" != "true" ]; then
               SHOULD_PUBLISH=true
             fi
           elif [ "$INPUT_PUBLISH_PYPI" = "true" ]; then
@@ -139,6 +162,7 @@ jobs:
 
           echo "Current plugin version: $CURRENT_VERSION"
           echo "Previous plugin version: ${PREVIOUS_VERSION:-<none>}"
+          echo "Version exists on PyPI: $VERSION_EXISTS_ON_PYPI"
           echo "Publish plugin: $SHOULD_PUBLISH"
 
   publish-pypi:
