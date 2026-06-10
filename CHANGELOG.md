@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0
+
+- Adds YAML resource registry entry points for external resource plugins.
+- Moves Feishu Bitable into the `onestep-feishu-bitable` plugin package.
+
 ## 1.3.3
 
 - Replaces Feishu Bitable sink `match_field` with `match_fields` and supports compound-key upsert/update matching.

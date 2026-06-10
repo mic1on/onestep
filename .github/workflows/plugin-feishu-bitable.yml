@@ -174,6 +174,16 @@ jobs:
       - name: Check plugin metadata
         run: uvx twine check dist/plugin/*
 
+      - name: Verify onestep dependency is published
+        run: |
+          set -euo pipefail
+
+          REQUIRED_ONESTEP_VERSION="$(
+            python3 -c 'import pathlib, re, sys; text = pathlib.Path("plugins/onestep-feishu-bitable/pyproject.toml").read_text(encoding="utf-8"); match = re.search(r"onestep\s*>=\s*([0-9]+(?:\.[0-9]+)*(?:[A-Za-z0-9._+-]*)?)", text); print(match.group(1) if match else sys.exit("onestep dependency must be pinned as onestep>=<version>"))'
+          )"
+
+          python3 -c 'import json, sys, urllib.request; version = sys.argv[1]; releases = json.load(urllib.request.urlopen("https://pypi.org/pypi/onestep/json", timeout=20)).get("releases", {}); sys.exit(f"onestep=={version} is not published on PyPI yet; publish the core package before publishing the plugin.") if not releases.get(version) else print(f"onestep=={version} is available on PyPI.")' "$REQUIRED_ONESTEP_VERSION"
+
       - name: Publish plugin to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
