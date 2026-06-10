@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from onestep.envelope import Envelope
-from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
+from onestep.resilience import ConnectorOperation, ConnectorOperationError
 
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
+
+from .resilience import as_redis_connector_operation_error
 
 try:  # pragma: no cover - optional dependency
     from redis.asyncio import Redis
@@ -241,8 +243,7 @@ class RedisStreamQueue(Source, Sink):
             
             self._opened = True
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="redis",
+            connector_error = as_redis_connector_operation_error(
                 operation=ConnectorOperation.OPEN,
                 exc=exc,
                 source_name=self.name,
@@ -307,8 +308,7 @@ class RedisStreamQueue(Source, Sink):
         except ConnectorOperationError:
             raise
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="redis",
+            connector_error = as_redis_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
                 exc=exc,
                 source_name=self.name,
@@ -372,8 +372,7 @@ class RedisStreamQueue(Source, Sink):
         except ConnectorOperationError:
             raise
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="redis",
+            connector_error = as_redis_connector_operation_error(
                 operation=ConnectorOperation.SEND,
                 exc=exc,
                 source_name=self.name,

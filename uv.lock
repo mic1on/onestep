@@ -459,7 +459,7 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.4.0"
+version = "1.4.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -586,7 +586,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
     { name = "onestep" },
@@ -616,7 +616,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-rabbitmq"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins/onestep-rabbitmq" }
 dependencies = [
     { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -645,7 +645,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-redis"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins/onestep-redis" }
 dependencies = [
     { name = "onestep" },
@@ -680,7 +680,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-sqs"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins/onestep-sqs" }
 dependencies = [
     { name = "boto3" },

@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "1.4.0"
+version = "1.4.1"
 description = "Async task runtime for queue, polling, schedule, and webhook workloads."
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -31,16 +31,16 @@ yaml = [
     "PyYAML>=6.0",
 ]
 mysql = [
-    "onestep-mysql>=0.1.0",
+    "onestep-mysql>=0.2.0",
 ]
 rabbitmq = [
-    "onestep-rabbitmq>=0.1.0",
+    "onestep-rabbitmq>=0.2.0",
 ]
 redis = [
-    "onestep-redis>=0.1.0",
+    "onestep-redis>=0.2.0",
 ]
 sqs = [
-    "onestep-sqs>=0.1.0",
+    "onestep-sqs>=0.2.0",
 ]
 test = [
     "pytest>=8.0.0",
@@ -51,28 +51,28 @@ integration = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",
-    "onestep-rabbitmq>=0.1.0",
-    "onestep-redis>=0.1.0",
-    "onestep-mysql>=0.1.0",
-    "onestep-sqs>=0.1.0",
+    "onestep-rabbitmq>=0.2.0",
+    "onestep-redis>=0.2.0",
+    "onestep-mysql>=0.2.0",
+    "onestep-sqs>=0.2.0",
 ]
 all = [
     "websockets>=12.0",
     "PyYAML>=6.0",
-    "onestep-rabbitmq>=0.1.0",
-    "onestep-redis>=0.1.0",
-    "onestep-mysql>=0.1.0",
-    "onestep-sqs>=0.1.0",
+    "onestep-rabbitmq>=0.2.0",
+    "onestep-redis>=0.2.0",
+    "onestep-mysql>=0.2.0",
+    "onestep-sqs>=0.2.0",
 ]
 dev = [
     "websockets>=12.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",
-    "onestep-rabbitmq>=0.1.0",
-    "onestep-redis>=0.1.0",
-    "onestep-mysql>=0.1.0",
-    "onestep-sqs>=0.1.0",
+    "onestep-rabbitmq>=0.2.0",
+    "onestep-redis>=0.2.0",
+    "onestep-mysql>=0.2.0",
+    "onestep-sqs>=0.2.0",
 ]
 
 [project.scripts]

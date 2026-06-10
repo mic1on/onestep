@@ -8,9 +8,9 @@ from uuid import UUID
 
 from onestep import ControlPlaneReporter, ControlPlaneReporterConfig, OneStepApp
 from onestep.config import load_app_config
-from onestep.resilience import ConnectorErrorKind
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep_redis import RedisConnector, RedisStreamQueue
-from onestep_redis.resilience import classify_redis_error
+from onestep_redis.resilience import as_redis_connector_operation_error, classify_redis_error
 
 
 @dataclass
@@ -77,8 +77,24 @@ def test_yaml_builds_redis_resources_via_plugin_entry_point() -> None:
     assert app.resources["jobs"].approximate_trim is False
 
 
-def test_redis_plugin_registers_error_classifier() -> None:
-    assert classify_redis_error(TimeoutError("timeout")) is ConnectorErrorKind.DISCONNECTED
+def test_redis_plugin_normalizes_redis_errors() -> None:
+    timeout = TimeoutError("timeout")
+
+    assert classify_redis_error(timeout) is ConnectorErrorKind.DISCONNECTED
+    normalized = as_redis_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=timeout,
+        source_name="jobs",
+        retry_delay_s=0.5,
+    )
+
+    assert isinstance(normalized, ConnectorOperationError)
+    assert normalized.backend == "redis"
+    assert normalized.operation is ConnectorOperation.FETCH
+    assert normalized.kind is ConnectorErrorKind.DISCONNECTED
+    assert normalized.source_name == "jobs"
+    assert normalized.retry_delay_s == 0.5
+    assert normalized.cause is timeout
 
 
 def test_reporter_sync_payload_includes_redis_stream_topology_config() -> None:

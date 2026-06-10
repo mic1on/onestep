@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from onestep.resilience import ConnectorErrorKind, register_connector_error_classifier
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 
 try:  # pragma: no cover - optional dependency
     import redis.exceptions as redis_exceptions
@@ -50,5 +50,21 @@ def classify_redis_error(exc: BaseException) -> ConnectorErrorKind | None:
     return None
 
 
-def register_error_classifiers() -> None:
-    register_connector_error_classifier("redis", classify_redis_error)
+def as_redis_connector_operation_error(
+    *,
+    operation: ConnectorOperation,
+    exc: BaseException,
+    source_name: str | None = None,
+    retry_delay_s: float | None = None,
+) -> ConnectorOperationError | None:
+    kind = classify_redis_error(exc)
+    if kind is None:
+        return None
+    return ConnectorOperationError(
+        backend="redis",
+        operation=operation,
+        kind=kind,
+        source_name=source_name,
+        retry_delay_s=retry_delay_s,
+        cause=exc,
+    )

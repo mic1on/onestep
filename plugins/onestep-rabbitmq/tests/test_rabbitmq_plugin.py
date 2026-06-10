@@ -4,9 +4,9 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 from onestep.config import load_app_config
-from onestep.resilience import ConnectorErrorKind
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep_rabbitmq import RabbitMQConnector, RabbitMQQueue
-from onestep_rabbitmq.resilience import classify_rabbitmq_error
+from onestep_rabbitmq.resilience import as_rabbitmq_connector_operation_error, classify_rabbitmq_error
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -60,9 +60,25 @@ def test_yaml_builds_rabbitmq_resources_via_plugin_entry_point() -> None:
     assert app.resources["jobs"].prefetch == 50
 
 
-def test_rabbitmq_plugin_registers_error_classifier() -> None:
-    assert classify_rabbitmq_error(ConnectionError("connection refused")) is ConnectorErrorKind.DISCONNECTED
+def test_rabbitmq_plugin_normalizes_rabbitmq_errors() -> None:
+    connection_error = ConnectionError("connection refused")
+
+    assert classify_rabbitmq_error(connection_error) is ConnectorErrorKind.DISCONNECTED
     assert classify_rabbitmq_error(RuntimeError("connection closed")) is ConnectorErrorKind.DISCONNECTED
+    normalized = as_rabbitmq_connector_operation_error(
+        operation=ConnectorOperation.OPEN,
+        exc=connection_error,
+        source_name="incoming_jobs",
+        retry_delay_s=1.0,
+    )
+
+    assert isinstance(normalized, ConnectorOperationError)
+    assert normalized.backend == "rabbitmq"
+    assert normalized.operation is ConnectorOperation.OPEN
+    assert normalized.kind is ConnectorErrorKind.DISCONNECTED
+    assert normalized.source_name == "incoming_jobs"
+    assert normalized.retry_delay_s == 1.0
+    assert normalized.cause is connection_error
 
 
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:

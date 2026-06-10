@@ -34,7 +34,6 @@ from .resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
     ConnectorOperationError,
-    register_connector_error_classifier,
 )
 from .retry import (
     FailureInfo,
@@ -114,5 +113,4 @@ __all__ = [
     "load_resource_plugins",
     "load_yaml_app",
     "register_resource_type",
-    "register_connector_error_classifier",
 ]

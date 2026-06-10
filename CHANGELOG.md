@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1
+
+- Keeps connector resilience handling backend-neutral in the core runtime.
+- Moves backend exception normalization into the MySQL, RabbitMQ, Redis, and SQS plugins.
+- Raises the MySQL, RabbitMQ, Redis, and SQS plugin package versions to `0.2.0`.
+
 ## 1.4.0
 
 - Adds YAML resource registry entry points for external resource plugins.

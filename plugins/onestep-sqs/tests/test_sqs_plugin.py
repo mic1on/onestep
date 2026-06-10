@@ -4,9 +4,9 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 from onestep.config import load_app_config
-from onestep.resilience import ConnectorErrorKind
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep_sqs import SQSConnector, SQSQueue
-from onestep_sqs.resilience import classify_sqs_error
+from onestep_sqs.resilience import as_sqs_connector_operation_error, classify_sqs_error
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -56,8 +56,24 @@ def test_yaml_builds_sqs_resources_via_plugin_entry_point() -> None:
     assert app.resources["jobs"].on_fail == "release"
 
 
-def test_sqs_plugin_registers_sqs_error_classifier() -> None:
-    assert classify_sqs_error(TimeoutError("timeout")) is ConnectorErrorKind.DISCONNECTED
+def test_sqs_plugin_normalizes_sqs_errors() -> None:
+    timeout = TimeoutError("timeout")
+
+    assert classify_sqs_error(timeout) is ConnectorErrorKind.DISCONNECTED
+    normalized = as_sqs_connector_operation_error(
+        operation=ConnectorOperation.SEND,
+        exc=timeout,
+        source_name="jobs",
+        retry_delay_s=3.0,
+    )
+
+    assert isinstance(normalized, ConnectorOperationError)
+    assert normalized.backend == "sqs"
+    assert normalized.operation is ConnectorOperation.SEND
+    assert normalized.kind is ConnectorErrorKind.DISCONNECTED
+    assert normalized.source_name == "jobs"
+    assert normalized.retry_delay_s == 3.0
+    assert normalized.cause is timeout
 
 
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:

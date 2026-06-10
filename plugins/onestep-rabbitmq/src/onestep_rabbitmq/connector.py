@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from onestep.envelope import Envelope
-from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
+from onestep.resilience import ConnectorOperation, ConnectorOperationError
 
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
+
+from .resilience import as_rabbitmq_connector_operation_error
 
 try:  # pragma: no cover - optional dependency
     import aio_pika
@@ -223,8 +225,7 @@ class RabbitMQQueue(Source, Sink):
         except Exception as exc:
             if acquired:
                 await self._reset_transport_state(release_connection=True)
-            connector_error = as_connector_operation_error(
-                backend="rabbitmq",
+            connector_error = as_rabbitmq_connector_operation_error(
                 operation=ConnectorOperation.OPEN,
                 exc=exc,
                 source_name=self.name,
@@ -270,8 +271,7 @@ class RabbitMQQueue(Source, Sink):
         except ConnectorOperationError:
             raise
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="rabbitmq",
+            connector_error = as_rabbitmq_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
                 exc=exc,
                 source_name=self.name,
@@ -300,8 +300,7 @@ class RabbitMQQueue(Source, Sink):
         except ConnectorOperationError:
             raise
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="rabbitmq",
+            connector_error = as_rabbitmq_connector_operation_error(
                 operation=ConnectorOperation.SEND,
                 exc=exc,
                 source_name=self.name,

@@ -1,12 +1,12 @@
 [project]
 name = "onestep-mysql"
-version = "0.1.0"
+version = "0.2.0"
 description = "MySQL connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
-    "onestep>=1.4.0",
+    "onestep>=1.4.1",
     "SQLAlchemy>=2.0.0",
     "PyMySQL>=1.1.0",
 ]

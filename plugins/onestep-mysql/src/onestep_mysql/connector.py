@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from onestep.envelope import Envelope
-from onestep.resilience import ConnectorOperation, as_connector_operation_error
+from onestep.resilience import ConnectorOperation
 from onestep.state import CursorStore, InMemoryCursorStore
 
 from onestep.connectors.base import Delivery, Sink, Source
 
+from .resilience import as_mysql_connector_operation_error
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 
 try:
@@ -224,8 +225,7 @@ class TableQueueSource(Source):
         try:
             rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="mysql",
+            connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
                 exc=exc,
                 source_name=self.name,
@@ -357,8 +357,7 @@ class IncrementalTableSource(Source):
         try:
             rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="mysql",
+            connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
                 exc=exc,
                 source_name=self.name,
@@ -432,8 +431,7 @@ class TableSink(Sink):
         try:
             await asyncio.to_thread(self._send_sync, dict(envelope.body))
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="mysql",
+            connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.SEND,
                 exc=exc,
                 source_name=self.name,

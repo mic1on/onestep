@@ -11,10 +11,8 @@ from .connector import (
     TableSink,
 )
 from .resources import register_resources
-from .resilience import classify_sqlalchemy_error, register_error_classifiers
+from .resilience import classify_sqlalchemy_error
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
-
-register_error_classifiers()
 
 try:
     __version__ = _package_version("onestep-mysql")
@@ -35,6 +33,5 @@ __all__ = [
     "__version__",
     "classify_sqlalchemy_error",
     "register",
-    "register_error_classifiers",
     "register_resources",
 ]

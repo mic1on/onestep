@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from enum import Enum
-from typing import Optional
+
 
 class ConnectorErrorKind(str, Enum):
     DISCONNECTED = "disconnected"
@@ -21,10 +20,6 @@ class ConnectorOperation(str, Enum):
     RETRY = "retry"
     FAIL = "fail"
     CLOSE = "close"
-
-
-ConnectorErrorClassifier = Callable[[BaseException], Optional[ConnectorErrorKind]]
-_CONNECTOR_ERROR_CLASSIFIERS: dict[str, ConnectorErrorClassifier] = {}
 
 
 class ConnectorOperationError(Exception):
@@ -67,34 +62,3 @@ def connector_retry_delay(exc: ConnectorOperationError, *, fallback_s: float) ->
     if exc.kind is ConnectorErrorKind.THROTTLED:
         return max(fallback_s, 1.0)
     return max(fallback_s, 0.0)
-
-
-def register_connector_error_classifier(backend: str, classifier: ConnectorErrorClassifier) -> None:
-    normalized = backend.strip().lower()
-    if not normalized:
-        raise ValueError("backend must be a non-empty string")
-    _CONNECTOR_ERROR_CLASSIFIERS[normalized] = classifier
-
-
-def as_connector_operation_error(
-    *,
-    backend: str,
-    operation: ConnectorOperation,
-    exc: BaseException,
-    source_name: str | None = None,
-    retry_delay_s: float | None = None,
-) -> ConnectorOperationError | None:
-    classifier = _CONNECTOR_ERROR_CLASSIFIERS.get(backend.strip().lower())
-    if classifier is None:
-        return None
-    kind = classifier(exc)
-    if kind is None:
-        return None
-    return ConnectorOperationError(
-        backend=backend,
-        operation=operation,
-        kind=kind,
-        source_name=source_name,
-        retry_delay_s=retry_delay_s,
-        cause=exc,
-    )

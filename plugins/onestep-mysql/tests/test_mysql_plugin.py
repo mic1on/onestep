@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from onestep.resilience import ConnectorErrorKind
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.config import load_app_config
 from onestep_mysql import (
     IncrementalTableSource,
@@ -15,7 +15,7 @@ from onestep_mysql import (
     SQLAlchemyStateStore,
     TableSink,
 )
-from onestep_mysql.resilience import classify_sqlalchemy_error
+from onestep_mysql.resilience import as_mysql_connector_operation_error, classify_sqlalchemy_error
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -37,13 +37,29 @@ def test_sqlalchemy_state_store_is_not_exposed_by_core() -> None:
         importlib.import_module("onestep.state_sqlalchemy")
 
 
-def test_mysql_plugin_registers_sqlalchemy_error_classifier() -> None:
+def test_mysql_plugin_normalizes_sqlalchemy_errors() -> None:
     assert classify_sqlalchemy_error(TimeoutError("timeout")) is None
 
     from onestep_mysql.resilience import sa
 
     assert sa is not None
-    assert classify_sqlalchemy_error(sa.exc.TimeoutError("timeout")) is ConnectorErrorKind.TRANSIENT
+    sql_error = sa.exc.TimeoutError("timeout")
+    assert classify_sqlalchemy_error(sql_error) is ConnectorErrorKind.TRANSIENT
+
+    normalized = as_mysql_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=sql_error,
+        source_name="mysql.incremental:users",
+        retry_delay_s=2.0,
+    )
+
+    assert isinstance(normalized, ConnectorOperationError)
+    assert normalized.backend == "mysql"
+    assert normalized.operation is ConnectorOperation.FETCH
+    assert normalized.kind is ConnectorErrorKind.TRANSIENT
+    assert normalized.source_name == "mysql.incremental:users"
+    assert normalized.retry_delay_s == 2.0
+    assert normalized.cause is sql_error
 
 
 def test_yaml_builds_mysql_resources_via_plugin_entry_point(tmp_path) -> None:

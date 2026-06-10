@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from onestep.envelope import Envelope
-from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
+from onestep.resilience import ConnectorOperation, ConnectorOperationError
 
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
+
+from .resilience import as_sqs_connector_operation_error
 
 try:  # pragma: no cover - optional dependency
     import boto3
@@ -186,8 +188,7 @@ class SQSQueue(Source, Sink):
             if self._delete_flusher_task is None and self.delete_flush_interval_s > 0:
                 self._delete_flusher_task = asyncio.create_task(self._delete_flush_loop())
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="sqs",
+            connector_error = as_sqs_connector_operation_error(
                 operation=ConnectorOperation.OPEN,
                 exc=exc,
                 source_name=self.name,
@@ -228,8 +229,7 @@ class SQSQueue(Source, Sink):
         except ConnectorOperationError:
             raise
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="sqs",
+            connector_error = as_sqs_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
                 exc=exc,
                 source_name=self.name,
@@ -257,8 +257,7 @@ class SQSQueue(Source, Sink):
         except ConnectorOperationError:
             raise
         except Exception as exc:
-            connector_error = as_connector_operation_error(
-                backend="sqs",
+            connector_error = as_sqs_connector_operation_error(
                 operation=ConnectorOperation.SEND,
                 exc=exc,
                 source_name=self.name,

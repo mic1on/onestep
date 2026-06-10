@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from onestep.resilience import ConnectorErrorKind, register_connector_error_classifier
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 
 try:  # pragma: no cover - optional dependency
     import aio_pika.exceptions as aio_pika_exceptions
@@ -67,5 +67,21 @@ def _classify_amqp_error(exc: BaseException, module: Any) -> ConnectorErrorKind 
     return None
 
 
-def register_error_classifiers() -> None:
-    register_connector_error_classifier("rabbitmq", classify_rabbitmq_error)
+def as_rabbitmq_connector_operation_error(
+    *,
+    operation: ConnectorOperation,
+    exc: BaseException,
+    source_name: str | None = None,
+    retry_delay_s: float | None = None,
+) -> ConnectorOperationError | None:
+    kind = classify_rabbitmq_error(exc)
+    if kind is None:
+        return None
+    return ConnectorOperationError(
+        backend="rabbitmq",
+        operation=operation,
+        kind=kind,
+        source_name=source_name,
+        retry_delay_s=retry_delay_s,
+        cause=exc,
+    )

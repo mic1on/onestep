@@ -4,9 +4,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 
 from .connector import RedisConnector, RedisStreamDelivery, RedisStreamQueue
 from .resources import register_resources
-from .resilience import classify_redis_error, register_error_classifiers
-
-register_error_classifiers()
+from .resilience import classify_redis_error
 
 try:
     __version__ = _package_version("onestep-redis")
@@ -22,6 +20,5 @@ __all__ = [
     "__version__",
     "classify_redis_error",
     "register",
-    "register_error_classifiers",
     "register_resources",
 ]
