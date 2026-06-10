@@ -9,14 +9,12 @@ on:
       - "plugins/onestep-rabbitmq/**"
       - "src/**"
       - "pyproject.toml"
-      - "uv.lock"
   pull_request:
     paths:
       - ".github/workflows/plugin-rabbitmq.yml"
       - "plugins/onestep-rabbitmq/**"
       - "src/**"
       - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
       publish_pypi:

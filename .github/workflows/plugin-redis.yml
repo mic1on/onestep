@@ -9,14 +9,12 @@ on:
       - "plugins/onestep-redis/**"
       - "src/**"
       - "pyproject.toml"
-      - "uv.lock"
   pull_request:
     paths:
       - ".github/workflows/plugin-redis.yml"
       - "plugins/onestep-redis/**"
       - "src/**"
       - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
       publish_pypi:

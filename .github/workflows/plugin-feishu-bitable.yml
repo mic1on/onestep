@@ -9,14 +9,12 @@ on:
       - "plugins/onestep-feishu-bitable/**"
       - "src/**"
       - "pyproject.toml"
-      - "uv.lock"
   pull_request:
     paths:
       - ".github/workflows/plugin-feishu-bitable.yml"
       - "plugins/onestep-feishu-bitable/**"
       - "src/**"
       - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
       publish_pypi:
