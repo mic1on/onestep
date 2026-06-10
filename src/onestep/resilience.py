@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 try:  # pragma: no cover - optional dependency
     import aio_pika.exceptions as aio_pika_exceptions
@@ -38,7 +38,7 @@ class ConnectorOperation(str, Enum):
     CLOSE = "close"
 
 
-ConnectorErrorClassifier = Callable[[BaseException], ConnectorErrorKind | None]
+ConnectorErrorClassifier = Callable[[BaseException], Optional[ConnectorErrorKind]]
 _CONNECTOR_ERROR_CLASSIFIERS: dict[str, ConnectorErrorClassifier] = {}
 
 
