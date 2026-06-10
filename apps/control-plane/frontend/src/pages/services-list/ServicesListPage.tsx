@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
 import { useServicesQuery } from "../../features/services/queries";
+import { formatConnectorKind } from "../../features/tasks/components/TaskTopologySummary";
 import type { ServiceSummary } from "../../lib/api/types";
 import { formatDateTime, formatRelativeTime } from "../../lib/formatters";
 import { servicePath } from "../../lib/routes";
@@ -14,8 +15,9 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 export function ServicesListPage() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const isZh = Boolean(i18n.resolvedLanguage?.startsWith("zh"));
   const environmentParam = searchParams.get("environment");
   const selectedEnvironment =
     environmentParam === "all" || environmentParam === "dev" || environmentParam === "staging" || environmentParam === "prod"
@@ -118,7 +120,7 @@ export function ServicesListPage() {
                   }
                   type="button"
                 >
-                  <span className="ref-tag-chip-kind">{kind}</span>
+                  <span className="ref-tag-chip-kind">{formatConnectorKind(kind, isZh)}</span>
                   <span className="ref-tag-chip-count">{count}</span>
                 </button>
               );
@@ -164,7 +166,9 @@ export function ServicesListPage() {
         <EmptyState title={t("servicesList.emptyTitle")} body={t("servicesList.emptyBody")} />
       ) : null}
 
-      {!isPending && !error && sortedActiveItems.length > 0 ? <ServicesTable items={sortedActiveItems} t={t} /> : null}
+      {!isPending && !error && sortedActiveItems.length > 0 ? (
+        <ServicesTable isZh={isZh} items={sortedActiveItems} t={t} />
+      ) : null}
 
       {!isPending && !error && sortedInactiveItems.length > 0 ? (
         <details className="ref-collapse-card">
@@ -173,7 +177,7 @@ export function ServicesListPage() {
             <span>{t("servicesList.inactiveSectionDescription", { days: inactiveServiceDays })}</span>
           </summary>
           <div className="ref-collapse-body">
-            <ServicesTable items={sortedInactiveItems} t={t} />
+            <ServicesTable isZh={isZh} items={sortedInactiveItems} t={t} />
           </div>
         </details>
       ) : null}
@@ -181,7 +185,7 @@ export function ServicesListPage() {
   );
 }
 
-function ServicesTable({ items, t }: { items: ServiceSummary[]; t: Translate }) {
+function ServicesTable({ isZh, items, t }: { isZh: boolean; items: ServiceSummary[]; t: Translate }) {
   return (
     <section className="ref-table-card">
       <div className="ref-table-head">
@@ -194,14 +198,14 @@ function ServicesTable({ items, t }: { items: ServiceSummary[]; t: Translate }) 
 
       <div className="ref-table-body">
         {items.map((service) => (
-          <ServiceRow key={`${service.environment}:${service.name}`} service={service} t={t} />
+          <ServiceRow key={`${service.environment}:${service.name}`} isZh={isZh} service={service} t={t} />
         ))}
       </div>
     </section>
   );
 }
 
-function ServiceRow({ service, t }: { service: ServiceSummary; t: Translate }) {
+function ServiceRow({ isZh, service, t }: { isZh: boolean; service: ServiceSummary; t: Translate }) {
   return (
     <article className="ref-table-row" key={`${service.environment}:${service.name}`}>
       <div className="ref-service-cell">
@@ -222,7 +226,7 @@ function ServiceRow({ service, t }: { service: ServiceSummary; t: Translate }) {
                 </span>
               ) : null}
               {service.source_kinds.map((kind) => (
-                <span key={kind} className="ref-mini-tag">{kind}</span>
+                <span key={kind} className="ref-mini-tag">{formatConnectorKind(kind, isZh)}</span>
               ))}
             </span>
           ) : null}

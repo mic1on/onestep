@@ -182,4 +182,21 @@ describe("ServicesListPage", () => {
     expect(usageFill).toHaveClass("is-healthy");
     expect(usageFill).not.toHaveClass("is-warning");
   });
+
+  it("formats plugin source kinds with readable labels", async () => {
+    const response = buildServicesResponse();
+    response.items[0].source_kinds = ["feishu_bitable_incremental"];
+    response.source_kind_counts = {
+      feishu_bitable_incremental: 1,
+    };
+    mockUseServicesQuery.mockReturnValue({
+      data: response,
+      isPending: false,
+      error: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findAllByText("Feishu Bitable incremental")).toHaveLength(2);
+  });
 });

@@ -133,6 +133,33 @@ export function formatRetryPolicySummary(
   return details.join(" · ");
 }
 
+export function formatConnectorKind(kind: string, isZh: boolean) {
+  const labels: Record<string, { zh: string; en: string }> = {
+    cron: { zh: "Cron", en: "Cron" },
+    interval: { zh: "定时任务", en: "Interval" },
+    rabbitmq_queue: { zh: "RabbitMQ 队列", en: "RabbitMQ queue" },
+    mysql_table_sink: { zh: "MySQL 表写入", en: "MySQL table sink" },
+    http_sink: { zh: "HTTP 请求", en: "HTTP sink" },
+    feishu_bitable_incremental: { zh: "飞书多维表格增量源", en: "Feishu Bitable incremental" },
+    feishu_bitable_table_sink: { zh: "飞书多维表格写入", en: "Feishu Bitable table sink" },
+  };
+
+  const direct = labels[kind];
+  if (direct) {
+    return isZh ? direct.zh : direct.en;
+  }
+
+  const normalized = kind.replaceAll(/[_-]+/g, " ").trim();
+  if (!normalized) {
+    return kind;
+  }
+
+  return normalized
+    .split(" ")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function TopologyPreviewRow({
   label,
   value,
@@ -259,6 +286,8 @@ function buildConfigHighlights(
   push(formatNamedValue(config, "stream", "stream"));
   push(formatNamedValue(config, "routing_key", isZh ? "路由键" : "routing key"));
   push(formatNamedValue(config, "table", isZh ? "表" : "table"));
+  push(formatNamedValue(config, "table_id", isZh ? "表" : "table"));
+  push(formatNamedValue(config, "cursor_field", isZh ? "游标" : "cursor"));
   push(formatNamedValue(config, "bucket", "bucket"));
   push(formatNamedValue(config, "index", "index"));
   push(formatNamedValue(config, "channel", isZh ? "通道" : "channel"));
@@ -282,6 +311,13 @@ function buildConfigHighlights(
   if (keys.length > 0) {
     push(
       isZh ? `键 ${keys.join(", ")}` : `keys ${keys.join(", ")}`,
+    );
+  }
+
+  const matchFields = getStringArrayValue(config, "match_fields");
+  if (matchFields.length > 0) {
+    push(
+      isZh ? `匹配 ${matchFields.join(", ")}` : `match ${matchFields.join(", ")}`,
     );
   }
 
@@ -311,6 +347,7 @@ function resolveConnectorTarget(config: JsonObject | null) {
     "subject",
     "stream",
     "table",
+    "table_id",
     "bucket",
     "index",
     "channel",
@@ -342,31 +379,6 @@ function formatEmitPreview(
   return isZh
     ? `${summaries[0].inline} 等 ${summaries.length} 个目标`
     : `${summaries[0].inline} and ${summaries.length - 1} more`;
-}
-
-function formatConnectorKind(kind: string, isZh: boolean) {
-  const labels: Record<string, { zh: string; en: string }> = {
-    cron: { zh: "Cron", en: "Cron" },
-    interval: { zh: "定时任务", en: "Interval" },
-    rabbitmq_queue: { zh: "RabbitMQ 队列", en: "RabbitMQ queue" },
-    mysql_table_sink: { zh: "MySQL 表写入", en: "MySQL table sink" },
-    http_sink: { zh: "HTTP 请求", en: "HTTP sink" },
-  };
-
-  const direct = labels[kind];
-  if (direct) {
-    return isZh ? direct.zh : direct.en;
-  }
-
-  const normalized = kind.replaceAll(/[_-]+/g, " ").trim();
-  if (!normalized) {
-    return kind;
-  }
-
-  return normalized
-    .split(" ")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function formatRetryKind(kind: string, isZh: boolean) {
