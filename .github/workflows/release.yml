@@ -236,7 +236,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install release test dependencies
-        run: uv sync --frozen --extra test
+        run: uv sync --frozen --all-packages --extra test
 
       - name: Run non-integration tests
         run: uv run pytest -q -m "not integration"

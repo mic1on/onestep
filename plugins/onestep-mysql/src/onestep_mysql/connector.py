@@ -10,9 +10,10 @@ from typing import Any
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation, as_connector_operation_error
 from onestep.state import CursorStore, InMemoryCursorStore
-from onestep.state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 
-from .base import Delivery, Sink, Source
+from onestep.connectors.base import Delivery, Sink, Source
+
+from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 
 try:
     import sqlalchemy as sa
@@ -25,7 +26,7 @@ except ImportError:  # pragma: no cover - exercised when optional deps are missi
 class MySQLConnector:
     def __init__(self, dsn: str, **engine_options: Any) -> None:
         if create_engine is None:
-            raise RuntimeError("MySQLConnector requires SQLAlchemy. Install onestep[mysql].")
+            raise RuntimeError("MySQLConnector requires SQLAlchemy. Install onestep-mysql.")
         self.dsn = dsn
         self.engine = create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
         self._tables: dict[str, Any] = {}

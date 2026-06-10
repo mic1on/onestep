@@ -7,6 +7,7 @@ on:
       - ".github/workflows/test.yml"
       - "docker/**"
       - "docker-compose.integration.yml"
+      - "plugins/**"
       - "pyproject.toml"
       - "scripts/**"
       - "src/**"
@@ -18,6 +19,7 @@ on:
       - ".github/workflows/test.yml"
       - "docker/**"
       - "docker-compose.integration.yml"
+      - "plugins/**"
       - "pyproject.toml"
       - "scripts/**"
       - "src/**"
@@ -51,7 +53,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install test dependencies
-        run: uv sync --frozen --extra test
+        run: uv sync --frozen --all-packages --extra test
 
       - name: Run unit and contract tests
         run: uv run pytest -q -m "not integration"
@@ -88,7 +90,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install integration dependencies
-        run: uv sync --frozen --extra integration
+        run: uv sync --frozen --all-packages --extra integration
 
       - name: Run live integration tests
         run: ./scripts/run-integration-tests.sh

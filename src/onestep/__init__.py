@@ -34,6 +34,7 @@ from .resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
     ConnectorOperationError,
+    register_connector_error_classifier,
 )
 from .retry import (
     FailureInfo,
@@ -45,15 +46,12 @@ from .retry import (
     RetryPolicy,
 )
 from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedState, StateStore
-from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 from .connectors.base import Delivery, Sink, Source
 from .connectors.http import HttpSink, HttpSinkStatusError
 from .connectors.memory import MemoryQueue
-from .connectors.mysql import MySQLConnector
 from .connectors.rabbitmq import RabbitMQConnector
 from .connectors.redis import RedisConnector
 from .connectors.schedule import CronSource, IntervalSource
-from .connectors.sqs import SQSConnector
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
 
 try:
@@ -89,7 +87,6 @@ __all__ = [
     "IntervalSource",
     "MaxAttempts",
     "MemoryQueue",
-    "MySQLConnector",
     "NoRetry",
     "OneStepApp",
     "RabbitMQConnector",
@@ -101,13 +98,10 @@ __all__ = [
     "RetryAction",
     "RetryDecision",
     "RetryPolicy",
-    "SQLAlchemyCursorStore",
-    "SQLAlchemyStateStore",
     "Sink",
     "StateStore",
     "StructuredEventLogger",
     "Source",
-    "SQSConnector",
     "ScopedState",
     "TaskEvent",
     "TaskEventKind",
@@ -124,4 +118,5 @@ __all__ = [
     "load_resource_plugins",
     "load_yaml_app",
     "register_resource_type",
+    "register_connector_error_classifier",
 ]

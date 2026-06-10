@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.connectors.mysql import MySQLConnector
 from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+
+from .connector import MySQLConnector
 
 _MYSQL_FIELDS = frozenset({"type", "dsn", "engine_options"})
 _MYSQL_STATE_STORE_FIELDS = frozenset(

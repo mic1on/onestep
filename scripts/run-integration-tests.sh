@@ -25,4 +25,8 @@ docker compose -f "$COMPOSE_FILE" up -d
 # shellcheck disable=SC1091
 eval "$("$ROOT_DIR/scripts/setup-integration-env.sh")"
 
-"$PYTHON_BIN" -m pytest tests/integration -q "$@"
+"$PYTHON_BIN" -m pytest \
+  tests/integration \
+  plugins/onestep-mysql/tests/integration \
+  plugins/onestep-sqs/tests/integration \
+  -q "$@"

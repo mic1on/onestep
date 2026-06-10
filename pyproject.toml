@@ -31,8 +31,7 @@ yaml = [
     "PyYAML>=6.0",
 ]
 mysql = [
-    "SQLAlchemy>=2.0.0",
-    "PyMySQL>=1.1.0",
+    "onestep-mysql>=0.1.0",
 ]
 rabbitmq = [
     "aio-pika>=9.0.0",
@@ -41,43 +40,39 @@ redis = [
     "redis>=4.2.0",
 ]
 sqs = [
-    "boto3>=1.34.0",
+    "onestep-sqs>=0.1.0",
 ]
 test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",
-    "SQLAlchemy>=2.0.0",
 ]
 integration = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",
     "aio-pika>=9.0.0",
-    "boto3>=1.34.0",
     "redis>=4.2.0",
-    "SQLAlchemy>=2.0.0",
-    "PyMySQL>=1.1.0",
+    "onestep-mysql>=0.1.0",
+    "onestep-sqs>=0.1.0",
 ]
 all = [
     "websockets>=12.0",
     "PyYAML>=6.0",
-    "SQLAlchemy>=2.0.0",
-    "PyMySQL>=1.1.0",
     "aio-pika>=9.0.0",
-    "boto3>=1.34.0",
     "redis>=4.2.0",
+    "onestep-mysql>=0.1.0",
+    "onestep-sqs>=0.1.0",
 ]
 dev = [
     "websockets>=12.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",
-    "SQLAlchemy>=2.0.0",
-    "PyMySQL>=1.1.0",
     "aio-pika>=9.0.0",
-    "boto3>=1.34.0",
     "redis>=4.2.0",
+    "onestep-mysql>=0.1.0",
+    "onestep-sqs>=0.1.0",
 ]
 
 [project.scripts]
@@ -86,7 +81,13 @@ onestep = "onestep.cli:main"
 [tool.uv.workspace]
 members = [
     "plugins/onestep-feishu-bitable",
+    "plugins/onestep-mysql",
+    "plugins/onestep-sqs",
 ]
+
+[tool.uv.sources]
+onestep-mysql = { workspace = true }
+onestep-sqs = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

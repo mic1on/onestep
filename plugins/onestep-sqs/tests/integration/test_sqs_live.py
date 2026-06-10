@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from onestep import SQSConnector
+from onestep_sqs import SQSConnector
 
 
 if not os.getenv("ONESTEP_SQS_QUEUE_URL"):

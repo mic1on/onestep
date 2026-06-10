@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.connectors.sqs import SQSConnector
 from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+
+from .connector import SQSConnector
 
 _SQS_FIELDS = frozenset({"type", "region_name", "options"})
 _SQS_QUEUE_FIELDS = frozenset(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
@@ -14,20 +15,9 @@ except ImportError:  # pragma: no cover - optional dependency
     aiormq_exceptions = None
 
 try:  # pragma: no cover - optional dependency
-    import botocore.exceptions as botocore_exceptions
-except ImportError:  # pragma: no cover - optional dependency
-    botocore_exceptions = None
-
-try:  # pragma: no cover - optional dependency
-    import sqlalchemy as sa
-except ImportError:  # pragma: no cover - optional dependency
-    sa = None
-
-try:  # pragma: no cover - optional dependency
     import redis.exceptions as redis_exceptions
 except ImportError:  # pragma: no cover - optional dependency
     redis_exceptions = None
-
 
 class ConnectorErrorKind(str, Enum):
     DISCONNECTED = "disconnected"
@@ -46,6 +36,10 @@ class ConnectorOperation(str, Enum):
     RETRY = "retry"
     FAIL = "fail"
     CLOSE = "close"
+
+
+ConnectorErrorClassifier = Callable[[BaseException], ConnectorErrorKind | None]
+_CONNECTOR_ERROR_CLASSIFIERS: dict[str, ConnectorErrorClassifier] = {}
 
 
 class ConnectorOperationError(Exception):
@@ -90,6 +84,13 @@ def connector_retry_delay(exc: ConnectorOperationError, *, fallback_s: float) ->
     return max(fallback_s, 0.0)
 
 
+def register_connector_error_classifier(backend: str, classifier: ConnectorErrorClassifier) -> None:
+    normalized = backend.strip().lower()
+    if not normalized:
+        raise ValueError("backend must be a non-empty string")
+    _CONNECTOR_ERROR_CLASSIFIERS[normalized] = classifier
+
+
 def classify_rabbitmq_error(exc: BaseException) -> ConnectorErrorKind | None:
     if isinstance(exc, (ConnectionError, OSError)):
         return ConnectorErrorKind.DISCONNECTED
@@ -106,79 +107,6 @@ def classify_rabbitmq_error(exc: BaseException) -> ConnectorErrorKind | None:
         result = _classify_amqp_error(exc, aiormq_exceptions)
         if result is not None:
             return result
-    return None
-
-
-def classify_sqs_error(exc: BaseException) -> ConnectorErrorKind | None:
-    if isinstance(exc, (ConnectionError, OSError, TimeoutError)):
-        return ConnectorErrorKind.DISCONNECTED
-    if botocore_exceptions is None:
-        return None
-
-    transient_types = []
-    for name in ("EndpointConnectionError", "ConnectionClosedError", "ReadTimeoutError", "ConnectTimeoutError"):
-        error_type = getattr(botocore_exceptions, name, None)
-        if isinstance(error_type, type):
-            transient_types.append(error_type)
-    if transient_types and isinstance(exc, tuple(transient_types)):
-        return ConnectorErrorKind.DISCONNECTED
-
-    client_error = getattr(botocore_exceptions, "ClientError", None)
-    if isinstance(client_error, type) and isinstance(exc, client_error):
-        code = str(exc.response.get("Error", {}).get("Code", "")).lower()
-        if code in {
-            "throttling",
-            "throttlingexception",
-            "requestthrottled",
-            "toomanyrequestsexception",
-            "slowdown",
-        }:
-            return ConnectorErrorKind.THROTTLED
-        if code in {"requesttimeout", "internalerror", "serviceunavailable"}:
-            return ConnectorErrorKind.TRANSIENT
-        if code in {
-            "accessdenied",
-            "accessdeniedexception",
-            "invalidclienttokenid",
-            "signaturedoesnotmatch",
-            "aws.simplequeueservice.nonexistentqueue",
-        }:
-            return ConnectorErrorKind.MISCONFIGURED
-        return ConnectorErrorKind.PERMANENT
-    return None
-
-
-def classify_sqlalchemy_error(exc: BaseException) -> ConnectorErrorKind | None:
-    if sa is None:
-        return None
-    sql_exc = sa.exc
-    if isinstance(exc, getattr(sql_exc, "TimeoutError", ())):
-        return ConnectorErrorKind.TRANSIENT
-    if isinstance(exc, getattr(sql_exc, "InterfaceError", ())):
-        return ConnectorErrorKind.DISCONNECTED
-    if isinstance(exc, getattr(sql_exc, "ProgrammingError", ())):
-        return ConnectorErrorKind.PERMANENT
-    if isinstance(exc, getattr(sql_exc, "DBAPIError", ())):
-        if getattr(exc, "connection_invalidated", False):
-            return ConnectorErrorKind.DISCONNECTED
-        message = " ".join(
-            str(part).lower()
-            for part in (
-                getattr(exc, "orig", None),
-                exc,
-            )
-            if part is not None
-        )
-        if any(token in message for token in ("server has gone away", "lost connection", "connection refused")):
-            return ConnectorErrorKind.DISCONNECTED
-        if any(token in message for token in ("lock wait timeout", "deadlock found")):
-            return ConnectorErrorKind.TRANSIENT
-        if any(token in message for token in ("access denied", "unknown database", "authentication")):
-            return ConnectorErrorKind.MISCONFIGURED
-        if any(token in message for token in ("no such table", "unknown table", "unknown column", "syntax error")):
-            return ConnectorErrorKind.PERMANENT
-        if isinstance(exc, getattr(sql_exc, "OperationalError", ())):
-            return ConnectorErrorKind.TRANSIENT
     return None
 
 
@@ -251,12 +179,7 @@ def as_connector_operation_error(
     source_name: str | None = None,
     retry_delay_s: float | None = None,
 ) -> ConnectorOperationError | None:
-    classifier = {
-        "rabbitmq": classify_rabbitmq_error,
-        "sqs": classify_sqs_error,
-        "mysql": classify_sqlalchemy_error,
-        "redis": classify_redis_error,
-    }.get(backend)
+    classifier = _CONNECTOR_ERROR_CLASSIFIERS.get(backend.strip().lower())
     if classifier is None:
         return None
     kind = classifier(exc)
@@ -303,3 +226,7 @@ def _classify_amqp_error(exc: BaseException, module: Any) -> ConnectorErrorKind 
         if isinstance(error_type, type) and isinstance(exc, error_type):
             return ConnectorErrorKind.PERMANENT
     return None
+
+
+register_connector_error_classifier("rabbitmq", classify_rabbitmq_error)
+register_connector_error_classifier("redis", classify_redis_error)

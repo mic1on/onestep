@@ -1,6 +1,7 @@
 import asyncio
 
-from onestep import ConnectorOperation, ConnectorOperationError, SQSConnector
+from onestep import ConnectorOperation, ConnectorOperationError
+from onestep_sqs import SQSConnector
 
 
 class FakeSQSClient:

@@ -7,8 +7,8 @@ from typing import Any
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation, ConnectorOperationError, as_connector_operation_error
 
-from .base import Delivery, Sink, Source
-from .codec import decode_envelope, encode_envelope
+from onestep.connectors.base import Delivery, Sink, Source
+from onestep.connectors.codec import decode_envelope, encode_envelope
 
 try:  # pragma: no cover - optional dependency
     import boto3
@@ -122,7 +122,7 @@ class SQSConnector:
             return self.client
         if self._client is None:
             if boto3 is None:
-                raise RuntimeError("SQSConnector requires boto3. Install onestep[sqs].")
+                raise RuntimeError("SQSConnector requires boto3. Install onestep-sqs.")
             self._client = boto3.client("sqs", region_name=self.region_name, **(self.options or {}))
         return self._client
 

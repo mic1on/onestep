@@ -1,4 +1,5 @@
-from onestep import OneStepApp, SQSConnector
+from onestep import OneStepApp
+from onestep_sqs import SQSConnector
 
 app = OneStepApp("sqs-demo")
 sqs = SQSConnector(region_name="ap-southeast-1")

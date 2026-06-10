@@ -3,7 +3,7 @@ from pathlib import Path
 
 import sqlalchemy as sa
 
-from onestep import MySQLConnector
+from onestep_mysql import MySQLConnector
 
 
 def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:

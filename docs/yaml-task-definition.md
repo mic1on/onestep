@@ -431,7 +431,7 @@ Hook `params` are passed as keyword arguments after the runtime arguments.
 - legacy `connectors`, `sources`, and `sinks` sections are still accepted and merged into the same resource registry.
 - resources are available at runtime through `app.resources` and `ctx.resources`.
 
-Supported resource types today:
+Built-in resource types:
 
 - `memory`
 - `interval`
@@ -442,14 +442,15 @@ Supported resource types today:
 - `rabbitmq_queue`
 - `redis`
 - `redis_stream`
-- `sqs`
-- `sqs_queue`
-- `mysql`
-- `mysql_state_store`
-- `mysql_cursor_store`
-- `mysql_table_queue`
-- `mysql_incremental`
-- `mysql_table_sink`
+
+Plugin resource types:
+
+- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+
+Install the corresponding plugin package in the worker environment before
+using plugin resource types in YAML.
 
 Additional resource types can be provided by installed packages. A package can
 register YAML resources through the `onestep.resources` entry point group:
@@ -463,8 +464,5 @@ The entry point receives the resource registry and registers one or more
 resource handlers. Once the package is installed in the worker environment, YAML
 files can use the provided `type` values without changing onestep core.
 
-The repository includes `plugins/onestep-feishu-bitable`, which registers:
-
-- `feishu_bitable`
-- `feishu_bitable_incremental`
-- `feishu_bitable_table_sink`
+The repository includes plugin packages under `plugins/`, each with its own
+entry point and release workflow.

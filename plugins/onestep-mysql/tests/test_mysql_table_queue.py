@@ -3,7 +3,8 @@ from pathlib import Path
 
 import sqlalchemy as sa
 
-from onestep import MySQLConnector, OneStepApp
+from onestep import OneStepApp
+from onestep_mysql import MySQLConnector
 
 
 def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:

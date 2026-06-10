@@ -165,20 +165,17 @@ def test_load_resource_plugins_rejects_non_callable_entry_point(monkeypatch) -> 
         load_resource_plugins(ResourceRegistry())
 
 
-def test_core_does_not_register_feishu_bitable_without_plugin(monkeypatch) -> None:
+@pytest.mark.parametrize("resource_type", ["feishu_bitable", "mysql", "sqs"])
+def test_core_does_not_register_plugin_resources_without_plugins(monkeypatch, resource_type: str) -> None:
     monkeypatch.setattr(registry_module.importlib_metadata, "entry_points", lambda: FakeEntryPoints(()))
 
-    with pytest.raises(ValueError, match="unsupported resource type 'feishu_bitable' for resources.feishu_bitable"):
+    with pytest.raises(ValueError, match=f"unsupported resource type '{resource_type}'"):
         validate_app_config(
             {
-                "apiVersion": "onestep/v1alpha1",
-                "kind": "App",
-                "app": {"name": "core-only"},
+                "name": "core-only",
                 "resources": {
-                    "feishu_bitable": {
-                        "type": "feishu_bitable",
-                        "app_id": "app-id",
-                        "app_secret": "secret",
+                    "candidate": {
+                        "type": resource_type,
                     },
                 },
                 "tasks": [],

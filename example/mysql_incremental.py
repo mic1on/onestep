@@ -1,4 +1,5 @@
-from onestep import MemoryQueue, MySQLConnector, OneStepApp
+from onestep import MemoryQueue, OneStepApp
+from onestep_mysql import MySQLConnector
 
 app = OneStepApp("sync-users")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")

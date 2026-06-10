@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from onestep import MySQLConnector, SQLAlchemyStateStore
+from onestep_mysql import MySQLConnector, SQLAlchemyStateStore
 
 
 def test_sqlalchemy_state_store_persists_across_instances(tmp_path: Path) -> None:

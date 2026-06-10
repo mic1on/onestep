@@ -5,7 +5,7 @@ import uuid
 import pytest
 import sqlalchemy as sa
 
-from onestep import MySQLConnector
+from onestep_mysql import MySQLConnector
 
 
 if not os.getenv("ONESTEP_MYSQL_DSN"):

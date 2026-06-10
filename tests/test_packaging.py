@@ -55,18 +55,19 @@ def test_websockets_is_control_plane_optional_dependency_only() -> None:
     assert "websockets>=12.0" not in test_extra
 
 
-def test_core_import_path_does_not_require_websockets() -> None:
+def test_core_import_path_does_not_require_optional_connector_dependencies() -> None:
     script = """
 import builtins
 
 original_import = builtins.__import__
 
-def missing_websockets_import(name, globals=None, locals=None, fromlist=(), level=0):
-    if name == "websockets" or name.startswith("websockets."):
-        raise ImportError("No module named 'websockets'")
+def missing_optional_import(name, globals=None, locals=None, fromlist=(), level=0):
+    optional_roots = {"boto3", "botocore", "pymysql", "sqlalchemy", "websockets"}
+    if name.split(".", 1)[0] in optional_roots:
+        raise ImportError(f"No module named {name!r}")
     return original_import(name, globals, locals, fromlist, level)
 
-builtins.__import__ = missing_websockets_import
+builtins.__import__ = missing_optional_import
 
 from onestep import MemoryQueue, OneStepApp
 
