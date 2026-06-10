@@ -21,13 +21,20 @@ from onestep_feishu_bitable import (
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
-    entry_points = importlib_metadata.entry_points().select(group="onestep.resources")
+    entry_points = _entry_points_for_group("onestep.resources")
 
     assert any(
         entry_point.name == "feishu_bitable"
         and entry_point.value == "onestep_feishu_bitable:register"
         for entry_point in entry_points
     )
+
+
+def _entry_points_for_group(group: str) -> tuple[Any, ...]:
+    entry_points = importlib_metadata.entry_points()
+    if hasattr(entry_points, "select"):
+        return tuple(entry_points.select(group=group))
+    return tuple(entry_points.get(group, ()))
 
 
 async def _start_json_server(
