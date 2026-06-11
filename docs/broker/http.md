@@ -42,6 +42,7 @@ sink = HttpSink(
     url="https://example.com/hooks/events",
     method="POST",
     headers={"X-Api-Key": "secret-token"},
+    params={"source": "onestep"},
     timeout_s=5.0,
     success_statuses=[200, 201, 202, 204],
 )
@@ -52,10 +53,23 @@ sink = HttpSink(
 | `url` | HTTP 或 HTTPS 目标地址 | 必填 |
 | `method` | 请求方法，会转成大写 | `POST` |
 | `headers` | 请求头映射，值会转成字符串 | `{}` |
+| `params` | 静态查询参数映射，值会转成字符串或字符串列表 | `{}` |
 | `timeout_s` | 单次请求超时时间，必须大于 0 | `5.0` |
 | `success_statuses` | 视为成功的 HTTP 状态码列表 | `[200, 201, 202, 204]` |
 
 如果响应状态码不在 `success_statuses` 中，发送会失败并抛出连接器错误。`429` 会被归类为限流，`408`、`425` 和 `5xx` 会被归类为临时错误，其余非成功状态会被归类为永久错误。
+
+`GET` 和 `DELETE` 不发送 JSON body。静态 `params` 和任务返回的 mapping payload 会被编码到 query string 中：
+
+```python
+lookup = HttpSink(
+    "lookup",
+    url="https://example.com/users",
+    method="GET",
+    params={"api_key": "secret"},
+    success_statuses=[200],
+)
+```
 
 ## YAML 配置
 
@@ -70,6 +84,8 @@ resources:
     method: POST
     headers:
       Authorization: "Bearer ${NOTIFY_TOKEN}"
+    params:
+      source: onestep
     timeout_s: 5
     success_statuses: [200, 202]
 
@@ -81,11 +97,11 @@ tasks:
       ref: myapp.handlers:normalize_event
 ```
 
-`http_sink` 支持的字段是 `url`、`method`、`headers`、`timeout_s` 和 `success_statuses`。严格校验会拒绝未知字段。
+`http_sink` 支持的字段是 `url`、`method`、`headers`、`params`、`timeout_s` 和 `success_statuses`。严格校验会拒绝未知字段。
 
 ## YAML 直接转发
 
-从 1.2.6 开始，YAML 任务可以省略 `handler`，只配置 `emit`。运行时会把 source 收到的 payload 原样转发给 sink。
+YAML 任务可以省略 `handler`，只配置 `emit`。运行时会把 source 收到的 payload 原样转发给 sink。
 
 ```yaml
 resources:
@@ -108,7 +124,7 @@ tasks:
 
 ## Control Plane
 
-启用 Control Plane reporter 后，`HttpSink` 会作为 `http_sink` 出现在任务拓扑中。上报时会隐藏 URL 中的账号信息，移除查询参数和 fragment，并把所有 header 值标记为 `<redacted>`，避免 token 出现在拓扑 payload 里。
+启用 Control Plane reporter 后，`HttpSink` 会作为 `http_sink` 出现在任务拓扑中。上报时会隐藏 URL 中的账号信息，移除 URL query 和 fragment，并把 header 与 `params` 的值标记为 `<redacted>`，避免 token 出现在拓扑 payload 里。
 
 ## 下一步
 

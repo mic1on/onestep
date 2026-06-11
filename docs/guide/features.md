@@ -32,12 +32,15 @@ async def my_task(ctx, item):
 | Redis Streams | 支持 | 支持 | 轻量级流队列 |
 | AWS SQS | 支持 | 支持 | 云队列 |
 | MySQL | 支持 | 支持 | 表队列/增量同步/表输出 |
+| Feishu Bitable | 支持 | 支持 | 多维表格增量同步/表输出 |
 | 自定义 | 支持 | 支持 | 任意数据源 |
 
 ### 灵活流转
 
 ```python
-from onestep import CronSource, MySQLConnector, RabbitMQConnector
+from onestep import CronSource
+from onestep_mysql import MySQLConnector
+from onestep_rabbitmq import RabbitMQConnector
 
 rmq = RabbitMQConnector("amqp://...")
 db = MySQLConnector("mysql+pymysql://...")

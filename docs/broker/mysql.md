@@ -13,7 +13,7 @@ MySQL Connector 提供三种模式：
 ## 安装
 
 ```bash
-pip install 'onestep[mysql]'
+pip install onestep-mysql
 ```
 
 ## 表队列 (Table Queue)
@@ -23,7 +23,8 @@ pip install 'onestep[mysql]'
 ### 基本用法
 
 ```python
-from onestep import MySQLConnector, OneStepApp
+from onestep import OneStepApp
+from onestep_mysql import MySQLConnector
 
 app = OneStepApp("orders")
 
@@ -87,7 +88,8 @@ nack={"status": "failed"}     # 失败
 ### 基本用法
 
 ```python
-from onestep import MySQLConnector, OneStepApp
+from onestep import MemoryQueue, OneStepApp
+from onestep_mysql import MySQLConnector
 
 app = OneStepApp("sync-users")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")

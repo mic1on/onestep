@@ -21,7 +21,8 @@ Source (输入) → Task (处理) → Sink (输出)
 每种 Connector 提供不同的 Source 创建方式：
 
 ```python
-from onestep import MemoryQueue, OneStepApp, RabbitMQConnector
+from onestep import MemoryQueue, OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("demo")
 
@@ -49,7 +50,8 @@ async def process(ctx, item):
 ## 创建 Sink
 
 ```python
-from onestep import HttpSink, MemoryQueue, RabbitMQConnector
+from onestep import HttpSink, MemoryQueue
+from onestep_rabbitmq import RabbitMQConnector
 
 # 内存队列
 memory_sink = MemoryQueue("output")
@@ -67,7 +69,7 @@ async def process(ctx, item):
     return {"processed": item}
 ```
 
-## 内置 Connector
+## 内置与插件 Connector
 
 | Connector | 用途 | Source | Sink |
 |-----------|------|--------|------|
@@ -76,10 +78,13 @@ async def process(ctx, item):
 | `CronSource` | Cron 定时器 | 支持 | 不支持 |
 | `WebhookSource` | HTTP 接收 | 支持 | 不支持 |
 | `HttpSink` | HTTP JSON 输出 | 不支持 | 支持 |
-| `RabbitMQConnector` | RabbitMQ | 支持 | 支持 |
-| `RedisConnector` | Redis Streams | 支持 | 支持 |
-| `SQSConnector` | AWS SQS | 支持 | 支持 |
-| `MySQLConnector` | MySQL 表队列/增量同步/表输出 | 支持 | 支持 |
+| `RabbitMQConnector` (`onestep-mq`) | RabbitMQ | 支持 | 支持 |
+| `RedisConnector` (`onestep-redis`) | Redis Streams | 支持 | 支持 |
+| `SQSConnector` (`onestep-sqs`) | AWS SQS | 支持 | 支持 |
+| `MySQLConnector` (`onestep-mysql`) | MySQL 表队列/增量同步/表输出 | 支持 | 支持 |
+| `FeishuBitableConnector` (`onestep-feishu-bitable`) | 飞书多维表格增量同步/表输出 | 支持 | 支持 |
+
+`onestep` 核心包内置内存、定时器、Webhook 和 HTTP Sink。RabbitMQ、Redis Streams、AWS SQS、MySQL 和 Feishu Bitable 需要安装对应插件包，并从插件模块导入 Python API。
 
 ## 混合使用
 
@@ -87,9 +92,10 @@ async def process(ctx, item):
 
 ```python
 from onestep import (
-    CronSource, MemoryQueue, MySQLConnector, 
-    OneStepApp, RabbitMQConnector
+    CronSource, MemoryQueue, OneStepApp
 )
+from onestep_mysql import MySQLConnector
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("mixed-demo")
 

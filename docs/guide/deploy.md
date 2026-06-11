@@ -124,6 +124,17 @@ onestep check worker.yaml
 onestep run worker.yaml
 ```
 
+容器部署可以使用官方 worker runtime image。镜像会把工作区加入 `PYTHONPATH`，安装项目依赖，先执行 `onestep check`，再启动 `onestep run`：
+
+```bash
+docker run --rm \
+  -e ONESTEP_TARGET=/workspace/worker.yaml \
+  -v "$PWD:/workspace" \
+  ghcr.io/mic1on/onestep-worker:1.4.2
+```
+
+详细说明见 [Worker Runtime Image](/guide/worker-runtime-image)。
+
 ## 生产建议
 
 ### 状态持久化
@@ -131,6 +142,8 @@ onestep run worker.yaml
 生产环境推荐使用 `db.cursor_store(...)` 或 `db.state_store(...)`，确保游标和任务状态在进程重启后保持：
 
 ```python
+from onestep_mysql import MySQLConnector
+
 db = MySQLConnector("mysql+pymysql://...")
 state = db.cursor_store(table="onestep_cursor")
 
@@ -155,3 +168,4 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 - [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
 - [Redis Streams](/broker/redis) - 轻量级消息队列
 - [MySQL](/broker/mysql) - 数据库集成
+- [Worker Runtime Image](/guide/worker-runtime-image) - 容器化运行 YAML worker

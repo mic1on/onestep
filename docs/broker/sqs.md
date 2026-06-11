@@ -10,7 +10,7 @@ AWS SQS (Simple Queue Service) 是 AWS 提供的托管消息队列服务。
 ## 安装
 
 ```bash
-pip install 'onestep[sqs]'
+pip install onestep-sqs
 ```
 
 ## 配置认证
@@ -30,7 +30,8 @@ export AWS_DEFAULT_REGION=us-east-1
 ## 基本用法
 
 ```python
-from onestep import OneStepApp, SQSConnector
+from onestep import OneStepApp
+from onestep_sqs import SQSConnector
 
 app = OneStepApp("sqs-demo")
 

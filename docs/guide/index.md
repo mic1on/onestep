@@ -7,7 +7,7 @@ outline: deep
 
 onestep 是一个轻量级 Python 异步任务运行时。它围绕 `OneStepApp`、`Source`、`Sink` 和任务处理函数组织代码，适合队列消费、定时同步、Webhook 接入和多阶段数据处理。
 
-当前包版本为 `1.2.6`。文档站使用 VitePress `1.6.4`，这是 2026-05-09 npm `latest` 对应的稳定版本；`2.0.0-alpha.17` 仍在 `next` 标签下。
+当前包版本为 `1.4.2`。文档站使用仓库锁定的 VitePress `1.6.4`。
 
 ## 安装
 
@@ -27,7 +27,7 @@ poetry add onestep
 
 :::
 
-按使用场景安装可选依赖：
+按使用场景安装 YAML 支持或连接器插件：
 
 ::: code-group
 
@@ -36,19 +36,23 @@ pip install 'onestep[yaml]'
 ```
 
 ```bash [MySQL]
-pip install 'onestep[mysql]'
+pip install onestep-mysql
 ```
 
 ```bash [RabbitMQ]
-pip install 'onestep[rabbitmq]'
+pip install onestep-mq
 ```
 
 ```bash [Redis]
-pip install 'onestep[redis]'
+pip install onestep-redis
 ```
 
 ```bash [AWS SQS]
-pip install 'onestep[sqs]'
+pip install onestep-sqs
+```
+
+```bash [Feishu Bitable]
+pip install onestep-feishu-bitable
 ```
 
 ```bash [全部]
@@ -56,6 +60,8 @@ pip install 'onestep[all]'
 ```
 
 :::
+
+`onestep[all]` 安装常用队列和数据库插件；Feishu Bitable 仍单独安装。
 
 ## 第一个任务
 
@@ -128,12 +134,14 @@ async def main():
 asyncio.run(main())
 ```
 
-真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL，或把结果发送到 HTTP Sink。
+真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL、Feishu Bitable，或把结果发送到 HTTP Sink。
 
 ## 使用外部连接器
 
 ```python
-from onestep import MySQLConnector, OneStepApp, RabbitMQConnector
+from onestep import OneStepApp
+from onestep_mysql import MySQLConnector
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("orders")
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")

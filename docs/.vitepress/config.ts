@@ -72,6 +72,7 @@ export default defineConfig({
           { text: '入门教程', link: '/guide/tutorial' },
           { text: '功能特性', link: '/guide/features' },
           { text: '生产部署', link: '/guide/deploy' },
+          { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },
         ],
       },
       {
@@ -95,6 +96,7 @@ export default defineConfig({
           { text: 'Redis Streams', link: '/broker/redis' },
           { text: 'AWS SQS', link: '/broker/sqs' },
           { text: 'MySQL', link: '/broker/mysql' },
+          { text: 'Feishu Bitable', link: '/broker/feishu-bitable' },
           { text: '自定义 Source/Sink', link: '/broker/custom' },
         ],
       },

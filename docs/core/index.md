@@ -61,6 +61,10 @@ async def cleanup(app):
 数据输入源，负责获取消息：
 
 ```python
+from onestep import CronSource, IntervalSource, MemoryQueue, WebhookSource
+from onestep_mysql import MySQLConnector
+from onestep_rabbitmq import RabbitMQConnector
+
 # 内存队列
 source = MemoryQueue("incoming")
 
@@ -79,6 +83,8 @@ source = RabbitMQConnector("amqp://...").queue("jobs")
 # MySQL
 source = MySQLConnector("mysql://...").table_queue("tasks")
 ```
+
+RabbitMQ、MySQL、Redis Streams、AWS SQS 和 Feishu Bitable 由插件包提供，安装后从对应插件模块导入 Python API。
 
 ### 自定义 Source
 
@@ -100,6 +106,10 @@ class MySource(Source):
 数据输出目标，负责发布消息：
 
 ```python
+from onestep import MemoryQueue
+from onestep_mysql import MySQLConnector
+from onestep_rabbitmq import RabbitMQConnector
+
 # 内存队列
 sink = MemoryQueue("output")
 

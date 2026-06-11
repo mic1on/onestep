@@ -10,7 +10,7 @@ RabbitMQ 是最常用的分布式消息队列，onestep 提供完整的支持。
 ## 安装
 
 ```bash
-pip install 'onestep[rabbitmq]'
+pip install onestep-mq
 ```
 
 ## 快速开始
@@ -34,7 +34,8 @@ docker run -d --name rabbitmq \
 ### 基本使用
 
 ```python
-from onestep import OneStepApp, RabbitMQConnector
+from onestep import OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("rabbitmq-demo")
 
