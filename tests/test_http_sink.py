@@ -104,6 +104,33 @@ def test_http_sink_sends_json_body_and_headers() -> None:
     asyncio.run(scenario())
 
 
+def test_http_sink_get_sends_query_params_without_body() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_http_server(status=200)
+        try:
+            sink = HttpSink(
+                "lookup",
+                url=f"{base_url}/lookup?existing=1",
+                method="GET",
+                params={"token": "secret-token"},
+                timeout_s=1.0,
+                success_statuses=[200],
+            )
+            await sink.send(Envelope(body={"id": 123, "tags": ["new", "vip"]}))
+        finally:
+            await _close_server(server)
+
+        assert len(requests) == 1
+        request = requests[0]
+        assert request["method"] == "GET"
+        assert request["target"] == "/lookup?existing=1&token=secret-token&id=123&tags=new&tags=vip"
+        assert "content-type" not in request["headers"]
+        assert "content-length" not in request["headers"]
+        assert request["body"] == b""
+
+    asyncio.run(scenario())
+
+
 def test_http_sink_raises_send_failure_for_non_success_status() -> None:
     async def scenario() -> None:
         server, requests, base_url = await _start_http_server(status=500, body=b"failed")
@@ -133,7 +160,7 @@ def test_yaml_http_sink_and_passthrough_task_emit_payload() -> None:
                     "kind": "App",
                     "app": {"name": "yaml-http"},
                     "resources": {
-                        "incoming": {"type": "memory"},
+                        "incoming": {"type": "memory", "maxsize": 100},
                         "notify": {
                             "type": "http_sink",
                             "url": f"{base_url}/notify",
@@ -168,6 +195,53 @@ def test_yaml_http_sink_and_passthrough_task_emit_payload() -> None:
     asyncio.run(scenario())
 
 
+def test_yaml_http_sink_get_accepts_params_and_emits_query_string() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_http_server(status=200)
+        try:
+            app = load_app_config(
+                {
+                    "apiVersion": "onestep/v1alpha1",
+                    "kind": "App",
+                    "app": {"name": "yaml-http-get"},
+                    "resources": {
+                        "incoming": {"type": "memory", "maxsize": 100},
+                        "lookup": {
+                            "type": "http_sink",
+                            "url": f"{base_url}/lookup",
+                            "method": "GET",
+                            "params": {"token": "secret-token"},
+                            "success_statuses": [200],
+                        },
+                    },
+                    "tasks": [
+                        {
+                            "name": "lookup",
+                            "source": "incoming",
+                            "emit": "lookup",
+                        }
+                    ],
+                },
+                strict=True,
+            )
+
+            await app.startup()
+            try:
+                result = await app.run_task_once("lookup", payload={"id": 123})
+            finally:
+                await app.shutdown()
+        finally:
+            await _close_server(server)
+
+        assert result["completion"] == "complete"
+        assert len(requests) == 1
+        assert requests[0]["method"] == "GET"
+        assert requests[0]["target"] == "/lookup?token=secret-token&id=123"
+        assert requests[0]["body"] == b""
+
+    asyncio.run(scenario())
+
+
 def test_strict_yaml_rejects_passthrough_task_without_emit() -> None:
     with pytest.raises(ValueError, match=r"tasks\[0\] must define either 'handler' or 'emit'"):
         load_app_config(
@@ -176,7 +250,7 @@ def test_strict_yaml_rejects_passthrough_task_without_emit() -> None:
                 "kind": "App",
                 "app": {"name": "yaml-invalid"},
                 "resources": {
-                    "incoming": {"type": "memory"},
+                    "incoming": {"type": "memory", "maxsize": 100},
                 },
                 "tasks": [
                     {
@@ -219,6 +293,7 @@ def test_reporter_describes_http_sink_kind_and_redacts_config() -> None:
             "Authorization": "Bearer secret-token",
             "X-Api-Key": "secret-token",
         },
+        params={"token": "secret-token"},
         timeout_s=2.5,
         success_statuses=[202],
     )
@@ -246,6 +321,9 @@ def test_reporter_describes_http_sink_kind_and_redacts_config() -> None:
             "headers": {
                 "Authorization": "<redacted>",
                 "X-Api-Key": "<redacted>",
+            },
+            "params": {
+                "token": "<redacted>",
             },
             "timeout_s": 2.5,
             "success_statuses": [202],

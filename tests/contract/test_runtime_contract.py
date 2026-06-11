@@ -239,6 +239,33 @@ def test_startup_hook_failure_closes_opened_resources_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_cancelled_stop_fetching_waiter_does_not_leak_child_tasks_contract() -> None:
+    async def scenario() -> None:
+        app = OneStepApp("stop-fetching-cancellation")
+
+        for _ in range(100):
+            wait_task = asyncio.create_task(app.wait_for_stop_fetching("missing-task"))
+            await asyncio.sleep(0)
+            wait_task.cancel()
+            await asyncio.gather(wait_task, return_exceptions=True)
+
+        current_task = asyncio.current_task()
+        leaked_tasks = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not current_task and not task.done()
+        ]
+
+        try:
+            assert leaked_tasks == []
+        finally:
+            for task in leaked_tasks:
+                task.cancel()
+            await asyncio.gather(*leaked_tasks, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 def test_app_created_outside_running_loop_still_serves_contract() -> None:
     source = MemoryQueue("outside-loop.incoming")
     sink = MemoryQueue("outside-loop.processed")
@@ -431,15 +458,18 @@ def test_task_timeout_retries_once_then_fails() -> None:
         source = MemoryQueue("incoming", poll_interval_s=0.01)
         app = OneStepApp("timeout-app")
         attempts: list[int] = []
+        second_attempt_seen = asyncio.Event()
 
         @app.task(source=source, retry=MaxAttempts(2, delay_s=0), timeout_s=0.01)
         async def slow(ctx, item):
             attempts.append(ctx.current.attempts)
+            if len(attempts) == 2:
+                second_attempt_seen.set()
             await asyncio.sleep(0.05)
 
         await source.publish({"value": 1})
         app_task = asyncio.create_task(app.serve())
-        await asyncio.sleep(0.15)
+        await asyncio.wait_for(second_attempt_seen.wait(), timeout=1.0)
         app.request_shutdown()
         await asyncio.wait_for(app_task, timeout=1.0)
 
@@ -871,6 +901,101 @@ def test_structured_event_logger_includes_failure_fields() -> None:
         assert record.failure_exception_type == "TimeoutError"
         assert record.app_name == "structured-events-failure"
         assert record.task_name == "consume"
+
+    asyncio.run(scenario())
+
+
+def test_sink_success_logs_at_debug_level() -> None:
+    class ListHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records = []
+
+        def emit(self, record) -> None:
+            self.records.append(record)
+
+    async def scenario() -> None:
+        source = MemoryQueue("incoming")
+        sink = MemoryQueue("processed")
+        logger = logging.getLogger("onestep.logging-contract.consume")
+        handler = ListHandler()
+        previous_handlers = list(logger.handlers)
+        previous_level = logger.level
+        previous_propagate = logger.propagate
+        logger.handlers = [handler]
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        app = OneStepApp("logging-contract")
+
+        @app.on_startup
+        async def seed(app):
+            await source.publish({"value": 1})
+
+        @app.task(source=source, emit=sink)
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        try:
+            await asyncio.wait_for(app.serve(), timeout=1.0)
+        finally:
+            logger.handlers = previous_handlers
+            logger.setLevel(previous_level)
+            logger.propagate = previous_propagate
+
+        succeeded = [record for record in handler.records if record.getMessage() == "sink send succeeded"]
+        assert len(succeeded) == 1
+        record = succeeded[0]
+        assert record.levelno == logging.DEBUG
+        assert record.sink_name == "processed"
+        assert record.sink_kind == "MemoryQueue"
+        assert record.delivery_attempts == 0
+
+    asyncio.run(scenario())
+
+
+def test_sink_success_debug_log_respects_logger_level() -> None:
+    class ListHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records = []
+
+        def emit(self, record) -> None:
+            self.records.append(record)
+
+    async def scenario() -> None:
+        source = MemoryQueue("incoming")
+        sink = MemoryQueue("processed")
+        logger = logging.getLogger("onestep.logging-contract-quiet.consume")
+        handler = ListHandler()
+        previous_handlers = list(logger.handlers)
+        previous_level = logger.level
+        previous_propagate = logger.propagate
+        logger.handlers = [handler]
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        app = OneStepApp("logging-contract-quiet")
+
+        @app.on_startup
+        async def seed(app):
+            await source.publish({"value": 1})
+
+        @app.task(source=source, emit=sink)
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        try:
+            await asyncio.wait_for(app.serve(), timeout=1.0)
+        finally:
+            logger.handlers = previous_handlers
+            logger.setLevel(previous_level)
+            logger.propagate = previous_propagate
+
+        succeeded = [record for record in handler.records if record.getMessage() == "sink send succeeded"]
+        assert succeeded == []
 
     asyncio.run(scenario())
 

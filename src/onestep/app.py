@@ -347,10 +347,16 @@ class OneStepApp:
         waiters = {shutdown_task, drain_task}
         if task_name is not None:
             waiters.add(asyncio.create_task(self.wait_for_task_pause_request(task_name)))
-        done, pending = await asyncio.wait(
-            waiters,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        try:
+            done, pending = await asyncio.wait(
+                waiters,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+            raise
         for pending_task in pending:
             pending_task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)

@@ -1,4 +1,5 @@
-from onestep import MySQLConnector, OneStepApp
+from onestep import OneStepApp
+from onestep_mysql import MySQLConnector
 
 app = OneStepApp("orders")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")

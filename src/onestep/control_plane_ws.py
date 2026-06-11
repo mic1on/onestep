@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ DEFAULT_COMMAND_CAPABILITIES = [
     "command.flush_metrics",
     "command.flush_events",
 ]
+_BACKPRESSURE_LOG_INTERVAL_S = 30.0
 
 
 def _utcnow() -> datetime:
@@ -122,6 +124,17 @@ def _format_exception_summary(exc: BaseException) -> str:
     if message:
         return message
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
+
+
+def _is_ws_connection_closed(exc: BaseException) -> bool:
+    try:
+        from websockets.exceptions import ConnectionClosed
+
+        return isinstance(exc, ConnectionClosed)
+    except ImportError:
+        cls_name = type(exc).__qualname__
+        module = type(exc).__module__
+        return "ConnectionClosed" in cls_name and "websockets" in module
 
 
 def _is_transient_ws_connect_failure(exc: BaseException) -> bool:
@@ -388,12 +401,24 @@ class ControlPlaneWsTransport:
                     server_response = json.loads(await connection.recv())
                 except asyncio.CancelledError:
                     raise
-                except Exception:
-                    self._logger.warning(
-                        "control plane WS receive loop exited unexpectedly",
-                        extra={"ws_url": self._ws_url},
-                        exc_info=True,
-                    )
+                except Exception as exc:
+                    if _is_ws_connection_closed(exc):
+                        code = getattr(exc, "code", None)
+                        reason = getattr(exc, "reason", None)
+                        self._logger.info(
+                            "control plane WS connection closed",
+                            extra={
+                                "ws_url": self._ws_url,
+                                "close_code": code,
+                                "close_reason": reason,
+                            },
+                        )
+                    else:
+                        self._logger.warning(
+                            "control plane WS receive loop exited unexpectedly",
+                            extra={"ws_url": self._ws_url},
+                            exc_info=True,
+                        )
                     return
                 message_type = server_response.get("type")
                 if message_type == "command":
@@ -633,6 +658,8 @@ class ControlPlaneWsSender:
             1,
             (config.max_pending_events + config.event_batch_size - 1) // config.event_batch_size,
         )
+        self._backpressure_log_deadlines: dict[str, float] = {}
+        self._backpressure_suppressed_drops: dict[str, int] = {}
         set_command_handler = getattr(self._transport, "set_command_handler", None)
         if callable(set_command_handler):
             set_command_handler(self)
@@ -842,7 +869,18 @@ class ControlPlaneWsSender:
     def _next_reconnect_delay_s(self) -> float:
         base_delay = self._config.reconnect_base_delay_s
         max_delay = self._config.reconnect_max_delay_s
-        backoff = min(max_delay, base_delay * (2 ** max(self._reconnect_attempts - 1, 0)))
+        attempts = max(self._reconnect_attempts - 1, 0)
+        if base_delay <= 0:
+            backoff = 0.0
+        elif max_delay <= base_delay:
+            backoff = min(max_delay, base_delay)
+        else:
+            max_multiplier = max_delay / base_delay
+            cap_attempts = math.ceil(math.log2(max_multiplier))
+            if attempts >= cap_attempts:
+                backoff = max_delay
+            else:
+                backoff = min(max_delay, base_delay * (1 << attempts))
         jitter = 0.5 + random.random() * 0.5
         return backoff * jitter
 
@@ -928,14 +966,26 @@ class ControlPlaneWsSender:
                     f"control plane {channel} telemetry was dropped due to local backpressure"
                 ),
             )
+        now = self._monotonic()
+        suppressed = self._backpressure_suppressed_drops.pop(channel, 0)
+        next_log_at = self._backpressure_log_deadlines.get(channel, 0.0)
+        if now < next_log_at:
+            self._backpressure_suppressed_drops[channel] = suppressed + overflow
+            return
+        total_dropped = overflow + suppressed
+        self._backpressure_log_deadlines[channel] = now + _BACKPRESSURE_LOG_INTERVAL_S
         self._logger.warning(
             "dropping control plane WS telemetry due to local sender backpressure",
             extra={
                 "channel": channel,
-                "dropped_payloads": overflow,
+                "dropped_payloads": total_dropped,
                 "retained_payloads": len(queue),
+                "suppressed_log_payloads": suppressed,
             },
         )
+
+    def _monotonic(self) -> float:
+        return asyncio.get_running_loop().time()
 
     async def _run(self) -> None:
         try:
@@ -1021,7 +1071,7 @@ class ControlPlaneWsSender:
         if self._transport.connected:
             return True
         if self._service_descriptor is None or self._runtime_descriptor is None:
-            self._logger.warning(
+            self._logger.debug(
                 "control plane WS sender is missing service/runtime descriptors; deferring connect"
             )
             await asyncio.sleep(self._next_reconnect_delay_s())
@@ -1031,22 +1081,31 @@ class ControlPlaneWsSender:
             set_capabilities(self._advertised_capabilities())
         if self._reconnect_attempts > 0:
             await asyncio.sleep(self._next_reconnect_delay_s())
+        previous_attempts = self._reconnect_attempts
         try:
             await self._transport.connect(
                 service=self._service_descriptor,
                 runtime=self._runtime_descriptor,
             )
         except Exception as exc:
+            self._reconnect_attempts = previous_attempts + 1
             log_message = (
                 "control plane WS connect failed; will retry in background: "
                 f"{_format_exception_summary(exc)}"
             )
-            self._logger.warning(
-                log_message,
-                exc_info=not _is_transient_ws_connect_failure(exc),
-            )
-            self._reconnect_attempts += 1
+            if self._reconnect_attempts == 1:
+                self._logger.warning(
+                    log_message,
+                    exc_info=not _is_transient_ws_connect_failure(exc),
+                )
+            else:
+                self._logger.debug(log_message)
             return False
+        if previous_attempts > 0:
+            self._logger.info(
+                "control plane WS reconnected after %d retries",
+                previous_attempts,
+            )
         self._reconnect_attempts = 0
         return True
 

@@ -6,6 +6,16 @@ resolution-markers = [
     "python_full_version < '3.10'",
 ]
 
+[manifest]
+members = [
+    "onestep",
+    "onestep-feishu-bitable",
+    "onestep-mq",
+    "onestep-mysql",
+    "onestep-redis",
+    "onestep-sqs",
+]
+
 [[package]]
 name = "aio-pika"
 version = "9.5.6"
@@ -449,19 +459,16 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.2.6"
+version = "1.4.2"
 source = { editable = "." }
 
 [package.optional-dependencies]
 all = [
-    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "boto3" },
-    { name = "pymysql" },
+    { name = "onestep-mq" },
+    { name = "onestep-mysql" },
+    { name = "onestep-redis" },
+    { name = "onestep-sqs" },
     { name = "pyyaml" },
-    { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "sqlalchemy" },
     { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
@@ -470,49 +477,40 @@ control-plane = [
     { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 dev = [
-    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "boto3" },
-    { name = "pymysql" },
+    { name = "onestep-mq" },
+    { name = "onestep-mysql" },
+    { name = "onestep-redis" },
+    { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyyaml" },
-    { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "sqlalchemy" },
     { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 integration = [
-    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "boto3" },
-    { name = "pymysql" },
+    { name = "onestep-mq" },
+    { name = "onestep-mysql" },
+    { name = "onestep-redis" },
+    { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyyaml" },
-    { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "sqlalchemy" },
 ]
 mysql = [
-    { name = "pymysql" },
-    { name = "sqlalchemy" },
+    { name = "onestep-mysql" },
 ]
 rabbitmq = [
-    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onestep-mq" },
 ]
 redis = [
-    { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onestep-redis" },
 ]
 sqs = [
-    { name = "boto3" },
+    { name = "onestep-sqs" },
 ]
 test = [
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -520,7 +518,6 @@ test = [
     { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyyaml" },
-    { name = "sqlalchemy" },
 ]
 yaml = [
     { name = "pyyaml" },
@@ -528,18 +525,22 @@ yaml = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aio-pika", marker = "extra == 'all'", specifier = ">=9.0.0" },
-    { name = "aio-pika", marker = "extra == 'dev'", specifier = ">=9.0.0" },
-    { name = "aio-pika", marker = "extra == 'integration'", specifier = ">=9.0.0" },
-    { name = "aio-pika", marker = "extra == 'rabbitmq'", specifier = ">=9.0.0" },
-    { name = "boto3", marker = "extra == 'all'", specifier = ">=1.34.0" },
-    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.34.0" },
-    { name = "boto3", marker = "extra == 'integration'", specifier = ">=1.34.0" },
-    { name = "boto3", marker = "extra == 'sqs'", specifier = ">=1.34.0" },
-    { name = "pymysql", marker = "extra == 'all'", specifier = ">=1.1.0" },
-    { name = "pymysql", marker = "extra == 'dev'", specifier = ">=1.1.0" },
-    { name = "pymysql", marker = "extra == 'integration'", specifier = ">=1.1.0" },
-    { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1.0" },
+    { name = "onestep-mq", marker = "extra == 'all'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mq", marker = "extra == 'dev'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mq", marker = "extra == 'integration'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mq", marker = "extra == 'rabbitmq'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mysql", marker = "extra == 'all'", editable = "plugins/onestep-mysql" },
+    { name = "onestep-mysql", marker = "extra == 'dev'", editable = "plugins/onestep-mysql" },
+    { name = "onestep-mysql", marker = "extra == 'integration'", editable = "plugins/onestep-mysql" },
+    { name = "onestep-mysql", marker = "extra == 'mysql'", editable = "plugins/onestep-mysql" },
+    { name = "onestep-redis", marker = "extra == 'all'", editable = "plugins/onestep-redis" },
+    { name = "onestep-redis", marker = "extra == 'dev'", editable = "plugins/onestep-redis" },
+    { name = "onestep-redis", marker = "extra == 'integration'", editable = "plugins/onestep-redis" },
+    { name = "onestep-redis", marker = "extra == 'redis'", editable = "plugins/onestep-redis" },
+    { name = "onestep-sqs", marker = "extra == 'all'", editable = "plugins/onestep-sqs" },
+    { name = "onestep-sqs", marker = "extra == 'dev'", editable = "plugins/onestep-sqs" },
+    { name = "onestep-sqs", marker = "extra == 'integration'", editable = "plugins/onestep-sqs" },
+    { name = "onestep-sqs", marker = "extra == 'sqs'", editable = "plugins/onestep-sqs" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'integration'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
@@ -551,20 +552,159 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'integration'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
-    { name = "redis", marker = "extra == 'all'", specifier = ">=4.2.0" },
-    { name = "redis", marker = "extra == 'dev'", specifier = ">=4.2.0" },
-    { name = "redis", marker = "extra == 'integration'", specifier = ">=4.2.0" },
-    { name = "redis", marker = "extra == 'redis'", specifier = ">=4.2.0" },
-    { name = "sqlalchemy", marker = "extra == 'all'", specifier = ">=2.0.0" },
-    { name = "sqlalchemy", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "sqlalchemy", marker = "extra == 'integration'", specifier = ">=2.0.0" },
-    { name = "sqlalchemy", marker = "extra == 'mysql'", specifier = ">=2.0.0" },
-    { name = "sqlalchemy", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "websockets", marker = "extra == 'all'", specifier = ">=12.0" },
     { name = "websockets", marker = "extra == 'control-plane'", specifier = ">=12.0" },
     { name = "websockets", marker = "extra == 'dev'", specifier = ">=12.0" },
 ]
 provides-extras = ["control-plane", "yaml", "mysql", "rabbitmq", "redis", "sqs", "test", "integration", "all", "dev"]
+
+[[package]]
+name = "onestep-feishu-bitable"
+version = "0.1.2"
+source = { editable = "plugins/onestep-feishu-bitable" }
+dependencies = [
+    { name = "onestep" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+]
+provides-extras = ["test", "dev"]
+
+[[package]]
+name = "onestep-mq"
+version = "0.2.0"
+source = { editable = "plugins/onestep-rabbitmq" }
+dependencies = [
+    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onestep" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aio-pika", specifier = ">=9.0.0" },
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+]
+provides-extras = ["test", "dev"]
+
+[[package]]
+name = "onestep-mysql"
+version = "0.2.0"
+source = { editable = "plugins/onestep-mysql" }
+dependencies = [
+    { name = "onestep" },
+    { name = "pymysql" },
+    { name = "sqlalchemy" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "onestep", editable = "." },
+    { name = "pymysql", specifier = ">=1.1.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
+]
+provides-extras = ["test", "dev"]
+
+[[package]]
+name = "onestep-redis"
+version = "0.2.0"
+source = { editable = "plugins/onestep-redis" }
+dependencies = [
+    { name = "onestep" },
+    { name = "redis", version = "7.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "redis", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "redis", specifier = ">=4.2.0" },
+]
+provides-extras = ["test", "dev"]
+
+[[package]]
+name = "onestep-sqs"
+version = "0.2.0"
+source = { editable = "plugins/onestep-sqs" }
+dependencies = [
+    { name = "boto3" },
+    { name = "onestep" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.34.0" },
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+]
+provides-extras = ["test", "dev"]
 
 [[package]]
 name = "packaging"

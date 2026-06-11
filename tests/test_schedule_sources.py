@@ -114,6 +114,43 @@ def test_interval_source_overlap_queue_serializes_missed_ticks() -> None:
     asyncio.run(scenario())
 
 
+def test_interval_source_overlap_queue_caps_missed_ticks() -> None:
+    async def scenario() -> None:
+        tz = ZoneInfo("Asia/Shanghai")
+        clock = FakeClock(datetime(2026, 3, 7, 10, 0, tzinfo=tz))
+        source = IntervalSource.every(
+            seconds=10,
+            overlap="queue",
+            max_queued_runs=2,
+            timezone=tz,
+            clock=clock,
+        )
+        await source.open()
+
+        clock.advance(seconds=10)
+        first = await source.fetch(1)
+        assert len(first) == 1
+        assert first[0].envelope.meta["scheduled_at"] == "2026-03-07T10:00:10+08:00"
+
+        clock.advance(seconds=50)
+        assert await source.fetch(1) == []
+
+        await first[0].ack()
+        second = await source.fetch(1)
+        assert len(second) == 1
+        assert second[0].envelope.meta["scheduled_at"] == "2026-03-07T10:00:50+08:00"
+
+        await second[0].ack()
+        third = await source.fetch(1)
+        assert len(third) == 1
+        assert third[0].envelope.meta["scheduled_at"] == "2026-03-07T10:01:00+08:00"
+
+        await third[0].ack()
+        assert await source.fetch(1) == []
+
+    asyncio.run(scenario())
+
+
 def test_cron_source_hourly_alias() -> None:
     async def scenario() -> None:
         tz = ZoneInfo("Asia/Shanghai")

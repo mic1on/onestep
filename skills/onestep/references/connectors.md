@@ -4,7 +4,7 @@ Use this reference when wiring onestep resources to queues, polling backends, sc
 
 ## General Rules
 
-- Install only the needed extra: `onestep[mysql]`, `onestep[rabbitmq]`, `onestep[redis]`, `onestep[sqs]`, or `onestep[yaml]`.
+- Install only the needed package: `onestep-mysql`, `onestep-mq`, `onestep-redis`, `onestep-sqs`, or `onestep[yaml]`.
 - Prefer environment variables for DSNs, tokens, and queue URLs in YAML.
 - In YAML, define shared connection resources first, then sources/sinks that reference them by name.
 - Keep connector options minimal until the deployment requires tuning.
@@ -40,15 +40,18 @@ resources:
     minutes: 5
     immediate: true
     overlap: skip
+    max_queued_runs: 1000
 
   nightly:
     type: cron
     expression: "0 2 * * *"
     timezone: Asia/Shanghai
     overlap: skip
+    max_queued_runs: 1000
 ```
 
 Use `overlap: skip` for scheduled jobs that should not run concurrently.
+Use `max_queued_runs` to bound `overlap: queue` backlogs.
 
 ## MySQL
 
@@ -184,6 +187,19 @@ notify = HttpSink(
 )
 ```
 
+For `GET` or `DELETE`, `HttpSink` does not send a request body. Static `params`
+and mapping payload fields are encoded into the query string instead:
+
+```python
+lookup = HttpSink(
+    "lookup",
+    url="https://example.com/users",
+    method="GET",
+    params={"api_key": os.environ["API_KEY"]},
+    success_statuses=[200],
+)
+```
+
 YAML:
 
 ```yaml
@@ -194,8 +210,143 @@ resources:
     method: POST
     headers:
       Authorization: "Bearer ${NOTIFY_TOKEN}"
+    params:
+      source: onestep
     timeout_s: 5
     success_statuses: [200, 202]
 ```
 
-`http_sink` sends task results as JSON. It is a sink only, not a source. Use `WebhookSource` for inbound HTTP and `HttpSink` for outbound HTTP.
+`http_sink` sends task results as JSON for body methods such as `POST`, `PUT`,
+and `PATCH`. It is a sink only, not a source. Use `WebhookSource` for inbound
+HTTP and `HttpSink` for outbound HTTP.
+
+## Feishu Bitable
+
+Use the `onestep-feishu-bitable` plugin when syncing rows into a Bitable table
+or incrementally copying records between Bitable tables. Install the plugin in
+the same environment as `onestep`; it registers the YAML resource types through
+the `onestep.resources` entry point group.
+
+```yaml
+resources:
+  feishu:
+    type: feishu_bitable
+    app_id: "${FEISHU_APP_ID}"
+    app_secret: "${FEISHU_APP_SECRET}"
+
+  feishu_orders:
+    type: feishu_bitable_table_sink
+    connector: feishu
+    app_token: "${FEISHU_APP_TOKEN}"
+    table_id: "${FEISHU_TABLE_ID}"
+    mode: upsert
+    match_fields: [order_no]
+```
+
+For MySQL to Bitable sync, keep the field mapping in Python:
+
+```yaml
+resources:
+  mysql_orders:
+    type: mysql_incremental
+    connector: mysql_main
+    table: orders
+    key: id
+    cursor: [updated_at, id]
+
+  feishu_orders:
+    type: feishu_bitable_table_sink
+    connector: feishu
+    app_token: "${FEISHU_APP_TOKEN}"
+    table_id: "${FEISHU_TABLE_ID}"
+    mode: upsert
+    match_fields: [order_no]
+
+tasks:
+  - name: sync_orders
+    source: mysql_orders
+    emit: feishu_orders
+    handler:
+      ref: worker.tasks.orders:to_feishu_fields
+```
+
+For Bitable to Bitable sync:
+
+```yaml
+resources:
+  source_orders:
+    type: feishu_bitable_incremental
+    connector: feishu
+    app_token: "${SOURCE_FEISHU_APP_TOKEN}"
+    table_id: "${SOURCE_FEISHU_TABLE_ID}"
+    cursor_field: updated_at
+    user_id_type: user_id
+    batch_size: 100
+    fallback_scan_page_limit: 100
+
+  target_orders:
+    type: feishu_bitable_table_sink
+    connector: feishu
+    app_token: "${TARGET_FEISHU_APP_TOKEN}"
+    table_id: "${TARGET_FEISHU_TABLE_ID}"
+    mode: upsert
+    match_fields: [order_no]
+    user_id_type: user_id
+```
+
+`cursor_field` is the source high-water mark for incremental reads.
+`match_fields` are the target business unique fields for sink upsert. The default
+upsert path does not require storing Feishu `record_id` values in MySQL.
+At runtime, effective source fetch size is capped by both task `concurrency` and
+source `batch_size`; set them together when debugging larger batches.
+`fallback_scan_page_limit` bounds the local fallback scan used when Feishu
+rejects cursor sorting.
+
+The Bitable source emits:
+
+```python
+{
+    "record_id": "recxxxx",
+    "fields": {"order_no": "A001", "updated_at": "2026-06-08T10:00:00+08:00"},
+}
+```
+
+The Bitable sink accepts either a direct field mapping or a `{"fields": ...}`
+payload. Field names are passed through exactly as provided, including Feishu
+display names.
+
+When copying text-like fields from one Bitable table to another, Feishu may
+return rich text arrays or objects. Use `feishu_bitable_text(...)` in handlers to
+flatten those values before writing them to a target text field:
+
+```python
+from onestep_feishu_bitable import feishu_bitable_text
+
+
+async def map_row(ctx, payload):
+    fields = payload["fields"]
+    return {
+        "标题": feishu_bitable_text(fields.get("标题")),
+        "编号": feishu_bitable_text(fields.get("编号")),
+    }
+```
+
+For Feishu person fields, use `feishu_bitable_user(...)` and set
+`user_id_type` to match the identifier you provide. If your source data already
+has Feishu `user_id` values, configure the sink with `user_id_type: user_id`:
+
+```python
+from onestep_feishu_bitable import feishu_bitable_text, feishu_bitable_user
+
+
+async def map_row(ctx, payload):
+    fields = payload["fields"]
+    return {
+        "编号": feishu_bitable_text(fields.get("编号")),
+        "负责人": feishu_bitable_user(fields.get("负责人ID")),
+    }
+```
+
+`feishu_bitable_user("u_xxx")` returns `[{"id": "u_xxx"}]`, which is the value
+shape expected by Feishu Bitable person fields. The helpers are exported by the
+`onestep_feishu_bitable` plugin package, not by the root `onestep` package.

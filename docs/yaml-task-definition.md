@@ -9,7 +9,7 @@
 
 YAML is responsible for:
 
-- `app`: name, global config, shutdown timeout, state store binding
+- `app`: name, global config, shutdown timeout, state store binding, framework log level
 - `reporter`: built-in control-plane telemetry wiring
 - `resources`: named runtime objects and their dependencies
 - `hooks`: app-level startup, shutdown, and event observers
@@ -37,6 +37,24 @@ Strict mode is intended to catch configuration drift early:
 - unknown task, hook, reporter, and resource fields
 - invalid `apiVersion` / `kind` values when they are present
 - silent mixing of legacy top-level app fields with the `app:` section
+- invalid `app.logging.level` values when YAML opts into framework log control
+
+## Framework Logging
+
+Pure YAML workers can set the `onestep` logger namespace level directly:
+
+```yaml
+app:
+  name: hello-worker
+  logging:
+    level: DEBUG
+```
+
+Notes:
+
+- this only sets the `onestep` logger namespace
+- it does not configure the root logger, handlers, or formatters
+- `DEBUG` enables low-level framework logs such as successful sink sends
 
 For long-lived configs, prefer adding:
 
@@ -94,6 +112,8 @@ Start with the smallest shape that runs. Add fields only when the task actually 
 ```yaml
 app:
   name: hello-worker
+  logging:
+    level: DEBUG
 
 resources:
   tick:
@@ -444,22 +464,45 @@ Hook `params` are passed as keyword arguments after the runtime arguments.
 - legacy `connectors`, `sources`, and `sinks` sections are still accepted and merged into the same resource registry.
 - resources are available at runtime through `app.resources` and `ctx.resources`.
 
-Supported resource types today:
+Built-in resource types:
 
 - `memory`
 - `interval`
 - `cron`
 - `webhook`
 - `http_sink`
-- `rabbitmq`
-- `rabbitmq_queue`
-- `redis`
-- `redis_stream`
-- `sqs`
-- `sqs_queue`
-- `mysql`
-- `mysql_state_store`
-- `mysql_cursor_store`
-- `mysql_table_queue`
-- `mysql_incremental`
-- `mysql_table_sink`
+
+In strict mode, `memory` resources must set a positive `maxsize`; this keeps
+long-lived YAML workers from creating unbounded in-process queues by accident.
+Scheduled `interval` and `cron` resources accept `max_queued_runs` for
+`overlap: queue`, defaulting to `1000`.
+
+Plugin resource types:
+
+- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
+- `onestep-redis`: `redis`, `redis_stream`
+- `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+
+`feishu_bitable_incremental` accepts `fallback_scan_page_limit` to bound the
+fallback scan used when Feishu rejects cursor sorting. The default is `100`
+pages.
+
+Install the corresponding plugin package in the worker environment before
+using plugin resource types in YAML.
+
+Additional resource types can be provided by installed packages. A package can
+register YAML resources through the `onestep.resources` entry point group:
+
+```toml
+[project.entry-points."onestep.resources"]
+feishu_bitable = "onestep_feishu_bitable:register"
+```
+
+The entry point receives the resource registry and registers one or more
+resource handlers. Once the package is installed in the worker environment, YAML
+files can use the provided `type` values without changing onestep core.
+
+The repository includes plugin packages under `plugins/`, each with its own
+entry point and release workflow.

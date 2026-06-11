@@ -52,7 +52,8 @@ your_project/
 
 ```python
 # your_project/onestep_app.py
-from onestep import OneStepApp, RabbitMQConnector
+from onestep import OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("billing-sync")
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")
@@ -93,7 +94,8 @@ the shared backend, and run OneStep separately.
 
 ```python
 # your_project/onestep_app.py
-from onestep import OneStepApp, RabbitMQConnector
+from onestep import OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("billing-sync")
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")

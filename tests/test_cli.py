@@ -1,14 +1,16 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 import types
 from contextlib import contextmanager
 
+import pytest
+
 import onestep.config as config_module
-from onestep import MemoryQueue, OneStepApp
+from onestep import MemoryQueue, OneStepApp, load_app_config
 from onestep.cli import main
-from onestep.connectors.base import Sink, Source
 
 
 @contextmanager
@@ -438,7 +440,7 @@ def test_cli_check_strict_loads_valid_yaml_target(capsys, tmp_path) -> None:
                     "name": "yaml-strict-app",
                 },
                 "resources": {
-                    "incoming": {"type": "memory"},
+                    "incoming": {"type": "memory", "maxsize": 100},
                 },
                 "tasks": [
                     {
@@ -463,6 +465,30 @@ def test_cli_check_strict_loads_valid_yaml_target(capsys, tmp_path) -> None:
     assert "App: yaml-strict-app" in captured.out
 
 
+def test_load_app_config_strict_requires_memory_maxsize() -> None:
+    with pytest.raises(ValueError, match="resources.incoming.maxsize is required"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-strict-memory",
+                },
+                "resources": {
+                    "incoming": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "consume",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_cli_strict:consume",
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
 def test_cli_check_strict_rejects_unknown_task_fields(capsys, tmp_path) -> None:
     config_path = tmp_path / "strict-invalid-task.yaml"
     config_path.write_text(
@@ -472,7 +498,7 @@ def test_cli_check_strict_rejects_unknown_task_fields(capsys, tmp_path) -> None:
                 "kind": "App",
                 "name": "yaml-strict-invalid",
                 "resources": {
-                    "incoming": {"type": "memory"},
+                    "incoming": {"type": "memory", "maxsize": 100},
                 },
                 "tasks": [
                     {
@@ -550,6 +576,76 @@ def test_cli_check_strict_rejects_unknown_reporter_fields(capsys, tmp_path) -> N
     assert "unsupported fields for reporter: url" in captured.err
 
 
+def test_load_app_config_strict_applies_yaml_logging_level() -> None:
+    logger = logging.getLogger("onestep")
+    previous_level = logger.level
+    try:
+        app = load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging",
+                    "logging": {"level": "debug"},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+        assert app.name == "yaml-logging"
+        assert logger.level == logging.DEBUG
+    finally:
+        logger.setLevel(previous_level)
+
+
+def test_load_app_config_strict_rejects_invalid_yaml_logging_level_type() -> None:
+    with pytest.raises(ValueError, match="'level' must be a non-empty string"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-invalid-type",
+                    "logging": {"level": 123},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_invalid_yaml_logging_level_value() -> None:
+    with pytest.raises(ValueError, match="unsupported logging level 'verbose'"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-invalid-value",
+                    "logging": {"level": "verbose"},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_unknown_yaml_logging_fields() -> None:
+    with pytest.raises(ValueError, match="unsupported fields for app.logging: unexpected"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-invalid-field",
+                    "logging": {"unexpected": True},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
 def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     config_path.write_text(
@@ -602,242 +698,6 @@ def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_pat
 
     asyncio.run(scenario())
     assert seen == [{"value": 42}]
-
-
-def test_yaml_target_builds_mysql_rabbitmq_sqs_and_state_resources_via_refs(monkeypatch, tmp_path) -> None:
-    class FakeCursorStore:
-        def __init__(self, *, connector, kwargs):
-            self.connector = connector
-            self.kwargs = kwargs
-
-        async def load(self, key: str):
-            return None
-
-        async def save(self, key: str, value):
-            return None
-
-    class FakeStateStore(FakeCursorStore):
-        async def delete(self, key: str):
-            return None
-
-    class FakeSource(Source):
-        def __init__(self, name: str, *, connector, kind: str, kwargs):
-            super().__init__(name)
-            self.connector = connector
-            self.kind = kind
-            self.kwargs = kwargs
-
-        async def fetch(self, limit: int):
-            return []
-
-    class FakeQueue(FakeSource, Sink):
-        def __init__(self, name: str, *, connector, kind: str, kwargs):
-            FakeSource.__init__(self, name, connector=connector, kind=kind, kwargs=kwargs)
-            Sink.__init__(self, name)
-
-        async def send(self, envelope):
-            return None
-
-    class FakeSink(Sink):
-        def __init__(self, name: str, *, connector, kind: str, kwargs):
-            super().__init__(name)
-            self.connector = connector
-            self.kind = kind
-            self.kwargs = kwargs
-
-        async def send(self, envelope):
-            return None
-
-    class FakeRabbitMQConnector:
-        def __init__(self, url: str, options=None):
-            self.url = url
-            self.options = options
-
-        def queue(self, name: str, **kwargs):
-            return FakeQueue(name, connector=self, kind="rabbitmq_queue", kwargs=kwargs)
-
-    class FakeSQSConnector:
-        def __init__(self, region_name=None, options=None):
-            self.region_name = region_name
-            self.options = options
-
-        def queue(self, url: str, **kwargs):
-            return FakeQueue(url, connector=self, kind="sqs_queue", kwargs=kwargs)
-
-    class FakeMySQLConnector:
-        def __init__(self, dsn: str, **engine_options):
-            self.dsn = dsn
-            self.engine_options = engine_options
-            self.cursor_stores = []
-            self.state_stores = []
-
-        def state_store(self, **kwargs):
-            store = FakeStateStore(connector=self, kwargs=kwargs)
-            self.state_stores.append(store)
-            return store
-
-        def cursor_store(self, **kwargs):
-            store = FakeCursorStore(connector=self, kwargs=kwargs)
-            self.cursor_stores.append(store)
-            return store
-
-        def incremental(self, **kwargs):
-            return FakeSource(f"mysql.incremental:{kwargs['table']}", connector=self, kind="mysql_incremental", kwargs=kwargs)
-
-        def table_sink(self, **kwargs):
-            return FakeSink(f"mysql.table_sink:{kwargs['table']}", connector=self, kind="mysql_table_sink", kwargs=kwargs)
-
-    monkeypatch.setattr(config_module, "RabbitMQConnector", FakeRabbitMQConnector)
-    monkeypatch.setattr(config_module, "SQSConnector", FakeSQSConnector, raising=False)
-    monkeypatch.setattr(config_module, "MySQLConnector", FakeMySQLConnector)
-
-    config_path = tmp_path / "advanced.yaml"
-    config_path.write_text(
-        json.dumps(
-            {
-                "app": {
-                    "name": "yaml-advanced",
-                    "state": "app_state",
-                    "config": {"environment": "test"},
-                },
-                "connectors": {
-                    "rmq": {
-                        "type": "rabbitmq",
-                        "url": "amqp://guest:guest@localhost/",
-                        "options": {"client_properties": {"connection_name": "yaml-worker"}},
-                    },
-                    "jobs_in": {
-                        "type": "rabbitmq_queue",
-                        "connector": "rmq",
-                        "queue": "incoming_jobs",
-                        "exchange": "jobs.events",
-                        "routing_key": "jobs.created",
-                        "exclusive": True,
-                        "prefetch": 50,
-                    },
-                    "db": {
-                        "type": "mysql",
-                        "dsn": "mysql+pymysql://root:root@localhost:3306/app",
-                        "engine_options": {"pool_recycle": 3600},
-                    },
-                    "app_state": {
-                        "type": "mysql_state_store",
-                        "connector": "db",
-                        "table": "app_state",
-                    },
-                    "cursor": {
-                        "type": "mysql_cursor_store",
-                        "connector": "db",
-                        "table": "onestep_cursor",
-                    },
-                    "users": {
-                        "type": "mysql_incremental",
-                        "connector": "db",
-                        "table": "users",
-                        "key": "id",
-                        "cursor": ["updated_at", "id"],
-                        "where": "deleted = 0",
-                        "state": "cursor",
-                        "state_key": "users-sync",
-                    },
-                    "processed": {
-                        "type": "mysql_table_sink",
-                        "connector": "db",
-                        "table": "processed_users",
-                        "mode": "upsert",
-                        "keys": ["id"],
-                    },
-                    "sqs": {
-                        "type": "sqs",
-                        "region_name": "ap-southeast-1",
-                        "options": {"endpoint_url": "http://localstack:4566"},
-                    },
-                    "jobs_sqs_in": {
-                        "type": "sqs_queue",
-                        "connector": "sqs",
-                        "url": "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs.fifo",
-                        "message_group_id": "workers",
-                        "heartbeat_interval_s": 15,
-                        "heartbeat_visibility_timeout": 60,
-                    },
-                    "jobs_sqs_out": {
-                        "type": "sqs_queue",
-                        "connector": "sqs",
-                        "url": "https://sqs.ap-southeast-1.amazonaws.com/123456789/processed.fifo",
-                        "message_group_id": "workers",
-                        "delete_batch_size": 5,
-                    },
-                },
-                "tasks": [
-                    {
-                        "name": "sync_users",
-                        "source": "users",
-                        "handler": "testsupport_yaml_advanced:sync_users",
-                        "emit": ["processed", "jobs_sqs_out"],
-                    },
-                    {
-                        "name": "ingest_jobs",
-                        "source": "jobs_in",
-                        "handler": "testsupport_yaml_advanced:ingest_jobs",
-                    },
-                    {
-                        "name": "ingest_sqs_jobs",
-                        "source": "jobs_sqs_in",
-                        "handler": "testsupport_yaml_advanced:ingest_sqs_jobs",
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    async def sync_users(ctx, item):
-        return item
-
-    async def ingest_jobs(ctx, item):
-        return None
-
-    async def ingest_sqs_jobs(ctx, item):
-        return None
-
-    with registered_yaml_module(), registered_module(
-        "testsupport_yaml_advanced",
-        sync_users=sync_users,
-        ingest_jobs=ingest_jobs,
-        ingest_sqs_jobs=ingest_sqs_jobs,
-    ):
-        app = OneStepApp.load(str(config_path))
-
-    sync_task = app.tasks[0]
-    ingest_task = app.tasks[1]
-    ingest_sqs_task = app.tasks[2]
-
-    assert app.config == {"environment": "test", "config_path": str(config_path)}
-    assert app.state is sync_task.source.connector.state_stores[0]
-    assert app.state.kwargs["table"] == "app_state"
-    assert sync_task.source.kind == "mysql_incremental"
-    assert sync_task.source.kwargs["cursor"] == ("updated_at", "id")
-    assert sync_task.source.kwargs["state"] is sync_task.source.connector.cursor_stores[0]
-    assert sync_task.source.kwargs["state_key"] == "users-sync"
-    assert sync_task.source.connector.engine_options == {"pool_recycle": 3600}
-    assert sync_task.sinks[0].kind == "mysql_table_sink"
-    assert sync_task.sinks[0].connector is sync_task.source.connector
-    assert sync_task.sinks[1].kind == "sqs_queue"
-    assert sync_task.sinks[1].connector.region_name == "ap-southeast-1"
-    assert sync_task.sinks[1].connector.options == {"endpoint_url": "http://localstack:4566"}
-    assert sync_task.sinks[1].kwargs["message_group_id"] == "workers"
-    assert sync_task.sinks[1].kwargs["delete_batch_size"] == 5
-    assert ingest_task.source.kind == "rabbitmq_queue"
-    assert ingest_task.source.name == "incoming_jobs"
-    assert ingest_task.source.connector.url == "amqp://guest:guest@localhost/"
-    assert ingest_task.source.connector.options == {"client_properties": {"connection_name": "yaml-worker"}}
-    assert ingest_task.source.kwargs["exchange"] == "jobs.events"
-    assert ingest_task.source.kwargs["exclusive"] is True
-    assert ingest_task.source.kwargs["prefetch"] == 50
-    assert ingest_sqs_task.source.kind == "sqs_queue"
-    assert ingest_sqs_task.source.name == "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs.fifo"
-    assert ingest_sqs_task.source.kwargs["heartbeat_interval_s"] == 15
-    assert ingest_sqs_task.source.kwargs["heartbeat_visibility_timeout"] == 60
 
 
 def test_yaml_target_builds_webhook_auth_and_response(tmp_path) -> None:

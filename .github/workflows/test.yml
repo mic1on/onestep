@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     paths:
+      - ".github/workflows/release.yml"
       - ".github/workflows/test.yml"
+      - "docker/**"
       - "docker-compose.integration.yml"
+      - "plugins/**"
       - "pyproject.toml"
       - "scripts/**"
       - "src/**"
@@ -12,8 +15,11 @@ on:
       - "uv.lock"
   pull_request:
     paths:
+      - ".github/workflows/release.yml"
       - ".github/workflows/test.yml"
+      - "docker/**"
       - "docker-compose.integration.yml"
+      - "plugins/**"
       - "pyproject.toml"
       - "scripts/**"
       - "src/**"
@@ -47,15 +53,28 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install test dependencies
-        run: uv sync --frozen --extra test
+        run: uv sync --frozen --all-packages --extra test
 
       - name: Run unit and contract tests
         run: uv run pytest -q -m "not integration"
 
+  worker-image:
+    name: Worker image smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run worker image smoke tests
+        run: ./scripts/run-worker-image-smoke.sh
+
   integration:
     name: Integration (py3.11)
     runs-on: ubuntu-latest
-    needs: unit
+    needs:
+      - unit
+      - worker-image
     timeout-minutes: 20
 
     steps:
@@ -71,7 +90,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install integration dependencies
-        run: uv sync --frozen --extra integration
+        run: uv sync --frozen --all-packages --extra integration
 
       - name: Run live integration tests
         run: ./scripts/run-integration-tests.sh

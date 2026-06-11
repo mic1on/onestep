@@ -14,7 +14,6 @@ from onestep import (
     MaxAttempts,
     MemoryQueue,
     OneStepApp,
-    RedisConnector,
     TaskEvent,
     TaskEventKind,
 )
@@ -132,6 +131,7 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
                     "seconds": 3600,
                     "immediate": True,
                     "overlap": "skip",
+                    "max_queued_runs": source.max_queued_runs,
                     "timezone": source.timezone_name,
                     "poll_interval_s": source.poll_interval_s,
                 },
@@ -181,52 +181,6 @@ def test_reporter_sync_payload_uses_tz_environment_name_for_schedule_timezone(mo
 
     sync_payload = [payload for channel, payload in recorder.calls if channel == "sync"][0]
     assert sync_payload["app"]["tasks"][0]["source"]["config"]["timezone"] == "Asia/Shanghai"
-
-
-def test_reporter_sync_payload_includes_redis_stream_topology_config() -> None:
-    recorder = SenderRecorder()
-    redis = RedisConnector("redis://localhost:6379")
-    source = redis.stream(
-        "jobs",
-        group="workers",
-        consumer="worker-a",
-        batch_size=25,
-        poll_interval_s=0.5,
-        block_ms=250,
-        maxlen=1000,
-        approximate_trim=False,
-    )
-    app = OneStepApp("billing-sync")
-
-    @app.task(source=source)
-    async def sync_users(ctx, payload):
-        return payload
-
-    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
-    reporter.attach(app)
-
-    async def scenario() -> None:
-        await reporter.send_sync_now()
-
-    asyncio.run(scenario())
-
-    sync_payload = [payload for channel, payload in recorder.calls if channel == "sync"][0]
-    assert sync_payload["app"]["tasks"][0]["source"] == {
-        "kind": "redis_stream",
-        "name": "jobs",
-        "config": {
-            "stream": "jobs",
-            "group": "workers",
-            "consumer": "worker-a",
-            "batch_size": 25,
-            "poll_interval_s": 0.5,
-            "block_ms": 250,
-            "start_id": "$",
-            "create_group": True,
-            "maxlen": 1000,
-            "approximate_trim": False,
-        },
-    }
 
 
 def test_reporter_heartbeat_includes_task_control_states() -> None:

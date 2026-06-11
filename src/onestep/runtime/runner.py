@@ -130,17 +130,19 @@ class TaskRunner:
         )
         try:
             if stop_fetching_task in done:
-                fetch_task.cancel()
-                await asyncio.gather(fetch_task, return_exceptions=True)
+                if self.task.source.fetch_is_cancel_safe:
+                    fetch_task.cancel()
+                    await asyncio.gather(fetch_task, return_exceptions=True)
+                else:
+                    deliveries = await self._resolve_fetch_task(fetch_task)
+                    await self._release_unstarted_deliveries(deliveries)
                 return []
             if fetch_task in done:
-                try:
-                    return fetch_task.result()
-                except ConnectorOperationError as exc:
-                    if not is_retryable_connector_error(exc):
-                        raise
-                    await self._handle_source_fetch_error(exc)
+                deliveries = await self._resolve_fetch_task(fetch_task)
+                if self.app.is_stopping or self.app.is_draining or self.app.is_task_paused(self.task.name):
+                    await self._release_unstarted_deliveries(deliveries)
                     return []
+                return deliveries
             fetch_task.cancel()
             await asyncio.gather(fetch_task, return_exceptions=True)
             return []
@@ -149,6 +151,22 @@ class TaskRunner:
             for pending_task in pending:
                 pending_task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _resolve_fetch_task(self, fetch_task: asyncio.Task[list["Delivery"]]) -> list["Delivery"]:
+        try:
+            return await fetch_task
+        except ConnectorOperationError as exc:
+            if not is_retryable_connector_error(exc):
+                raise
+            await self._handle_source_fetch_error(exc)
+            return []
+
+    async def _release_unstarted_deliveries(self, deliveries: list["Delivery"]) -> None:
+        for delivery in deliveries:
+            try:
+                await delivery.release_unstarted()
+            except Exception:
+                self._logger.exception("releasing unstarted delivery failed")
 
     def _track_inflight(self, task: asyncio.Task[None]) -> None:
         self._inflight.add(task)
@@ -202,6 +220,17 @@ class TaskRunner:
         for attempt in range(self._SEND_ATTEMPTS):
             try:
                 await sink.send(envelope)
+                self._logger.debug(
+                    "sink send succeeded",
+                    extra={
+                        "sink_name": getattr(sink, "name", sink.__class__.__name__),
+                        "sink_kind": sink.__class__.__name__,
+                        "connector_backend": getattr(getattr(sink, "connector", None), "__class__", type(None)).__name__
+                        if getattr(sink, "connector", None) is not None
+                        else None,
+                        "delivery_attempts": envelope.attempts,
+                    },
+                )
                 return
             except ConnectorOperationError as exc:
                 if not is_retryable_connector_error(exc) or attempt == self._SEND_ATTEMPTS - 1:

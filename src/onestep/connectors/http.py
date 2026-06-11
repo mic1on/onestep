@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import urllib.parse
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -15,6 +16,7 @@ from .base import Sink
 
 _DEFAULT_SUCCESS_STATUSES = (200, 201, 202, 204)
 _DEFAULT_TIMEOUT_S = 5.0
+_BODYLESS_METHODS = {"DELETE", "GET"}
 _REDACTED = "<redacted>"
 
 
@@ -35,6 +37,7 @@ class HttpSink(Sink):
         url: str,
         method: str = "POST",
         headers: Mapping[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
         success_statuses: Sequence[int] | None = None,
     ) -> None:
@@ -42,15 +45,18 @@ class HttpSink(Sink):
         self.url = _normalize_url(url)
         self.method = _normalize_method(method)
         self.headers = _normalize_headers(headers)
+        self.params = _normalize_params(params, field="params")
         self.timeout_s = _normalize_timeout(timeout_s)
         self.success_statuses = _normalize_success_statuses(success_statuses)
 
     async def send(self, envelope: Envelope) -> None:
-        payload = json.dumps(envelope.body, default=str).encode("utf-8")
+        request_url = self._request_url(envelope)
+        payload = self._request_payload(envelope)
         headers = dict(self.headers)
-        _set_header_default(headers, "Content-Type", "application/json")
+        if payload is not None:
+            _set_header_default(headers, "Content-Type", "application/json")
         request = urllib.request.Request(
-            self.url,
+            request_url,
             data=payload,
             headers=headers,
             method=self.method,
@@ -93,10 +99,22 @@ class HttpSink(Sink):
                 "url": _redact_url(self.url),
                 "method": self.method,
                 "headers": {key: _REDACTED for key in sorted(self.headers)},
+                "params": {key: _REDACTED for key in sorted(self.params)},
                 "timeout_s": self.timeout_s,
                 "success_statuses": list(self.success_statuses),
             },
         }
+
+    def _request_payload(self, envelope: Envelope) -> bytes | None:
+        if self.method in _BODYLESS_METHODS:
+            return None
+        return json.dumps(envelope.body, default=str).encode("utf-8")
+
+    def _request_url(self, envelope: Envelope) -> str:
+        params: dict[str, Any] = dict(self.params)
+        if self.method in _BODYLESS_METHODS and envelope.body is not None:
+            params.update(_normalize_params(envelope.body, field="envelope.body"))
+        return _append_query_params(self.url, params)
 
     def _send_request(self, request: urllib.request.Request) -> tuple[int, str, bytes]:
         try:
@@ -139,6 +157,33 @@ def _normalize_headers(value: Mapping[str, Any] | None) -> dict[str, str]:
             raise ValueError("header names must be non-empty")
         headers[name] = str(item)
     return headers
+
+
+def _normalize_params(value: Mapping[str, Any] | None, *, field: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"'{field}' must be a mapping")
+    params: dict[str, Any] = {}
+    for key, item in value.items():
+        name = str(key).strip()
+        if not name:
+            raise ValueError("parameter names must be non-empty")
+        params[name] = item
+    return params
+
+
+def _append_query_params(url: str, params: Mapping[str, Any]) -> str:
+    if not params:
+        return url
+    parsed = urlsplit(url)
+    query = parsed.query
+    encoded = urllib.parse.urlencode(params, doseq=True)
+    if query:
+        query = f"{query}&{encoded}"
+    else:
+        query = encoded
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment))
 
 
 def _normalize_timeout(value: float) -> float:

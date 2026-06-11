@@ -1,7 +1,7 @@
 """
 Redis Streams example for onestep.
 
-Requires: pip install 'onestep[redis]'
+Requires: pip install onestep-redis
 
 Run with:
     PYTHONPATH=src python example/redis_stream.py
@@ -12,7 +12,8 @@ Or with YAML:
 import asyncio
 import os
 
-from onestep import OneStepApp, RedisConnector
+from onestep import OneStepApp
+from onestep_redis import RedisConnector
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 

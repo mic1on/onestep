@@ -18,14 +18,10 @@
 The V1 stable surface includes:
 
 - `MemoryQueue`
-- `MySQLConnector.table_queue(...)`
-- `MySQLConnector.incremental(...)`
-- `MySQLConnector.table_sink(...)`
-- `MySQLConnector.state_store(...)`
-- `MySQLConnector.cursor_store(...)`
-- `RabbitMQConnector.queue(...)`
-- `RedisConnector.stream(...)`
-- `SQSConnector.queue(...)`
+- `onestep-mysql`: `MySQLConnector.table_queue(...)`, incremental sources, table sinks, state stores, and cursor stores
+- `onestep-mq`: `RabbitMQConnector.queue(...)`
+- `onestep-redis`: `RedisConnector.stream(...)`
+- `onestep-sqs`: `SQSConnector.queue(...)`
 - `IntervalSource.every(...)`
 - `CronSource(...)`
 - `WebhookSource(...)`
@@ -42,12 +38,20 @@ pip install onestep
 Common extras:
 
 - `pip install 'onestep[yaml]'`
-- `pip install 'onestep[mysql]'`
-- `pip install 'onestep[rabbitmq]'`
-- `pip install 'onestep[redis]'`
-- `pip install 'onestep[sqs]'`
+- `pip install onestep-mysql`
+- `pip install onestep-mq`
+- `pip install onestep-redis`
+- `pip install onestep-sqs`
 - `pip install 'onestep[control-plane]'`
 - `pip install 'onestep[all]'`
+
+Connector plugins:
+
+- Feishu Bitable: install `onestep-feishu-bitable`
+- MySQL: install `onestep-mysql`
+- RabbitMQ: install `onestep-mq`
+- Redis: install `onestep-redis`
+- SQS: install `onestep-sqs`
 
 From a source checkout:
 
@@ -123,6 +127,8 @@ Python callables:
 ```yaml
 app:
   name: billing-sync
+  logging:
+    level: DEBUG
 
 resources:
   tick:
@@ -169,6 +175,10 @@ and resource specs:
 onestep check --strict worker.yaml
 ```
 
+`app.logging.level` is optional and only controls the `onestep` logger
+namespace. It does not configure handlers or formatters, but setting it to
+`DEBUG` makes framework-level sink success logs visible.
+
 YAML resources can reference other resources by name, for example
 `rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.
 
@@ -187,25 +197,24 @@ strict-check guidance, see
 For a standalone project-style example with `worker.yaml` plus
 `tasks.py` / `transforms.py` / `hooks.py`, see `example/yaml_project/`.
 
-Currently supported YAML resource types:
+Built-in YAML resource types:
 
 - `memory`
 - `interval`
 - `cron`
 - `webhook`
 - `http_sink`
-- `rabbitmq`
-- `rabbitmq_queue`
-- `redis`
-- `redis_stream`
-- `sqs`
-- `sqs_queue`
-- `mysql`
-- `mysql_state_store`
-- `mysql_cursor_store`
-- `mysql_table_queue`
-- `mysql_incremental`
-- `mysql_table_sink`
+
+Plugin YAML resource types:
+
+- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
+- `onestep-redis`: `redis`, `redis_stream`
+- `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+
+Install the corresponding plugin package in the worker environment before
+using plugin resource types in YAML.
 
 YAML tasks can also omit `handler` when they only forward the incoming payload
 to sinks:
@@ -232,6 +241,9 @@ app:
   state: app_state
 
 connectors:
+  db:
+    type: mysql
+    dsn: mysql+pymysql://root:root@localhost:3306/app
   app_state:
     type: mysql_state_store
     connector: db
@@ -239,7 +251,7 @@ connectors:
 ```
 
 The named state resource must support `load/save/delete`; `mysql_state_store`
-and `mysql_cursor_store` both work.
+and `mysql_cursor_store` both work when `onestep-mysql` is installed.
 
 Legacy `connectors`, `sources`, and `sinks` sections are still supported and
 merged into the same internal resource registry. For the full YAML schema and a
@@ -292,6 +304,35 @@ sudo journalctl -u onestep-app -f
 
 See `deploy/README.md` for the expected directory layout and the env vars you need to adjust first.
 The deploy template prepends `APP_CWD` to `PYTHONPATH` so module targets defined inside the repo can be imported by the `onestep` console script.
+
+## Official worker image
+
+`onestep` also ships an official worker runtime image for YAML-oriented workers.
+
+Mounted workspace usage:
+
+```bash
+docker run --rm \
+  -e ONESTEP_TARGET=/workspace/worker.yaml \
+  -v "$PWD:/workspace" \
+  ghcr.io/mic1on/onestep-worker:1.2.7
+```
+
+Derived image usage:
+
+```dockerfile
+FROM ghcr.io/mic1on/onestep-worker:1.2.7
+
+WORKDIR /workspace
+COPY . /workspace
+ENV ONESTEP_TARGET=/workspace/worker.yaml
+```
+
+`ONESTEP_TARGET` points to the YAML file path or Python import target the container should start.
+The runtime automatically adds `/workspace` and `/workspace/src` to `PYTHONPATH`.
+If `/workspace/requirements.txt` exists it is installed first; otherwise the runtime falls back to installing `/workspace` when `/workspace/pyproject.toml` exists.
+
+See `deploy/worker-runtime-image.md` for the full usage guide and troubleshooting notes.
 
 ## Control Plane Reporter
 
@@ -612,6 +653,9 @@ async def refresh_cache(ctx, item):
 - `skip`: drop missed ticks while the previous run is still running
 - `queue`: serialize missed ticks and run them one by one afterwards
 
+`queue` mode keeps at most `max_queued_runs` missed ticks, defaulting to `1000`,
+and drops the oldest queued ticks first when the backlog exceeds that bound.
+
 ## Cron Source
 
 Use `CronSource` when you care about wall-clock time rather than elapsed duration.
@@ -686,7 +730,8 @@ The payload delivered to your task contains:
 Use a table as a task queue by claiming rows and marking them as finished.
 
 ```python
-from onestep import MemoryQueue, MySQLConnector, OneStepApp
+from onestep import MemoryQueue, OneStepApp
+from onestep_mysql import MySQLConnector
 
 app = OneStepApp("orders")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")
@@ -716,7 +761,8 @@ supported for `MySQLConnector.table_queue(...)` deliveries.
 Use `(updated_at, id)` as a lightweight cursor for Logstash-style sync.
 
 ```python
-from onestep import MemoryQueue, MySQLConnector, OneStepApp
+from onestep import MemoryQueue, OneStepApp
+from onestep_mysql import MySQLConnector
 
 app = OneStepApp("sync-users")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")
@@ -740,10 +786,64 @@ async def sync_user(ctx, row):
 For production deployments, prefer `db.cursor_store(...)` or `db.state_store(...)` over the in-memory stores so cursors and task state survive process restarts.
 
 
+## Feishu Bitable Plugin
+
+Install `onestep-feishu-bitable` to use Feishu Bitable as an incremental
+source or upsert sink. In this repository, the plugin source lives under
+`plugins/onestep-feishu-bitable`.
+
+```python
+from onestep import OneStepApp
+from onestep_feishu_bitable import (
+    FeishuBitableConnector,
+    feishu_bitable_text,
+    feishu_bitable_user,
+)
+
+app = OneStepApp("feishu-sync")
+feishu = FeishuBitableConnector(app_id="cli_xxx", app_secret="secret")
+source = feishu.incremental(
+    app_token="bascnxxx",
+    table_id="tbl_source",
+    cursor_field="最后更新时间",
+    user_id_type="user_id",
+    batch_size=100,
+    fallback_scan_page_limit=100,
+)
+sink = feishu.table_sink(
+    app_token="bascnyyy",
+    table_id="tbl_target",
+    mode="upsert",
+    match_fields=["编号"],
+    user_id_type="user_id",
+)
+
+
+@app.task(source=source, emit=sink, concurrency=20)
+async def sync_order(ctx, payload):
+    fields = payload["fields"]
+    return {
+        "编号": feishu_bitable_text(fields.get("编号")),
+        "标题": feishu_bitable_text(fields.get("标题")),
+        "负责人": feishu_bitable_user(fields.get("负责人ID")),
+    }
+```
+
+For Feishu person fields, pass the matching `user_id_type` (`open_id`,
+`union_id`, or `user_id`) and write values as `[{"id": "..."}]`. The
+`feishu_bitable_text(...)` and `feishu_bitable_user(...)` helpers live in the
+`onestep_feishu_bitable` plugin package.
+
+When Feishu cannot serve the incremental search with cursor sorting, the source
+falls back to scanning pages and sorting locally. `fallback_scan_page_limit`
+bounds that fallback to avoid high memory use on large tables.
+
+
 ## RabbitMQ Queue
 
 ```python
-from onestep import OneStepApp, RabbitMQConnector
+from onestep import OneStepApp
+from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("rabbitmq-demo")
 rmq = RabbitMQConnector("amqp://guest:guest@localhost/")
@@ -765,14 +865,15 @@ async def process_job(ctx, item):
     return {"job": item["job"], "status": "done"}
 ```
 
-Install with `pip install '.[rabbitmq]'`.
+Install with `pip install onestep-mq`.
 
 ## Redis Streams
 
 Use Redis Streams for lightweight, reliable message queuing with consumer groups.
 
 ```python
-from onestep import OneStepApp, RedisConnector
+from onestep import OneStepApp
+from onestep_redis import RedisConnector
 
 app = OneStepApp("redis-demo")
 redis = RedisConnector("redis://localhost:6379")
@@ -797,12 +898,13 @@ Key features:
 - **Pending messages**: Unacked messages stay in PEL for retry via `XCLAIM`
 - **Stream trimming**: `maxlen` option to limit stream size
 
-Install with `pip install '.[redis]'`.
+Install with `pip install onestep-redis`.
 
 ## SQS Queue
 
 ```python
-from onestep import OneStepApp, SQSConnector
+from onestep import OneStepApp
+from onestep_sqs import SQSConnector
 
 app = OneStepApp("sqs-demo")
 sqs = SQSConnector(region_name="ap-southeast-1")
@@ -825,7 +927,7 @@ async def process_job(ctx, item):
     return {"job": item["job"], "status": "done"}
 ```
 
-Install with `pip install '.[sqs]'`.
+Install with `pip install onestep-sqs`.
 
 ## Examples
 
@@ -844,7 +946,8 @@ Common entrypoints:
 
 ## Integration Tests
 
-Optional live tests are under `tests/integration/`.
+Optional live tests are under `tests/integration/` and plugin-specific
+`plugins/*/tests/integration/` directories.
 The local stack now includes Redis, RabbitMQ, LocalStack SQS, and MySQL.
 
 Install the live-test dependencies:
@@ -875,8 +978,8 @@ You can also run one test file manually after loading the environment:
 
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_redis_live.py -q`
 - `PYTHONPATH=src python3 -m pytest tests/integration/test_rabbitmq_live.py -q`
-- `PYTHONPATH=src python3 -m pytest tests/integration/test_sqs_live.py -q`
-- `PYTHONPATH=src python3 -m pytest tests/integration/test_mysql_live.py -q`
+- `uv run --all-packages python -m pytest plugins/onestep-sqs/tests/integration/test_sqs_live.py -q`
+- `uv run --all-packages python -m pytest plugins/onestep-mysql/tests/integration/test_mysql_live.py -q`
 
 Set `KEEP_INTEGRATION_SERVICES=1` to keep containers running after `make integration-test`.
 
@@ -885,7 +988,8 @@ Set `KEEP_INTEGRATION_SERVICES=1` to keep containers running after `make integra
 The test suite is now intentionally split by responsibility:
 
 - `tests/contract/`: runtime contract tests that lock task execution semantics
-- `tests/integration/`: live infrastructure tests for Redis, RabbitMQ, SQS, and MySQL
+- `tests/integration/`: live infrastructure tests for built-in Redis and RabbitMQ connectors
+- `plugins/*/tests/`: plugin-specific unit, contract, and live integration tests
 - `tests/test_*.py`: connector-focused unit tests
 
 ## End-to-End Demo

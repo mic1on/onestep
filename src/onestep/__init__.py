@@ -21,6 +21,15 @@ from .identity_store import (
     derive_replica_instance_id,
 )
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .resource_registry import (
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+    ResourceValidationContext,
+    get_resource_handler,
+    load_resource_plugins,
+    register_resource_type,
+)
 from .resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
@@ -36,15 +45,10 @@ from .retry import (
     RetryPolicy,
 )
 from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedState, StateStore
-from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 from .connectors.base import Delivery, Sink, Source
 from .connectors.http import HttpSink, HttpSinkStatusError
 from .connectors.memory import MemoryQueue
-from .connectors.mysql import MySQLConnector
-from .connectors.rabbitmq import RabbitMQConnector
-from .connectors.redis import RedisConnector
 from .connectors.schedule import CronSource, IntervalSource
-from .connectors.sqs import SQSConnector
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
 
 try:
@@ -80,21 +84,19 @@ __all__ = [
     "IntervalSource",
     "MaxAttempts",
     "MemoryQueue",
-    "MySQLConnector",
     "NoRetry",
     "OneStepApp",
-    "RabbitMQConnector",
-    "RedisConnector",
+    "ResourceBuildContext",
+    "ResourceRegistry",
+    "ResourceSpecHandler",
+    "ResourceValidationContext",
     "RetryAction",
     "RetryDecision",
     "RetryPolicy",
-    "SQLAlchemyCursorStore",
-    "SQLAlchemyStateStore",
     "Sink",
     "StateStore",
     "StructuredEventLogger",
     "Source",
-    "SQSConnector",
     "ScopedState",
     "TaskEvent",
     "TaskEventKind",
@@ -106,6 +108,9 @@ __all__ = [
     "build_control_plane_ws_url",
     "build_default_state_dir",
     "derive_replica_instance_id",
+    "get_resource_handler",
     "load_app_config",
+    "load_resource_plugins",
     "load_yaml_app",
+    "register_resource_type",
 ]
