@@ -148,3 +148,68 @@ def test_mysql_incremental_cursor_recovers_after_restart_live():
         engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_binlog_reads_insert_update_delete_live():
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"cdc_orders_{suffix}"
+        cursor_table_name = f"binlog_cursor_{suffix}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        orders = sa.Table(
+            table_name,
+            metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("status", sa.String(255), nullable=False),
+        )
+        metadata.create_all(engine)
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        cursor = db.cursor_store(table=cursor_table_name)
+        source = db.binlog(
+            server_id=18492,
+            schemas=("onestep",),
+            tables=(table_name,),
+            state=cursor,
+            state_key=f"{table_name}-cdc",
+            batch_size=10,
+            poll_interval_s=0.1,
+        )
+        await source.open()
+
+        with engine.begin() as conn:
+            conn.execute(sa.insert(orders), [{"id": 1, "status": "pending"}])
+            conn.execute(sa.update(orders).where(orders.c.id == 1).values(status="paid"))
+            conn.execute(sa.delete(orders).where(orders.c.id == 1))
+
+        batch = []
+        for _ in range(20):
+            batch = await source.fetch(10)
+            if len(batch) >= 3:
+                break
+            await asyncio.sleep(0.1)
+
+        assert [item.payload["event"] for item in batch[:3]] == ["insert", "update", "delete"]
+        assert batch[0].payload["values"]["status"] == "pending"
+        assert batch[1].payload["before_values"]["status"] == "pending"
+        assert batch[1].payload["values"]["status"] == "paid"
+        assert batch[2].payload["values"]["status"] == "paid"
+
+        await batch[1].ack()
+        assert await cursor.load(f"{table_name}-cdc") is not None
+        await batch[0].ack()
+        await batch[2].ack()
+        saved = await cursor.load(f"{table_name}-cdc")
+        assert saved["file"].startswith("mysql-bin.")
+        assert saved["pos"] >= batch[2].payload["binlog"]["pos"]
+
+        await source.close()
+        await db.close()
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE IF EXISTS `{cursor_table_name}`"))
+        metadata.drop_all(engine)
+        engine.dispose()
+
+    asyncio.run(scenario())

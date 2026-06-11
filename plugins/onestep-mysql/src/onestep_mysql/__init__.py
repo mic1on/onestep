@@ -3,6 +3,8 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version as _package_version
 
 from .connector import (
+    BinlogDelivery,
+    BinlogSource,
     IncrementalDelivery,
     IncrementalTableSource,
     MySQLConnector,
@@ -22,6 +24,8 @@ except PackageNotFoundError:  # pragma: no cover - local source tree before inst
 register = register_resources
 
 __all__ = [
+    "BinlogDelivery",
+    "BinlogSource",
     "IncrementalDelivery",
     "IncrementalTableSource",
     "MySQLConnector",

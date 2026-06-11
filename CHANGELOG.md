@@ -1,5 +1,11 @@
 # Changelog
 
+## onestep-mysql 0.3.0
+
+- Adds the `mysql_binlog` source for row-based MySQL binlog CDC.
+- Supports YAML and Python wiring for insert/update/delete row events with durable file/position cursor state.
+- Adds MySQL binlog examples and live MySQL 8.4 coverage for insert, update, and delete events.
+
 ## 1.4.2
 
 - Requires strict YAML `memory` resources to set a bounded `maxsize`.

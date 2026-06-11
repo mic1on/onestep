@@ -458,6 +458,19 @@ wheels = [
 ]
 
 [[package]]
+name = "mysql-replication"
+version = "1.0.15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "pymysql" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1f/bb/1d2f295f3d14def732003fe5c2d21408a5c6a907a9598bd195dc017a397e/mysql_replication-1.0.15.tar.gz", hash = "sha256:c13c8b6f56c07f234b96f7b34dc0989ab80af677eaeb1f968a2e2f0ebe12e1eb", size = 74399, upload-time = "2026-02-07T11:55:19.456Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/4b/3bd715ef7c597d88d35a997adff0c9cc6d230a915327739aaeac79ac87fd/mysql_replication-1.0.15-py3-none-any.whl", hash = "sha256:2e38eb75442f0ba54fd82565b1902e1e6347b903e1f080978cbefb991f2d0087", size = 82935, upload-time = "2026-02-07T11:55:17.878Z" },
+]
+
+[[package]]
 name = "onestep"
 version = "1.4.2"
 source = { editable = "." }
@@ -615,9 +628,10 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
+    { name = "mysql-replication" },
     { name = "onestep" },
     { name = "pymysql" },
     { name = "sqlalchemy" },
@@ -635,6 +649,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "mysql-replication", specifier = ">=1.0.15" },
     { name = "onestep", editable = "." },
     { name = "pymysql", specifier = ">=1.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },

@@ -14,6 +14,7 @@ entry point:
 - `mysql_cursor_store`
 - `mysql_table_queue`
 - `mysql_incremental`
+- `mysql_binlog`
 - `mysql_table_sink`
 
 Python usage:

@@ -31,7 +31,7 @@ yaml = [
     "PyYAML>=6.0",
 ]
 mysql = [
-    "onestep-mysql>=0.2.0",
+    "onestep-mysql>=0.3.0",
 ]
 rabbitmq = [
     "onestep-mq>=0.2.0",
@@ -53,7 +53,7 @@ integration = [
     "PyYAML>=6.0",
     "onestep-mq>=0.2.0",
     "onestep-redis>=0.2.0",
-    "onestep-mysql>=0.2.0",
+    "onestep-mysql>=0.3.0",
     "onestep-sqs>=0.2.0",
 ]
 all = [
@@ -61,7 +61,7 @@ all = [
     "PyYAML>=6.0",
     "onestep-mq>=0.2.0",
     "onestep-redis>=0.2.0",
-    "onestep-mysql>=0.2.0",
+    "onestep-mysql>=0.3.0",
     "onestep-sqs>=0.2.0",
 ]
 dev = [
@@ -71,7 +71,7 @@ dev = [
     "PyYAML>=6.0",
     "onestep-mq>=0.2.0",
     "onestep-redis>=0.2.0",
-    "onestep-mysql>=0.2.0",
+    "onestep-mysql>=0.3.0",
     "onestep-sqs>=0.2.0",
 ]
 

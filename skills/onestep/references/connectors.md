@@ -80,8 +80,32 @@ Useful types:
 
 - `mysql_table_queue`: table-backed queue with claim/ack/nack fields.
 - `mysql_incremental`: incremental polling with cursor state.
+- `mysql_binlog`: row-based change stream with binlog file/position cursor state.
 - `mysql_table_sink`: insert/upsert output table.
 - `mysql_state_store` / `mysql_cursor_store`: durable app or cursor state.
+
+Use `mysql_binlog` when downstream systems need insert/update/delete events:
+
+```yaml
+resources:
+  mysql_cursor:
+    type: mysql_cursor_store
+    connector: mysql_main
+
+  order_changes:
+    type: mysql_binlog
+    connector: mysql_main
+    server_id: 18492
+    schemas: [onestep]
+    tables: [orders]
+    events: [insert, update, delete]
+    state: mysql_cursor
+    state_key: orders-cdc
+```
+
+The source expects MySQL binary logging to be enabled with row logging,
+for example `--log-bin`, `--server-id`, `--binlog-format=ROW`, and
+`--binlog-row-image=FULL`.
 
 Bind app-level state explicitly when needed:
 

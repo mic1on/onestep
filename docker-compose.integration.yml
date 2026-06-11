@@ -25,6 +25,12 @@ services:
   mysql:
     image: mysql:8.4
     container_name: onestep-mysql
+    command:
+      - --log-bin=mysql-bin
+      - --server-id=18491
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --binlog-row-metadata=FULL
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_ROOT_HOST: "%"

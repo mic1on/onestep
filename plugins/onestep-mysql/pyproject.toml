@@ -1,6 +1,6 @@
 [project]
 name = "onestep-mysql"
-version = "0.2.0"
+version = "0.3.0"
 description = "MySQL connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -9,6 +9,7 @@ dependencies = [
     "onestep>=1.4.1",
     "SQLAlchemy>=2.0.0",
     "PyMySQL>=1.1.0",
+    "mysql-replication>=1.0.15",
 ]
 
 [project.optional-dependencies]

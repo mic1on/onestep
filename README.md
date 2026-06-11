@@ -18,7 +18,7 @@
 The V1 stable surface includes:
 
 - `MemoryQueue`
-- `onestep-mysql`: `MySQLConnector.table_queue(...)`, incremental sources, table sinks, state stores, and cursor stores
+- `onestep-mysql`: `MySQLConnector.table_queue(...)`, binlog and incremental sources, table sinks, state stores, and cursor stores
 - `onestep-mq`: `RabbitMQConnector.queue(...)`
 - `onestep-redis`: `RedisConnector.stream(...)`
 - `onestep-sqs`: `SQSConnector.queue(...)`
@@ -206,7 +206,7 @@ Built-in YAML resource types:
 
 Plugin YAML resource types:
 
-- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_binlog`, `mysql_table_sink`
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
