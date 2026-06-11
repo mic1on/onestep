@@ -95,7 +95,7 @@ class RabbitMQConnector:
 
     def _driver(self) -> Any:
         if aio_pika is None:
-            raise RuntimeError("RabbitMQConnector requires aio-pika. Install onestep-rabbitmq.")
+            raise RuntimeError("RabbitMQConnector requires aio-pika. Install onestep-mq.")
         return aio_pika
 
     def _runtime_lock(self) -> asyncio.Lock:

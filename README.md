@@ -19,7 +19,7 @@ The V1 stable surface includes:
 
 - `MemoryQueue`
 - `onestep-mysql`: `MySQLConnector.table_queue(...)`, incremental sources, table sinks, state stores, and cursor stores
-- `onestep-rabbitmq`: `RabbitMQConnector.queue(...)`
+- `onestep-mq`: `RabbitMQConnector.queue(...)`
 - `onestep-redis`: `RedisConnector.stream(...)`
 - `onestep-sqs`: `SQSConnector.queue(...)`
 - `IntervalSource.every(...)`
@@ -38,7 +38,7 @@ Common extras:
 
 - `pip install 'onestep[yaml]'`
 - `pip install onestep-mysql`
-- `pip install onestep-rabbitmq`
+- `pip install onestep-mq`
 - `pip install onestep-redis`
 - `pip install onestep-sqs`
 - `pip install 'onestep[control-plane]'`
@@ -48,7 +48,7 @@ Connector plugins:
 
 - Feishu Bitable: install `onestep-feishu-bitable`
 - MySQL: install `onestep-mysql`
-- RabbitMQ: install `onestep-rabbitmq`
+- RabbitMQ: install `onestep-mq`
 - Redis: install `onestep-redis`
 - SQS: install `onestep-sqs`
 
@@ -207,7 +207,7 @@ Built-in YAML resource types:
 Plugin YAML resource types:
 
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
-- `onestep-rabbitmq`: `rabbitmq`, `rabbitmq_queue`
+- `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
@@ -847,7 +847,7 @@ async def process_job(ctx, item):
     return {"job": item["job"], "status": "done"}
 ```
 
-Install with `pip install onestep-rabbitmq`.
+Install with `pip install onestep-mq`.
 
 ## Redis Streams
 

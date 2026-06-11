@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_pypi:
-        description: "Publish the current onestep-rabbitmq version to PyPI"
+        description: "Publish the current onestep-mq version to PyPI"
         required: false
         default: false
         type: boolean
@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PLUGIN_PACKAGE: onestep-rabbitmq
+  PLUGIN_PACKAGE: onestep-mq
   PLUGIN_PATH: plugins/onestep-rabbitmq
   PLUGIN_PYPROJECT: plugins/onestep-rabbitmq/pyproject.toml
 
@@ -119,7 +119,7 @@ jobs:
 
           version = sys.argv[1]
           try:
-              with urllib.request.urlopen("https://pypi.org/pypi/onestep-rabbitmq/json", timeout=20) as response:
+              with urllib.request.urlopen("https://pypi.org/pypi/onestep-mq/json", timeout=20) as response:
                   releases = json.load(response).get("releases", {})
           except urllib.error.HTTPError as exc:
               if exc.code == 404:
@@ -211,4 +211,4 @@ jobs:
         with:
           packages-dir: dist/plugin
           skip-existing: true
-          password: ${{ secrets.RABBITMQ_PYPI_API_TOKEN || secrets.PYPI_API_TOKEN || secrets.PYPI_TOKEN }}
+          password: ${{ secrets.MQ_PYPI_API_TOKEN || secrets.PYPI_API_TOKEN || secrets.PYPI_TOKEN || secrets.RABBITMQ_PYPI_API_TOKEN }}

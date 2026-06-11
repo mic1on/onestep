@@ -7,7 +7,7 @@ from .resources import register_resources
 from .resilience import classify_rabbitmq_error
 
 try:
-    __version__ = _package_version("onestep-rabbitmq")
+    __version__ = _package_version("onestep-mq")
 except PackageNotFoundError:  # pragma: no cover - local source tree before install
     __version__ = "dev"
 

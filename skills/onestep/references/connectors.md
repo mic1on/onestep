@@ -4,7 +4,7 @@ Use this reference when wiring onestep resources to queues, polling backends, sc
 
 ## General Rules
 
-- Install only the needed package: `onestep-mysql`, `onestep-rabbitmq`, `onestep-redis`, `onestep-sqs`, or `onestep[yaml]`.
+- Install only the needed package: `onestep-mysql`, `onestep-mq`, `onestep-redis`, `onestep-sqs`, or `onestep[yaml]`.
 - Prefer environment variables for DSNs, tokens, and queue URLs in YAML.
 - In YAML, define shared connection resources first, then sources/sinks that reference them by name.
 - Keep connector options minimal until the deployment requires tuning.

@@ -159,7 +159,7 @@ Check these before rollout:
 - Python `>=3.9` is now required
 - optional extras have changed:
   - `onestep-mysql`
-  - `onestep-rabbitmq`
+  - `onestep-mq`
   - `onestep-redis`
   - `onestep-sqs`
   - `.[all]`

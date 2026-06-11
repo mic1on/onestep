@@ -10,8 +10,8 @@ resolution-markers = [
 members = [
     "onestep",
     "onestep-feishu-bitable",
+    "onestep-mq",
     "onestep-mysql",
-    "onestep-rabbitmq",
     "onestep-redis",
     "onestep-sqs",
 ]
@@ -464,8 +464,8 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 all = [
+    { name = "onestep-mq" },
     { name = "onestep-mysql" },
-    { name = "onestep-rabbitmq" },
     { name = "onestep-redis" },
     { name = "onestep-sqs" },
     { name = "pyyaml" },
@@ -477,8 +477,8 @@ control-plane = [
     { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 dev = [
+    { name = "onestep-mq" },
     { name = "onestep-mysql" },
-    { name = "onestep-rabbitmq" },
     { name = "onestep-redis" },
     { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -490,8 +490,8 @@ dev = [
     { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 integration = [
+    { name = "onestep-mq" },
     { name = "onestep-mysql" },
-    { name = "onestep-rabbitmq" },
     { name = "onestep-redis" },
     { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -504,7 +504,7 @@ mysql = [
     { name = "onestep-mysql" },
 ]
 rabbitmq = [
-    { name = "onestep-rabbitmq" },
+    { name = "onestep-mq" },
 ]
 redis = [
     { name = "onestep-redis" },
@@ -525,14 +525,14 @@ yaml = [
 
 [package.metadata]
 requires-dist = [
+    { name = "onestep-mq", marker = "extra == 'all'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mq", marker = "extra == 'dev'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mq", marker = "extra == 'integration'", editable = "plugins/onestep-rabbitmq" },
+    { name = "onestep-mq", marker = "extra == 'rabbitmq'", editable = "plugins/onestep-rabbitmq" },
     { name = "onestep-mysql", marker = "extra == 'all'", editable = "plugins/onestep-mysql" },
     { name = "onestep-mysql", marker = "extra == 'dev'", editable = "plugins/onestep-mysql" },
     { name = "onestep-mysql", marker = "extra == 'integration'", editable = "plugins/onestep-mysql" },
     { name = "onestep-mysql", marker = "extra == 'mysql'", editable = "plugins/onestep-mysql" },
-    { name = "onestep-rabbitmq", marker = "extra == 'all'", editable = "plugins/onestep-rabbitmq" },
-    { name = "onestep-rabbitmq", marker = "extra == 'dev'", editable = "plugins/onestep-rabbitmq" },
-    { name = "onestep-rabbitmq", marker = "extra == 'integration'", editable = "plugins/onestep-rabbitmq" },
-    { name = "onestep-rabbitmq", marker = "extra == 'rabbitmq'", editable = "plugins/onestep-rabbitmq" },
     { name = "onestep-redis", marker = "extra == 'all'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'dev'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'integration'", editable = "plugins/onestep-redis" },
@@ -585,6 +585,35 @@ requires-dist = [
 provides-extras = ["test", "dev"]
 
 [[package]]
+name = "onestep-mq"
+version = "0.2.0"
+source = { editable = "plugins/onestep-rabbitmq" }
+dependencies = [
+    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onestep" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aio-pika", specifier = ">=9.0.0" },
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+]
+provides-extras = ["test", "dev"]
+
+[[package]]
 name = "onestep-mysql"
 version = "0.2.0"
 source = { editable = "plugins/onestep-mysql" }
@@ -611,35 +640,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
-]
-provides-extras = ["test", "dev"]
-
-[[package]]
-name = "onestep-rabbitmq"
-version = "0.2.0"
-source = { editable = "plugins/onestep-rabbitmq" }
-dependencies = [
-    { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "aio-pika", version = "9.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "onestep" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
-test = [
-    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aio-pika", specifier = ">=9.0.0" },
-    { name = "onestep", editable = "." },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
 ]
 provides-extras = ["test", "dev"]
 

@@ -15,7 +15,7 @@ Common extras and connector plugins:
 ```bash
 pip install 'onestep[yaml]'
 pip install onestep-mysql
-pip install onestep-rabbitmq
+pip install onestep-mq
 pip install onestep-redis
 pip install onestep-sqs
 pip install 'onestep[control-plane]'

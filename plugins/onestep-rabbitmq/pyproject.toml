@@ -1,5 +1,5 @@
 [project]
-name = "onestep-rabbitmq"
+name = "onestep-mq"
 version = "0.2.0"
 description = "RabbitMQ connector plugin for onestep."
 readme = "README.md"
