@@ -109,29 +109,47 @@ jobs:
           CURRENT_VERSION="$(read_version "$PLUGIN_PYPROJECT")"
           PREVIOUS_VERSION=""
           SHOULD_PUBLISH=false
+          PROJECT_EXISTS_ON_PYPI=false
           VERSION_EXISTS_ON_PYPI=false
+          PYPI_STATUS=unknown
 
-          if python3 - "$CURRENT_VERSION" <<'PY'
+          PYPI_STATUS="$(python3 - "$CURRENT_VERSION" "$PLUGIN_PACKAGE" <<'PY'
           import json
+          import socket
           import sys
           import urllib.error
           import urllib.request
 
           version = sys.argv[1]
+          package = sys.argv[2]
           try:
-              with urllib.request.urlopen("https://pypi.org/pypi/onestep-mq/json", timeout=20) as response:
+              with urllib.request.urlopen(f"https://pypi.org/pypi/{package}/json", timeout=20) as response:
                   releases = json.load(response).get("releases", {})
           except urllib.error.HTTPError as exc:
               if exc.code == 404:
-                  raise SystemExit(1)
-              raise
-          raise SystemExit(0 if releases.get(version) else 1)
+                  print("missing-project")
+                  raise SystemExit(0)
+              print("unknown")
+              raise SystemExit(0)
+          except (TimeoutError, socket.timeout, urllib.error.URLError):
+              print("unknown")
+              raise SystemExit(0)
+          print("version-exists" if releases.get(version) else "missing-version")
           PY
-          then
+          )"
+
+          if [ "$PYPI_STATUS" = "version-exists" ]; then
+            PROJECT_EXISTS_ON_PYPI=true
             VERSION_EXISTS_ON_PYPI=true
+          elif [ "$PYPI_STATUS" = "missing-version" ]; then
+            PROJECT_EXISTS_ON_PYPI=true
           fi
 
           if [ "$EVENT_NAME" = "push" ]; then
+            if [ "$PYPI_STATUS" = "unknown" ]; then
+              echo "::notice::Could not determine PyPI status for $PLUGIN_PACKAGE. Skipping automatic publish on push; use workflow_dispatch with publish_pypi=true when PyPI is healthy."
+            fi
+
             if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
               if git cat-file -e "$BEFORE_SHA:$PLUGIN_PYPROJECT" 2>/dev/null; then
                 git show "$BEFORE_SHA:$PLUGIN_PYPROJECT" > /tmp/previous-plugin-pyproject.toml
@@ -139,9 +157,15 @@ jobs:
               fi
             fi
 
-            if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
-              SHOULD_PUBLISH=true
-            elif [ "$VERSION_EXISTS_ON_PYPI" != "true" ]; then
+            if [ "$PYPI_STATUS" = "unknown" ]; then
+              SHOULD_PUBLISH=false
+            elif [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+              if [ "$PROJECT_EXISTS_ON_PYPI" = "true" ]; then
+                SHOULD_PUBLISH=true
+              else
+                echo "::notice::Package $PLUGIN_PACKAGE does not exist on PyPI yet. Use workflow_dispatch with publish_pypi=true after PyPI's new-project creation limit resets."
+              fi
+            elif [ "$PROJECT_EXISTS_ON_PYPI" = "true" ] && [ "$VERSION_EXISTS_ON_PYPI" != "true" ]; then
               SHOULD_PUBLISH=true
             fi
           elif [ "$INPUT_PUBLISH_PYPI" = "true" ]; then
@@ -160,6 +184,8 @@ jobs:
 
           echo "Current plugin version: $CURRENT_VERSION"
           echo "Previous plugin version: ${PREVIOUS_VERSION:-<none>}"
+          echo "PyPI status: $PYPI_STATUS"
+          echo "Project exists on PyPI: $PROJECT_EXISTS_ON_PYPI"
           echo "Version exists on PyPI: $VERSION_EXISTS_ON_PYPI"
           echo "Publish plugin: $SHOULD_PUBLISH"
 
