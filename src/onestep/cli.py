@@ -24,6 +24,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     run_parser = subparsers.add_parser("run", help="Load and run a OneStepApp target or YAML config")
     run_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
+    run_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        default=None,
+        help="Path to a .env file to load environment variables from (YAML targets only)",
+    )
+    run_parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        dest="strict_env",
+        default=None,
+        help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
+    )
 
     check_parser = subparsers.add_parser("check", help="Load a target or YAML config and print its task summary")
     check_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
@@ -32,6 +45,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--strict",
         action="store_true",
         help="Validate YAML targets against the strict config contract before printing the summary",
+    )
+    check_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        default=None,
+        help="Path to a .env file to load environment variables from (YAML targets only)",
+    )
+    check_parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        dest="strict_env",
+        default=None,
+        help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
     )
 
     init_parser = subparsers.add_parser("init", help="Create a minimal OneStep YAML project scaffold")
@@ -59,7 +85,18 @@ def main(argv: list[str] | None = None) -> int:
     _ensure_local_import_paths(args.target)
     try:
         if args.command == "check" and getattr(args, "strict", False) and is_yaml_target(args.target):
-            app = load_yaml_app(args.target, strict=True)
+            app = load_yaml_app(
+                args.target,
+                strict=True,
+                env_file=getattr(args, "env_file", None),
+                strict_env=getattr(args, "strict_env", None),
+            )
+        elif is_yaml_target(args.target):
+            app = load_yaml_app(
+                args.target,
+                env_file=getattr(args, "env_file", None),
+                strict_env=getattr(args, "strict_env", None),
+            )
         else:
             app = OneStepApp.load(args.target)
     except Exception as exc:
