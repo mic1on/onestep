@@ -30,7 +30,7 @@ from .resource_registry import (
     validate_unknown_fields as _validate_unknown_fields,
 )
 from .retry import MaxAttempts, NoRetry, RetryPolicy
-from .task import TaskHooks
+from .task import EmitRoute, TaskHooks
 
 _YAML_SUFFIXES = (".yaml", ".yml")
 
@@ -67,6 +67,7 @@ _STRICT_TOP_LEVEL_FIELDS = frozenset(
 _STRICT_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state", "logging", "env_file", "strict_env"})
 _STRICT_APP_LOGGING_FIELDS = frozenset({"level"})
 _STRICT_HANDLER_FIELDS = frozenset({"ref", "params"})
+_STRICT_EMIT_ROUTE_FIELDS = frozenset({"when", "then", "otherwise"})
 _STRICT_APP_HOOK_FIELDS = frozenset({"startup", "shutdown", "events"})
 _STRICT_TASK_HOOK_FIELDS = frozenset({"before", "after_success", "on_failure"})
 _STRICT_TASK_FIELDS = frozenset(
@@ -337,7 +338,7 @@ def load_app_config(
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         task_name = _optional_string(task_config, "name")
         source = _resolve_optional_source(resources, task_config.get("source"), task_index=index)
-        emit = _resolve_optional_sinks(resources, task_config.get("emit"), field="emit", task_index=index)
+        emit = _resolve_optional_emit_routes(resources, task_config.get("emit"), field="emit", task_index=index)
         dead_letter = _resolve_optional_sinks(
             resources,
             task_config.get("dead_letter"),
@@ -538,6 +539,59 @@ def _resolve_optional_sinks(
     return tuple(sinks)
 
 
+def _resolve_optional_emit_routes(
+    resources: Mapping[str, Any],
+    value: Any,
+    *,
+    field: str,
+    task_index: int,
+) -> tuple[EmitRoute, ...] | None:
+    if value is None:
+        return None
+    base_field = f"tasks[{task_index}].{field}"
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        entries = list(value)
+        return tuple(
+            _resolve_emit_route(resources, entry, field=f"{base_field}[{index}]")
+            for index, entry in enumerate(entries)
+        )
+    return (_resolve_emit_route(resources, value, field=base_field),)
+
+
+def _resolve_emit_route(resources: Mapping[str, Any], value: Any, *, field: str) -> EmitRoute:
+    if isinstance(value, Mapping):
+        if "when" not in value:
+            raise ValueError(f"{field}.when is required")
+        if "then" not in value:
+            raise ValueError(f"{field}.then is required")
+        predicate, predicate_ref = _resolve_callable_ref(value.get("when"), field=f"{field}.when")
+        otherwise_sinks = (
+            _resolve_emit_sinks(resources, value.get("otherwise"), field=f"{field}.otherwise")
+            if "otherwise" in value
+            else ()
+        )
+        return EmitRoute(
+            predicate=predicate,
+            predicate_ref=predicate_ref,
+            then_sinks=_resolve_emit_sinks(resources, value.get("then"), field=f"{field}.then"),
+            otherwise_sinks=otherwise_sinks,
+        )
+    return EmitRoute(then_sinks=_resolve_emit_sinks(resources, value, field=field))
+
+
+def _resolve_emit_sinks(resources: Mapping[str, Any], value: Any, *, field: str) -> tuple[Sink, ...]:
+    names = _string_list(value, field=field)
+    if not names:
+        raise ValueError(f"{field} must not be empty")
+    sinks: list[Sink] = []
+    for name in names:
+        resolved = _resolve_resource(resources, name)
+        if not isinstance(resolved, Sink):
+            raise TypeError(f"resource {name!r} cannot be used as a sink")
+        sinks.append(resolved)
+    return tuple(sinks)
+
+
 def _resolve_app_state(resources: Mapping[str, Any], value: Any) -> Any:
     name = _string_value(value, field="app.state")
     resolved = _resolve_resource(resources, name)
@@ -620,6 +674,7 @@ def _validate_tasks(raw_tasks: Any) -> None:
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         field = f"tasks[{index}]"
         _validate_unknown_fields(raw_task, _STRICT_TASK_FIELDS, field=field)
+        _validate_emit(raw_task.get("emit"), field=f"{field}.emit")
         if "handler" in raw_task:
             _validate_ref_entry(raw_task.get("handler"), field=f"{field}.handler")
         elif not _task_emit_configured(raw_task.get("emit")):
@@ -714,6 +769,41 @@ def _validate_ref_entry(raw_value: Any, *, field: str) -> None:
     params = raw_value.get("params")
     if params is not None and not isinstance(params, Mapping):
         raise TypeError(f"'{field}.params' must be a mapping")
+
+
+def _validate_emit(raw_emit: Any, *, field: str) -> None:
+    if raw_emit is None:
+        return
+    if isinstance(raw_emit, Mapping):
+        _validate_emit_route(raw_emit, field=field)
+        return
+    if isinstance(raw_emit, Sequence) and not isinstance(raw_emit, (str, bytes)):
+        for index, entry in enumerate(raw_emit):
+            entry_field = f"{field}[{index}]"
+            if isinstance(entry, Mapping):
+                _validate_emit_route(entry, field=entry_field)
+            else:
+                _validate_emit_sink_names(entry, field=entry_field)
+        return
+    _validate_emit_sink_names(raw_emit, field=field)
+
+
+def _validate_emit_route(raw_route: Mapping[str, Any], *, field: str) -> None:
+    _validate_unknown_fields(raw_route, _STRICT_EMIT_ROUTE_FIELDS, field=field)
+    if "when" not in raw_route:
+        raise ValueError(f"{field}.when is required")
+    if "then" not in raw_route:
+        raise ValueError(f"{field}.then is required")
+    _validate_ref_entry(raw_route.get("when"), field=f"{field}.when")
+    _validate_emit_sink_names(raw_route.get("then"), field=f"{field}.then")
+    if "otherwise" in raw_route:
+        _validate_emit_sink_names(raw_route.get("otherwise"), field=f"{field}.otherwise")
+
+
+def _validate_emit_sink_names(raw_value: Any, *, field: str) -> None:
+    names = _string_list(raw_value, field=field)
+    if not names:
+        raise ValueError(f"{field} must not be empty")
 
 
 def _validate_retry(raw_retry: Any, *, field: str) -> None:
