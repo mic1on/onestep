@@ -19,7 +19,7 @@ from onestep.task import TaskSpec
 
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
-    from onestep.connectors.base import Delivery
+    from onestep.connectors.base import Delivery, Sink
 
 
 _INVALID_NOTIFICATION_VALUE = object()
@@ -263,9 +263,9 @@ class TaskRunner:
             await self._run_task_hooks(self.task.hooks.before, ctx, delivery.payload)
             result = await self._invoke_handler(ctx, delivery)
             await self._run_task_hooks(self.task.hooks.after_success, ctx, delivery.payload, result)
-            if result is not None and self.task.sinks:
+            if result is not None and self.task.emit_routes:
                 envelope = Envelope(body=result)
-                for sink in self.task.sinks:
+                for sink in await self._select_emit_sinks(ctx, delivery.payload, result):
                     await self._send_to_sink(sink, envelope)
             await delivery.ack()
             event_meta = self._build_succeeded_event_meta(delivery, result)
@@ -317,6 +317,21 @@ class TaskRunner:
                 return await asyncio.wait_for(result, timeout=self.task.timeout_s)
             return await result
         return result
+
+    async def _select_emit_sinks(self, ctx: TaskContext, payload: Any, result: Any) -> tuple["Sink", ...]:
+        sinks: list["Sink"] = []
+        for route in self.task.emit_routes:
+            if route.predicate is None:
+                sinks.extend(route.then_sinks)
+                continue
+            predicate_result = invoke_callback(route.predicate, ctx, payload, result)
+            if inspect.isawaitable(predicate_result):
+                predicate_result = await predicate_result
+            if predicate_result:
+                sinks.extend(route.then_sinks)
+            else:
+                sinks.extend(route.otherwise_sinks)
+        return tuple(sinks)
 
     async def _handle_failure(
         self,

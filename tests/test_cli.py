@@ -700,6 +700,264 @@ def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_pat
     assert seen == [{"value": 42}]
 
 
+def test_yaml_target_loads_conditional_emit_routes(tmp_path) -> None:
+    config_path = tmp_path / "conditional-emit.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-conditional-emit",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "audit": {"type": "memory"},
+                    "active": {"type": "memory"},
+                    "inactive": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_emit_routes:consume",
+                        "emit": [
+                            "audit",
+                            {
+                                "when": {
+                                    "ref": "testsupport_yaml_emit_routes:is_active",
+                                    "params": {"threshold": 10},
+                                },
+                                "then": "active",
+                                "otherwise": "inactive",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async def consume(ctx, item):
+        return item
+
+    def is_active(ctx, payload, result, *, threshold: int):
+        return result["value"] >= threshold
+
+    with registered_yaml_module(), registered_module(
+        "testsupport_yaml_emit_routes",
+        consume=consume,
+        is_active=is_active,
+    ):
+        app = OneStepApp.load(str(config_path))
+
+    task = app.tasks[0]
+    assert [sink.name for sink in task.sinks] == ["audit", "active", "inactive"]
+    assert len(task.emit_routes) == 2
+    assert task.emit_routes[0].predicate is None
+    assert [sink.name for sink in task.emit_routes[0].then_sinks] == ["audit"]
+    assert task.emit_routes[1].predicate_ref == "testsupport_yaml_emit_routes:is_active"
+    assert [sink.name for sink in task.emit_routes[1].then_sinks] == ["active"]
+    assert [sink.name for sink in task.emit_routes[1].otherwise_sinks] == ["inactive"]
+
+    async def evaluate_predicate(result):
+        selected = task.emit_routes[1].predicate(None, {}, result)
+        if asyncio.iscoroutine(selected):
+            return await selected
+        return selected
+
+    assert asyncio.run(evaluate_predicate({"value": 11})) is True
+    assert asyncio.run(evaluate_predicate({"value": 9})) is False
+
+
+def test_yaml_conditional_emit_supports_list_sinks_and_passthrough_handler() -> None:
+    def should_route(ctx, payload, result):
+        return True
+
+    with registered_module("testsupport_yaml_emit_passthrough", should_route=should_route):
+        app = load_app_config(
+            {
+                "name": "yaml-conditional-passthrough",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "primary": {"type": "memory"},
+                    "audit": {"type": "memory"},
+                    "fallback": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": "testsupport_yaml_emit_passthrough:should_route",
+                                "then": ["primary", "audit"],
+                                "otherwise": ["fallback"],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+    task = app.tasks[0]
+    assert task.handler_ref is None
+    assert [sink.name for sink in task.sinks] == ["primary", "audit", "fallback"]
+    assert [sink.name for sink in task.emit_routes[0].then_sinks] == ["primary", "audit"]
+    assert [sink.name for sink in task.emit_routes[0].otherwise_sinks] == ["fallback"]
+
+
+def test_cli_check_json_flattens_conditional_emit_routes(capsys, tmp_path) -> None:
+    config_path = tmp_path / "conditional-cli.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-conditional-cli",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "active": {"type": "memory"},
+                    "inactive": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": "testsupport_yaml_emit_cli:is_active",
+                                "then": "active",
+                                "otherwise": "inactive",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def is_active(ctx, payload, result):
+        return True
+
+    with registered_yaml_module(), registered_module("testsupport_yaml_emit_cli", is_active=is_active):
+        exit_code = main(["check", "--json", str(config_path)])
+
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert exit_code == 0
+    assert [entry["name"] for entry in summary["tasks"][0]["emit"]] == ["active", "inactive"]
+    assert "emit_routes" not in summary["tasks"][0]
+
+
+def test_load_app_config_strict_rejects_emit_route_missing_then() -> None:
+    with pytest.raises(ValueError, match=r"tasks\[0\]\.emit\[0\]\.then is required"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-strict-emit-missing-then"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "processed": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": "testsupport_yaml_emit_strict:predicate",
+                            }
+                        ],
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_emit_route_unknown_fields() -> None:
+    with pytest.raises(ValueError, match=r"unsupported fields for tasks\[0\]\.emit\[0\]: else"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-strict-emit-unknown"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "processed": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": "testsupport_yaml_emit_strict:predicate",
+                                "then": "processed",
+                                "else": "processed",
+                            }
+                        ],
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_emit_route_expression_when() -> None:
+    with pytest.raises(ValueError, match=r"unsupported fields for tasks\[0\]\.emit\[0\]\.when: expression"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-strict-emit-expression"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "processed": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": {"expression": "payload.active"},
+                                "then": "processed",
+                            }
+                        ],
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_emit_route_empty_then_list() -> None:
+    with pytest.raises(ValueError, match=r"tasks\[0\]\.emit\[0\]\.then must not be empty"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-strict-emit-empty-then"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "processed": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": "testsupport_yaml_emit_strict:predicate",
+                                "then": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
 def test_yaml_target_builds_webhook_auth_and_response(tmp_path) -> None:
     config_path = tmp_path / "webhook.yaml"
     config_path.write_text(

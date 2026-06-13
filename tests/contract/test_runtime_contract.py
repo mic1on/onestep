@@ -22,6 +22,7 @@ from onestep import (
 )
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
+from onestep.task import EmitRoute
 
 
 class _StubDelivery(Delivery):
@@ -449,6 +450,156 @@ def test_ctx_emit_and_return_follow_separate_contracts() -> None:
         assert len(explicit_batch) == 1
         assert default_batch[0].payload == {"kind": "main", "value": 6}
         assert explicit_batch[0].payload == {"kind": "side", "value": 3}
+
+    asyncio.run(scenario())
+
+
+def test_task_spec_normalizes_unconditional_sink_to_emit_route() -> None:
+    source = MemoryQueue("incoming")
+    sink = MemoryQueue("processed")
+    app = OneStepApp("emit-route-model")
+
+    @app.task(source=source, emit=sink)
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.sinks == (sink,)
+    assert task.emit_routes == (EmitRoute(then_sinks=(sink,)),)
+
+
+def test_task_spec_flattens_conditional_route_sinks_for_compatibility() -> None:
+    source = MemoryQueue("incoming")
+    active = MemoryQueue("active")
+    inactive = MemoryQueue("inactive")
+    app = OneStepApp("emit-route-flatten")
+
+    def is_active(ctx, payload, result):
+        return True
+
+    route = EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))
+
+    @app.task(source=source, emit=[route])
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.emit_routes == (route,)
+    assert task.sinks == (active, inactive)
+
+
+def test_conditional_emit_routes_select_then_and_otherwise_sinks() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        active = MemoryQueue("active", poll_interval_s=0.01)
+        inactive = MemoryQueue("inactive", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit")
+        seen: list[int] = []
+
+        def is_active(ctx, payload, result):
+            return result["active"]
+
+        @app.task(
+            source=source,
+            emit=[EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))],
+        )
+        async def consume(ctx, item):
+            seen.append(item["id"])
+            if len(seen) == 2:
+                ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"id": 1, "active": True})
+        await source.publish({"id": 2, "active": False})
+        await app.serve()
+
+        active_batch = await active.fetch(1)
+        inactive_batch = await inactive.fetch(1)
+        assert [delivery.payload for delivery in active_batch] == [{"id": 1, "active": True}]
+        assert [delivery.payload for delivery in inactive_batch] == [{"id": 2, "active": False}]
+
+    asyncio.run(scenario())
+
+
+def test_conditional_emit_route_without_otherwise_skips_false_result() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-skip")
+
+        @app.task(
+            source=source,
+            emit=[EmitRoute(predicate=lambda ctx, payload, result: False, then_sinks=(sink,))],
+        )
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"value": 1})
+        await app.serve()
+
+        assert await sink.fetch(1) == []
+
+    asyncio.run(scenario())
+
+
+def test_conditional_emit_route_awaits_async_predicate() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-async")
+
+        async def should_emit(ctx, payload, result):
+            await asyncio.sleep(0)
+            return result["value"] == 3
+
+        @app.task(source=source, emit=[EmitRoute(predicate=should_emit, then_sinks=(sink,))])
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        await source.publish({"value": 2})
+        await app.serve()
+
+        batch = await sink.fetch(1)
+        assert [delivery.payload for delivery in batch] == [{"value": 3}]
+
+    asyncio.run(scenario())
+
+
+def test_conditional_emit_predicate_failure_uses_retry_policy() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-retry")
+        attempts: list[int] = []
+        predicate_calls = 0
+
+        def flaky_predicate(ctx, payload, result):
+            nonlocal predicate_calls
+            predicate_calls += 1
+            if predicate_calls == 1:
+                raise RuntimeError("predicate failed")
+            return True
+
+        @app.task(
+            source=source,
+            emit=[EmitRoute(predicate=flaky_predicate, then_sinks=(sink,))],
+            retry=MaxAttempts(2, delay_s=0),
+        )
+        async def consume(ctx, item):
+            attempts.append(ctx.current.attempts)
+            if len(attempts) == 2:
+                ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"value": 1})
+        await app.serve()
+
+        batch = await sink.fetch(1)
+        assert attempts == [0, 1]
+        assert predicate_calls == 2
+        assert [delivery.payload for delivery in batch] == [{"value": 1}]
 
     asyncio.run(scenario())
 

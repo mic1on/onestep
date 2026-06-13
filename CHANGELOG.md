@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Adds YAML conditional sink routing with `when` / `then` / `otherwise` emit entries while preserving legacy fan-out emit behavior.
+- Keeps CLI, app description, and control-plane topology output on the existing flattened `emit` sink list.
+
 ## onestep-mysql 0.3.0
 
 - Adds the `mysql_binlog` source for row-based MySQL binlog CDC.

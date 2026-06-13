@@ -18,9 +18,12 @@ YAML is responsible for:
 YAML does not define:
 
 - transform DSLs
-- conditional branches or workflow graphs
+- workflow graphs
 - expression engines
 - embedded business logic
+
+YAML may name Python predicate callables for conditional sink routing, but the
+condition logic still lives in Python.
 
 ## Strict Check
 
@@ -38,6 +41,7 @@ Strict mode is intended to catch configuration drift early:
 - invalid `apiVersion` / `kind` values when they are present
 - silent mixing of legacy top-level app fields with the `app:` section
 - invalid `app.logging.level` values when YAML opts into framework log control
+- invalid conditional `emit` route shapes
 
 ## Framework Logging
 
@@ -174,6 +178,46 @@ tasks:
       max_attempts: 5
       delay_s: 10
 ```
+
+### Conditional Sink Routing
+
+`emit` entries can mix unconditional sinks with conditional route mappings.
+YAML only names the predicate callable and target sinks; Python evaluates the
+condition.
+
+```yaml
+tasks:
+  - name: route_users
+    source: users_source
+    emit:
+      - audit_sink
+      - when:
+          ref: worker.routing:is_active_user
+          params:
+            status_field: status
+        then: active_user_sink
+        otherwise: inactive_user_sink
+    handler:
+      ref: worker.tasks.users:normalize_user
+```
+
+The predicate callable may accept `ctx`, `payload`, and `result` positional
+arguments. It can also receive keyword arguments from `when.params`.
+
+```python
+def is_active_user(ctx, payload, result, *, status_field: str) -> bool:
+    return result.get(status_field) == "active"
+```
+
+Rules:
+
+- `when` is a callable ref string or a `{ref, params}` mapping.
+- `then` is a sink name or list of sink names.
+- `otherwise` is optional; when omitted, a falsy predicate skips that route.
+- separate `emit` entries are evaluated independently and in order.
+- within one route, only `then` or `otherwise` is selected.
+- predicate exceptions are task failures and use the task retry/dead-letter policy.
+- already completed sink sends are not rolled back if a later route or sink fails.
 
 ### Level 3: Add Task Config
 
@@ -421,6 +465,7 @@ Hook `params` are passed as keyword arguments after the runtime arguments.
 
 - `before` runs after the delivery starts processing and after the `started` event is emitted.
 - `after_success` runs after the handler returns successfully, before emitting to sinks and before `ack()`.
+- conditional `emit.when` predicates run after `after_success`, before sink sends and before `ack()`.
 - `on_failure` runs for task failures before retry or dead-letter decisions are applied.
 - failures inside `on_failure` hooks are logged and do not replace the original task failure.
 - `timeout_s` currently applies to the async handler body itself; task hooks remain outside that timeout.
