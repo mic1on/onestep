@@ -22,6 +22,7 @@ from onestep import (
 )
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
+from onestep.task import EmitRoute
 
 
 class _StubDelivery(Delivery):
@@ -451,6 +452,40 @@ def test_ctx_emit_and_return_follow_separate_contracts() -> None:
         assert explicit_batch[0].payload == {"kind": "side", "value": 3}
 
     asyncio.run(scenario())
+
+
+def test_task_spec_normalizes_unconditional_sink_to_emit_route() -> None:
+    source = MemoryQueue("incoming")
+    sink = MemoryQueue("processed")
+    app = OneStepApp("emit-route-model")
+
+    @app.task(source=source, emit=sink)
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.sinks == (sink,)
+    assert task.emit_routes == (EmitRoute(then_sinks=(sink,)),)
+
+
+def test_task_spec_flattens_conditional_route_sinks_for_compatibility() -> None:
+    source = MemoryQueue("incoming")
+    active = MemoryQueue("active")
+    inactive = MemoryQueue("inactive")
+    app = OneStepApp("emit-route-flatten")
+
+    def is_active(ctx, payload, result):
+        return True
+
+    route = EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))
+
+    @app.task(source=source, emit=[route])
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.emit_routes == (route,)
+    assert task.sinks == (active, inactive)
 
 
 def test_task_timeout_retries_once_then_fails() -> None:
