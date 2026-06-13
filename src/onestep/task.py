@@ -4,7 +4,7 @@ import copy
 import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union
 
 from .connectors.base import Sink, Source
 from .retry import NoRetry, RetryPolicy
@@ -33,7 +33,7 @@ class EmitRoute:
         return (*self.then_sinks, *self.otherwise_sinks)
 
 
-EmitTarget = Sink | EmitRoute
+EmitTarget = Union[Sink, EmitRoute]
 
 
 @dataclass
