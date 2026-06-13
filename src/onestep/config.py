@@ -138,10 +138,10 @@ def _expand_env_vars(value: Any) -> Any:
 
 def _load_dotenv(path: str) -> int:
     """Parse a .env file and inject key=value pairs into os.environ.
-    
+
     Uses os.environ.setdefault so existing environment variables take
     precedence over those defined in the .env file.
-    
+
     Returns the number of keys loaded from the file.
     """
     logger = logging.getLogger("onestep")
@@ -163,8 +163,12 @@ def _load_dotenv(path: str) -> int:
                 )
                 continue
             key = match.group(1)
-            # value: the first non-None group among the three value capture groups
-            value = match.group(2) or match.group(3) or match.group(4) or ""
+            if match.group(2) is not None:
+                value = match.group(2)
+            elif match.group(3) is not None:
+                value = match.group(3)
+            else:
+                value = (match.group(4) or "").strip()
             previous = os.environ.get(key)
             if previous is not None:
                 logger.debug("skipped %s from %s (already set in environment)", key, path)
@@ -176,7 +180,7 @@ def _load_dotenv(path: str) -> int:
 
 def _collect_env_refs(config: Any) -> dict[str, list[str]]:
     """Collect all ${VAR} references without defaults that are missing from the environment.
-    
+
     Returns a dict mapping missing variable names to their field paths.
     """
     ref_re = re.compile(r"\$\{([^}]+)\}")

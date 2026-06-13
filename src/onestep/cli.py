@@ -34,6 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--strict-env",
         action="store_true",
         dest="strict_env",
+        default=None,
         help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
     )
 
@@ -55,6 +56,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--strict-env",
         action="store_true",
         dest="strict_env",
+        default=None,
         help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
     )
 

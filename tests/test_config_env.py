@@ -94,7 +94,16 @@ def test_load_dotenv_value_with_trailing_comment(tmp_path, monkeypatch):
     env_file.write_text("DB_DSN_5=mysql://localhost # connection string\n", encoding="utf-8")
     loaded = _load_dotenv(str(env_file))
     assert loaded == 1
-    assert "mysql://localhost" in os.environ["DB_DSN_5"]
+    assert os.environ["DB_DSN_5"] == "mysql://localhost"
+
+
+def test_load_dotenv_quoted_value_preserves_spaces(tmp_path, monkeypatch):
+    monkeypatch.delenv("PADDED_TOKEN", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text('PADDED_TOKEN="  abc123  " # comment\n', encoding="utf-8")
+    loaded = _load_dotenv(str(env_file))
+    assert loaded == 1
+    assert os.environ["PADDED_TOKEN"] == "  abc123  "
 
 
 def test_load_dotenv_shell_variable_takes_precedence(tmp_path, monkeypatch):
@@ -540,6 +549,28 @@ def test_cli_check_with_strict_env_missing_var(tmp_path, capsys):
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "strict_env: missing required environment variable" in captured.err
+
+
+def test_cli_check_honors_app_strict_env_when_flag_omitted(tmp_path, capsys, monkeypatch):
+    monkeypatch.delenv("APP_STRICT_MISSING_VAR", raising=False)
+    config_path = tmp_path / "app-strict-cli.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {"name": "app-strict-cli-test", "strict_env": True},
+                "resources": {
+                    "db": {"type": "memory", "dsn": "${APP_STRICT_MISSING_VAR}"},
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with _registered_yaml_module():
+        exit_code = main(["check", str(config_path)])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "APP_STRICT_MISSING_VAR" in captured.err
 
 
 def test_cli_check_with_strict_env_and_env_file(tmp_path, capsys, monkeypatch):
