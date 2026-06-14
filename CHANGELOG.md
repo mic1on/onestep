@@ -5,6 +5,12 @@
 - Adds YAML conditional sink routing with `when` / `then` / `otherwise` emit entries while preserving legacy fan-out emit behavior.
 - Keeps CLI, app description, and control-plane topology output on the existing flattened `emit` sink list.
 
+## onestep-postgres 0.1.0
+
+- Adds the `onestep-postgres` plugin package with PostgreSQL table queues, incremental polling sources, table sinks, and SQLAlchemy-backed state/cursor stores.
+- Supports YAML resource registration for `postgres`, `postgres_state_store`, `postgres_cursor_store`, `postgres_table_queue`, `postgres_incremental`, and `postgres_table_sink`.
+- Adds focused unit tests and live PostgreSQL integration coverage gated by `ONESTEP_POSTGRES_DSN`.
+
 ## onestep-mysql 0.3.0
 
 - Adds the `mysql_binlog` source for row-based MySQL binlog CDC.
