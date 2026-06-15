@@ -19,6 +19,8 @@ import type {
   NotificationServiceListResponse,
   NotificationServiceScope,
   Pipeline,
+  PipelineConnectorDescriptor,
+  PipelineCredential,
   PipelineGraph,
   PipelineListResponse,
   PipelineValidationResult,
@@ -346,6 +348,64 @@ export function validatePipeline(pipelineId: string) {
     `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/validate`,
     { method: "POST" },
   );
+}
+
+export function listPipelineConnectors() {
+  return request<{ items: PipelineConnectorDescriptor[] }>("/api/v1/connectors");
+}
+
+export function listPipelineCredentials() {
+  return request<{ items: PipelineCredential[] }>("/api/v1/pipeline-credentials");
+}
+
+export function createPipelineCredential(payload: {
+  name: string;
+  connector_type: string;
+  config: Record<string, unknown>;
+  env_vars: Record<string, string>;
+}) {
+  return request<PipelineCredential>("/api/v1/pipeline-credentials", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function updatePipelineCredential(
+  credentialId: string,
+  payload: Partial<{
+    name: string;
+    connector_type: string;
+    config: Record<string, unknown>;
+    env_vars: Record<string, string>;
+  }>,
+) {
+  return request<PipelineCredential>(
+    `/api/v1/pipeline-credentials/${encodeURIComponent(credentialId)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export function deletePipelineCredential(credentialId: string) {
+  return request<void>(`/api/v1/pipeline-credentials/${encodeURIComponent(credentialId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function exportPipeline(pipelineId: string) {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}/export`),
+    {
+      credentials: "include",
+      method: "POST",
+    },
+  );
+  if (!response.ok) {
+    throw new ApiError(response.statusText, response.status);
+  }
+  return response.blob();
 }
 
 export async function listNotificationChannels() {

@@ -15,6 +15,7 @@ Current scope:
 - task-oriented SQLAlchemy data model for services, instances, task windows, and task events
 - bearer-protected agent WS endpoint at `/api/v1/agents/ws`
 - query endpoints under `/api/v1/services*` for the future UI
+- design-time Pipeline Builder routes and UI for validating and exporting worker definitions
 - `frontend` monitoring console scaffold for service, task, and instance views
 
 ## Data model
