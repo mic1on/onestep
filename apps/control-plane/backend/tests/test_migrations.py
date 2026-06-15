@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202605270001"
+HEAD_REVISION = "202606150001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -39,6 +39,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "notification_channels",
         "notification_deliveries",
         "notification_instance_states",
+        "pipelines",
         "task_definitions",
         "task_events",
         "task_metric_windows",
@@ -159,6 +160,15 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
+    assert {column["name"] for column in inspector.get_columns("pipelines")} == {
+        "id",
+        "name",
+        "description",
+        "graph_json",
+        "status",
+        "created_at",
+        "updated_at",
+    }
     assert {column["name"] for column in inspector.get_columns("local_roles")} == {
         "id",
         "name",
@@ -222,6 +232,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         column["name"]: column
         for column in inspector.get_columns("notification_instance_states")
     }
+    pipeline_columns = {column["name"]: column for column in inspector.get_columns("pipelines")}
     instance_columns = {column["name"]: column for column in inspector.get_columns("instances")}
     assert isinstance(instance_columns["app_snapshot_json"]["type"], sa.JSON)
     assert isinstance(agent_session_columns["capabilities_json"]["type"], sa.JSON)
@@ -241,6 +252,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         notification_instance_state_columns["last_connectivity"]["type"],
         sa.String,
     )
+    assert isinstance(pipeline_columns["graph_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {
@@ -299,6 +311,10 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("notification_deliveries")} == {
         "ix_notification_deliveries_channel_id_created_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("pipelines")} == {
+        "ix_pipelines_status_updated_at",
+        "ix_pipelines_updated_at",
     }
     assert {index["name"] for index in inspector.get_indexes("local_users")} == {
         "ix_local_users_username",

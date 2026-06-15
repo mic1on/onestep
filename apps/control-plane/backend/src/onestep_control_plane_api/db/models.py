@@ -18,6 +18,31 @@ def utcnow() -> datetime:
 JSON_TYPE = sa.JSON().with_variant(JSONB(), "postgresql")
 
 
+class Pipeline(Base):
+    __tablename__ = "pipelines"
+    __table_args__ = (
+        sa.Index("ix_pipelines_updated_at", "updated_at"),
+        sa.Index("ix_pipelines_status_updated_at", "status", "updated_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    description: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    graph_json: Mapped[dict[str, object]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=dict,
+    )
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="draft")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class Service(Base):
     __tablename__ = "services"
     __table_args__ = (
