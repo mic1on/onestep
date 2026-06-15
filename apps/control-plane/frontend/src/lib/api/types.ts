@@ -66,6 +66,79 @@ export type ConsoleRole = "viewer" | "operator" | "admin";
 
 export type JsonObject = Record<string, unknown>;
 
+export type PipelineStatus = "draft" | "valid" | "invalid";
+export type PipelineNodeKind = "source" | "handler" | "sink";
+export type PipelineHandlerMode = "visual" | "code";
+
+export interface PipelineGraphNode {
+  id: string;
+  type: string;
+  kind: PipelineNodeKind;
+  credential_ref?: string | null;
+  config: JsonObject;
+  mode?: PipelineHandlerMode | null;
+  mapping: Record<string, string>;
+  code?: string | null;
+  input_schema: JsonObject;
+  position: { x: number; y: number };
+}
+
+export interface PipelineGraphEdge {
+  from: string;
+  to: string;
+  condition?: string | null;
+}
+
+export interface PipelineGraph {
+  nodes: PipelineGraphNode[];
+  edges: PipelineGraphEdge[];
+}
+
+export interface Pipeline {
+  id: string;
+  name: string;
+  description: string;
+  graph: PipelineGraph;
+  status: PipelineStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PipelineListResponse {
+  items: Pipeline[];
+}
+
+export interface PipelineValidationResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface PipelineConnectorField {
+  name: string;
+  label: string;
+  type: string;
+  required: boolean;
+}
+
+export interface PipelineConnectorDescriptor {
+  type: string;
+  label: string;
+  category: PipelineNodeKind;
+  description: string;
+  credential_type?: string | null;
+  fields: PipelineConnectorField[];
+}
+
+export interface PipelineCredential {
+  id: string;
+  name: string;
+  connector_type: string;
+  config: JsonObject;
+  env_vars: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ConnectorDescriptor {
   kind: string;
   name: string;

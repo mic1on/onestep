@@ -75,6 +75,7 @@ describe("AppShell", () => {
     renderShell();
 
     expect(await screen.findByText("Services page")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Pipelines" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Notifications" })).toBeInTheDocument();
   });
 });

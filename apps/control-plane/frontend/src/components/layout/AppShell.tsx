@@ -60,6 +60,14 @@ export function AppShell() {
             >
               {t("app.servicesNav")}
             </NavLink>
+            <NavLink
+              className={({ isActive }) =>
+                isActive ? "shell-nav-link active" : "shell-nav-link"
+              }
+              to="/pipelines"
+            >
+              {t("app.pipelinesNav")}
+            </NavLink>
             {canManageNotifications ? (
               <NavLink
                 className={({ isActive }) =>

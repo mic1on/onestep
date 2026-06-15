@@ -18,6 +18,10 @@ import type {
   NotificationProvider,
   NotificationServiceListResponse,
   NotificationServiceScope,
+  Pipeline,
+  PipelineGraph,
+  PipelineListResponse,
+  PipelineValidationResult,
   ServiceCommandFanoutResponse,
   ServiceCommandOfflineBehavior,
   ServiceCommandTargetMode,
@@ -39,7 +43,7 @@ const INSTANCE_COMMANDS_PAGE_SIZE = 50;
 
 type QueryValue = string | number | undefined | null;
 type RequestOptions = {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   query?: Record<string, QueryValue>;
   body?: unknown;
   redirectOnUnauthorized?: boolean;
@@ -303,6 +307,45 @@ export function listServices(environment?: Environment, sourceKind?: string, que
   return request<ServiceListResponse>("/api/v1/services", {
     query: { environment, source_kind: sourceKind, q: query, limit: SERVICES_PAGE_SIZE, offset: 0 },
   });
+}
+
+export function listPipelines() {
+  return request<PipelineListResponse>("/api/v1/pipelines");
+}
+
+export function getPipeline(pipelineId: string) {
+  return request<Pipeline>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}`);
+}
+
+export function createPipeline(payload: {
+  name: string;
+  description: string;
+  graph: PipelineGraph;
+}) {
+  return request<Pipeline>("/api/v1/pipelines", { method: "POST", body: payload });
+}
+
+export function updatePipeline(
+  pipelineId: string,
+  payload: Partial<Pick<Pipeline, "name" | "description" | "graph">>,
+) {
+  return request<Pipeline>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function deletePipeline(pipelineId: string) {
+  return request<void>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function validatePipeline(pipelineId: string) {
+  return request<PipelineValidationResult>(
+    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/validate`,
+    { method: "POST" },
+  );
 }
 
 export async function listNotificationChannels() {
