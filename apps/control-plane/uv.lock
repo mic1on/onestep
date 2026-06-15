@@ -410,51 +410,16 @@ wheels = [
 [[package]]
 name = "onestep"
 version = "1.4.2"
-source = { editable = "../onestep" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/1b/9046f65645b668d3ecb70a054d29d2b172b237147680ce57e2b866f36563/onestep-1.4.2.tar.gz", hash = "sha256:ecd9f115d3576590255bd0e86f503192f14066802ed77b418ebe74fa1d5fdf0e", size = 128772, upload-time = "2026-06-10T13:25:05.499Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/8f/33d9d15c1719a69d2ce86ca0bed182c4634fd5e66c5e02739b374a277928/onestep-1.4.2-py3-none-any.whl", hash = "sha256:b52677dd9799b7c96992ba552b951e36318cdd587a9db80fdc5b0ae19397c743", size = 81908, upload-time = "2026-06-10T13:25:04.217Z" },
+]
 
 [package.optional-dependencies]
 yaml = [
     { name = "pyyaml" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "onestep-mq", marker = "extra == 'all'", editable = "../onestep/plugins/onestep-rabbitmq" },
-    { name = "onestep-mq", marker = "extra == 'dev'", editable = "../onestep/plugins/onestep-rabbitmq" },
-    { name = "onestep-mq", marker = "extra == 'integration'", editable = "../onestep/plugins/onestep-rabbitmq" },
-    { name = "onestep-mq", marker = "extra == 'rabbitmq'", editable = "../onestep/plugins/onestep-rabbitmq" },
-    { name = "onestep-mysql", marker = "extra == 'all'", editable = "../onestep/plugins/onestep-mysql" },
-    { name = "onestep-mysql", marker = "extra == 'dev'", editable = "../onestep/plugins/onestep-mysql" },
-    { name = "onestep-mysql", marker = "extra == 'integration'", editable = "../onestep/plugins/onestep-mysql" },
-    { name = "onestep-mysql", marker = "extra == 'mysql'", editable = "../onestep/plugins/onestep-mysql" },
-    { name = "onestep-postgres", marker = "extra == 'all'", editable = "../onestep/plugins/onestep-postgres" },
-    { name = "onestep-postgres", marker = "extra == 'dev'", editable = "../onestep/plugins/onestep-postgres" },
-    { name = "onestep-postgres", marker = "extra == 'integration'", editable = "../onestep/plugins/onestep-postgres" },
-    { name = "onestep-postgres", marker = "extra == 'postgres'", editable = "../onestep/plugins/onestep-postgres" },
-    { name = "onestep-redis", marker = "extra == 'all'", editable = "../onestep/plugins/onestep-redis" },
-    { name = "onestep-redis", marker = "extra == 'dev'", editable = "../onestep/plugins/onestep-redis" },
-    { name = "onestep-redis", marker = "extra == 'integration'", editable = "../onestep/plugins/onestep-redis" },
-    { name = "onestep-redis", marker = "extra == 'redis'", editable = "../onestep/plugins/onestep-redis" },
-    { name = "onestep-sqs", marker = "extra == 'all'", editable = "../onestep/plugins/onestep-sqs" },
-    { name = "onestep-sqs", marker = "extra == 'dev'", editable = "../onestep/plugins/onestep-sqs" },
-    { name = "onestep-sqs", marker = "extra == 'integration'", editable = "../onestep/plugins/onestep-sqs" },
-    { name = "onestep-sqs", marker = "extra == 'sqs'", editable = "../onestep/plugins/onestep-sqs" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest", marker = "extra == 'integration'", specifier = ">=8.0.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pytest-asyncio", marker = "extra == 'integration'", specifier = ">=0.23.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
-    { name = "pyyaml", marker = "extra == 'all'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'integration'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
-    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
-    { name = "websockets", marker = "extra == 'all'", specifier = ">=12.0" },
-    { name = "websockets", marker = "extra == 'control-plane'", specifier = ">=12.0" },
-    { name = "websockets", marker = "extra == 'dev'", specifier = ">=12.0" },
-]
-provides-extras = ["control-plane", "yaml", "mysql", "postgres", "rabbitmq", "redis", "sqs", "test", "integration", "all", "dev"]
 
 [[package]]
 name = "onestep-control-plane"
@@ -489,7 +454,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
     { name = "httpx", specifier = ">=0.28.0" },
-    { name = "onestep", extras = ["yaml"], editable = "../onestep" },
+    { name = "onestep", extras = ["yaml"], specifier = ">=1.4.2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },
