@@ -17,6 +17,7 @@ from onestep import (
     TaskEvent,
     TaskEventKind,
 )
+from onestep.task import EmitRoute
 
 
 @dataclass
@@ -158,6 +159,38 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
             },
         }
     ]
+
+
+def test_reporter_sync_payload_flattens_conditional_emit_routes() -> None:
+    recorder = SenderRecorder()
+    source = MemoryQueue("incoming")
+    active = MemoryQueue("active")
+    inactive = MemoryQueue("inactive")
+    app = OneStepApp("billing-sync")
+
+    def is_active(ctx, payload, result):
+        return True
+
+    @app.task(
+        source=source,
+        emit=[EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))],
+    )
+    async def sync_users(ctx, payload):
+        return payload
+
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_payload = [payload for channel, payload in recorder.calls if channel == "sync"][0]
+    emit = sync_payload["app"]["tasks"][0]["emit"]
+    assert [entry["name"] for entry in emit] == ["active", "inactive"]
+    assert all("when_ref" not in entry for entry in emit)
 
 
 def test_reporter_sync_payload_uses_tz_environment_name_for_schedule_timezone(monkeypatch) -> None:

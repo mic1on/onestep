@@ -17,7 +17,7 @@ from .invoke import invoke_callback
 from .retry import RetryPolicy
 from .runtime.runner import TaskRunner
 from .state import InMemoryStateStore, StateStore
-from .task import TaskHandler, TaskHooks, TaskSpec
+from .task import EmitTarget, TaskHandler, TaskHooks, TaskSpec
 
 
 class _SyntheticManualRunDelivery:
@@ -540,7 +540,7 @@ class OneStepApp:
         name: str | None = None,
         description: str | None = None,
         source: Source | None = None,
-        emit: Sink | Sequence[Sink] | None = None,
+        emit: EmitTarget | Sequence[EmitTarget] | None = None,
         dead_letter: Sink | Sequence[Sink] | None = None,
         config: Mapping[str, Any] | None = None,
         metadata: Mapping[str, Any] | None = None,

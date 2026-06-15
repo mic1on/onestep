@@ -181,6 +181,25 @@ namespace. It does not configure handlers or formatters, but setting it to
 YAML resources can reference other resources by name, for example
 `rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.
 
+YAML `emit` entries can also route handler results with a Python predicate.
+The YAML stays declarative: `when` names a callable, while the condition logic
+stays in Python.
+
+```yaml
+emit:
+  - audit_sink
+  - when:
+      ref: your_package.routing:is_active_user
+      params:
+        status_field: status
+    then: active_user_sink
+    otherwise: inactive_user_sink
+```
+
+The predicate may accept `ctx`, `payload`, and `result`; `then` and `otherwise`
+can each be a sink name or list of sink names. If `otherwise` is omitted and the
+predicate is falsy, that route emits to no sink.
+
 Task handlers and hooks can read:
 
 - `ctx.config` for app-level config

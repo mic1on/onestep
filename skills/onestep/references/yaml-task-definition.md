@@ -12,7 +12,8 @@ YAML defines:
 - `hooks`: app lifecycle hooks and event observers.
 - `tasks`: source, emit, dead-letter, retry, timeout, concurrency, handler, task config, and task hooks.
 
-YAML does not define transforms, conditional branches, workflow graphs, expression engines, or embedded business logic.
+YAML does not define transforms, workflow graphs, expression engines, or embedded business logic.
+YAML may name Python predicate callables for conditional sink routing; the condition logic stays in Python.
 
 ## Strict Mode
 
@@ -111,6 +112,34 @@ tasks:
       max_attempts: 5
       delay_s: 10
 ```
+
+## Conditional Sink Routing
+
+`emit` can mix unconditional sink names with conditional route mappings:
+
+```yaml
+tasks:
+  - name: route_users
+    source: users_source
+    emit:
+      - audit_sink
+      - when:
+          ref: worker.routing:is_active_user
+          params:
+            status_field: status
+        then: active_user_sink
+        otherwise: inactive_user_sink
+    handler:
+      ref: worker.tasks.users:normalize_user
+```
+
+Rules:
+
+- `when` is a callable ref string or `{ref, params}` mapping.
+- the predicate may accept `ctx`, `payload`, and `result` positional arguments.
+- `then` and `otherwise` are sink names or lists of sink names.
+- omitted `otherwise` means a falsy predicate skips that route.
+- separate `emit` entries are evaluated independently and in order.
 
 ## Passthrough Tasks
 
