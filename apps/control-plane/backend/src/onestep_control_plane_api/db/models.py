@@ -43,6 +43,27 @@ class Pipeline(Base):
     )
 
 
+class PipelineCredential(Base):
+    __tablename__ = "pipeline_credentials"
+    __table_args__ = (
+        sa.UniqueConstraint("name", name="uq_pipeline_credentials_name"),
+        sa.Index("ix_pipeline_credentials_connector_type_name", "connector_type", "name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    connector_type: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    config_encrypted: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    env_vars_encrypted: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class Service(Base):
     __tablename__ = "services"
     __table_args__ = (

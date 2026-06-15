@@ -91,3 +91,49 @@ def test_validate_invalid_pipeline_updates_status(client) -> None:
     get_response = client.get(f"/api/v1/pipelines/{pipeline_id}")
     assert get_response.status_code == 200
     assert get_response.json()["status"] == "invalid"
+
+
+def test_pipeline_credentials_mask_and_preserve_secret_values(client) -> None:
+    create_response = client.post(
+        "/api/v1/pipeline-credentials",
+        json={
+            "name": "demo mysql",
+            "connector_type": "mysql",
+            "config": {"host": "localhost"},
+            "env_vars": {"MYSQL_PASSWORD": "secret"},
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["env_vars"] == {"MYSQL_PASSWORD": "********"}
+
+    update_response = client.put(
+        f"/api/v1/pipeline-credentials/{created['id']}",
+        json={"env_vars": {"MYSQL_PASSWORD": "********", "MYSQL_USER": "root"}},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["env_vars"] == {
+        "MYSQL_PASSWORD": "********",
+        "MYSQL_USER": "********",
+    }
+
+
+def test_export_pipeline_returns_worker_zip(client) -> None:
+    create_response = client.post(
+        "/api/v1/pipelines",
+        json={
+            "name": "Daily Sync",
+            "description": "",
+            "graph": minimal_graph_payload(),
+        },
+    )
+    pipeline_id = create_response.json()["id"]
+
+    export_response = client.post(f"/api/v1/pipelines/{pipeline_id}/export")
+
+    assert export_response.status_code == 200
+    assert export_response.headers["content-type"] == "application/zip"
+    assert export_response.headers["content-disposition"].startswith(
+        'attachment; filename="'
+    )
+    assert export_response.content.startswith(b"PK")

@@ -43,9 +43,33 @@ def upgrade() -> None:
             "pipelines",
             ["status", "updated_at"],
         )
+    if not _has_table("pipeline_credentials"):
+        op.create_table(
+            "pipeline_credentials",
+            sa.Column("id", sa.Uuid(), nullable=False),
+            sa.Column("name", sa.String(length=255), nullable=False),
+            sa.Column("connector_type", sa.String(length=128), nullable=False),
+            sa.Column("config_encrypted", sa.Text(), nullable=False),
+            sa.Column("env_vars_encrypted", sa.Text(), nullable=False),
+            sa.Column("created_at", UTCDateTime(), nullable=False),
+            sa.Column("updated_at", UTCDateTime(), nullable=False),
+            sa.PrimaryKeyConstraint("id", name=op.f("pk_pipeline_credentials")),
+            sa.UniqueConstraint("name", name="uq_pipeline_credentials_name"),
+        )
+        op.create_index(
+            "ix_pipeline_credentials_connector_type_name",
+            "pipeline_credentials",
+            ["connector_type", "name"],
+        )
 
 
 def downgrade() -> None:
+    if _has_table("pipeline_credentials"):
+        op.drop_index(
+            "ix_pipeline_credentials_connector_type_name",
+            table_name="pipeline_credentials",
+        )
+        op.drop_table("pipeline_credentials")
     if _has_table("pipelines"):
         op.drop_index("ix_pipelines_status_updated_at", table_name="pipelines")
         op.drop_index("ix_pipelines_updated_at", table_name="pipelines")

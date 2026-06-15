@@ -39,6 +39,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "notification_channels",
         "notification_deliveries",
         "notification_instance_states",
+        "pipeline_credentials",
         "pipelines",
         "task_definitions",
         "task_events",
@@ -169,6 +170,15 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
+    assert {column["name"] for column in inspector.get_columns("pipeline_credentials")} == {
+        "id",
+        "name",
+        "connector_type",
+        "config_encrypted",
+        "env_vars_encrypted",
+        "created_at",
+        "updated_at",
+    }
     assert {column["name"] for column in inspector.get_columns("local_roles")} == {
         "id",
         "name",
@@ -233,6 +243,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         for column in inspector.get_columns("notification_instance_states")
     }
     pipeline_columns = {column["name"]: column for column in inspector.get_columns("pipelines")}
+    pipeline_credential_columns = {
+        column["name"]: column for column in inspector.get_columns("pipeline_credentials")
+    }
     instance_columns = {column["name"]: column for column in inspector.get_columns("instances")}
     assert isinstance(instance_columns["app_snapshot_json"]["type"], sa.JSON)
     assert isinstance(agent_session_columns["capabilities_json"]["type"], sa.JSON)
@@ -253,6 +266,8 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         sa.String,
     )
     assert isinstance(pipeline_columns["graph_json"]["type"], sa.JSON)
+    assert isinstance(pipeline_credential_columns["config_encrypted"]["type"], sa.Text)
+    assert isinstance(pipeline_credential_columns["env_vars_encrypted"]["type"], sa.Text)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {
@@ -315,6 +330,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert {index["name"] for index in inspector.get_indexes("pipelines")} == {
         "ix_pipelines_status_updated_at",
         "ix_pipelines_updated_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("pipeline_credentials")} == {
+        "ix_pipeline_credentials_connector_type_name",
     }
     assert {index["name"] for index in inspector.get_indexes("local_users")} == {
         "ix_local_users_username",
