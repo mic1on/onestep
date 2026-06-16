@@ -14,7 +14,8 @@ import websockets
 from onestep_worker_agent import __version__
 from onestep_worker_agent.config import AgentConfig
 from onestep_worker_agent.identity import AgentIdentity
-from onestep_worker_agent.supervisor import SubprocessSupervisor
+from onestep_worker_agent.packages import extract_package
+from onestep_worker_agent.supervisor import DeploymentSpec, SubprocessSupervisor
 
 
 def _message_id() -> str:
@@ -116,40 +117,47 @@ async def run_control_loop(
 ) -> None:
     ws_url = _worker_agent_ws_url(config.plane_url)
     headers = {"Authorization": f"Bearer {identity.connection_token}"}
-    async with await _connect_ws(ws_url, headers) as websocket:
-        await websocket.send(
-            json.dumps(
-                build_hello_message(
-                    worker_agent_id=identity.worker_agent_id,
-                    max_concurrent_deployments=config.max_concurrent_deployments,
-                    used_slots=supervisor.used_slots,
-                    running_deployments=supervisor.running_deployments(),
-                )
-            )
-        )
-        await websocket.recv()
-
-        async def heartbeat_loop() -> None:
-            while True:
-                await asyncio.sleep(30)
-                await websocket.send(
-                    json.dumps(
-                        build_heartbeat_message(
-                            worker_agent_id=identity.worker_agent_id,
-                            used_slots=supervisor.used_slots,
-                            running_deployments=supervisor.running_deployments(),
-                        )
+    async with httpx.AsyncClient(base_url=config.plane_url, timeout=60.0) as http_client:
+        async with await _connect_ws(ws_url, headers) as websocket:
+            await websocket.send(
+                json.dumps(
+                    build_hello_message(
+                        worker_agent_id=identity.worker_agent_id,
+                        max_concurrent_deployments=config.max_concurrent_deployments,
+                        used_slots=supervisor.used_slots,
+                        running_deployments=supervisor.running_deployments(),
                     )
                 )
+            )
+            await websocket.recv()
 
-        heartbeat_task = asyncio.create_task(heartbeat_loop())
-        try:
-            async for raw_message in websocket:
-                message = json.loads(raw_message)
-                if message.get("type") == "command":
-                    await _ack_unsupported_command(websocket, message)
-        finally:
-            heartbeat_task.cancel()
+            async def heartbeat_loop() -> None:
+                while True:
+                    await asyncio.sleep(30)
+                    await websocket.send(
+                        json.dumps(
+                            build_heartbeat_message(
+                                worker_agent_id=identity.worker_agent_id,
+                                used_slots=supervisor.used_slots,
+                                running_deployments=supervisor.running_deployments(),
+                            )
+                        )
+                    )
+
+            heartbeat_task = asyncio.create_task(heartbeat_loop())
+            try:
+                async for raw_message in websocket:
+                    message = json.loads(raw_message)
+                    await handle_control_message(
+                        websocket=websocket,
+                        http_client=http_client,
+                        config=config,
+                        identity=identity,
+                        supervisor=supervisor,
+                        message=message,
+                    )
+            finally:
+                heartbeat_task.cancel()
 
 
 async def _ack_unsupported_command(websocket, message: dict[str, object]) -> None:
@@ -169,6 +177,180 @@ async def _ack_unsupported_command(websocket, message: dict[str, object]) -> Non
                     "status": "rejected",
                     "error_code": "unsupported_command",
                     "error_message": f"command kind {kind} is not implemented yet",
+                },
+            }
+        )
+    )
+
+
+async def handle_control_message(
+    *,
+    websocket,
+    http_client: httpx.AsyncClient,
+    config: AgentConfig,
+    identity: AgentIdentity,
+    supervisor: SubprocessSupervisor,
+    message: dict[str, object],
+) -> None:
+    if message.get("type") != "command":
+        return
+    payload = message.get("payload")
+    if not isinstance(payload, dict):
+        return
+    if payload.get("kind") != "start_deployment":
+        await _ack_unsupported_command(websocket, message)
+        return
+    await _handle_start_deployment_command(
+        websocket=websocket,
+        http_client=http_client,
+        config=config,
+        identity=identity,
+        supervisor=supervisor,
+        payload=payload,
+    )
+
+
+async def _handle_start_deployment_command(
+    *,
+    websocket,
+    http_client: httpx.AsyncClient,
+    config: AgentConfig,
+    identity: AgentIdentity,
+    supervisor: SubprocessSupervisor,
+    payload: dict[str, object],
+) -> None:
+    command_id = str(payload.get("command_id") or "")
+    args = payload.get("args")
+    if not command_id or not isinstance(args, dict):
+        return
+
+    deployment_id = _required_string(args, "deployment_id")
+    package_checksum = _required_string(args, "package_checksum")
+    download_url = _required_string(args, "download_url")
+    entrypoint = _required_string(args, "entrypoint")
+    env = _string_dict(args.get("env"))
+
+    try:
+        supervisor.reserve_slot(deployment_id)
+    except RuntimeError as exc:
+        await _send_command_ack(
+            websocket,
+            command_id=command_id,
+            status="rejected",
+            error_code="no_slots_available",
+            error_message=str(exc),
+        )
+        return
+
+    await _send_command_ack(websocket, command_id=command_id, status="accepted")
+    package_dir = config.work_dir / "deployments" / deployment_id / "package"
+    runtime_instance_id = str(uuid4())
+    try:
+        response = await http_client.get(
+            download_url,
+            headers={"Authorization": f"Bearer {identity.connection_token}"},
+        )
+        response.raise_for_status()
+        extract_package(response.content, package_checksum, package_dir)
+        spec = DeploymentSpec(
+            deployment_id=deployment_id,
+            worker_agent_id=str(identity.worker_agent_id),
+            runtime_instance_id=runtime_instance_id,
+            package_dir=package_dir,
+            entrypoint=entrypoint,
+            env=env,
+        )
+        check_returncode = await supervisor.check(spec)
+        if check_returncode != 0:
+            supervisor.release_slot(deployment_id)
+            await _send_command_result(
+                websocket,
+                command_id=command_id,
+                status="failed",
+                error_code="check_failed",
+                error_message=f"onestep check exited with code {check_returncode}",
+            )
+            return
+        await supervisor.start(spec)
+    except Exception as exc:
+        supervisor.release_slot(deployment_id)
+        await _send_command_result(
+            websocket,
+            command_id=command_id,
+            status="failed",
+            error_code=exc.__class__.__name__,
+            error_message=str(exc),
+        )
+        return
+
+    await _send_command_result(
+        websocket,
+        command_id=command_id,
+        status="succeeded",
+        result={"runtime_instance_id": runtime_instance_id},
+    )
+
+
+def _required_string(payload: dict[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"args.{key} is required")
+    return value
+
+
+def _string_dict(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): str(item) for key, item in value.items()}
+
+
+async def _send_command_ack(
+    websocket,
+    *,
+    command_id: str,
+    status: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "command_ack",
+                "message_id": _message_id(),
+                "sent_at": _sent_at(),
+                "payload": {
+                    "command_id": command_id,
+                    "status": status,
+                    "error_code": error_code,
+                    "error_message": error_message,
+                },
+            }
+        )
+    )
+
+
+async def _send_command_result(
+    websocket,
+    *,
+    command_id: str,
+    status: str,
+    result: dict[str, object] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "command_result",
+                "message_id": _message_id(),
+                "sent_at": _sent_at(),
+                "payload": {
+                    "command_id": command_id,
+                    "status": status,
+                    "result": result,
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "finished_at": _sent_at(),
                 },
             }
         )

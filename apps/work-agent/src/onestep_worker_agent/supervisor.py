@@ -12,6 +12,7 @@ class DeploymentSpec:
     worker_agent_id: str
     runtime_instance_id: str
     package_dir: Path
+    entrypoint: str
     env: dict[str, str]
 
 
@@ -54,7 +55,7 @@ class SubprocessSupervisor:
         process = await asyncio.create_subprocess_exec(
             "onestep",
             "check",
-            "worker.yaml",
+            spec.entrypoint,
             cwd=spec.package_dir,
             env=self.build_environment(spec),
         )
@@ -66,7 +67,7 @@ class SubprocessSupervisor:
             process = await asyncio.create_subprocess_exec(
                 "onestep",
                 "run",
-                "worker.yaml",
+                spec.entrypoint,
                 cwd=spec.package_dir,
                 env=self.build_environment(spec),
                 stdout=asyncio.subprocess.PIPE,

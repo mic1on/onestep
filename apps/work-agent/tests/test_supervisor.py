@@ -20,6 +20,7 @@ def test_supervisor_builds_onestep_environment(tmp_path) -> None:
         worker_agent_id="agent-1",
         runtime_instance_id="runtime-1",
         package_dir=tmp_path / "deployment-1",
+        entrypoint="worker.yaml",
         env={"CUSTOM": "value"},
     )
 
