@@ -62,7 +62,9 @@ def setup(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="onestep-worker-agent")
+    parser = argparse.ArgumentParser(
+        prog=Path(sys.argv[0]).name if argv is None else "onestep-worker-agent"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     start_parser = subparsers.add_parser("start", help="Start the worker agent")

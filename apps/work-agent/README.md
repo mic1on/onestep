@@ -5,7 +5,7 @@ Execution host agent for OneStep Control Plane deployments.
 ## Setup
 
 ```bash
-onestep-worker-agent setup
+onestep-agent setup
 ```
 
 If the config file does not exist, `setup` prompts for the Control Plane URL,
@@ -19,7 +19,7 @@ It writes:
 For non-interactive deployment:
 
 ```bash
-onestep-worker-agent setup \
+onestep-agent setup \
   --plane-url http://localhost:8000 \
   --registration-token dev-token \
   --name worker-agent \
@@ -30,8 +30,10 @@ onestep-worker-agent setup \
 Then start the agent:
 
 ```bash
-onestep-worker-agent start
+onestep-agent start
 ```
+
+`onestep-worker-agent` remains available as a compatibility alias.
 
 Use `--config-dir <dir>` with either command to store/read config elsewhere.
 Environment variables still override config-file values:

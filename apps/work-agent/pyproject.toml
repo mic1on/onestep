@@ -24,6 +24,7 @@ dev = [
 ]
 
 [project.scripts]
+onestep-agent = "onestep_worker_agent.cli:main"
 onestep-worker-agent = "onestep_worker_agent.cli:main"
 
 [build-system]
