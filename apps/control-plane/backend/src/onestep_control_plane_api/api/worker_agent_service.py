@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.common import utcnow
 from onestep_control_plane_api.api.schemas import (
+    WorkerAgentCommandAckMessage,
+    WorkerAgentCommandMessage,
+    WorkerAgentCommandPayload,
+    WorkerAgentCommandResultMessage,
     WorkerAgentHeartbeatMessage,
     WorkerAgentHelloAckMessage,
     WorkerAgentHelloAckPayload,
@@ -29,6 +33,7 @@ from onestep_control_plane_api.api.security import (
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     WorkerAgent,
+    WorkerAgentCommand,
     WorkerAgentSession,
     WorkerDeployment,
     WorkflowPackage,
@@ -169,6 +174,153 @@ def apply_worker_agent_heartbeat(
         .values(last_message_at=received_at, updated_at=received_at)
     )
     db.commit()
+
+
+def get_worker_agent_command_or_404(db: Session, command_id: UUID) -> WorkerAgentCommand:
+    command = db.scalar(
+        select(WorkerAgentCommand).where(WorkerAgentCommand.command_id == command_id)
+    )
+    if command is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"worker agent command {command_id} was not found",
+        )
+    return command
+
+
+def build_worker_agent_command_message(
+    command: WorkerAgentCommand,
+) -> WorkerAgentCommandMessage:
+    now = utcnow()
+    return WorkerAgentCommandMessage(
+        type="command",
+        message_id=_new_message_id(),
+        sent_at=now,
+        payload=WorkerAgentCommandPayload(
+            command_id=command.command_id,
+            kind=command.kind,
+            deployment_id=command.deployment_id,
+            timeout_s=command.timeout_s,
+            args=command.args_json,
+            created_at=command.created_at,
+        ),
+    )
+
+
+def create_start_deployment_command(
+    db: Session,
+    *,
+    deployment: WorkerDeployment,
+    package: WorkflowPackage,
+    timeout_s: int = 30,
+) -> WorkerAgentCommand:
+    command = WorkerAgentCommand(
+        command_id=uuid4(),
+        worker_agent_id=deployment.worker_agent_id,
+        deployment_id=deployment.deployment_id,
+        kind="start_deployment",
+        args_json={
+            "deployment_id": str(deployment.deployment_id),
+            "package_id": str(package.package_id),
+            "package_checksum": package.checksum_sha256,
+            "download_url": f"/api/v1/workflow-packages/{package.package_id}/download",
+            "entrypoint": package.entrypoint,
+            "params": deployment.params_json,
+            "env": deployment.env_json,
+            "credential_refs": deployment.credential_refs_json,
+        },
+        timeout_s=timeout_s,
+        status="pending",
+    )
+    db.add(command)
+    db.commit()
+    db.refresh(command)
+    return command
+
+
+async def dispatch_worker_agent_command(
+    db: Session,
+    *,
+    command: WorkerAgentCommand,
+    send_queue,
+    session_id: str,
+) -> WorkerAgentCommand:
+    now = utcnow()
+    command.status = "dispatched"
+    command.session_id = session_id
+    command.dispatched_at = now
+    command.updated_at = now
+    db.commit()
+    db.refresh(command)
+    await send_queue.put(build_worker_agent_command_message(command).model_dump(mode="json"))
+    return command
+
+
+def handle_worker_agent_command_ack(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    session_id: str,
+    message: WorkerAgentCommandAckMessage,
+    received_at,
+) -> bool:
+    command = db.scalar(
+        select(WorkerAgentCommand).where(
+            WorkerAgentCommand.command_id == message.payload.command_id,
+            WorkerAgentCommand.worker_agent_id == worker_agent.worker_agent_id,
+        )
+    )
+    if command is None:
+        return False
+    if command.finished_at is not None or command.ack_status is not None:
+        return True
+
+    command.session_id = session_id
+    command.ack_status = message.payload.status
+    command.acked_at = received_at
+    command.updated_at = received_at
+    if message.payload.status == "accepted":
+        command.status = "accepted"
+    else:
+        command.status = "rejected"
+        command.finished_at = received_at
+        command.error_code = message.payload.error_code
+        command.error_message = message.payload.error_message
+    db.commit()
+    return True
+
+
+def handle_worker_agent_command_result(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    session_id: str,
+    message: WorkerAgentCommandResultMessage,
+    received_at,
+) -> str:
+    command = db.scalar(
+        select(WorkerAgentCommand).where(
+            WorkerAgentCommand.command_id == message.payload.command_id,
+            WorkerAgentCommand.worker_agent_id == worker_agent.worker_agent_id,
+        )
+    )
+    if command is None:
+        return "unknown"
+    if command.finished_at is not None:
+        return "duplicate"
+
+    command.session_id = session_id
+    command.status = message.payload.status
+    command.finished_at = message.payload.finished_at
+    command.result_json = message.payload.result
+    command.error_code = message.payload.error_code
+    command.error_message = message.payload.error_message
+    if command.ack_status is None:
+        command.ack_status = "accepted"
+        command.acked_at = received_at
+    command.updated_at = received_at
+    db.commit()
+    return "ok"
 
 
 def close_worker_agent_session(

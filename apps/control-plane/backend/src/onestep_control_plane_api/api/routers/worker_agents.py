@@ -21,12 +21,17 @@ from onestep_control_plane_api.api.security import (
     require_console_auth,
     require_worker_agent_connection,
 )
+from onestep_control_plane_api.api.worker_agent_connection_registry import (
+    worker_agent_connection_registry,
+)
 from onestep_control_plane_api.api.worker_agent_service import (
     build_worker_agent_summary,
     build_worker_deployment_summary,
     build_workflow_package_summary,
+    create_start_deployment_command,
     create_worker_deployment,
     create_workflow_package,
+    dispatch_worker_agent_command,
     get_worker_agent_or_404,
     get_worker_deployment_or_404,
     get_workflow_package_or_404,
@@ -132,7 +137,7 @@ def download_workflow_package_endpoint(
     "/worker-deployments",
     response_model=WorkerDeploymentSummary,
 )
-def create_worker_deployment_endpoint(
+async def create_worker_deployment_endpoint(
     request: WorkerDeploymentCreateRequest,
     identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
@@ -142,6 +147,17 @@ def create_worker_deployment_endpoint(
         request,
         created_by=identity.username if identity is not None else "system",
     )
+    package = get_workflow_package_or_404(db, deployment.workflow_package_id)
+    if deployment.desired_status == "running":
+        command = create_start_deployment_command(db, deployment=deployment, package=package)
+        live_connection = await worker_agent_connection_registry.get(deployment.worker_agent_id)
+        if live_connection is not None:
+            await dispatch_worker_agent_command(
+                db,
+                command=command,
+                send_queue=live_connection.send_queue,
+                session_id=live_connection.session_id,
+            )
     return build_worker_deployment_summary(deployment)
 
 

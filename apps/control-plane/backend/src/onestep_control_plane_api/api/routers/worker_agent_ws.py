@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 from onestep_control_plane_api.api.common import utcnow
 from onestep_control_plane_api.api.schemas import (
     AgentErrorPayload,
+    WorkerAgentCommandAckMessage,
+    WorkerAgentCommandResultMessage,
     WorkerAgentErrorMessage,
     WorkerAgentHeartbeatMessage,
     WorkerAgentHelloMessage,
@@ -23,6 +25,8 @@ from onestep_control_plane_api.api.worker_agent_connection_registry import (
 from onestep_control_plane_api.api.worker_agent_service import (
     apply_worker_agent_heartbeat,
     close_worker_agent_session,
+    handle_worker_agent_command_ack,
+    handle_worker_agent_command_result,
     handle_worker_agent_hello,
     mark_worker_agent_session_message,
 )
@@ -165,6 +169,69 @@ async def worker_agent_ws(
                         close_connection=True,
                     )
                     return
+                continue
+
+            if envelope.type == "command_ack":
+                try:
+                    command_ack = WorkerAgentCommandAckMessage.model_validate_json(
+                        raw_message
+                    )
+                except ValidationError:
+                    await _send_error(
+                        websocket,
+                        code="invalid_command_ack",
+                        message="command_ack payload is invalid",
+                        close_connection=False,
+                    )
+                    continue
+                if not handle_worker_agent_command_ack(
+                    db,
+                    worker_agent=worker_agent,
+                    session_id=context.session_id,
+                    message=command_ack,
+                    received_at=now,
+                ):
+                    await _send_error(
+                        websocket,
+                        code="unknown_command",
+                        message=(
+                            f"worker-agent command {command_ack.payload.command_id} "
+                            "was not found"
+                        ),
+                        close_connection=False,
+                    )
+                continue
+
+            if envelope.type == "command_result":
+                try:
+                    command_result = WorkerAgentCommandResultMessage.model_validate_json(
+                        raw_message
+                    )
+                except ValidationError:
+                    await _send_error(
+                        websocket,
+                        code="invalid_command_result",
+                        message="command_result payload is invalid",
+                        close_connection=False,
+                    )
+                    continue
+                result_status = handle_worker_agent_command_result(
+                    db,
+                    worker_agent=worker_agent,
+                    session_id=context.session_id,
+                    message=command_result,
+                    received_at=now,
+                )
+                if result_status == "unknown":
+                    await _send_error(
+                        websocket,
+                        code="unknown_command",
+                        message=(
+                            f"worker-agent command {command_result.payload.command_id} "
+                            "was not found"
+                        ),
+                        close_connection=False,
+                    )
                 continue
 
             await _send_error(

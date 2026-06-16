@@ -133,6 +133,14 @@ WorkerAgentWsMessageType = Literal[
     "command_result",
     "error",
 ]
+WorkerAgentCommandKind = Literal[
+    "start_deployment",
+    "stop_deployment",
+    "restart_deployment",
+    "sync_agent_state",
+]
+WorkerAgentCommandAckStatus = Literal["accepted", "rejected"]
+WorkerAgentCommandResultStatus = Literal["succeeded", "failed", "timeout", "cancelled"]
 WsMessageType = Literal[
     "hello",
     "hello_ack",
@@ -657,6 +665,52 @@ class WorkerAgentHeartbeatMessage(APIModel):
     message_id: str = Field(min_length=1, max_length=255)
     sent_at: datetime
     payload: WorkerAgentHeartbeatPayload
+
+
+class WorkerAgentCommandPayload(APIModel):
+    command_id: UUID
+    kind: WorkerAgentCommandKind
+    deployment_id: UUID | None = None
+    timeout_s: int = Field(ge=1)
+    args: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class WorkerAgentCommandMessage(APIModel):
+    type: Literal["command"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerAgentCommandPayload
+
+
+class WorkerAgentCommandAckPayload(APIModel):
+    command_id: UUID
+    status: WorkerAgentCommandAckStatus
+    error_code: str | None = Field(default=None, max_length=128)
+    error_message: str | None = None
+
+
+class WorkerAgentCommandAckMessage(APIModel):
+    type: Literal["command_ack"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerAgentCommandAckPayload
+
+
+class WorkerAgentCommandResultPayload(APIModel):
+    command_id: UUID
+    status: WorkerAgentCommandResultStatus
+    result: dict[str, Any] | None = None
+    error_code: str | None = Field(default=None, max_length=128)
+    error_message: str | None = None
+    finished_at: datetime
+
+
+class WorkerAgentCommandResultMessage(APIModel):
+    type: Literal["command_result"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerAgentCommandResultPayload
 
 
 class WorkerAgentErrorMessage(APIModel):
