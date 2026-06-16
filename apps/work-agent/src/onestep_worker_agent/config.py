@@ -11,6 +11,7 @@ class AgentConfig:
     registration_token: str
     work_dir: Path
     identity_path: Path
+    deployment_state_path: Path
     display_name: str
     max_concurrent_deployments: int
 
@@ -23,6 +24,7 @@ def load_config_from_env() -> AgentConfig:
         registration_token=os.environ.get("ONESTEP_AGENT_REGISTRATION_TOKEN", ""),
         work_dir=work_dir,
         identity_path=work_dir / "identity.json",
+        deployment_state_path=work_dir / "deployments.json",
         display_name=os.environ.get("ONESTEP_WORKER_AGENT_NAME", "worker-agent"),
         max_concurrent_deployments=int(
             os.environ.get("ONESTEP_WORKER_AGENT_MAX_CONCURRENCY", "1")

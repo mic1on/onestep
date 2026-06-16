@@ -79,6 +79,7 @@ def _config(tmp_path: Path) -> AgentConfig:
         registration_token="registration-token",
         work_dir=tmp_path,
         identity_path=tmp_path / "identity.json",
+        deployment_state_path=tmp_path / "deployments.json",
         display_name="test-agent",
         max_concurrent_deployments=1,
     )
