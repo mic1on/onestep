@@ -8,6 +8,9 @@ from onestep_control_plane_api.api.routers.notifications import router as notifi
 from onestep_control_plane_api.api.routers.pipelines import router as pipelines_router
 from onestep_control_plane_api.api.routers.query import router as query_router
 from onestep_control_plane_api.api.routers.ui_ws import router as ui_ws_router
+from onestep_control_plane_api.api.routers.worker_agent_ws import (
+    router as worker_agent_ws_router,
+)
 from onestep_control_plane_api.api.routers.worker_agents import router as worker_agents_router
 
 router = APIRouter()
@@ -19,5 +22,6 @@ router.include_router(notifications_router)
 router.include_router(pipelines_router)
 router.include_router(commands_router)
 router.include_router(worker_agents_router)
+router.include_router(worker_agent_ws_router)
 router.include_router(agent_ws_router)
 router.include_router(ui_ws_router)

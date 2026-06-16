@@ -6,11 +6,15 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.common import utcnow
 from onestep_control_plane_api.api.schemas import (
+    WorkerAgentHeartbeatMessage,
+    WorkerAgentHelloAckMessage,
+    WorkerAgentHelloAckPayload,
+    WorkerAgentHelloMessage,
     WorkerAgentRegistrationRequest,
     WorkerAgentRegistrationResponse,
     WorkerAgentSummary,
@@ -25,10 +29,12 @@ from onestep_control_plane_api.api.security import (
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     WorkerAgent,
+    WorkerAgentSession,
     WorkerDeployment,
     WorkflowPackage,
 )
 
+SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION = "1"
 DEFAULT_WORKER_AGENT_HEARTBEAT_INTERVAL_S = 30
 WORKER_AGENT_CAPABILITIES = frozenset(
     {
@@ -48,10 +54,156 @@ def _new_connection_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _new_message_id() -> str:
+    return f"msg_{uuid4().hex}"
+
+
+def _new_session_id() -> str:
+    return f"worker_sess_{uuid4().hex}"
+
+
 def _accepted_capabilities(requested: list[str]) -> list[str]:
     return sorted(
         {capability for capability in requested if capability in WORKER_AGENT_CAPABILITIES}
     )
+
+
+def handle_worker_agent_hello(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    message: WorkerAgentHelloMessage,
+    connected_at,
+) -> WorkerAgentHelloAckMessage:
+    if message.payload.protocol_version != SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION:
+        raise ValueError(
+            f"protocol_version={message.payload.protocol_version} is not supported"
+        )
+    if message.payload.worker_agent_id != worker_agent.worker_agent_id:
+        raise ValueError(
+            "worker_agent_id does not match the authenticated connection token"
+        )
+
+    accepted_capabilities = _accepted_capabilities(message.payload.capabilities)
+    session_id = _new_session_id()
+    db.execute(
+        update(WorkerAgentSession)
+        .where(
+            WorkerAgentSession.worker_agent_id == worker_agent.worker_agent_id,
+            WorkerAgentSession.status == "active",
+        )
+        .values(
+            status="disconnected",
+            disconnected_at=connected_at,
+            updated_at=connected_at,
+        )
+    )
+    worker_agent.status = "online"
+    worker_agent.max_concurrent_deployments = message.payload.max_concurrent_deployments
+    worker_agent.used_slots = message.payload.used_slots
+    worker_agent.capabilities_json = accepted_capabilities
+    worker_agent.last_seen_at = connected_at
+    worker_agent.updated_at = connected_at
+    db.add(
+        WorkerAgentSession(
+            session_id=session_id,
+            worker_agent_id=worker_agent.worker_agent_id,
+            protocol_version=message.payload.protocol_version,
+            status="active",
+            capabilities_json=list(message.payload.capabilities),
+            accepted_capabilities_json=accepted_capabilities,
+            connected_at=connected_at,
+            last_hello_at=connected_at,
+            last_message_at=connected_at,
+        )
+    )
+    db.commit()
+
+    return WorkerAgentHelloAckMessage(
+        type="hello_ack",
+        message_id=_new_message_id(),
+        sent_at=connected_at,
+        payload=WorkerAgentHelloAckPayload(
+            session_id=session_id,
+            protocol_version=SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION,
+            heartbeat_interval_s=DEFAULT_WORKER_AGENT_HEARTBEAT_INTERVAL_S,
+            accepted_capabilities=accepted_capabilities,
+            server_time=connected_at,
+        ),
+    )
+
+
+def mark_worker_agent_session_message(
+    db: Session,
+    *,
+    session_id: str,
+    occurred_at,
+) -> None:
+    db.execute(
+        update(WorkerAgentSession)
+        .where(WorkerAgentSession.session_id == session_id)
+        .values(last_message_at=occurred_at, updated_at=occurred_at)
+    )
+    db.commit()
+
+
+def apply_worker_agent_heartbeat(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    session_id: str,
+    message: WorkerAgentHeartbeatMessage,
+    received_at,
+) -> None:
+    if message.payload.worker_agent_id != worker_agent.worker_agent_id:
+        raise ValueError(
+            "worker_agent_id does not match the authenticated connection token"
+        )
+    worker_agent.status = "online"
+    worker_agent.used_slots = message.payload.used_slots
+    worker_agent.last_seen_at = received_at
+    worker_agent.updated_at = received_at
+    db.execute(
+        update(WorkerAgentSession)
+        .where(WorkerAgentSession.session_id == session_id)
+        .values(last_message_at=received_at, updated_at=received_at)
+    )
+    db.commit()
+
+
+def close_worker_agent_session(
+    db: Session,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    disconnected_at,
+) -> None:
+    db.execute(
+        update(WorkerAgentSession)
+        .where(
+            WorkerAgentSession.session_id == session_id,
+            WorkerAgentSession.status == "active",
+        )
+        .values(
+            status="disconnected",
+            disconnected_at=disconnected_at,
+            last_message_at=disconnected_at,
+            updated_at=disconnected_at,
+        )
+    )
+    active_session_count = db.scalar(
+        select(func.count())
+        .select_from(WorkerAgentSession)
+        .where(
+            WorkerAgentSession.worker_agent_id == worker_agent_id,
+            WorkerAgentSession.status == "active",
+        )
+    )
+    if not active_session_count:
+        worker_agent = get_worker_agent_or_404(db, worker_agent_id)
+        worker_agent.status = "offline"
+        worker_agent.updated_at = disconnected_at
+    db.commit()
 
 
 def register_worker_agent(

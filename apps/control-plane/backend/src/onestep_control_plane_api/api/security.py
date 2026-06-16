@@ -133,6 +133,29 @@ def require_worker_agent_connection(
     return worker_agent
 
 
+def require_websocket_worker_agent_connection(
+    websocket: WebSocket,
+    db: Session = Depends(get_db_session),
+) -> WorkerAgent:
+    token = _extract_bearer_token(websocket.headers.get("authorization"))
+    if token is None:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="missing worker agent bearer token",
+        )
+
+    token_hash = hash_worker_agent_token(token)
+    worker_agent = db.scalar(
+        select(WorkerAgent).where(WorkerAgent.connection_token_hash == token_hash)
+    )
+    if worker_agent is None:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="invalid worker agent bearer token",
+        )
+    return worker_agent
+
+
 def require_websocket_ingest_token(websocket: WebSocket) -> WebSocketIngestAuth:
     if not settings.ingest_tokens:
         raise WebSocketException(

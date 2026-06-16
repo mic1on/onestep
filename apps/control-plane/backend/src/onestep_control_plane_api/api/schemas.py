@@ -124,6 +124,15 @@ WorkerDeploymentObservedStatus = Literal[
     "failed",
     "cancelled",
 ]
+WorkerAgentWsMessageType = Literal[
+    "hello",
+    "hello_ack",
+    "heartbeat",
+    "command",
+    "command_ack",
+    "command_result",
+    "error",
+]
 WsMessageType = Literal[
     "hello",
     "hello_ack",
@@ -597,6 +606,71 @@ class WorkerDeploymentSummary(APIModel):
 
 class WorkerDeploymentListResponse(PaginatedResponse):
     items: list[WorkerDeploymentSummary]
+
+
+class WorkerAgentHelloPayload(APIModel):
+    protocol_version: str = Field(min_length=1, max_length=16)
+    worker_agent_id: UUID
+    capabilities: list[str] = Field(default_factory=list)
+    max_concurrent_deployments: int = Field(ge=1)
+    used_slots: int = Field(ge=0)
+    running_deployments: list[UUID] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_used_slots(self) -> WorkerAgentHelloPayload:
+        if self.used_slots > self.max_concurrent_deployments:
+            raise ValueError("used_slots must not exceed max_concurrent_deployments")
+        return self
+
+
+class WorkerAgentHelloMessage(APIModel):
+    type: Literal["hello"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerAgentHelloPayload
+
+
+class WorkerAgentHelloAckPayload(APIModel):
+    session_id: str = Field(min_length=1, max_length=255)
+    protocol_version: str = Field(min_length=1, max_length=16)
+    heartbeat_interval_s: int = Field(ge=1)
+    accepted_capabilities: list[str] = Field(default_factory=list)
+    server_time: datetime
+
+
+class WorkerAgentHelloAckMessage(APIModel):
+    type: Literal["hello_ack"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerAgentHelloAckPayload
+
+
+class WorkerAgentHeartbeatPayload(APIModel):
+    worker_agent_id: UUID
+    used_slots: int = Field(ge=0)
+    running_deployments: list[UUID] = Field(default_factory=list)
+    recent_errors: list[str] = Field(default_factory=list)
+
+
+class WorkerAgentHeartbeatMessage(APIModel):
+    type: Literal["heartbeat"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerAgentHeartbeatPayload
+
+
+class WorkerAgentErrorMessage(APIModel):
+    type: Literal["error"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: AgentErrorPayload
+
+
+class WorkerAgentWsEnvelope(APIModel):
+    type: WorkerAgentWsMessageType
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: dict[str, Any]
 
 
 class AgentCommandCreateRequest(APIModel):
