@@ -44,6 +44,7 @@ class FakeSupervisor:
         self.reserved: set[str] = set()
         self.checked: list[str] = []
         self.started: list[str] = []
+        self.stopped: list[str] = []
 
     def reserve_slot(self, deployment_id: str) -> None:
         self.reserved.add(deployment_id)
@@ -58,6 +59,11 @@ class FakeSupervisor:
     async def start(self, spec):
         self.started.append(spec.deployment_id)
         return object()
+
+    async def stop(self, deployment_id: str):
+        self.stopped.append(deployment_id)
+        self.release_slot(deployment_id)
+        return 0
 
 
 def _build_zip() -> bytes:
@@ -127,5 +133,90 @@ def test_handle_start_deployment_downloads_and_starts_package(tmp_path) -> None:
         )
     ]
     assert (tmp_path / "deployments" / deployment_id / "package" / "worker.yaml").exists()
+    assert supervisor.checked == ["worker.yaml"]
+    assert supervisor.started == [deployment_id]
+
+
+def test_handle_stop_deployment_stops_existing_process(tmp_path) -> None:
+    identity = AgentIdentity(
+        worker_agent_id=UUID("11111111-1111-4111-8111-111111111111"),
+        connection_token="connection-token",
+    )
+    command_id = str(uuid4())
+    deployment_id = str(uuid4())
+    websocket = FakeWebSocket()
+    supervisor = FakeSupervisor()
+    supervisor.reserve_slot(deployment_id)
+
+    asyncio.run(
+        handle_control_message(
+            websocket=websocket,
+            http_client=FakeHttpClient(b""),
+            config=_config(tmp_path),
+            identity=identity,
+            supervisor=supervisor,
+            message={
+                "type": "command",
+                "payload": {
+                    "command_id": command_id,
+                    "kind": "stop_deployment",
+                    "args": {"deployment_id": deployment_id},
+                },
+            },
+        )
+    )
+
+    assert websocket.messages[0]["type"] == "command_ack"
+    assert websocket.messages[0]["payload"]["status"] == "accepted"
+    assert websocket.messages[1]["type"] == "command_result"
+    assert websocket.messages[1]["payload"]["status"] == "succeeded"
+    assert websocket.messages[1]["payload"]["result"] == {"returncode": 0}
+    assert supervisor.stopped == [deployment_id]
+    assert deployment_id not in supervisor.reserved
+
+
+def test_handle_restart_deployment_stops_then_starts(tmp_path) -> None:
+    content = _build_zip()
+    checksum = hashlib.sha256(content).hexdigest()
+    identity = AgentIdentity(
+        worker_agent_id=UUID("11111111-1111-4111-8111-111111111111"),
+        connection_token="connection-token",
+    )
+    command_id = str(uuid4())
+    deployment_id = str(uuid4())
+    websocket = FakeWebSocket()
+    http_client = FakeHttpClient(content)
+    supervisor = FakeSupervisor()
+    supervisor.reserve_slot(deployment_id)
+
+    asyncio.run(
+        handle_control_message(
+            websocket=websocket,
+            http_client=http_client,
+            config=_config(tmp_path),
+            identity=identity,
+            supervisor=supervisor,
+            message={
+                "type": "command",
+                "payload": {
+                    "command_id": command_id,
+                    "kind": "restart_deployment",
+                    "args": {
+                        "deployment_id": deployment_id,
+                        "package_checksum": checksum,
+                        "download_url": "/api/v1/workflow-packages/package/download",
+                        "entrypoint": "worker.yaml",
+                        "env": {"EXAMPLE": "1"},
+                    },
+                },
+            },
+        )
+    )
+
+    assert websocket.messages[0]["type"] == "command_ack"
+    assert websocket.messages[0]["payload"]["status"] == "accepted"
+    assert websocket.messages[1]["type"] == "command_result"
+    assert websocket.messages[1]["payload"]["status"] == "succeeded"
+    assert supervisor.stopped == [deployment_id]
     assert supervisor.checked == ["worker.yaml"]
     assert supervisor.started == [deployment_id]

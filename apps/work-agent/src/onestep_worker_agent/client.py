@@ -197,17 +197,38 @@ async def handle_control_message(
     payload = message.get("payload")
     if not isinstance(payload, dict):
         return
-    if payload.get("kind") != "start_deployment":
-        await _ack_unsupported_command(websocket, message)
+    kind = payload.get("kind")
+    if kind == "start_deployment":
+        await _handle_start_deployment_command(
+            websocket=websocket,
+            http_client=http_client,
+            config=config,
+            identity=identity,
+            supervisor=supervisor,
+            payload=payload,
+            stop_existing_first=False,
+        )
         return
-    await _handle_start_deployment_command(
-        websocket=websocket,
-        http_client=http_client,
-        config=config,
-        identity=identity,
-        supervisor=supervisor,
-        payload=payload,
-    )
+    if kind == "stop_deployment":
+        await _handle_stop_deployment_command(
+            websocket=websocket,
+            supervisor=supervisor,
+            payload=payload,
+        )
+        return
+    if kind == "restart_deployment":
+        await _handle_start_deployment_command(
+            websocket=websocket,
+            http_client=http_client,
+            config=config,
+            identity=identity,
+            supervisor=supervisor,
+            payload=payload,
+            stop_existing_first=True,
+        )
+        return
+    else:
+        await _ack_unsupported_command(websocket, message)
 
 
 async def _handle_start_deployment_command(
@@ -218,6 +239,7 @@ async def _handle_start_deployment_command(
     identity: AgentIdentity,
     supervisor: SubprocessSupervisor,
     payload: dict[str, object],
+    stop_existing_first: bool,
 ) -> None:
     command_id = str(payload.get("command_id") or "")
     args = payload.get("args")
@@ -229,6 +251,9 @@ async def _handle_start_deployment_command(
     download_url = _required_string(args, "download_url")
     entrypoint = _required_string(args, "entrypoint")
     env = _string_dict(args.get("env"))
+
+    if stop_existing_first:
+        await supervisor.stop(deployment_id)
 
     try:
         supervisor.reserve_slot(deployment_id)
@@ -288,6 +313,39 @@ async def _handle_start_deployment_command(
         command_id=command_id,
         status="succeeded",
         result={"runtime_instance_id": runtime_instance_id},
+    )
+
+
+async def _handle_stop_deployment_command(
+    *,
+    websocket,
+    supervisor: SubprocessSupervisor,
+    payload: dict[str, object],
+) -> None:
+    command_id = str(payload.get("command_id") or "")
+    args = payload.get("args")
+    if not command_id or not isinstance(args, dict):
+        return
+
+    deployment_id = _required_string(args, "deployment_id")
+    await _send_command_ack(websocket, command_id=command_id, status="accepted")
+    try:
+        returncode = await supervisor.stop(deployment_id)
+    except Exception as exc:
+        await _send_command_result(
+            websocket,
+            command_id=command_id,
+            status="failed",
+            error_code=exc.__class__.__name__,
+            error_message=str(exc),
+        )
+        return
+
+    await _send_command_result(
+        websocket,
+        command_id=command_id,
+        status="succeeded",
+        result={"returncode": returncode},
     )
 
 
