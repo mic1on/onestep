@@ -25,3 +25,16 @@ Runtime state is also stored under `ONESTEP_WORKER_AGENT_DIR`:
 On restart, the agent restores deployments whose recorded PID is still alive,
 reports them in the next control-plane hello/heartbeat, and can stop them by
 PID. Stale records whose PID no longer exists are removed during startup.
+
+## End-to-End Smoke
+
+With a sibling `onestep-control-plane` checkout, run a real local deployment
+smoke:
+
+```bash
+uv run python scripts/run_smoke.py
+```
+
+The smoke starts a temporary SQLite-backed control plane, starts this worker
+agent, uploads a minimal workflow package, creates a deployment, waits for the
+`running` event, stops it, and waits for `stopped`.

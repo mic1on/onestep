@@ -10,6 +10,7 @@ authors = [
 ]
 dependencies = [
   "httpx>=0.28.0",
+  "onestep[yaml]>=1.4.2",
   "websockets>=12.0",
 ]
 
