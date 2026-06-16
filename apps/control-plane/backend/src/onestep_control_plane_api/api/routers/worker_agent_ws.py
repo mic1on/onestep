@@ -25,10 +25,14 @@ from onestep_control_plane_api.api.worker_agent_connection_registry import (
 from onestep_control_plane_api.api.worker_agent_service import (
     apply_worker_agent_heartbeat,
     close_worker_agent_session,
+    dispatch_worker_agent_command,
+    get_worker_agent_command_capability,
     handle_worker_agent_command_ack,
     handle_worker_agent_command_result,
     handle_worker_agent_hello,
+    list_redeliverable_worker_agent_commands,
     mark_worker_agent_session_message,
+    reject_worker_agent_command_without_delivery,
 )
 from onestep_control_plane_api.db.models import WorkerAgent
 from onestep_control_plane_api.db.session import get_db_session
@@ -148,6 +152,13 @@ async def worker_agent_ws(
                     send_queue=send_queue,
                 )
                 await websocket.send_json(ack.model_dump(mode="json"))
+                await _enqueue_pending_commands(
+                    db,
+                    worker_agent=worker_agent,
+                    session_id=context.session_id,
+                    accepted_capabilities=ack.payload.accepted_capabilities,
+                    send_queue=send_queue,
+                )
                 continue
 
             mark_worker_agent_session_message(db, session_id=context.session_id, occurred_at=now)
@@ -255,3 +266,35 @@ async def worker_agent_ws(
                 session_id=context.session_id,
                 disconnected_at=utcnow(),
             )
+
+
+async def _enqueue_pending_commands(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    session_id: str,
+    accepted_capabilities: list[str],
+    send_queue: asyncio.Queue[dict[str, object]],
+) -> None:
+    for command in list_redeliverable_worker_agent_commands(
+        db,
+        worker_agent_id=worker_agent.worker_agent_id,
+    ):
+        required_capability = get_worker_agent_command_capability(command.kind)
+        if required_capability is not None and required_capability not in accepted_capabilities:
+            reject_worker_agent_command_without_delivery(
+                db,
+                command=command,
+                error_code="unsupported_capability",
+                error_message=(
+                    f"worker agent {worker_agent.worker_agent_id} does not advertise "
+                    f"capability {required_capability}"
+                ),
+            )
+            continue
+        await dispatch_worker_agent_command(
+            db,
+            command=command,
+            send_queue=send_queue,
+            session_id=session_id,
+        )

@@ -49,6 +49,13 @@ WORKER_AGENT_CAPABILITIES = frozenset(
         "agent.sync_state",
     }
 )
+WORKER_AGENT_COMMAND_CAPABILITY_BY_KIND = {
+    "start_deployment": "deployment.start",
+    "stop_deployment": "deployment.stop",
+    "restart_deployment": "deployment.restart",
+    "sync_agent_state": "agent.sync_state",
+}
+WORKER_AGENT_REDELIVERABLE_COMMAND_STATUSES = frozenset({"pending", "dispatched"})
 
 
 def _package_storage_dir() -> Path:
@@ -205,6 +212,51 @@ def build_worker_agent_command_message(
             created_at=command.created_at,
         ),
     )
+
+
+def get_worker_agent_command_capability(kind: str) -> str | None:
+    return WORKER_AGENT_COMMAND_CAPABILITY_BY_KIND.get(kind)
+
+
+def list_redeliverable_worker_agent_commands(
+    db: Session,
+    *,
+    worker_agent_id: UUID,
+) -> list[WorkerAgentCommand]:
+    return list(
+        db.scalars(
+            select(WorkerAgentCommand)
+            .where(
+                WorkerAgentCommand.worker_agent_id == worker_agent_id,
+                WorkerAgentCommand.status.in_(WORKER_AGENT_REDELIVERABLE_COMMAND_STATUSES),
+            )
+            .order_by(WorkerAgentCommand.created_at.asc(), WorkerAgentCommand.command_id.asc())
+        ).all()
+    )
+
+
+def reject_worker_agent_command_without_delivery(
+    db: Session,
+    *,
+    command: WorkerAgentCommand,
+    error_code: str,
+    error_message: str,
+) -> WorkerAgentCommand:
+    now = utcnow()
+    command.status = "rejected"
+    command.error_code = error_code
+    command.error_message = error_message
+    command.finished_at = now
+    command.updated_at = now
+    _apply_worker_command_failure_to_deployment(
+        db,
+        command=command,
+        error_code=error_code,
+        error_message=error_message,
+    )
+    db.commit()
+    db.refresh(command)
+    return command
 
 
 def _deployment_package_args(

@@ -217,6 +217,55 @@ def test_worker_agent_ws_receives_start_deployment_and_records_ack(
         assert command.deployment_id == UUID(deployment["deployment_id"])
 
 
+def test_worker_agent_ws_redelivers_pending_command_after_reconnect(
+    client,
+    db_session,
+    worker_agent_registration_token,
+) -> None:
+    registration = _register_worker_agent(client, worker_agent_registration_token)
+    package = _upload_workflow_package(client)
+    deployment_response = client.post(
+        "/api/v1/worker-deployments",
+        json={
+            "workflow_package_id": package["package_id"],
+            "worker_agent_id": registration["worker_agent_id"],
+        },
+    )
+    assert deployment_response.status_code == 200
+    deployment = deployment_response.json()
+
+    db_session.expire_all()
+    command_before_connect = db_session.scalar(
+        select(WorkerAgentCommand).where(
+            WorkerAgentCommand.deployment_id == UUID(deployment["deployment_id"])
+        )
+    )
+    assert command_before_connect is not None
+    assert command_before_connect.status == "pending"
+
+    with client.websocket_connect(
+        "/api/v1/worker-agents/ws",
+        headers={"Authorization": f"Bearer {registration['connection_token']}"},
+    ) as websocket:
+        websocket.send_json(_hello_message(registration["worker_agent_id"]))
+        websocket.receive_json()
+        command_message = websocket.receive_json()
+
+        assert command_message["type"] == "command"
+        assert command_message["payload"]["kind"] == "start_deployment"
+        assert command_message["payload"]["deployment_id"] == deployment["deployment_id"]
+
+        db_session.expire_all()
+        command_after_connect = db_session.scalar(
+            select(WorkerAgentCommand).where(
+                WorkerAgentCommand.command_id
+                == UUID(command_message["payload"]["command_id"])
+            )
+        )
+        assert command_after_connect is not None
+        assert command_after_connect.status == "dispatched"
+
+
 def test_worker_agent_ws_updates_deployment_state_for_start_stop_restart(
     client,
     db_session,
