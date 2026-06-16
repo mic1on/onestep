@@ -123,9 +123,15 @@ def test_handle_start_deployment_downloads_and_starts_package(tmp_path) -> None:
 
     assert websocket.messages[0]["type"] == "command_ack"
     assert websocket.messages[0]["payload"]["status"] == "accepted"
-    assert websocket.messages[1]["type"] == "command_result"
-    assert websocket.messages[1]["payload"]["status"] == "succeeded"
-    assert "runtime_instance_id" in websocket.messages[1]["payload"]["result"]
+    event_types = [
+        message["payload"]["event_type"]
+        for message in websocket.messages
+        if message["type"] == "deployment_event"
+    ]
+    assert event_types == ["preparing", "checking", "running"]
+    result = _last_command_result(websocket.messages)
+    assert result["payload"]["status"] == "succeeded"
+    assert "runtime_instance_id" in result["payload"]["result"]
     assert http_client.requests == [
         (
             "/api/v1/workflow-packages/package/download",
@@ -168,9 +174,15 @@ def test_handle_stop_deployment_stops_existing_process(tmp_path) -> None:
 
     assert websocket.messages[0]["type"] == "command_ack"
     assert websocket.messages[0]["payload"]["status"] == "accepted"
-    assert websocket.messages[1]["type"] == "command_result"
-    assert websocket.messages[1]["payload"]["status"] == "succeeded"
-    assert websocket.messages[1]["payload"]["result"] == {"returncode": 0}
+    event_types = [
+        message["payload"]["event_type"]
+        for message in websocket.messages
+        if message["type"] == "deployment_event"
+    ]
+    assert event_types == ["stopping", "stopped"]
+    result = _last_command_result(websocket.messages)
+    assert result["payload"]["status"] == "succeeded"
+    assert result["payload"]["result"] == {"returncode": 0}
     assert supervisor.stopped == [deployment_id]
     assert deployment_id not in supervisor.reserved
 
@@ -215,8 +227,20 @@ def test_handle_restart_deployment_stops_then_starts(tmp_path) -> None:
 
     assert websocket.messages[0]["type"] == "command_ack"
     assert websocket.messages[0]["payload"]["status"] == "accepted"
-    assert websocket.messages[1]["type"] == "command_result"
-    assert websocket.messages[1]["payload"]["status"] == "succeeded"
+    event_types = [
+        message["payload"]["event_type"]
+        for message in websocket.messages
+        if message["type"] == "deployment_event"
+    ]
+    assert event_types == ["preparing", "checking", "running"]
+    result = _last_command_result(websocket.messages)
+    assert result["payload"]["status"] == "succeeded"
     assert supervisor.stopped == [deployment_id]
     assert supervisor.checked == ["worker.yaml"]
     assert supervisor.started == [deployment_id]
+
+
+def _last_command_result(messages: list[dict[str, object]]) -> dict[str, object]:
+    results = [message for message in messages if message["type"] == "command_result"]
+    assert results
+    return results[-1]

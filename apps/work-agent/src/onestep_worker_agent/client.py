@@ -271,12 +271,28 @@ async def _handle_start_deployment_command(
     package_dir = config.work_dir / "deployments" / deployment_id / "package"
     runtime_instance_id = str(uuid4())
     try:
+        await _send_deployment_event(
+            websocket,
+            deployment_id=deployment_id,
+            event_type="preparing",
+            observed_status="preparing",
+            message="downloading workflow package",
+            payload={"download_url": download_url},
+        )
         response = await http_client.get(
             download_url,
             headers={"Authorization": f"Bearer {identity.connection_token}"},
         )
         response.raise_for_status()
         extract_package(response.content, package_checksum, package_dir)
+        await _send_deployment_event(
+            websocket,
+            deployment_id=deployment_id,
+            event_type="checking",
+            observed_status="checking",
+            message="running onestep check",
+            payload={"entrypoint": entrypoint},
+        )
         spec = DeploymentSpec(
             deployment_id=deployment_id,
             worker_agent_id=str(identity.worker_agent_id),
@@ -299,6 +315,14 @@ async def _handle_start_deployment_command(
         await supervisor.start(spec)
     except Exception as exc:
         supervisor.release_slot(deployment_id)
+        await _send_deployment_event(
+            websocket,
+            deployment_id=deployment_id,
+            event_type="failed",
+            observed_status="failed",
+            message=str(exc),
+            payload={"error_code": exc.__class__.__name__},
+        )
         await _send_command_result(
             websocket,
             command_id=command_id,
@@ -308,6 +332,14 @@ async def _handle_start_deployment_command(
         )
         return
 
+    await _send_deployment_event(
+        websocket,
+        deployment_id=deployment_id,
+        event_type="running",
+        observed_status="running",
+        message="deployment started",
+        payload={"runtime_instance_id": runtime_instance_id},
+    )
     await _send_command_result(
         websocket,
         command_id=command_id,
@@ -330,8 +362,23 @@ async def _handle_stop_deployment_command(
     deployment_id = _required_string(args, "deployment_id")
     await _send_command_ack(websocket, command_id=command_id, status="accepted")
     try:
+        await _send_deployment_event(
+            websocket,
+            deployment_id=deployment_id,
+            event_type="stopping",
+            observed_status="stopping",
+            message="stopping deployment process",
+        )
         returncode = await supervisor.stop(deployment_id)
     except Exception as exc:
+        await _send_deployment_event(
+            websocket,
+            deployment_id=deployment_id,
+            event_type="failed",
+            observed_status="failed",
+            message=str(exc),
+            payload={"error_code": exc.__class__.__name__},
+        )
         await _send_command_result(
             websocket,
             command_id=command_id,
@@ -341,11 +388,46 @@ async def _handle_stop_deployment_command(
         )
         return
 
+    await _send_deployment_event(
+        websocket,
+        deployment_id=deployment_id,
+        event_type="stopped",
+        observed_status="stopped",
+        message="deployment stopped",
+        payload={"returncode": returncode},
+    )
     await _send_command_result(
         websocket,
         command_id=command_id,
         status="succeeded",
         result={"returncode": returncode},
+    )
+
+
+async def _send_deployment_event(
+    websocket,
+    *,
+    deployment_id: str,
+    event_type: str,
+    observed_status: str,
+    message: str,
+    payload: dict[str, object] | None = None,
+) -> None:
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "deployment_event",
+                "message_id": _message_id(),
+                "sent_at": _sent_at(),
+                "payload": {
+                    "deployment_id": deployment_id,
+                    "event_type": event_type,
+                    "observed_status": observed_status,
+                    "message": message,
+                    "payload": payload or {},
+                },
+            }
+        )
     )
 
 
