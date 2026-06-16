@@ -1,0 +1,44 @@
+[project]
+name = "onestep-worker-agent"
+version = "0.1.0a0"
+description = "Execution host agent for OneStep Control Plane deployments."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "miclon", email = "jcnd@163.com" }
+]
+dependencies = [
+  "httpx>=0.28.0",
+  "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.4.0",
+]
+dev = [
+  "pytest>=8.4.0",
+  "ruff>=0.13.0",
+]
+
+[project.scripts]
+onestep-worker-agent = "onestep_worker_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onestep_worker_agent"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
