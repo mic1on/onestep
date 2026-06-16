@@ -207,28 +207,43 @@ def build_worker_agent_command_message(
     )
 
 
-def create_start_deployment_command(
-    db: Session,
+def _deployment_package_args(
     *,
     deployment: WorkerDeployment,
     package: WorkflowPackage,
+) -> dict[str, object]:
+    return {
+        "deployment_id": str(deployment.deployment_id),
+        "package_id": str(package.package_id),
+        "package_checksum": package.checksum_sha256,
+        "download_url": f"/api/v1/workflow-packages/{package.package_id}/download",
+        "entrypoint": package.entrypoint,
+        "params": deployment.params_json,
+        "env": deployment.env_json,
+        "credential_refs": deployment.credential_refs_json,
+    }
+
+
+def create_worker_deployment_command(
+    db: Session,
+    *,
+    deployment: WorkerDeployment,
+    kind: str,
+    package: WorkflowPackage | None = None,
     timeout_s: int = 30,
 ) -> WorkerAgentCommand:
+    args_json: dict[str, object] = {"deployment_id": str(deployment.deployment_id)}
+    if kind in {"start_deployment", "restart_deployment"}:
+        if package is None:
+            raise ValueError(f"package is required when kind={kind}")
+        args_json = _deployment_package_args(deployment=deployment, package=package)
+
     command = WorkerAgentCommand(
         command_id=uuid4(),
         worker_agent_id=deployment.worker_agent_id,
         deployment_id=deployment.deployment_id,
-        kind="start_deployment",
-        args_json={
-            "deployment_id": str(deployment.deployment_id),
-            "package_id": str(package.package_id),
-            "package_checksum": package.checksum_sha256,
-            "download_url": f"/api/v1/workflow-packages/{package.package_id}/download",
-            "entrypoint": package.entrypoint,
-            "params": deployment.params_json,
-            "env": deployment.env_json,
-            "credential_refs": deployment.credential_refs_json,
-        },
+        kind=kind,
+        args_json=args_json,
         timeout_s=timeout_s,
         status="pending",
     )
@@ -236,6 +251,58 @@ def create_start_deployment_command(
     db.commit()
     db.refresh(command)
     return command
+
+
+def create_start_deployment_command(
+    db: Session,
+    *,
+    deployment: WorkerDeployment,
+    package: WorkflowPackage,
+    timeout_s: int = 30,
+) -> WorkerAgentCommand:
+    return create_worker_deployment_command(
+        db,
+        deployment=deployment,
+        kind="start_deployment",
+        package=package,
+        timeout_s=timeout_s,
+    )
+
+
+def create_stop_deployment_command(
+    db: Session,
+    *,
+    deployment: WorkerDeployment,
+    timeout_s: int = 30,
+) -> WorkerAgentCommand:
+    deployment.desired_status = "stopped"
+    deployment.observed_status = "stopping"
+    deployment.updated_at = utcnow()
+    return create_worker_deployment_command(
+        db,
+        deployment=deployment,
+        kind="stop_deployment",
+        timeout_s=timeout_s,
+    )
+
+
+def create_restart_deployment_command(
+    db: Session,
+    *,
+    deployment: WorkerDeployment,
+    package: WorkflowPackage,
+    timeout_s: int = 30,
+) -> WorkerAgentCommand:
+    deployment.desired_status = "running"
+    deployment.observed_status = "assigned"
+    deployment.updated_at = utcnow()
+    return create_worker_deployment_command(
+        db,
+        deployment=deployment,
+        kind="restart_deployment",
+        package=package,
+        timeout_s=timeout_s,
+    )
 
 
 async def dispatch_worker_agent_command(
@@ -286,8 +353,71 @@ def handle_worker_agent_command_ack(
         command.finished_at = received_at
         command.error_code = message.payload.error_code
         command.error_message = message.payload.error_message
+        _apply_worker_command_failure_to_deployment(
+            db,
+            command=command,
+            error_code=message.payload.error_code,
+            error_message=message.payload.error_message,
+        )
     db.commit()
     return True
+
+
+def _apply_worker_command_failure_to_deployment(
+    db: Session,
+    *,
+    command: WorkerAgentCommand,
+    error_code: str | None,
+    error_message: str | None,
+) -> None:
+    if command.deployment_id is None:
+        return
+    deployment = db.scalar(
+        select(WorkerDeployment).where(
+            WorkerDeployment.deployment_id == command.deployment_id
+        )
+    )
+    if deployment is None:
+        return
+    deployment.observed_status = "failed"
+    deployment.last_error_code = error_code
+    deployment.last_error_message = error_message
+    deployment.updated_at = utcnow()
+
+
+def _apply_worker_command_success_to_deployment(
+    db: Session,
+    *,
+    command: WorkerAgentCommand,
+    result: dict[str, object] | None,
+    finished_at,
+) -> None:
+    if command.deployment_id is None:
+        return
+    deployment = db.scalar(
+        select(WorkerDeployment).where(
+            WorkerDeployment.deployment_id == command.deployment_id
+        )
+    )
+    if deployment is None:
+        return
+
+    if command.kind in {"start_deployment", "restart_deployment"}:
+        deployment.observed_status = "running"
+        deployment.started_at = finished_at
+        if isinstance(result, dict):
+            runtime_instance_id = result.get("runtime_instance_id")
+            if isinstance(runtime_instance_id, str):
+                try:
+                    deployment.runtime_instance_id = UUID(runtime_instance_id)
+                except ValueError:
+                    pass
+    elif command.kind == "stop_deployment":
+        deployment.observed_status = "stopped"
+        deployment.finished_at = finished_at
+    deployment.last_error_code = None
+    deployment.last_error_message = None
+    deployment.updated_at = utcnow()
 
 
 def handle_worker_agent_command_result(
@@ -319,6 +449,20 @@ def handle_worker_agent_command_result(
         command.ack_status = "accepted"
         command.acked_at = received_at
     command.updated_at = received_at
+    if message.payload.status == "succeeded":
+        _apply_worker_command_success_to_deployment(
+            db,
+            command=command,
+            result=message.payload.result,
+            finished_at=message.payload.finished_at,
+        )
+    elif message.payload.status in {"failed", "timeout", "cancelled"}:
+        _apply_worker_command_failure_to_deployment(
+            db,
+            command=command,
+            error_code=message.payload.error_code or message.payload.status,
+            error_message=message.payload.error_message,
+        )
     db.commit()
     return "ok"
 
