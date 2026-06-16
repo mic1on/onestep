@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.auth.service import LocalAuthService, LocalIdentity, utcnow
 from onestep_control_plane_api.core.settings import settings
-from onestep_control_plane_api.db.models import LocalUser
+from onestep_control_plane_api.db.models import LocalUser, WorkerAgent
 from onestep_control_plane_api.db.session import get_db_session
 
 AGENT_WS_SUBPROTOCOL = "onestep-agent.v1"
@@ -31,6 +32,11 @@ bearer_scheme = HTTPBearer(
     description=(
         "Bearer token used by OneStep reporters to push heartbeat, metrics, events, and sync."
     ),
+    auto_error=False,
+)
+worker_agent_bearer_scheme = HTTPBearer(
+    scheme_name="WorkerAgentBearerAuth",
+    description="Bearer token used by OneStep worker agents to access host-control APIs.",
     auto_error=False,
 )
 
@@ -49,6 +55,17 @@ class WebSocketIngestAuth:
 
 def _validate_ingest_token_value(token: str) -> bool:
     for configured_token in settings.ingest_tokens:
+        if secrets.compare_digest(token, configured_token):
+            return True
+    return False
+
+
+def hash_worker_agent_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def validate_worker_agent_registration_token_value(token: str) -> bool:
+    for configured_token in settings.worker_agent_registration_tokens:
         if secrets.compare_digest(token, configured_token):
             return True
     return False
@@ -87,6 +104,33 @@ def require_ingest_token(
         detail="invalid bearer token",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def require_worker_agent_connection(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Security(worker_agent_bearer_scheme),
+    ],
+    db: Session = Depends(get_db_session),
+) -> WorkerAgent:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing worker agent bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token_hash = hash_worker_agent_token(credentials.credentials)
+    worker_agent = db.scalar(
+        select(WorkerAgent).where(WorkerAgent.connection_token_hash == token_hash)
+    )
+    if worker_agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid worker agent bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return worker_agent
 
 
 def require_websocket_ingest_token(websocket: WebSocket) -> WebSocketIngestAuth:

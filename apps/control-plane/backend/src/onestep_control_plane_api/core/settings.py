@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     instance_health_participation_window_s: int = Field(default=3600, ge=1)
     database_url: str = DEFAULT_DATABASE_URL
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
+    worker_package_storage_dir: str = ".onestep-control-plane/packages"
     console_auth_username: str = ""
     console_auth_password: str = ""
     console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
@@ -47,7 +51,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("ingest_tokens", "cors_allow_origins", mode="before")
+    @field_validator(
+        "ingest_tokens",
+        "worker_agent_registration_tokens",
+        "cors_allow_origins",
+        mode="before",
+    )
     @classmethod
     def parse_string_list(cls, value: object) -> object:
         if isinstance(value, str):

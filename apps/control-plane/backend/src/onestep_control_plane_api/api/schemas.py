@@ -110,6 +110,20 @@ ServiceCommandTargetMode = Literal["all_online", "selected_instances"]
 ServiceCommandOfflineBehavior = Literal["skip", "queue"]
 ServiceCommandFanoutOutcome = Literal["dispatched", "queued", "skipped", "rejected"]
 UiStreamChannel = Literal["commands", "sessions"]
+WorkerAgentExecutionMode = Literal["subprocess"]
+WorkerAgentStatus = Literal["offline", "online", "unknown"]
+WorkerDeploymentDesiredStatus = Literal["running", "stopped"]
+WorkerDeploymentObservedStatus = Literal[
+    "pending",
+    "assigned",
+    "preparing",
+    "checking",
+    "running",
+    "stopping",
+    "stopped",
+    "failed",
+    "cancelled",
+]
 WsMessageType = Literal[
     "hello",
     "hello_ack",
@@ -484,6 +498,105 @@ class PaginatedResponse(APIModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+
+
+class WorkerAgentRegistrationRequest(APIModel):
+    registration_token: str = Field(min_length=1)
+    display_name: str = Field(min_length=1, max_length=255)
+    execution_mode: WorkerAgentExecutionMode = "subprocess"
+    max_concurrent_deployments: int = Field(ge=1)
+    labels: dict[str, str] = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    agent_version: str | None = Field(default=None, max_length=64)
+    onestep_version: str | None = Field(default=None, max_length=64)
+    python_version: str | None = Field(default=None, max_length=64)
+    platform: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def normalize_display_name(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class WorkerAgentRegistrationResponse(APIModel):
+    worker_agent_id: UUID
+    connection_token: str
+    heartbeat_interval_s: int = Field(ge=1)
+    accepted_capabilities: list[str] = Field(default_factory=list)
+
+
+class WorkerAgentSummary(APIModel):
+    worker_agent_id: UUID
+    display_name: str
+    status: WorkerAgentStatus
+    execution_mode: WorkerAgentExecutionMode
+    max_concurrent_deployments: int = Field(ge=1)
+    used_slots: int = Field(ge=0)
+    labels: dict[str, str] = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    agent_version: str | None = None
+    onestep_version: str | None = None
+    python_version: str | None = None
+    platform: dict[str, Any] = Field(default_factory=dict)
+    registered_at: datetime
+    last_seen_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkerAgentListResponse(PaginatedResponse):
+    items: list[WorkerAgentSummary]
+
+
+class WorkflowPackageSummary(APIModel):
+    package_id: UUID
+    workflow_id: UUID
+    version: str
+    filename: str
+    content_type: str
+    checksum_sha256: str
+    size_bytes: int = Field(ge=0)
+    entrypoint: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: datetime
+
+
+class WorkerDeploymentCreateRequest(APIModel):
+    workflow_package_id: UUID
+    worker_agent_id: UUID
+    desired_status: WorkerDeploymentDesiredStatus = "running"
+    params: dict[str, Any] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)
+    credential_refs: list[str] = Field(default_factory=list)
+
+
+class WorkerDeploymentSummary(APIModel):
+    deployment_id: UUID
+    workflow_package_id: UUID
+    worker_agent_id: UUID
+    desired_status: WorkerDeploymentDesiredStatus
+    observed_status: WorkerDeploymentObservedStatus
+    runtime_instance_id: UUID | None = None
+    execution_mode: WorkerAgentExecutionMode
+    params: dict[str, Any] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)
+    credential_refs: list[str] = Field(default_factory=list)
+    package_checksum: str
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+    assigned_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkerDeploymentListResponse(PaginatedResponse):
+    items: list[WorkerDeploymentSummary]
 
 
 class AgentCommandCreateRequest(APIModel):

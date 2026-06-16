@@ -22,6 +22,7 @@ from sqlalchemy.pool import StaticPool
 
 TEST_DATABASE_URL = "sqlite+pysqlite:///:memory:"
 TEST_INGEST_TOKEN = "test-ingest-token"
+TEST_WORKER_AGENT_REGISTRATION_TOKEN = "test-worker-registration-token"
 TEST_HEAD_REVISION = get_expected_migration_heads()[0]
 
 
@@ -72,11 +73,15 @@ def test_engine():
 
 
 @pytest.fixture()
-def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, None]:
+def client(test_engine, configure_ingest_tokens, tmp_path) -> Generator[TestClient, None, None]:
     original_username = settings.console_auth_username
     original_password = settings.console_auth_password
+    original_worker_registration_tokens = settings.worker_agent_registration_tokens
+    original_worker_package_storage_dir = settings.worker_package_storage_dir
     settings.console_auth_username = ""
     settings.console_auth_password = ""
+    settings.worker_agent_registration_tokens = [TEST_WORKER_AGENT_REGISTRATION_TOKEN]
+    settings.worker_package_storage_dir = str(tmp_path / "worker-packages")
 
     def _override() -> Generator[Session, None, None]:
         yield from override_db_session(test_engine)
@@ -104,6 +109,8 @@ def client(test_engine, configure_ingest_tokens) -> Generator[TestClient, None, 
     }
     settings.console_auth_username = original_username
     settings.console_auth_password = original_password
+    settings.worker_agent_registration_tokens = original_worker_registration_tokens
+    settings.worker_package_storage_dir = original_worker_package_storage_dir
 
 
 @pytest.fixture()
@@ -115,6 +122,11 @@ def db_session(test_engine) -> Generator[Session, None, None]:
 @pytest.fixture()
 def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {TEST_INGEST_TOKEN}"}
+
+
+@pytest.fixture()
+def worker_agent_registration_token() -> str:
+    return TEST_WORKER_AGENT_REGISTRATION_TOKEN
 
 
 def create_local_user(
