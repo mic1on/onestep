@@ -48,6 +48,17 @@ models, but keep execution narrow:
 
 ## System Boundaries
 
+### Repository Boundary
+
+`onestep-worker-agent` should live in its own repository and publish as its own
+CLI/container artifact. It is a runtime host with different dependencies,
+release cadence, permissions, and operational lifecycle from
+`onestep-control-plane`.
+
+The control-plane repository should only contain the server-side protocol,
+registry, package, deployment, and command implementation. It should not vendor
+the worker-agent CLI code.
+
 ### `onestep-control-plane`
 
 The control plane is the only orchestration surface.
