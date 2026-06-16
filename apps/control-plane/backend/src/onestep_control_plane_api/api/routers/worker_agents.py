@@ -13,6 +13,7 @@ from onestep_control_plane_api.api.schemas import (
     WorkerAgentRegistrationResponse,
     WorkerAgentSummary,
     WorkerDeploymentCreateRequest,
+    WorkerDeploymentEventListResponse,
     WorkerDeploymentListResponse,
     WorkerDeploymentSummary,
     WorkflowPackageSummary,
@@ -26,6 +27,7 @@ from onestep_control_plane_api.api.worker_agent_connection_registry import (
 )
 from onestep_control_plane_api.api.worker_agent_service import (
     build_worker_agent_summary,
+    build_worker_deployment_event_summary,
     build_worker_deployment_summary,
     build_workflow_package_summary,
     create_restart_deployment_command,
@@ -39,6 +41,7 @@ from onestep_control_plane_api.api.worker_agent_service import (
     get_workflow_package_or_404,
     get_workflow_package_path_or_404,
     list_worker_agents,
+    list_worker_deployment_events,
     list_worker_deployments,
     register_worker_agent,
     require_worker_agent_package_assignment,
@@ -224,6 +227,32 @@ def get_worker_deployment_endpoint(
     db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
     return build_worker_deployment_summary(get_worker_deployment_or_404(db, deployment_id))
+
+
+@router.get(
+    "/worker-deployments/{deployment_id}/events",
+    response_model=WorkerDeploymentEventListResponse,
+    dependencies=[Depends(require_console_auth)],
+)
+def list_worker_deployment_events_endpoint(
+    deployment_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> WorkerDeploymentEventListResponse:
+    get_worker_deployment_or_404(db, deployment_id)
+    total, items = list_worker_deployment_events(
+        db,
+        deployment_id=deployment_id,
+        limit=limit,
+        offset=offset,
+    )
+    return WorkerDeploymentEventListResponse(
+        items=[build_worker_deployment_event_summary(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 async def _dispatch_if_connected(

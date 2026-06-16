@@ -17,6 +17,7 @@ from onestep_control_plane_api.api.schemas import (
     WorkerAgentHeartbeatMessage,
     WorkerAgentHelloMessage,
     WorkerAgentWsEnvelope,
+    WorkerDeploymentEventMessage,
 )
 from onestep_control_plane_api.api.security import require_websocket_worker_agent_connection
 from onestep_control_plane_api.api.worker_agent_connection_registry import (
@@ -24,6 +25,7 @@ from onestep_control_plane_api.api.worker_agent_connection_registry import (
 )
 from onestep_control_plane_api.api.worker_agent_service import (
     apply_worker_agent_heartbeat,
+    apply_worker_deployment_event,
     close_worker_agent_session,
     dispatch_worker_agent_command,
     get_worker_agent_command_capability,
@@ -180,6 +182,36 @@ async def worker_agent_ws(
                         close_connection=True,
                     )
                     return
+                continue
+
+            if envelope.type == "deployment_event":
+                try:
+                    deployment_event = WorkerDeploymentEventMessage.model_validate_json(
+                        raw_message
+                    )
+                except ValidationError:
+                    await _send_error(
+                        websocket,
+                        code="invalid_deployment_event",
+                        message="deployment_event payload is invalid",
+                        close_connection=False,
+                    )
+                    continue
+                if not apply_worker_deployment_event(
+                    db,
+                    worker_agent=worker_agent,
+                    message=deployment_event,
+                    received_at=now,
+                ):
+                    await _send_error(
+                        websocket,
+                        code="unknown_deployment",
+                        message=(
+                            f"worker deployment {deployment_event.payload.deployment_id} "
+                            "was not found for this worker agent"
+                        ),
+                        close_connection=False,
+                    )
                 continue
 
             if envelope.type == "command_ack":

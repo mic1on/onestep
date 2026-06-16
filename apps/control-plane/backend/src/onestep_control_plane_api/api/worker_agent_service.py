@@ -23,6 +23,8 @@ from onestep_control_plane_api.api.schemas import (
     WorkerAgentRegistrationResponse,
     WorkerAgentSummary,
     WorkerDeploymentCreateRequest,
+    WorkerDeploymentEventMessage,
+    WorkerDeploymentEventSummary,
     WorkerDeploymentSummary,
     WorkflowPackageSummary,
 )
@@ -36,6 +38,7 @@ from onestep_control_plane_api.db.models import (
     WorkerAgentCommand,
     WorkerAgentSession,
     WorkerDeployment,
+    WorkerDeploymentEvent,
     WorkflowPackage,
 )
 
@@ -78,6 +81,67 @@ def _accepted_capabilities(requested: list[str]) -> list[str]:
     return sorted(
         {capability for capability in requested if capability in WORKER_AGENT_CAPABILITIES}
     )
+
+
+def record_worker_deployment_event(
+    db: Session,
+    *,
+    deployment_id: UUID,
+    worker_agent_id: UUID,
+    event_type: str,
+    observed_status: str | None = None,
+    message: str = "",
+    payload: dict[str, object] | None = None,
+) -> WorkerDeploymentEvent:
+    event = WorkerDeploymentEvent(
+        deployment_id=deployment_id,
+        worker_agent_id=worker_agent_id,
+        event_type=event_type,
+        observed_status=observed_status,
+        message=message,
+        payload_json=payload or {},
+    )
+    db.add(event)
+    return event
+
+
+def build_worker_deployment_event_summary(
+    event: WorkerDeploymentEvent,
+) -> WorkerDeploymentEventSummary:
+    return WorkerDeploymentEventSummary(
+        deployment_id=event.deployment_id,
+        worker_agent_id=event.worker_agent_id,
+        event_type=event.event_type,
+        observed_status=event.observed_status,
+        message=event.message,
+        payload=event.payload_json,
+        created_at=event.created_at,
+    )
+
+
+def list_worker_deployment_events(
+    db: Session,
+    *,
+    deployment_id: UUID,
+    limit: int,
+    offset: int,
+) -> tuple[int, list[WorkerDeploymentEvent]]:
+    total = (
+        db.scalar(
+            select(func.count())
+            .select_from(WorkerDeploymentEvent)
+            .where(WorkerDeploymentEvent.deployment_id == deployment_id)
+        )
+        or 0
+    )
+    items = db.scalars(
+        select(WorkerDeploymentEvent)
+        .where(WorkerDeploymentEvent.deployment_id == deployment_id)
+        .order_by(WorkerDeploymentEvent.created_at.asc(), WorkerDeploymentEvent.id.asc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return total, list(items)
 
 
 def handle_worker_agent_hello(
@@ -183,6 +247,38 @@ def apply_worker_agent_heartbeat(
     db.commit()
 
 
+def apply_worker_deployment_event(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    message: WorkerDeploymentEventMessage,
+    received_at,
+) -> bool:
+    deployment = db.scalar(
+        select(WorkerDeployment).where(
+            WorkerDeployment.deployment_id == message.payload.deployment_id,
+            WorkerDeployment.worker_agent_id == worker_agent.worker_agent_id,
+        )
+    )
+    if deployment is None:
+        return False
+
+    if message.payload.observed_status is not None:
+        deployment.observed_status = message.payload.observed_status
+        deployment.updated_at = received_at
+    record_worker_deployment_event(
+        db,
+        deployment_id=deployment.deployment_id,
+        worker_agent_id=worker_agent.worker_agent_id,
+        event_type=message.payload.event_type,
+        observed_status=message.payload.observed_status,
+        message=message.payload.message,
+        payload={"source": "worker_agent", **message.payload.payload},
+    )
+    db.commit()
+    return True
+
+
 def get_worker_agent_command_or_404(db: Session, command_id: UUID) -> WorkerAgentCommand:
     command = db.scalar(
         select(WorkerAgentCommand).where(WorkerAgentCommand.command_id == command_id)
@@ -254,6 +350,16 @@ def reject_worker_agent_command_without_delivery(
         error_code=error_code,
         error_message=error_message,
     )
+    if command.deployment_id is not None:
+        record_worker_deployment_event(
+            db,
+            deployment_id=command.deployment_id,
+            worker_agent_id=command.worker_agent_id,
+            event_type="command_rejected",
+            observed_status="failed",
+            message=error_message,
+            payload={"command_id": str(command.command_id), "error_code": error_code},
+        )
     db.commit()
     db.refresh(command)
     return command
@@ -300,6 +406,15 @@ def create_worker_deployment_command(
         status="pending",
     )
     db.add(command)
+    record_worker_deployment_event(
+        db,
+        deployment_id=deployment.deployment_id,
+        worker_agent_id=deployment.worker_agent_id,
+        event_type="command_created",
+        observed_status=deployment.observed_status,
+        message=f"{kind} command created",
+        payload={"command_id": str(command.command_id), "kind": kind},
+    )
     db.commit()
     db.refresh(command)
     return command
@@ -369,6 +484,19 @@ async def dispatch_worker_agent_command(
     command.session_id = session_id
     command.dispatched_at = now
     command.updated_at = now
+    if command.deployment_id is not None:
+        record_worker_deployment_event(
+            db,
+            deployment_id=command.deployment_id,
+            worker_agent_id=command.worker_agent_id,
+            event_type="command_dispatched",
+            message=f"{command.kind} command dispatched",
+            payload={
+                "command_id": str(command.command_id),
+                "kind": command.kind,
+                "session_id": session_id,
+            },
+        )
     db.commit()
     db.refresh(command)
     await send_queue.put(build_worker_agent_command_message(command).model_dump(mode="json"))
@@ -400,16 +528,35 @@ def handle_worker_agent_command_ack(
     command.updated_at = received_at
     if message.payload.status == "accepted":
         command.status = "accepted"
+        event_type = "command_acknowledged"
+        event_status = None
     else:
         command.status = "rejected"
         command.finished_at = received_at
         command.error_code = message.payload.error_code
         command.error_message = message.payload.error_message
+        event_type = "command_rejected"
+        event_status = "failed"
         _apply_worker_command_failure_to_deployment(
             db,
             command=command,
             error_code=message.payload.error_code,
             error_message=message.payload.error_message,
+        )
+    if command.deployment_id is not None:
+        record_worker_deployment_event(
+            db,
+            deployment_id=command.deployment_id,
+            worker_agent_id=command.worker_agent_id,
+            event_type=event_type,
+            observed_status=event_status,
+            message=f"{command.kind} command {message.payload.status}",
+            payload={
+                "command_id": str(command.command_id),
+                "kind": command.kind,
+                "ack_status": message.payload.status,
+                "error_code": message.payload.error_code,
+            },
         )
     db.commit()
     return True
@@ -472,6 +619,14 @@ def _apply_worker_command_success_to_deployment(
     deployment.updated_at = utcnow()
 
 
+def _observed_status_for_successful_command(kind: str) -> str | None:
+    if kind in {"start_deployment", "restart_deployment"}:
+        return "running"
+    if kind == "stop_deployment":
+        return "stopped"
+    return None
+
+
 def handle_worker_agent_command_result(
     db: Session,
     *,
@@ -508,6 +663,20 @@ def handle_worker_agent_command_result(
             result=message.payload.result,
             finished_at=message.payload.finished_at,
         )
+        if command.deployment_id is not None:
+            record_worker_deployment_event(
+                db,
+                deployment_id=command.deployment_id,
+                worker_agent_id=command.worker_agent_id,
+                event_type="command_succeeded",
+                observed_status=_observed_status_for_successful_command(command.kind),
+                message=f"{command.kind} command succeeded",
+                payload={
+                    "command_id": str(command.command_id),
+                    "kind": command.kind,
+                    "result": message.payload.result or {},
+                },
+            )
     elif message.payload.status in {"failed", "timeout", "cancelled"}:
         _apply_worker_command_failure_to_deployment(
             db,
@@ -515,6 +684,21 @@ def handle_worker_agent_command_result(
             error_code=message.payload.error_code or message.payload.status,
             error_message=message.payload.error_message,
         )
+        if command.deployment_id is not None:
+            record_worker_deployment_event(
+                db,
+                deployment_id=command.deployment_id,
+                worker_agent_id=command.worker_agent_id,
+                event_type="command_failed",
+                observed_status="failed",
+                message=message.payload.error_message or f"{command.kind} command failed",
+                payload={
+                    "command_id": str(command.command_id),
+                    "kind": command.kind,
+                    "status": message.payload.status,
+                    "error_code": message.payload.error_code,
+                },
+            )
     db.commit()
     return "ok"
 
@@ -769,6 +953,18 @@ def create_worker_deployment(
         updated_at=now,
     )
     db.add(deployment)
+    record_worker_deployment_event(
+        db,
+        deployment_id=deployment.deployment_id,
+        worker_agent_id=deployment.worker_agent_id,
+        event_type="deployment_created",
+        observed_status=deployment.observed_status,
+        message="deployment created",
+        payload={
+            "workflow_package_id": str(package.package_id),
+            "desired_status": deployment.desired_status,
+        },
+    )
     db.commit()
     db.refresh(deployment)
     return deployment

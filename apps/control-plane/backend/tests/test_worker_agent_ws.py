@@ -350,6 +350,78 @@ def test_worker_agent_ws_updates_deployment_state_for_start_stop_restart(
         assert loaded.runtime_instance_id == UUID(runtime_instance_id)
 
 
+def test_worker_deployment_events_include_control_and_agent_timeline(
+    client,
+    worker_agent_registration_token,
+) -> None:
+    registration = _register_worker_agent(client, worker_agent_registration_token)
+    package = _upload_workflow_package(client)
+    worker_agent_id = registration["worker_agent_id"]
+
+    with client.websocket_connect(
+        "/api/v1/worker-agents/ws",
+        headers={"Authorization": f"Bearer {registration['connection_token']}"},
+    ) as websocket:
+        websocket.send_json(_hello_message(worker_agent_id))
+        websocket.receive_json()
+
+        deployment_response = client.post(
+            "/api/v1/worker-deployments",
+            json={
+                "workflow_package_id": package["package_id"],
+                "worker_agent_id": worker_agent_id,
+            },
+        )
+        assert deployment_response.status_code == 200
+        deployment = deployment_response.json()
+        command_message = websocket.receive_json()
+
+        websocket.send_json(
+            {
+                "type": "deployment_event",
+                "message_id": "msg_deployment_event_1",
+                "sent_at": "2026-06-16T09:00:15Z",
+                "payload": {
+                    "deployment_id": deployment["deployment_id"],
+                    "event_type": "checking",
+                    "observed_status": "checking",
+                    "message": "running onestep check",
+                    "payload": {"entrypoint": "worker.yaml"},
+                },
+            }
+        )
+        _send_command_result(
+            websocket,
+            command_id=command_message["payload"]["command_id"],
+            status="succeeded",
+            result={"runtime_instance_id": str(uuid4())},
+        )
+        websocket.send_json(
+            {
+                "type": "command_ack",
+                "message_id": "msg_ack_barrier",
+                "sent_at": "2026-06-16T09:00:30Z",
+                "payload": {"command_id": "unused"},
+            }
+        )
+        websocket.receive_json()
+
+    events_response = client.get(
+        f"/api/v1/worker-deployments/{deployment['deployment_id']}/events"
+    )
+    assert events_response.status_code == 200
+    events = events_response.json()["items"]
+    event_types = [item["event_type"] for item in events]
+    assert "deployment_created" in event_types
+    assert "command_created" in event_types
+    assert "command_dispatched" in event_types
+    assert "checking" in event_types
+    assert "command_succeeded" in event_types
+    checking_event = next(item for item in events if item["event_type"] == "checking")
+    assert checking_event["observed_status"] == "checking"
+    assert checking_event["payload"] == {"source": "worker_agent", "entrypoint": "worker.yaml"}
+
+
 def _send_command_result(
     websocket,
     *,

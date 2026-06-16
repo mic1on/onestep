@@ -128,6 +128,7 @@ WorkerAgentWsMessageType = Literal[
     "hello",
     "hello_ack",
     "heartbeat",
+    "deployment_event",
     "command",
     "command_ack",
     "command_result",
@@ -616,6 +617,20 @@ class WorkerDeploymentListResponse(PaginatedResponse):
     items: list[WorkerDeploymentSummary]
 
 
+class WorkerDeploymentEventSummary(APIModel):
+    deployment_id: UUID
+    worker_agent_id: UUID
+    event_type: str
+    observed_status: WorkerDeploymentObservedStatus | None = None
+    message: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class WorkerDeploymentEventListResponse(PaginatedResponse):
+    items: list[WorkerDeploymentEventSummary]
+
+
 class WorkerAgentHelloPayload(APIModel):
     protocol_version: str = Field(min_length=1, max_length=16)
     worker_agent_id: UUID
@@ -665,6 +680,21 @@ class WorkerAgentHeartbeatMessage(APIModel):
     message_id: str = Field(min_length=1, max_length=255)
     sent_at: datetime
     payload: WorkerAgentHeartbeatPayload
+
+
+class WorkerDeploymentEventPayload(APIModel):
+    deployment_id: UUID
+    event_type: str = Field(min_length=1, max_length=64)
+    observed_status: WorkerDeploymentObservedStatus | None = None
+    message: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkerDeploymentEventMessage(APIModel):
+    type: Literal["deployment_event"]
+    message_id: str = Field(min_length=1, max_length=255)
+    sent_at: datetime
+    payload: WorkerDeploymentEventPayload
 
 
 class WorkerAgentCommandPayload(APIModel):
