@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202606150001"
+HEAD_REVISION = "202606150002"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -44,6 +44,12 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "task_definitions",
         "task_events",
         "task_metric_windows",
+        "worker_agent_commands",
+        "worker_agent_sessions",
+        "worker_agents",
+        "worker_deployment_events",
+        "worker_deployments",
+        "workflow_packages",
     }
 
     assert {column["name"] for column in inspector.get_columns("services")} == {
@@ -179,6 +185,108 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
+    assert {column["name"] for column in inspector.get_columns("worker_agents")} == {
+        "id",
+        "worker_agent_id",
+        "display_name",
+        "status",
+        "execution_mode",
+        "max_concurrent_deployments",
+        "used_slots",
+        "labels_json",
+        "capabilities_json",
+        "agent_version",
+        "onestep_version",
+        "python_version",
+        "platform_json",
+        "connection_token_hash",
+        "registered_at",
+        "last_seen_at",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("worker_agent_sessions")} == {
+        "id",
+        "session_id",
+        "worker_agent_id",
+        "protocol_version",
+        "status",
+        "capabilities_json",
+        "accepted_capabilities_json",
+        "connected_at",
+        "last_hello_at",
+        "last_message_at",
+        "disconnected_at",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("workflow_packages")} == {
+        "id",
+        "package_id",
+        "workflow_id",
+        "version",
+        "filename",
+        "content_type",
+        "checksum_sha256",
+        "size_bytes",
+        "storage_path",
+        "entrypoint",
+        "metadata_json",
+        "created_by",
+        "created_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("worker_deployments")} == {
+        "id",
+        "deployment_id",
+        "workflow_package_id",
+        "worker_agent_id",
+        "desired_status",
+        "observed_status",
+        "runtime_instance_id",
+        "execution_mode",
+        "params_json",
+        "env_json",
+        "credential_refs_json",
+        "package_checksum",
+        "last_error_code",
+        "last_error_message",
+        "assigned_at",
+        "started_at",
+        "finished_at",
+        "created_by",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("worker_agent_commands")} == {
+        "id",
+        "command_id",
+        "worker_agent_id",
+        "deployment_id",
+        "session_id",
+        "kind",
+        "args_json",
+        "timeout_s",
+        "status",
+        "ack_status",
+        "result_json",
+        "error_code",
+        "error_message",
+        "created_at",
+        "dispatched_at",
+        "acked_at",
+        "finished_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("worker_deployment_events")} == {
+        "id",
+        "deployment_id",
+        "worker_agent_id",
+        "event_type",
+        "observed_status",
+        "message",
+        "payload_json",
+        "created_at",
+    }
     assert {column["name"] for column in inspector.get_columns("local_roles")} == {
         "id",
         "name",
@@ -246,6 +354,24 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     pipeline_credential_columns = {
         column["name"]: column for column in inspector.get_columns("pipeline_credentials")
     }
+    worker_agent_columns = {
+        column["name"]: column for column in inspector.get_columns("worker_agents")
+    }
+    worker_agent_session_columns = {
+        column["name"]: column for column in inspector.get_columns("worker_agent_sessions")
+    }
+    workflow_package_columns = {
+        column["name"]: column for column in inspector.get_columns("workflow_packages")
+    }
+    worker_deployment_columns = {
+        column["name"]: column for column in inspector.get_columns("worker_deployments")
+    }
+    worker_agent_command_columns = {
+        column["name"]: column for column in inspector.get_columns("worker_agent_commands")
+    }
+    worker_deployment_event_columns = {
+        column["name"]: column for column in inspector.get_columns("worker_deployment_events")
+    }
     instance_columns = {column["name"]: column for column in inspector.get_columns("instances")}
     assert isinstance(instance_columns["app_snapshot_json"]["type"], sa.JSON)
     assert isinstance(agent_session_columns["capabilities_json"]["type"], sa.JSON)
@@ -268,6 +394,18 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert isinstance(pipeline_columns["graph_json"]["type"], sa.JSON)
     assert isinstance(pipeline_credential_columns["config_encrypted"]["type"], sa.Text)
     assert isinstance(pipeline_credential_columns["env_vars_encrypted"]["type"], sa.Text)
+    assert isinstance(worker_agent_columns["labels_json"]["type"], sa.JSON)
+    assert isinstance(worker_agent_columns["capabilities_json"]["type"], sa.JSON)
+    assert isinstance(worker_agent_columns["platform_json"]["type"], sa.JSON)
+    assert isinstance(worker_agent_session_columns["capabilities_json"]["type"], sa.JSON)
+    assert isinstance(worker_agent_session_columns["accepted_capabilities_json"]["type"], sa.JSON)
+    assert isinstance(workflow_package_columns["metadata_json"]["type"], sa.JSON)
+    assert isinstance(worker_deployment_columns["params_json"]["type"], sa.JSON)
+    assert isinstance(worker_deployment_columns["env_json"]["type"], sa.JSON)
+    assert isinstance(worker_deployment_columns["credential_refs_json"]["type"], sa.JSON)
+    assert isinstance(worker_agent_command_columns["args_json"]["type"], sa.JSON)
+    assert isinstance(worker_agent_command_columns["result_json"]["type"], sa.JSON)
+    assert isinstance(worker_deployment_event_columns["payload_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["source_config_json"]["type"], sa.JSON)
     assert isinstance(task_definition_columns["emit_json"]["type"], sa.JSON)
     assert {column["name"] for column in inspector.get_columns("task_metric_windows")} == {
@@ -333,6 +471,24 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("pipeline_credentials")} == {
         "ix_pipeline_credentials_connector_type_name",
+    }
+    assert {index["name"] for index in inspector.get_indexes("worker_agents")} == {
+        "ix_worker_agents_status_last_seen_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("worker_agent_sessions")} == {
+        "ix_worker_agent_sessions_agent_status_connected_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("workflow_packages")} == {
+        "ix_workflow_packages_workflow_id_created_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("worker_deployments")} == {
+        "ix_worker_deployments_agent_observed_status",
+    }
+    assert {index["name"] for index in inspector.get_indexes("worker_agent_commands")} == {
+        "ix_worker_agent_commands_agent_status",
+    }
+    assert {index["name"] for index in inspector.get_indexes("worker_deployment_events")} == {
+        "ix_worker_deployment_events_deployment_created_at",
     }
     assert {index["name"] for index in inspector.get_indexes("local_users")} == {
         "ix_local_users_username",

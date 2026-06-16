@@ -440,6 +440,222 @@ class AgentCommand(Base):
     )
 
 
+class WorkerAgent(Base):
+    __tablename__ = "worker_agents"
+    __table_args__ = (
+        sa.UniqueConstraint("worker_agent_id", name="uq_worker_agents_worker_agent_id"),
+        sa.Index("ix_worker_agents_status_last_seen_at", "status", "last_seen_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    worker_agent_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    display_name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="offline")
+    execution_mode: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="subprocess")
+    max_concurrent_deployments: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    used_slots: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    labels_json: Mapped[dict[str, str]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    capabilities_json: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    agent_version: Mapped[str | None] = mapped_column(sa.String(64))
+    onestep_version: Mapped[str | None] = mapped_column(sa.String(64))
+    python_version: Mapped[str | None] = mapped_column(sa.String(64))
+    platform_json: Mapped[dict[str, object]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=dict,
+    )
+    connection_token_hash: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    sessions: Mapped[list[WorkerAgentSession]] = relationship(
+        back_populates="worker_agent",
+        cascade="all, delete-orphan",
+    )
+    deployments: Mapped[list[WorkerDeployment]] = relationship(
+        back_populates="worker_agent",
+        cascade="all, delete-orphan",
+    )
+
+
+class WorkerAgentSession(Base):
+    __tablename__ = "worker_agent_sessions"
+    __table_args__ = (
+        sa.UniqueConstraint("session_id", name="uq_worker_agent_sessions_session_id"),
+        sa.Index(
+            "ix_worker_agent_sessions_agent_status_connected_at",
+            "worker_agent_id",
+            "status",
+            "connected_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    session_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    worker_agent_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("worker_agents.worker_agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    protocol_version: Mapped[str] = mapped_column(sa.String(16), nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    capabilities_json: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    accepted_capabilities_json: Mapped[list[str]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=list,
+    )
+    connected_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_hello_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_message_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    disconnected_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    worker_agent: Mapped[WorkerAgent] = relationship(back_populates="sessions")
+
+
+class WorkflowPackage(Base):
+    __tablename__ = "workflow_packages"
+    __table_args__ = (
+        sa.UniqueConstraint("package_id", name="uq_workflow_packages_package_id"),
+        sa.Index("ix_workflow_packages_workflow_id_created_at", "workflow_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    package_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    workflow_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    version: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    filename: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(sa.String(128), nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    entrypoint: Mapped[str] = mapped_column(sa.String(255), nullable=False, default="worker.yaml")
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=dict,
+    )
+    created_by: Mapped[str] = mapped_column(sa.String(255), nullable=False, default="system")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+    deployments: Mapped[list[WorkerDeployment]] = relationship(back_populates="workflow_package")
+
+
+class WorkerDeployment(Base):
+    __tablename__ = "worker_deployments"
+    __table_args__ = (
+        sa.UniqueConstraint("deployment_id", name="uq_worker_deployments_deployment_id"),
+        sa.Index(
+            "ix_worker_deployments_agent_observed_status",
+            "worker_agent_id",
+            "observed_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    deployment_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    workflow_package_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("workflow_packages.package_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    worker_agent_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("worker_agents.worker_agent_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    desired_status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="running")
+    observed_status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
+    runtime_instance_id: Mapped[UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
+    execution_mode: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="subprocess")
+    params_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    env_json: Mapped[dict[str, str]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    credential_refs_json: Mapped[list[str]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    package_checksum: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    last_error_code: Mapped[str | None] = mapped_column(sa.String(128))
+    last_error_message: Mapped[str | None] = mapped_column(sa.Text)
+    assigned_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_by: Mapped[str] = mapped_column(sa.String(255), nullable=False, default="system")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    worker_agent: Mapped[WorkerAgent] = relationship(back_populates="deployments")
+    workflow_package: Mapped[WorkflowPackage] = relationship(back_populates="deployments")
+
+
+class WorkerAgentCommand(Base):
+    __tablename__ = "worker_agent_commands"
+    __table_args__ = (
+        sa.UniqueConstraint("command_id", name="uq_worker_agent_commands_command_id"),
+        sa.Index("ix_worker_agent_commands_agent_status", "worker_agent_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    command_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    worker_agent_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("worker_agents.worker_agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    deployment_id: Mapped[UUID | None] = mapped_column(sa.Uuid(as_uuid=True))
+    session_id: Mapped[str | None] = mapped_column(sa.String(255))
+    kind: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    args_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    timeout_s: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
+    ack_status: Mapped[str | None] = mapped_column(sa.String(32))
+    result_json: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)
+    error_code: Mapped[str | None] = mapped_column(sa.String(128))
+    error_message: Mapped[str | None] = mapped_column(sa.Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    dispatched_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    acked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
+class WorkerDeploymentEvent(Base):
+    __tablename__ = "worker_deployment_events"
+    __table_args__ = (
+        sa.Index(
+            "ix_worker_deployment_events_deployment_created_at",
+            "deployment_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    deployment_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    worker_agent_id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    observed_status: Mapped[str | None] = mapped_column(sa.String(32))
+    message: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    payload_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+
 class TaskMetricWindow(Base):
     __tablename__ = "task_metric_windows"
     __table_args__ = (
