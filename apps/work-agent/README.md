@@ -2,21 +2,51 @@
 
 Execution host agent for OneStep Control Plane deployments.
 
-## Local Start
+## Setup
 
 ```bash
-export ONESTEP_PLANE_URL=http://localhost:8000
-export ONESTEP_AGENT_REGISTRATION_TOKEN=dev-token
-export ONESTEP_WORKER_AGENT_DIR=.onestep-worker-agent
-export ONESTEP_WORKER_AGENT_MAX_CONCURRENCY=2
+onestep-worker-agent setup
+```
+
+If the config file does not exist, `setup` prompts for the Control Plane URL,
+registration token, agent name, worker-agent directory, and max concurrency.
+It writes:
+
+```text
+~/.onestep/worker-agent/config.json
+```
+
+For non-interactive deployment:
+
+```bash
+onestep-worker-agent setup \
+  --plane-url http://localhost:8000 \
+  --registration-token dev-token \
+  --name worker-agent \
+  --max-concurrency 2 \
+  --no-start
+```
+
+Then start the agent:
+
+```bash
 onestep-worker-agent start
 ```
 
-The agent registers once, stores its identity under `ONESTEP_WORKER_AGENT_DIR`,
+Use `--config-dir <dir>` with either command to store/read config elsewhere.
+Environment variables still override config-file values:
+
+- `ONESTEP_PLANE_URL`
+- `ONESTEP_AGENT_REGISTRATION_TOKEN`
+- `ONESTEP_WORKER_AGENT_DIR`
+- `ONESTEP_WORKER_AGENT_NAME`
+- `ONESTEP_WORKER_AGENT_MAX_CONCURRENCY`
+
+The agent registers once, stores its identity under the worker-agent directory,
 connects to the control plane, and runs assigned workflow packages with
 `onestep check worker.yaml` followed by `onestep run worker.yaml`.
 
-Runtime state is also stored under `ONESTEP_WORKER_AGENT_DIR`:
+Runtime state is also stored under the worker-agent directory:
 
 - `identity.json`: stable worker-agent identity and connection credential.
 - `deployments.json`: locally running deployments, including runtime identity,
