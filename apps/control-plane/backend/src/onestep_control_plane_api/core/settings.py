@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     retention_agent_commands_days: int = Field(default=30, ge=1)
     retention_delete_batch_size: int = Field(default=1000, ge=1)
     retention_run_interval_s: int = Field(default=60 * 60 * 24, ge=60)
-    pipeline_credentials_fernet_key: str = ""
+    connector_secret_key: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",
@@ -80,9 +80,9 @@ class Settings(BaseSettings):
             return DEFAULT_DATABASE_URL
         return value
 
-    @field_validator("pipeline_credentials_fernet_key")
+    @field_validator("connector_secret_key")
     @classmethod
-    def validate_pipeline_credentials_fernet_key(cls, value: str) -> str:
+    def validate_connector_secret_key(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
             return ""

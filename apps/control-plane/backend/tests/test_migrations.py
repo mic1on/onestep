@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202606150002"
+HEAD_REVISION = "202606170003"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -29,6 +29,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert set(inspector.get_table_names()) == {
         "agent_commands",
         "agent_sessions",
+        "connectors",
         "instances",
         "services",
         "alembic_version",
@@ -39,14 +40,13 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "notification_channels",
         "notification_deliveries",
         "notification_instance_states",
-        "pipeline_credentials",
-        "pipelines",
         "task_definitions",
         "task_events",
         "task_metric_windows",
         "worker_agent_commands",
         "worker_agent_sessions",
         "worker_agents",
+        "workers",
         "worker_deployment_events",
         "worker_deployments",
         "workflow_packages",
@@ -164,24 +164,6 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "instance_id",
         "last_connectivity",
         "last_transition_at",
-        "created_at",
-        "updated_at",
-    }
-    assert {column["name"] for column in inspector.get_columns("pipelines")} == {
-        "id",
-        "name",
-        "description",
-        "graph_json",
-        "status",
-        "created_at",
-        "updated_at",
-    }
-    assert {column["name"] for column in inspector.get_columns("pipeline_credentials")} == {
-        "id",
-        "name",
-        "connector_type",
-        "config_encrypted",
-        "env_vars_encrypted",
         "created_at",
         "updated_at",
     }
@@ -350,10 +332,6 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         column["name"]: column
         for column in inspector.get_columns("notification_instance_states")
     }
-    pipeline_columns = {column["name"]: column for column in inspector.get_columns("pipelines")}
-    pipeline_credential_columns = {
-        column["name"]: column for column in inspector.get_columns("pipeline_credentials")
-    }
     worker_agent_columns = {
         column["name"]: column for column in inspector.get_columns("worker_agents")
     }
@@ -365,6 +343,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     worker_deployment_columns = {
         column["name"]: column for column in inspector.get_columns("worker_deployments")
+    }
+    worker_columns = {
+        column["name"]: column for column in inspector.get_columns("workers")
     }
     worker_agent_command_columns = {
         column["name"]: column for column in inspector.get_columns("worker_agent_commands")
@@ -391,9 +372,6 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         notification_instance_state_columns["last_connectivity"]["type"],
         sa.String,
     )
-    assert isinstance(pipeline_columns["graph_json"]["type"], sa.JSON)
-    assert isinstance(pipeline_credential_columns["config_encrypted"]["type"], sa.Text)
-    assert isinstance(pipeline_credential_columns["env_vars_encrypted"]["type"], sa.Text)
     assert isinstance(worker_agent_columns["labels_json"]["type"], sa.JSON)
     assert isinstance(worker_agent_columns["capabilities_json"]["type"], sa.JSON)
     assert isinstance(worker_agent_columns["platform_json"]["type"], sa.JSON)
@@ -403,6 +381,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert isinstance(worker_deployment_columns["params_json"]["type"], sa.JSON)
     assert isinstance(worker_deployment_columns["env_json"]["type"], sa.JSON)
     assert isinstance(worker_deployment_columns["credential_refs_json"]["type"], sa.JSON)
+    assert isinstance(worker_columns["env_json"]["type"], sa.JSON)
     assert isinstance(worker_agent_command_columns["args_json"]["type"], sa.JSON)
     assert isinstance(worker_agent_command_columns["result_json"]["type"], sa.JSON)
     assert isinstance(worker_deployment_event_columns["payload_json"]["type"], sa.JSON)
@@ -464,13 +443,6 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("notification_deliveries")} == {
         "ix_notification_deliveries_channel_id_created_at",
-    }
-    assert {index["name"] for index in inspector.get_indexes("pipelines")} == {
-        "ix_pipelines_status_updated_at",
-        "ix_pipelines_updated_at",
-    }
-    assert {index["name"] for index in inspector.get_indexes("pipeline_credentials")} == {
-        "ix_pipeline_credentials_connector_type_name",
     }
     assert {index["name"] for index in inspector.get_indexes("worker_agents")} == {
         "ix_worker_agents_status_last_seen_at",

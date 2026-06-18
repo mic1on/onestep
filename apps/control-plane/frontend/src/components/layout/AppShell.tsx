@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { canManageNotificationSettings } from "../../features/auth/session";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { logoutAllConsole, logoutConsole } from "../../lib/api/client";
+import { changeLanguage, getCurrentLanguage } from "../../lib/i18n";
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -64,9 +65,25 @@ export function AppShell() {
               className={({ isActive }) =>
                 isActive ? "shell-nav-link active" : "shell-nav-link"
               }
-              to="/pipelines"
+              to="/connectors"
             >
-              {t("app.pipelinesNav")}
+              {t("app.connectorsNav")}
+            </NavLink>
+            <NavLink
+              className={({ isActive }) =>
+                isActive ? "shell-nav-link active" : "shell-nav-link"
+              }
+              to="/workers"
+            >
+              {t("app.workersNav")}
+            </NavLink>
+            <NavLink
+              className={({ isActive }) =>
+                isActive ? "shell-nav-link active" : "shell-nav-link"
+              }
+              to="/agents"
+            >
+              {t("app.agentsNav")}
             </NavLink>
             {canManageNotifications ? (
               <NavLink
@@ -82,6 +99,14 @@ export function AppShell() {
         </div>
 
         <div className="shell-topbar-side">
+          <button
+            className="shell-lang-btn"
+            type="button"
+            aria-label={t("app.languageAriaLabel")}
+            onClick={() => void changeLanguage(getCurrentLanguage() === "zh" ? "en" : "zh")}
+          >
+            {getCurrentLanguage() === "zh" ? t("language.en") : t("language.zh")}
+          </button>
           {authConfigured && authenticated && username && (
             <>
               <span className="shell-username">{username}</span>

@@ -58,6 +58,26 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: "Notifications" })).not.toBeInTheDocument();
   });
 
+  it("shows the agents navigation link", async () => {
+    mockUseConsoleSessionQuery.mockReturnValue({
+      isPending: false,
+      error: null,
+      data: {
+        auth_configured: true,
+        bootstrap_required: false,
+        authenticated: true,
+        username: "viewer",
+        role: "viewer",
+        roles: ["viewer"],
+      },
+    });
+
+    renderShell();
+
+    expect(await screen.findByText("Services page")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Agents" })).toBeInTheDocument();
+  });
+
   it("shows the notifications navigation link for operator accounts", async () => {
     mockUseConsoleSessionQuery.mockReturnValue({
       isPending: false,
@@ -75,7 +95,8 @@ describe("AppShell", () => {
     renderShell();
 
     expect(await screen.findByText("Services page")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Pipelines" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connectors" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Workers" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Notifications" })).toBeInTheDocument();
   });
 });

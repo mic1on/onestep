@@ -142,6 +142,27 @@ body {
   background: rgba(0, 0, 0, 0.02);
 }
 
+.shell-lang-btn {
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.shell-lang-btn:hover {
+  color: var(--nd-text);
+  border-color: var(--nd-border-strong);
+  background: rgba(0, 0, 0, 0.02);
+}
+
 .signal-console-frame {
   padding: 0;
   border: 0;
@@ -1582,6 +1603,1403 @@ body {
   color: #fff;
 }
 
+/* Runtime builder surfaces */
+
+.signal-console-runtime-page {
+  gap: 18px;
+  color: var(--nd-text);
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.signal-console-runtime-page .signal-console-page-header-side {
+  align-items: flex-end;
+}
+
+.signal-console-runtime-page .signal-console-page-header-copy h2 {
+  overflow-wrap: anywhere;
+}
+
+.signal-console-runtime-page button,
+.signal-console-runtime-page .signal-console-page-header-side > a,
+.deployment-events-page .signal-console-page-header-side > a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nd-text);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.signal-console-runtime-page button:hover,
+.signal-console-runtime-page .signal-console-page-header-side > a:hover,
+.deployment-events-page .signal-console-page-header-side > a:hover {
+  border-color: var(--nd-text);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.signal-console-runtime-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.signal-console-runtime-page .ref-inline-control {
+  gap: 7px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .ref-inline-control span,
+.signal-console-runtime-page .ref-table-head,
+.signal-console-runtime-page .ref-summary-chip span,
+.signal-console-runtime-page .runtime-section-heading span,
+.signal-console-runtime-page .runtime-flow-strip span,
+.signal-console-runtime-page .connector-type-copy span,
+.signal-console-runtime-page .ref-meta-cell span,
+.signal-console-runtime-page .ref-service-link span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .ref-inline-control input,
+.signal-console-runtime-page .ref-inline-control select,
+.signal-console-runtime-page .ref-inline-control textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 13px;
+  border: 1px solid var(--nd-border);
+  border-radius: 14px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-text);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.signal-console-runtime-page .ref-inline-control input:focus,
+.signal-console-runtime-page .ref-inline-control select:focus,
+.signal-console-runtime-page .ref-inline-control textarea:focus {
+  outline: none;
+  border-color: var(--nd-text);
+  box-shadow: 0 0 0 1px var(--nd-text);
+}
+
+.signal-console-runtime-page .status-badge {
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nd-text);
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .badge-success {
+  border-color: rgba(74, 158, 92, 0.38);
+  color: var(--nd-success);
+}
+
+.signal-console-runtime-page .badge-warning,
+.signal-console-runtime-page .badge-accent {
+  border-color: rgba(212, 168, 67, 0.4);
+  color: #8d6a13;
+}
+
+.signal-console-runtime-page .badge-danger {
+  border-color: rgba(215, 25, 33, 0.38);
+  color: var(--nd-accent);
+}
+
+.signal-console-runtime-page .badge-muted {
+  color: var(--nd-text-secondary);
+}
+
+.signal-console-runtime-page .loading-block,
+.signal-console-runtime-page .empty-state,
+.signal-console-runtime-page .runtime-empty-inline {
+  border: 1px dashed var(--nd-border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.42);
+  color: var(--nd-text-secondary);
+}
+
+.signal-console-runtime-page .loading-block,
+.signal-console-runtime-page .empty-state {
+  padding: 18px;
+}
+
+.signal-console-runtime-page .empty-state h3 {
+  margin: 0 0 6px;
+  color: var(--nd-text);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.signal-console-runtime-page .empty-state p {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-console-runtime-page .runtime-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--nd-border);
+  border-radius: 22px;
+  background: var(--nd-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .runtime-summary-strip .ref-summary-chip {
+  gap: 6px;
+  padding: 16px 18px;
+  border: 0;
+  border-right: 1px solid var(--nd-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.signal-console-runtime-page .runtime-summary-strip .ref-summary-chip:last-child {
+  border-right: 0;
+}
+
+.signal-console-runtime-page .ref-summary-chip strong,
+.signal-console-runtime-page .runtime-flow-strip strong,
+.signal-console-runtime-page .ref-meta-cell strong {
+  color: var(--nd-text);
+  font-family: "Space Mono", monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .ref-summary-chip-success strong {
+  color: var(--nd-success);
+}
+
+.signal-console-runtime-page .ref-summary-chip-danger strong {
+  color: var(--nd-accent);
+}
+
+.signal-console-runtime-page .runtime-table-card,
+.signal-console-runtime-page .runtime-catalog-card,
+.signal-console-runtime-page .runtime-editor-card {
+  border: 1px solid var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .runtime-table-head,
+.signal-console-runtime-page .runtime-table-row {
+  display: grid;
+  align-items: center;
+  gap: 14px;
+}
+
+.signal-console-runtime-page .runtime-table-head {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--nd-border);
+  background: transparent;
+}
+
+.signal-console-runtime-page .runtime-table-row {
+  padding: 18px 20px;
+  border-top: 0;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .runtime-table-row:last-child {
+  border-bottom: 0;
+}
+
+.signal-console-runtime-page .runtime-workers-grid {
+  grid-template-columns: minmax(220px, 1.5fr) minmax(100px, 0.7fr) minmax(120px, 0.9fr) minmax(80px, 0.5fr) minmax(130px, 0.8fr);
+}
+
+.signal-console-runtime-page .runtime-agents-grid {
+  grid-template-columns: minmax(240px, 1.5fr) minmax(100px, 0.65fr) minmax(90px, 0.55fr) minmax(110px, 0.7fr) minmax(130px, 0.85fr) minmax(140px, 0.9fr);
+}
+
+.signal-console-runtime-page .runtime-deployments-grid {
+  grid-template-columns: minmax(210px, 1.35fr) minmax(96px, 0.55fr) minmax(110px, 0.7fr) minmax(130px, 0.8fr) minmax(160px, 1fr) minmax(200px, 1.1fr);
+}
+
+.signal-console-runtime-page .runtime-events-grid {
+  grid-template-columns: minmax(190px, 0.95fr) minmax(150px, 0.8fr) minmax(120px, 0.65fr) minmax(240px, 1.4fr);
+}
+
+.signal-console-runtime-page .ref-service-cell,
+.signal-console-runtime-page .ref-meta-cell {
+  min-width: 0;
+}
+
+.signal-console-runtime-page .ref-service-link strong,
+.signal-console-runtime-page .ref-service-cell > a strong {
+  color: var(--nd-text);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .ref-service-link:hover strong,
+.signal-console-runtime-page .ref-service-cell > a:hover strong {
+  color: var(--nd-accent);
+}
+
+.signal-console-runtime-page .ref-service-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.signal-console-runtime-page .ref-mini-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .connector-type-row {
+  display: grid;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .connector-type-row:last-child {
+  border-bottom: 0;
+}
+
+.signal-console-runtime-page .connector-type-trigger {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  min-height: 64px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+}
+
+.signal-console-runtime-page .connector-type-trigger:hover {
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .connector-type-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .connector-type-copy strong {
+  color: var(--nd-text);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.signal-console-runtime-page .connector-type-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  color: var(--nd-text);
+  font-family: "Space Mono", monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .connector-type-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px 20px;
+}
+
+.signal-console-runtime-page .connectors-workbench {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.signal-console-runtime-page .connectors-type-rail,
+.signal-console-runtime-page .connectors-detail-surface,
+.signal-console-runtime-page .connectors-list-panel {
+  border: 1px solid var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .connectors-type-rail {
+  position: sticky;
+  top: 104px;
+  display: grid;
+  padding: 6px;
+}
+
+.signal-console-runtime-page .connector-type-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 18px;
+  text-align: left;
+}
+
+.signal-console-runtime-page .connector-type-option:hover,
+.signal-console-runtime-page .connector-type-option.is-selected {
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .connector-type-option.is-selected .connector-type-count {
+  border-color: var(--nd-text);
+  background: var(--nd-text);
+  color: #fff;
+}
+
+.signal-console-runtime-page .connectors-detail-surface {
+  display: grid;
+}
+
+.signal-console-runtime-page .connectors-detail-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .connectors-detail-head div,
+.signal-console-runtime-page .connectors-panel-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-console-runtime-page .connectors-detail-head span,
+.signal-console-runtime-page .connectors-panel-heading span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .connectors-detail-head h3 {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .connectors-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.25fr);
+  gap: 18px;
+  padding: 18px;
+}
+
+.signal-console-runtime-page .connectors-list-panel {
+  display: grid;
+  align-content: start;
+}
+
+.signal-console-runtime-page .connectors-panel-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .connectors-panel-heading strong {
+  color: var(--nd-text);
+  font-family: "Doto", "Space Mono", monospace;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 0.9;
+}
+
+.signal-console-runtime-page .connectors-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.signal-console-runtime-page .runtime-list-item.is-selected {
+  border-color: var(--nd-text);
+  background: var(--nd-surface);
+}
+
+.signal-console-runtime-page .connectors-editor-form {
+  align-self: start;
+}
+
+.signal-console-runtime-page .connectors-editor-form p {
+  grid-column: 1 / -1;
+  margin: -4px 0 2px;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-console-runtime-page .connectors-form-full {
+  grid-column: 1 / -1;
+}
+
+.signal-console-runtime-page .runtime-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--nd-border);
+  border-radius: 16px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .runtime-inline-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .runtime-inline-form h4 {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.signal-console-runtime-page .runtime-inline-form .ref-page-actions {
+  grid-column: 1 / -1;
+}
+
+.signal-console-runtime-page .runtime-flow-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--nd-border);
+  border-radius: 22px;
+  background: var(--nd-surface);
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .runtime-flow-strip article {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-right: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .runtime-flow-strip article:last-child {
+  border-right: 0;
+}
+
+.signal-console-runtime-page .runtime-flow-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .runtime-editor-card {
+  padding: 0;
+}
+
+.signal-console-runtime-page .runtime-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+
+.signal-console-runtime-page .runtime-form-section {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 22px;
+  border-top: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .runtime-form-section-wide {
+  grid-column: 1 / -1;
+  border-top: 0;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .runtime-form-section:nth-child(2) {
+  border-right: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .runtime-section-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-console-runtime-page .runtime-section-heading h3 {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .runtime-section-heading-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.signal-console-runtime-page .runtime-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.signal-console-runtime-page .runtime-form-grid-full {
+  grid-column: 1 / -1;
+}
+
+.signal-console-runtime-page .runtime-sink-list {
+  display: grid;
+  gap: 12px;
+}
+
+.signal-console-runtime-page .runtime-empty-inline {
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-console-runtime-page .runtime-sink-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .runtime-editor-actions {
+  padding: 18px 22px;
+  border-top: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .worker-build-panel,
+.signal-console-runtime-page .worker-code-source {
+  border: 1px solid var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .worker-build-head,
+.signal-console-runtime-page .worker-code-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .worker-build-head {
+  align-items: flex-start;
+}
+
+.signal-console-runtime-page .worker-build-head > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-build-head dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 18px;
+  min-width: min(620px, 100%);
+  margin: 0;
+}
+
+.signal-console-runtime-page .worker-build-head dl div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-build-head dt {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-build-head dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--nd-text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .worker-code-source-head div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-build-head h3,
+.signal-console-runtime-page .worker-code-source h3 {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .worker-build-head p,
+.signal-console-runtime-page .worker-code-source p {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.signal-console-runtime-page .worker-build-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  border-top: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .worker-trigger-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .worker-trigger-summary > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-trigger-summary span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-trigger-summary strong,
+.signal-console-runtime-page .worker-trigger-summary dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--nd-text);
+  font-size: 14px;
+}
+
+.signal-console-runtime-page .worker-trigger-summary-full {
+  grid-column: 1 / -1;
+}
+
+.signal-console-runtime-page .worker-trigger-summary dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.signal-console-runtime-page .worker-trigger-summary dl div {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.35fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.signal-console-runtime-page .worker-trigger-summary dt {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .worker-code-source-head {
+  align-items: flex-end;
+}
+
+.signal-console-runtime-page .worker-code-handler-ref {
+  width: min(420px, 100%);
+}
+
+.signal-console-runtime-page .worker-code-shell {
+  display: grid;
+  grid-template-columns: minmax(190px, 280px) minmax(0, 1fr);
+  min-height: 430px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .worker-code-explorer {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px;
+  border-right: 1px solid var(--nd-border);
+  background: var(--nd-surface);
+}
+
+.signal-console-runtime-page .worker-code-explorer strong {
+  overflow: hidden;
+  color: var(--nd-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .worker-code-explorer > span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 12px;
+  padding-left: 12px;
+}
+
+.signal-console-runtime-page .worker-code-file {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 34px;
+  padding: 0 10px 0 22px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .worker-code-file.is-active {
+  background: var(--nd-surface-muted);
+  color: var(--nd-text);
+}
+
+.signal-console-runtime-page .worker-code-pane {
+  min-width: 0;
+  background: #fbfbf8;
+}
+
+.signal-console-runtime-page .worker-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 52px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--nd-border);
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 12px;
+}
+
+.signal-console-runtime-page .worker-code-toolbar span:first-child {
+  color: var(--nd-text);
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .worker-code-editor {
+  min-height: 360px;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .worker-code-editor .monaco-editor,
+.signal-console-runtime-page .worker-code-editor .monaco-editor-background,
+.signal-console-runtime-page .worker-code-editor .monaco-editor .margin {
+  background: #fbfbf8;
+}
+
+/* Tab bar between worker setup and code/config panels */
+.signal-console-runtime-page .worker-tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin: 18px 0 0;
+}
+
+.signal-console-runtime-page .worker-tab-bar .segmented-control {
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.signal-console-runtime-page .worker-tab-bar .segmented-option {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nd-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-tab-bar .segmented-option.active {
+  background: var(--nd-text);
+  color: #fff;
+}
+
+.signal-console-runtime-page .worker-tab-panel {
+  margin-top: 14px;
+}
+
+.signal-console-runtime-page .worker-tab-panel[hidden] {
+  display: none;
+}
+
+/* Identity summary (build panel 01 is now read-only) */
+.signal-console-runtime-page .worker-identity-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.signal-console-runtime-page .worker-identity-summary > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-identity-summary span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-identity-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--nd-text);
+  font-size: 14px;
+}
+
+/* Compact one-line summary for the build panel source/sink sections */
+.signal-console-runtime-page .worker-overview-summary {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .worker-overview-summary span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-overview-summary strong {
+  overflow-wrap: anywhere;
+  color: var(--nd-text);
+  font-size: 14px;
+}
+
+/* Code source file tree */
+.signal-console-runtime-page .worker-file-tree {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  align-content: start;
+}
+
+.signal-console-runtime-page .worker-file-tree-head {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-console-runtime-page .worker-file-tree-head span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.signal-console-runtime-page .worker-code-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.signal-console-runtime-page .worker-file-tree-root,
+.signal-console-runtime-page .worker-file-tree-children {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.signal-console-runtime-page .worker-file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: default;
+}
+
+.signal-console-runtime-page .worker-file-tree-folder {
+  color: var(--nd-text);
+  font-weight: 700;
+  cursor: default;
+}
+
+.signal-console-runtime-page .worker-file-tree-file {
+  cursor: pointer;
+}
+
+.signal-console-runtime-page .worker-file-tree-file:hover {
+  background: var(--nd-surface-muted);
+}
+
+.signal-console-runtime-page .worker-file-tree-file.is-active {
+  background: var(--nd-surface-muted);
+  color: var(--nd-text);
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .worker-file-tree-chevron,
+.signal-console-runtime-page .worker-file-tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--nd-text-secondary);
+  font-size: 11px;
+}
+
+.signal-console-runtime-page .worker-file-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .worker-file-tree-tag {
+  padding: 1px 6px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  color: var(--nd-text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.signal-console-runtime-page .worker-code-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 360px;
+  padding: 24px;
+  background: #fbfbf8;
+}
+
+.signal-console-runtime-page .worker-code-placeholder p {
+  margin: 0;
+  max-width: 420px;
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+/* Configuration tab */
+.signal-console-runtime-page .worker-config-panel {
+  border: 1px solid var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .worker-config-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .worker-config-head div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-config-head h3 {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.signal-console-runtime-page .worker-config-head p {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.signal-console-runtime-page .worker-config-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 400px;
+}
+
+.signal-console-runtime-page .worker-config-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 26px 0 40px;
+  background: #ffffff;
+  border-right: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .worker-config-sidebar button {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  min-height: 52px;
+  padding: 10px 44px 10px 58px;
+  border: none;
+  background: transparent;
+  color: var(--nd-text-secondary);
+  font: 600 18px/1.2 "Space Grotesk", sans-serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.signal-console-runtime-page .worker-config-sidebar button:hover {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--nd-text);
+}
+
+.signal-console-runtime-page .worker-config-sidebar button.is-active {
+  background: transparent;
+  color: var(--nd-text);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.signal-console-runtime-page .worker-config-sidebar button.is-active::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 22px;
+  width: 28px;
+  height: 56px;
+  border: 2px solid var(--nd-accent);
+  border-right: 0;
+  border-radius: 999px 0 0 999px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.signal-console-runtime-page .worker-config-content {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 20px;
+}
+
+.signal-console-runtime-page .worker-config-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .worker-config-titlebar h3 {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.signal-console-runtime-page .worker-config-save {
+  flex: 0 0 auto;
+}
+
+.signal-console-runtime-page .worker-config-section {
+  display: grid;
+  gap: 14px;
+}
+
+.signal-console-runtime-page .worker-config-section h3 {
+  margin: 0;
+}
+
+.signal-console-runtime-page .worker-config-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.signal-console-runtime-page .worker-config-section-head h3 {
+  margin: 0;
+}
+
+.signal-console-runtime-page .worker-config-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.signal-console-runtime-page .worker-config-general {
+  border-right: 1px solid var(--nd-border);
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .worker-config-general .ref-inline-control textarea {
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid var(--nd-border);
+  border-radius: 12px;
+  background: var(--nd-surface);
+  color: var(--nd-text);
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.signal-console-runtime-page .worker-config-properties {
+  display: grid;
+  gap: 18px;
+}
+
+.signal-console-runtime-page .worker-config-block {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .worker-config-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.signal-console-runtime-page .worker-config-block-head strong {
+  color: var(--nd-text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-config-meta {
+  display: grid;
+  gap: 8px;
+}
+
+.signal-console-runtime-page .worker-config-meta > div {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-console-runtime-page .worker-config-meta span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-config-meta strong {
+  overflow-wrap: anywhere;
+  color: var(--nd-text);
+  font-size: 13px;
+}
+
+.signal-console-runtime-page .worker-config-block .worker-trigger-summary {
+  background: var(--nd-surface);
+}
+
+.signal-console-runtime-page .worker-env-list {
+  display: grid;
+  gap: 10px;
+}
+
+.signal-console-runtime-page .worker-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .worker-env-remove {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+}
+
+.signal-console-runtime-page .worker-config-agent-deploy {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+}
+
+.signal-console-runtime-page .ref-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 15, 15, 0.28);
+}
+
+.signal-console-runtime-page .ref-modal-card {
+  width: min(560px, 100%);
+  border: 1px solid var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  box-shadow: 0 24px 60px rgba(15, 15, 15, 0.18);
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .worker-trigger-modal {
+  width: min(680px, 100%);
+}
+
+.signal-console-runtime-page .ref-modal-head,
+.signal-console-runtime-page .ref-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.signal-console-runtime-page .ref-modal-head {
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .ref-modal-head strong {
+  color: var(--nd-text);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.signal-console-runtime-page .ref-modal-body {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.signal-console-runtime-page .ref-modal-foot {
+  border-top: 1px solid var(--nd-border);
+  justify-content: flex-end;
+}
+
+.signal-console-runtime-page .ref-error-note {
+  margin: 0;
+  color: var(--nd-accent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 @media (max-width: 1080px) {
   .signal-console-hero,
   .signal-console-service-hero,
@@ -1654,6 +3072,83 @@ body {
     justify-items: start;
     text-align: left;
   }
+
+  .signal-console-runtime-page .runtime-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .runtime-form-section:nth-child(2) {
+    border-right: 0;
+  }
+
+  .signal-console-runtime-page .connectors-workbench,
+  .signal-console-runtime-page .connectors-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .connectors-type-rail {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signal-console-runtime-page .worker-build-head {
+    display: grid;
+  }
+
+  .signal-console-runtime-page .worker-build-head dl {
+    width: 100%;
+  }
+
+  .signal-console-runtime-page .worker-config-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .worker-config-sidebar {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--nd-border);
+    padding: 0 8px;
+  }
+
+  .signal-console-runtime-page .worker-config-sidebar button {
+    white-space: nowrap;
+    min-height: 48px;
+    padding: 10px 14px;
+    border-left: 0 !important;
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    padding-left: 14px !important;
+  }
+
+  .signal-console-runtime-page .worker-config-sidebar button.is-active {
+    border-bottom: 3px solid var(--nd-accent, #4a9eff);
+    border-left: 0;
+    padding-left: 14px;
+  }
+
+  .signal-console-runtime-page .worker-config-sidebar button.is-active::before {
+    display: none;
+  }
+
+  .signal-console-runtime-page .worker-config-titlebar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .signal-console-runtime-page .worker-env-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .signal-console-runtime-page .worker-env-remove {
+    justify-self: start;
+  }
+
+  .signal-console-runtime-page .worker-config-general {
+    border-right: 0;
+    border-bottom: 1px solid var(--nd-border);
+  }
 }
 
 @media (max-width: 900px) {
@@ -1674,12 +3169,91 @@ body {
   .signal-console-settings-page .notification-settings-layout {
     grid-template-columns: 1fr;
   }
+
+  .signal-console-runtime-page .runtime-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .signal-console-runtime-page .runtime-table-head {
+    display: none;
+  }
+
+  .signal-console-runtime-page .runtime-table-row,
+  .signal-console-runtime-page .runtime-workers-grid,
+  .signal-console-runtime-page .runtime-agents-grid,
+  .signal-console-runtime-page .runtime-deployments-grid,
+  .signal-console-runtime-page .runtime-events-grid,
+  .signal-console-runtime-page .runtime-flow-strip,
+  .signal-console-runtime-page .runtime-inline-form,
+  .signal-console-runtime-page .runtime-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .runtime-table-row {
+    align-items: start;
+  }
+
+  .signal-console-runtime-page .runtime-flow-strip article {
+    border-right: 0;
+    border-bottom: 1px solid var(--nd-border);
+  }
+
+  .signal-console-runtime-page .runtime-flow-strip article:last-child {
+    border-bottom: 0;
+  }
+
+  .signal-console-runtime-page .connectors-detail-head {
+    align-items: start;
+  }
+
+  .signal-console-runtime-page .worker-build-head,
+  .signal-console-runtime-page .worker-code-source-head {
+    display: grid;
+    align-items: start;
+  }
+
+  .signal-console-runtime-page .worker-build-grid,
+  .signal-console-runtime-page .worker-trigger-summary,
+  .signal-console-runtime-page .worker-code-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .worker-code-explorer {
+    border-right: 0;
+    border-bottom: 1px solid var(--nd-border);
+  }
 }
 
 @media (max-width: 720px) {
   .shell-topbar {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
     padding: 10px 14px;
     border-radius: 18px;
+  }
+
+  .shell-topbar-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    width: 100%;
+  }
+
+  .shell-brand {
+    width: fit-content;
+  }
+
+  .shell-nav {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    overflow-x: visible;
+    padding-bottom: 2px;
+  }
+
+  .shell-nav-link {
+    flex: 0 0 auto;
   }
 
   .shell-brand-title {
@@ -1750,86 +3324,56 @@ body {
   .task-manual-run-actions .button-secondary {
     width: 100%;
   }
-}
-.pipeline-builder-editor-page {
-  min-height: calc(100vh - 120px);
-}
 
-.pipeline-editor-shell {
-  display: grid;
-  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr) minmax(18rem, 24rem);
-  gap: 1rem;
-  min-height: 42rem;
-}
-
-.pipeline-flow-pane {
-  min-width: 0;
-  min-height: 42rem;
-  border: 1px solid var(--ref-border-subtle);
-  background: var(--ref-surface);
-}
-
-.pipeline-flow-pane .react-flow {
-  min-height: 42rem;
-}
-
-.pipeline-node-palette,
-.pipeline-property-panel,
-.pipeline-credential-manager {
-  border: 1px solid var(--ref-border-subtle);
-  background: var(--ref-surface);
-  padding: 1rem;
-}
-
-.pipeline-palette-group + .pipeline-palette-group {
-  margin-top: 1rem;
-}
-
-.pipeline-palette-stack,
-.pipeline-credential-list,
-.pipeline-credential-form {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.pipeline-palette-node,
-.pipeline-flow-node {
-  display: grid;
-  gap: 0.25rem;
-}
-
-.pipeline-palette-node {
-  width: 100%;
-  text-align: left;
-}
-
-.pipeline-flow-node {
-  min-width: 9rem;
-  border: 1px solid var(--ref-border-strong);
-  background: var(--ref-surface-raised);
-  padding: 0.75rem;
-}
-
-.pipeline-flow-node span,
-.pipeline-panel-heading span {
-  color: var(--ref-text-muted);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-}
-
-.pipeline-property-section {
-  margin-top: 1rem;
-}
-
-.pipeline-credential-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-@media (max-width: 980px) {
-  .pipeline-editor-shell {
+  .signal-console-runtime-page .runtime-summary-strip {
     grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .runtime-summary-strip .ref-summary-chip {
+    border-right: 0;
+    border-bottom: 1px solid var(--nd-border);
+  }
+
+  .signal-console-runtime-page .runtime-summary-strip .ref-summary-chip:last-child {
+    border-bottom: 0;
+  }
+
+  .signal-console-runtime-page .runtime-list-item {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .runtime-section-heading-actions {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .signal-console-runtime-page .runtime-section-heading-actions button,
+  .signal-console-runtime-page .runtime-editor-actions button,
+  .signal-console-runtime-page .ref-page-actions button {
+    width: 100%;
+  }
+
+  .signal-console-runtime-page .ref-modal-overlay {
+    padding: 12px;
+  }
+
+  .signal-console-runtime-page .ref-modal-foot {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .connectors-type-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .connectors-detail-head {
+    display: grid;
+  }
+
+  .signal-console-runtime-page .worker-code-toolbar {
+    display: grid;
+    align-content: center;
+    justify-content: stretch;
+    padding: 10px 14px;
   }
 }

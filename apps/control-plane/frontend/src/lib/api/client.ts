@@ -4,6 +4,16 @@ import type {
   AgentCommandListResponse,
   AgentCommandSummary,
   AgentSessionListResponse,
+  ConnectorCreateRequest,
+  ConnectorListResponse,
+  ConnectorSummary,
+  ConnectorType,
+  ConnectorUpdateRequest,
+  WorkerCreateRequest,
+  WorkerDeployRequest,
+  WorkerListResponse,
+  WorkerSummary,
+  WorkerUpdateRequest,
   ConsoleRole,
   ConsoleSessionResponse,
   Environment,
@@ -18,12 +28,6 @@ import type {
   NotificationProvider,
   NotificationServiceListResponse,
   NotificationServiceScope,
-  Pipeline,
-  PipelineConnectorDescriptor,
-  PipelineCredential,
-  PipelineGraph,
-  PipelineListResponse,
-  PipelineValidationResult,
   ServiceCommandFanoutResponse,
   ServiceCommandOfflineBehavior,
   ServiceCommandTargetMode,
@@ -32,6 +36,14 @@ import type {
   TaskCommandKind,
   TaskDashboardListResponse,
   TaskDetailResponse,
+  WorkerAgentListResponse,
+  WorkerAgentSummary,
+  WorkerDeploymentCreateRequest,
+  WorkerDeploymentDesiredStatus,
+  WorkerDeploymentEventListResponse,
+  WorkerDeploymentListResponse,
+  WorkerDeploymentSummary,
+  WorkflowPackageSummary,
 } from "./types";
 import { getApiBaseUrl } from "../runtime-config";
 
@@ -311,101 +323,98 @@ export function listServices(environment?: Environment, sourceKind?: string, que
   });
 }
 
-export function listPipelines() {
-  return request<PipelineListResponse>("/api/v1/pipelines");
+export function listWorkerAgents(limit = 100, offset = 0) {
+  return request<WorkerAgentListResponse>("/api/v1/worker-agents", {
+    query: { limit, offset },
+  });
 }
 
-export function getPipeline(pipelineId: string) {
-  return request<Pipeline>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}`);
+export function getWorkerAgent(workerAgentId: string) {
+  return request<WorkerAgentSummary>(
+    `/api/v1/worker-agents/${encodeURIComponent(workerAgentId)}`,
+  );
 }
 
-export function createPipeline(payload: {
-  name: string;
-  description: string;
-  graph: PipelineGraph;
-}) {
-  return request<Pipeline>("/api/v1/pipelines", { method: "POST", body: payload });
-}
-
-export function updatePipeline(
-  pipelineId: string,
-  payload: Partial<Pick<Pipeline, "name" | "description" | "graph">>,
+export function listWorkerDeployments(
+  options: { workerAgentId?: string; limit?: number; offset?: number } = {},
 ) {
-  return request<Pipeline>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}`, {
-    method: "PUT",
-    body: payload,
+  const { workerAgentId, limit = 100, offset = 0 } = options;
+  return request<WorkerDeploymentListResponse>("/api/v1/worker-deployments", {
+    query: { worker_agent_id: workerAgentId, limit, offset },
   });
 }
 
-export function deletePipeline(pipelineId: string) {
-  return request<void>(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}`, {
-    method: "DELETE",
-  });
+export function getWorkerDeployment(deploymentId: string) {
+  return request<WorkerDeploymentSummary>(
+    `/api/v1/worker-deployments/${encodeURIComponent(deploymentId)}`,
+  );
 }
 
-export function validatePipeline(pipelineId: string) {
-  return request<PipelineValidationResult>(
-    `/api/v1/pipelines/${encodeURIComponent(pipelineId)}/validate`,
+export function startWorkerDeployment(deploymentId: string) {
+  return request<WorkerDeploymentSummary>(
+    `/api/v1/worker-deployments/${encodeURIComponent(deploymentId)}/start`,
     { method: "POST" },
   );
 }
 
-export function listPipelineConnectors() {
-  return request<{ items: PipelineConnectorDescriptor[] }>("/api/v1/connectors");
+export function stopWorkerDeployment(deploymentId: string) {
+  return request<WorkerDeploymentSummary>(
+    `/api/v1/worker-deployments/${encodeURIComponent(deploymentId)}/stop`,
+    { method: "POST" },
+  );
 }
 
-export function listPipelineCredentials() {
-  return request<{ items: PipelineCredential[] }>("/api/v1/pipeline-credentials");
+export function restartWorkerDeployment(deploymentId: string) {
+  return request<WorkerDeploymentSummary>(
+    `/api/v1/worker-deployments/${encodeURIComponent(deploymentId)}/restart`,
+    { method: "POST" },
+  );
 }
 
-export function createPipelineCredential(payload: {
-  name: string;
-  connector_type: string;
-  config: Record<string, unknown>;
-  env_vars: Record<string, string>;
-}) {
-  return request<PipelineCredential>("/api/v1/pipeline-credentials", {
+export function listWorkerDeploymentEvents(deploymentId: string, limit = 100, offset = 0) {
+  return request<WorkerDeploymentEventListResponse>(
+    `/api/v1/worker-deployments/${encodeURIComponent(deploymentId)}/events`,
+    { query: { limit, offset } },
+  );
+}
+
+export function createWorkerDeployment(payload: WorkerDeploymentCreateRequest) {
+  return request<WorkerDeploymentSummary>("/api/v1/worker-deployments", {
     method: "POST",
     body: payload,
   });
 }
 
-export function updatePipelineCredential(
-  credentialId: string,
-  payload: Partial<{
-    name: string;
-    connector_type: string;
-    config: Record<string, unknown>;
-    env_vars: Record<string, string>;
-  }>,
-) {
-  return request<PipelineCredential>(
-    `/api/v1/pipeline-credentials/${encodeURIComponent(credentialId)}`,
-    {
-      method: "PUT",
-      body: payload,
-    },
-  );
-}
-
-export function deletePipelineCredential(credentialId: string) {
-  return request<void>(`/api/v1/pipeline-credentials/${encodeURIComponent(credentialId)}`, {
-    method: "DELETE",
+export async function createWorkflowPackage(params: {
+  file: Blob;
+  workflowId: string;
+  version: string;
+  filename?: string;
+  entrypoint?: string;
+}) {
+  const url = buildApiUrl("/api/v1/workflow-packages", {
+    workflow_id: params.workflowId,
+    version: params.version,
+    filename: params.filename ?? "workflow.zip",
+    entrypoint: params.entrypoint ?? "worker.yaml",
   });
-}
-
-export async function exportPipeline(pipelineId: string) {
-  const response = await fetch(
-    buildApiUrl(`/api/v1/pipelines/${encodeURIComponent(pipelineId)}/export`),
-    {
-      credentials: "include",
-      method: "POST",
-    },
-  );
+  const response = await fetch(url, {
+    credentials: "include",
+    method: "POST",
+    headers: { "Content-Type": "application/zip" },
+    body: params.file,
+  });
   if (!response.ok) {
-    throw new ApiError(response.statusText, response.status);
+    let detail = response.statusText;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      detail = payload.detail ?? detail;
+    } catch {
+      // ignore json parse failures on error bodies
+    }
+    throw new ApiError(detail, response.status);
   }
-  return response.blob();
+  return (await response.json()) as WorkflowPackageSummary;
 }
 
 export async function listNotificationChannels() {
@@ -699,4 +708,58 @@ export function logoutAllConsole() {
     method: "POST",
     redirectOnUnauthorized: false,
   }).then(normalizeConsoleSession);
+}
+
+export function listConnectors(typeFilter?: ConnectorType) {
+  return request<ConnectorListResponse>("/api/v1/connectors", {
+    query: typeFilter ? { type: typeFilter } : {},
+  });
+}
+
+export function createConnector(payload: ConnectorCreateRequest) {
+  return request<ConnectorSummary>("/api/v1/connectors", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function updateConnector(connectorId: string, payload: ConnectorUpdateRequest) {
+  return request<ConnectorSummary>(`/api/v1/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function deleteConnector(connectorId: string) {
+  return request<void>(`/api/v1/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function listWorkers() {
+  return request<WorkerListResponse>("/api/v1/workers");
+}
+
+export function createWorker(payload: WorkerCreateRequest) {
+  return request<WorkerSummary>("/api/v1/workers", { method: "POST", body: payload });
+}
+
+export function updateWorker(workerId: string, payload: WorkerUpdateRequest) {
+  return request<WorkerSummary>(`/api/v1/workers/${encodeURIComponent(workerId)}`, {
+    method: "PUT",
+    body: payload,
+  });
+}
+
+export function deleteWorker(workerId: string) {
+  return request<void>(`/api/v1/workers/${encodeURIComponent(workerId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function deployWorker(workerId: string, payload: WorkerDeployRequest) {
+  return request<{ deployment_id: string }>(
+    `/api/v1/workers/${encodeURIComponent(workerId)}/deploy`,
+    { method: "POST", body: payload },
+  );
 }

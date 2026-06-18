@@ -2,15 +2,19 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { AppShell } from "../components/layout/AppShell";
 import { RequireConsoleAuth } from "../features/auth/RequireConsoleAuth";
+import { ConnectorsPage } from "../pages/connectors/ConnectorsPage";
+import { WorkerEditorPage } from "../pages/workers/WorkerEditorPage";
+import { WorkersListPage } from "../pages/workers/WorkersListPage";
+import { AgentDetailPage } from "../pages/worker-deployments/AgentDetailPage";
+import { DeploymentEventsPage } from "../pages/worker-deployment-events/DeploymentEventsPage";
 import { InstanceDetailPage } from "../pages/instance-detail/InstanceDetailPage";
 import { LoginPage } from "../pages/login/LoginPage";
 import { NotFoundPage } from "../pages/not-found/NotFoundPage";
-import { PipelineEditorPage } from "../pages/pipeline-editor/PipelineEditorPage";
-import { PipelinesListPage } from "../pages/pipelines-list/PipelinesListPage";
 import { SettingsNotificationsPage } from "../pages/settings-notifications/SettingsNotificationsPage";
 import { ServiceDetailPage } from "../pages/service-detail/ServiceDetailPage";
 import { ServicesListPage } from "../pages/services-list/ServicesListPage";
 import { TaskDetailPage } from "../pages/task-detail/TaskDetailPage";
+import { WorkerAgentsPage } from "../pages/worker-agents/WorkerAgentsPage";
 
 export const router = createBrowserRouter([
   {
@@ -45,12 +49,28 @@ export const router = createBrowserRouter([
             element: <InstanceDetailPage />,
           },
           {
-            path: "pipelines",
-            element: <PipelinesListPage />,
+            path: "agents",
+            element: <WorkerAgentsPage />,
           },
           {
-            path: "pipelines/:pipelineId",
-            element: <PipelineEditorPage />,
+            path: "connectors",
+            element: <ConnectorsPage />,
+          },
+          {
+            path: "workers",
+            element: <WorkersListPage />,
+          },
+          {
+            path: "workers/:workerId",
+            element: <WorkerEditorPage />,
+          },
+          {
+            path: "agents/:agentId",
+            element: <AgentDetailPage />,
+          },
+          {
+            path: "agents/:agentId/deployments/:deploymentId/events",
+            element: <DeploymentEventsPage />,
           },
           {
             path: "settings/notifications",

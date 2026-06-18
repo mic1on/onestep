@@ -117,6 +117,7 @@ WorkerDeploymentObservedStatus = Literal[
     "pending",
     "assigned",
     "preparing",
+    "installing",
     "checking",
     "running",
     "stopping",
@@ -1356,3 +1357,91 @@ class ServiceDashboardResponse(APIModel):
 class UiStreamEvent(APIModel):
     channel: UiStreamChannel
     published_at: datetime
+
+
+class ConnectorSummary(APIModel):
+    id: str
+    name: str
+    type: str
+    config: dict[str, object]
+    secret: dict[str, object]
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ConnectorListResponse(APIModel):
+    items: list[ConnectorSummary]
+    total: int
+
+
+class ConnectorCreateRequest(APIModel):
+    name: str
+    type: str
+    config: dict[str, object] = Field(default_factory=dict)
+    secret: dict[str, object] = Field(default_factory=dict)
+
+
+class ConnectorUpdateRequest(APIModel):
+    name: str | None = None
+    config: dict[str, object] | None = None
+    secret: dict[str, object] | None = None
+
+
+class WorkerSourceConfig(APIModel):
+    type: str
+    connector_id: str | None = None
+    fields: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkerSinkConfig(APIModel):
+    type: str
+    connector_id: str | None = None
+    fields: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkerSummary(APIModel):
+    id: str
+    name: str
+    description: str
+    handler_package_id: str | None = None
+    handler_ref: str
+    source_config: WorkerSourceConfig
+    sink_configs: list[WorkerSinkConfig]
+    env: dict[str, str] = Field(default_factory=dict)
+    status: str
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class WorkerListResponse(APIModel):
+    items: list[WorkerSummary]
+    total: int
+
+
+class WorkerCreateRequest(APIModel):
+    name: str
+    description: str = ""
+    handler_package_id: str | None = None
+    handler_ref: str = "handler:handler"
+    source_config: WorkerSourceConfig = Field(
+        default_factory=lambda: WorkerSourceConfig(type="interval")
+    )
+    sink_configs: list[WorkerSinkConfig] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class WorkerUpdateRequest(APIModel):
+    name: str | None = None
+    description: str | None = None
+    handler_package_id: str | None = None
+    handler_ref: str | None = None
+    source_config: WorkerSourceConfig | None = None
+    sink_configs: list[WorkerSinkConfig] | None = None
+    env: dict[str, str] | None = None
+    status: str | None = None
+
+
+class WorkerDeployRequest(APIModel):
+    worker_agent_id: str
+    desired_status: str = "running"
+    env: dict[str, str] | None = None

@@ -1,7 +1,7 @@
 """Add worker agent registry and deployment tables.
 
 Revision ID: 202606150002
-Revises: 202606150001
+Revises: 202605270001
 Create Date: 2026-06-16 08:30:00.000000
 """
 
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "202606150002"
-down_revision: str | None = "202606150001"
+down_revision: str | None = "202605270001"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

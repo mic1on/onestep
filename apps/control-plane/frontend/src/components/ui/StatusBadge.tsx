@@ -8,6 +8,7 @@ type BadgeValue =
   | "dispatched"
   | "expired"
   | "failed"
+  | "installing"
   | "online"
   | "offline"
   | "never_reported"
@@ -44,6 +45,7 @@ const BADGE_CLASS_MAP: Record<BadgeValue, string> = {
   consistent: "badge-success",
   degraded: "badge-warning",
   offline: "badge-warning",
+  installing: "badge-accent",
   starting: "badge-accent",
   succeeded: "badge-success",
   superseded: "badge-muted",

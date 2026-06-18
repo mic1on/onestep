@@ -18,52 +18,6 @@ def utcnow() -> datetime:
 JSON_TYPE = sa.JSON().with_variant(JSONB(), "postgresql")
 
 
-class Pipeline(Base):
-    __tablename__ = "pipelines"
-    __table_args__ = (
-        sa.Index("ix_pipelines_updated_at", "updated_at"),
-        sa.Index("ix_pipelines_status_updated_at", "status", "updated_at"),
-    )
-
-    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
-    description: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
-    graph_json: Mapped[dict[str, object]] = mapped_column(
-        JSON_TYPE,
-        nullable=False,
-        default=dict,
-    )
-    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="draft")
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(),
-        nullable=False,
-        default=utcnow,
-        onupdate=utcnow,
-    )
-
-
-class PipelineCredential(Base):
-    __tablename__ = "pipeline_credentials"
-    __table_args__ = (
-        sa.UniqueConstraint("name", name="uq_pipeline_credentials_name"),
-        sa.Index("ix_pipeline_credentials_connector_type_name", "connector_type", "name"),
-    )
-
-    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
-    connector_type: Mapped[str] = mapped_column(sa.String(128), nullable=False)
-    config_encrypted: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    env_vars_encrypted: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(),
-        nullable=False,
-        default=utcnow,
-        onupdate=utcnow,
-    )
-
-
 class Service(Base):
     __tablename__ = "services"
     __table_args__ = (
@@ -819,3 +773,56 @@ class NotificationInstanceState(Base):
     )
 
     channel: Mapped[NotificationChannel] = relationship(back_populates="instance_states")
+
+
+class Connector(Base):
+    __tablename__ = "connectors"
+    __table_args__ = (
+        sa.UniqueConstraint("name", name="uq_connectors_name"),
+        sa.Index("ix_connectors_type", "type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    config_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    secret_encrypted: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
+class Worker(Base):
+    __tablename__ = "workers"
+    __table_args__ = (
+        sa.UniqueConstraint("name", name="uq_workers_name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    description: Mapped[str] = mapped_column(sa.Text, nullable=False, default="")
+    handler_package_id: Mapped[UUID | None] = mapped_column(sa.Uuid(as_uuid=True), nullable=True)
+    handler_ref: Mapped[str] = mapped_column(
+        sa.String(255),
+        nullable=False,
+        default="handler:handler",
+    )
+    source_config: Mapped[dict[str, object]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=dict,
+    )
+    sink_configs: Mapped[list[object]] = mapped_column(JSON_TYPE, nullable=False, default=list)
+    env_json: Mapped[dict[str, str]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="draft")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )

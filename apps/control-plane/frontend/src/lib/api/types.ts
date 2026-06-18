@@ -66,77 +66,114 @@ export type ConsoleRole = "viewer" | "operator" | "admin";
 
 export type JsonObject = Record<string, unknown>;
 
-export type PipelineStatus = "draft" | "valid" | "invalid";
-export type PipelineNodeKind = "source" | "handler" | "sink";
-export type PipelineHandlerMode = "visual" | "code";
+export type WorkerAgentStatus = "offline" | "online" | "unknown";
+export type WorkerAgentExecutionMode = "subprocess";
+export type WorkerDeploymentDesiredStatus = "running" | "stopped";
+export type WorkerDeploymentObservedStatus =
+  | "pending"
+  | "assigned"
+  | "preparing"
+  | "installing"
+  | "checking"
+  | "running"
+  | "stopping"
+  | "stopped"
+  | "failed"
+  | "cancelled";
 
-export interface PipelineGraphNode {
-  id: string;
-  type: string;
-  kind: PipelineNodeKind;
-  credential_ref?: string | null;
-  config: JsonObject;
-  mode?: PipelineHandlerMode | null;
-  mapping: Record<string, string>;
-  code?: string | null;
-  input_schema: JsonObject;
-  position: { x: number; y: number };
-}
-
-export interface PipelineGraphEdge {
-  from: string;
-  to: string;
-  condition?: string | null;
-}
-
-export interface PipelineGraph {
-  nodes: PipelineGraphNode[];
-  edges: PipelineGraphEdge[];
-}
-
-export interface Pipeline {
-  id: string;
-  name: string;
-  description: string;
-  graph: PipelineGraph;
-  status: PipelineStatus;
+export interface WorkerAgentSummary {
+  worker_agent_id: string;
+  display_name: string;
+  status: WorkerAgentStatus;
+  execution_mode: WorkerAgentExecutionMode;
+  max_concurrent_deployments: number;
+  used_slots: number;
+  labels: Record<string, string>;
+  capabilities: string[];
+  agent_version: string | null;
+  onestep_version: string | null;
+  python_version: string | null;
+  platform: JsonObject;
+  registered_at: string;
+  last_seen_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface PipelineListResponse {
-  items: Pipeline[];
+export interface WorkerAgentListResponse {
+  items: WorkerAgentSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
-export interface PipelineValidationResult {
-  ok: boolean;
+export interface WorkflowPackageSummary {
+  package_id: string;
+  workflow_id: string;
+  version: string;
+  filename: string;
+  content_type: string;
+  checksum_sha256: string;
+  size_bytes: number;
+  entrypoint: string;
+  metadata: JsonObject;
+  created_by: string;
+  created_at: string;
+}
+
+export interface WorkerDeploymentCreateRequest {
+  workflow_package_id: string;
+  worker_agent_id: string;
+  desired_status: WorkerDeploymentDesiredStatus;
+  params?: JsonObject;
+  env?: Record<string, string>;
+  credential_refs?: string[];
+}
+
+export interface WorkerDeploymentSummary {
+  deployment_id: string;
+  workflow_package_id: string;
+  worker_agent_id: string;
+  desired_status: WorkerDeploymentDesiredStatus;
+  observed_status: WorkerDeploymentObservedStatus;
+  runtime_instance_id: string | null;
+  execution_mode: WorkerAgentExecutionMode;
+  params: JsonObject;
+  env: Record<string, string>;
+  credential_refs: string[];
+  package_checksum: string;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkerDeploymentListResponse {
+  items: WorkerDeploymentSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WorkerDeploymentEventSummary {
+  deployment_id: string;
+  worker_agent_id: string;
+  event_type: string;
+  observed_status: WorkerDeploymentObservedStatus | null;
   message: string;
-}
-
-export interface PipelineConnectorField {
-  name: string;
-  label: string;
-  type: string;
-  required: boolean;
-}
-
-export interface PipelineConnectorDescriptor {
-  type: string;
-  label: string;
-  category: PipelineNodeKind;
-  description: string;
-  credential_type?: string | null;
-  fields: PipelineConnectorField[];
-}
-
-export interface PipelineCredential {
-  id: string;
-  name: string;
-  connector_type: string;
-  config: JsonObject;
-  env_vars: Record<string, string>;
+  payload: JsonObject;
   created_at: string;
-  updated_at: string;
+}
+
+export interface WorkerDeploymentEventListResponse {
+  items: WorkerDeploymentEventSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ConnectorDescriptor {
@@ -547,4 +584,99 @@ export interface ServiceDashboardResponse {
   topology_hashes: string[];
   topology_consistent: boolean;
   recent_events: TaskEventSummary[];
+}
+
+export type ConnectorType =
+  | "mysql"
+  | "postgres"
+  | "redis"
+  | "rabbitmq"
+  | "sqs"
+  | "feishu_bitable"
+  | "http";
+
+export interface ConnectorSummary {
+  id: string;
+  name: string;
+  type: ConnectorType;
+  config: JsonObject;
+  secret: Record<string, string>;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ConnectorListResponse {
+  items: ConnectorSummary[];
+  total: number;
+}
+
+export interface ConnectorCreateRequest {
+  name: string;
+  type: ConnectorType;
+  config: JsonObject;
+  secret: Record<string, string>;
+}
+
+export interface ConnectorUpdateRequest {
+  name?: string;
+  config?: JsonObject;
+  secret?: Record<string, string>;
+}
+
+export interface WorkerSourceConfig {
+  type: string;
+  connector_id: string | null;
+  fields: JsonObject;
+}
+
+export interface WorkerSinkConfig {
+  type: string;
+  connector_id: string | null;
+  fields: JsonObject;
+}
+
+export interface WorkerSummary {
+  id: string;
+  name: string;
+  description: string;
+  handler_package_id: string | null;
+  handler_ref: string;
+  source_config: WorkerSourceConfig;
+  sink_configs: WorkerSinkConfig[];
+  env: Record<string, string>;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface WorkerListResponse {
+  items: WorkerSummary[];
+  total: number;
+}
+
+export interface WorkerCreateRequest {
+  name: string;
+  description?: string;
+  handler_package_id?: string | null;
+  handler_ref?: string;
+  source_config?: WorkerSourceConfig;
+  sink_configs?: WorkerSinkConfig[];
+  env?: Record<string, string>;
+}
+
+export interface WorkerUpdateRequest {
+  name?: string;
+  description?: string;
+  handler_package_id?: string | null;
+  handler_ref?: string;
+  source_config?: WorkerSourceConfig;
+  sink_configs?: WorkerSinkConfig[];
+  env?: Record<string, string>;
+  status?: string;
+}
+
+export interface WorkerDeployRequest {
+  worker_agent_id: string;
+  desired_status?: string;
+  env?: Record<string, string>;
 }
