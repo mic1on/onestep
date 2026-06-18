@@ -1,4 +1,4 @@
-import { Navigate, createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 
 import { AppShell } from "../components/layout/AppShell";
 import { RequireConsoleAuth } from "../features/auth/RequireConsoleAuth";
@@ -6,6 +6,7 @@ import { ConnectorsPage } from "../pages/connectors/ConnectorsPage";
 import { WorkerEditorPage } from "../pages/workers/WorkerEditorPage";
 import { WorkersListPage } from "../pages/workers/WorkersListPage";
 import { AgentDetailPage } from "../pages/worker-deployments/AgentDetailPage";
+import { CommandCenterPage } from "../pages/command-center/CommandCenterPage";
 import { DeploymentEventsPage } from "../pages/worker-deployment-events/DeploymentEventsPage";
 import { InstanceDetailPage } from "../pages/instance-detail/InstanceDetailPage";
 import { LoginPage } from "../pages/login/LoginPage";
@@ -30,7 +31,7 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            element: <Navigate to="/services?environment=all" replace />,
+            element: <CommandCenterPage />,
           },
           {
             path: "services",

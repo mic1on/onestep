@@ -22,9 +22,10 @@ function renderShell() {
 
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/services?environment=all"]}>
+      <MemoryRouter initialEntries={["/"]}>
         <Routes>
           <Route element={<AppShell />}>
+            <Route path="/" element={<div>Command center page</div>} />
             <Route path="/services" element={<div>Services page</div>} />
           </Route>
         </Routes>
@@ -54,7 +55,7 @@ describe("AppShell", () => {
 
     renderShell();
 
-    expect(await screen.findByText("Services page")).toBeInTheDocument();
+    expect(await screen.findByText("Command center page")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Notifications" })).not.toBeInTheDocument();
   });
 
@@ -74,8 +75,32 @@ describe("AppShell", () => {
 
     renderShell();
 
-    expect(await screen.findByText("Services page")).toBeInTheDocument();
+    expect(await screen.findByText("Command center page")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Agents" })).toBeInTheDocument();
+  });
+
+  it("groups primary navigation around command center workflows", async () => {
+    mockUseConsoleSessionQuery.mockReturnValue({
+      isPending: false,
+      error: null,
+      data: {
+        auth_configured: true,
+        bootstrap_required: false,
+        authenticated: true,
+        username: "operator",
+        role: "operator",
+        roles: ["operator"],
+      },
+    });
+
+    renderShell();
+
+    expect(await screen.findByText("Command center page")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Command Center" })).toBeInTheDocument();
+    expect(screen.getByText("Now")).toBeInTheDocument();
+    expect(screen.getByText("Deploy")).toBeInTheDocument();
+    expect(screen.getByText("Build")).toBeInTheDocument();
+    expect(screen.getByText("Admin")).toBeInTheDocument();
   });
 
   it("shows the notifications navigation link for operator accounts", async () => {
@@ -94,7 +119,7 @@ describe("AppShell", () => {
 
     renderShell();
 
-    expect(await screen.findByText("Services page")).toBeInTheDocument();
+    expect(await screen.findByText("Command center page")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connectors" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Workers" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Notifications" })).toBeInTheDocument();

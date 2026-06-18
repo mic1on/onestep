@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -44,7 +45,7 @@ export function AppShell() {
     <div className="app-shell">
       <header className="shell-topbar">
         <div className="shell-topbar-main">
-          <NavLink className="shell-brand" to="/services?environment=all">
+          <NavLink className="shell-brand" to="/">
             <span className="shell-brand-mark">01</span>
             <span className="shell-brand-copy">
               <strong className="shell-brand-title">{t("app.brand")}</strong>
@@ -53,47 +54,21 @@ export function AppShell() {
           </NavLink>
 
           <nav className="shell-nav" aria-label={t("app.primaryNavAriaLabel")}>
-            <NavLink
-              className={({ isActive }) =>
-                isActive ? "shell-nav-link active" : "shell-nav-link"
-              }
-              to="/services?environment=all"
-            >
-              {t("app.servicesNav")}
-            </NavLink>
-            <NavLink
-              className={({ isActive }) =>
-                isActive ? "shell-nav-link active" : "shell-nav-link"
-              }
-              to="/connectors"
-            >
-              {t("app.connectorsNav")}
-            </NavLink>
-            <NavLink
-              className={({ isActive }) =>
-                isActive ? "shell-nav-link active" : "shell-nav-link"
-              }
-              to="/workers"
-            >
-              {t("app.workersNav")}
-            </NavLink>
-            <NavLink
-              className={({ isActive }) =>
-                isActive ? "shell-nav-link active" : "shell-nav-link"
-              }
-              to="/agents"
-            >
-              {t("app.agentsNav")}
-            </NavLink>
+            <NavGroup label={t("app.navGroupNow")}>
+              <ShellNavLink to="/">{t("app.commandCenterNav")}</ShellNavLink>
+              <ShellNavLink to="/services?environment=all">{t("app.servicesNav")}</ShellNavLink>
+            </NavGroup>
+            <NavGroup label={t("app.navGroupDeploy")}>
+              <ShellNavLink to="/agents">{t("app.agentsNav")}</ShellNavLink>
+            </NavGroup>
+            <NavGroup label={t("app.navGroupBuild")}>
+              <ShellNavLink to="/workers">{t("app.workersNav")}</ShellNavLink>
+              <ShellNavLink to="/connectors">{t("app.connectorsNav")}</ShellNavLink>
+            </NavGroup>
             {canManageNotifications ? (
-              <NavLink
-                className={({ isActive }) =>
-                  isActive ? "shell-nav-link active" : "shell-nav-link"
-                }
-                to="/settings/notifications"
-              >
-                {t("app.notificationsNav")}
-              </NavLink>
+              <NavGroup label={t("app.navGroupAdmin")}>
+                <ShellNavLink to="/settings/notifications">{t("app.notificationsNav")}</ShellNavLink>
+              </NavGroup>
             ) : null}
           </nav>
         </div>
@@ -127,5 +102,26 @@ export function AppShell() {
         </div>
       </main>
     </div>
+  );
+}
+
+function NavGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="shell-nav-group">
+      <span className="shell-nav-group-label">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function ShellNavLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <NavLink
+      className={({ isActive }) => (isActive ? "shell-nav-link active" : "shell-nav-link")}
+      end={to === "/"}
+      to={to}
+    >
+      {children}
+    </NavLink>
   );
 }
