@@ -377,40 +377,37 @@ async def _handle_start_deployment_command(
         )
         response.raise_for_status()
         extract_package(response.content, package_checksum, package_dir)
-        venv_dir = None
-        onestep_executable = resolve_onestep_executable(None)
-        install_mode = SubprocessSupervisor.detect_install_mode(package_dir)
-        if install_mode is not None:
-            venv_dir = supervisor.venv_path_for(package_checksum)
-            onestep_executable = resolve_onestep_executable(venv_dir)
-            await _send_deployment_event(
-                websocket,
-                deployment_id=deployment_id,
-                event_type="installing",
-                observed_status="installing",
-                message="installing dependencies into virtualenv",
-                payload={
-                    "mode": install_mode,
-                    "package_checksum": package_checksum,
-                },
+        venv_dir = supervisor.venv_path_for(package_checksum)
+        onestep_executable = resolve_onestep_executable(venv_dir)
+        install_mode = SubprocessSupervisor.detect_install_mode(package_dir) or "runtime"
+        await _send_deployment_event(
+            websocket,
+            deployment_id=deployment_id,
+            event_type="installing",
+            observed_status="installing",
+            message="installing runtime dependencies into virtualenv",
+            payload={
+                "mode": install_mode,
+                "package_checksum": package_checksum,
+            },
+        )
+        try:
+            await supervisor.install(
+                DeploymentSpec(
+                    deployment_id=deployment_id,
+                    worker_agent_id=str(identity.worker_agent_id),
+                    runtime_instance_id=runtime_instance_id,
+                    package_dir=package_dir,
+                    entrypoint=entrypoint,
+                    env=env,
+                    venv_dir=venv_dir,
+                    onestep_executable=onestep_executable,
+                ),
+                mode=install_mode,
+                timeout_s=timeout_s,
             )
-            try:
-                await supervisor.install(
-                    DeploymentSpec(
-                        deployment_id=deployment_id,
-                        worker_agent_id=str(identity.worker_agent_id),
-                        runtime_instance_id=runtime_instance_id,
-                        package_dir=package_dir,
-                        entrypoint=entrypoint,
-                        env=env,
-                        venv_dir=venv_dir,
-                        onestep_executable=onestep_executable,
-                    ),
-                    mode=install_mode,
-                    timeout_s=timeout_s,
-                )
-            except InstallError as exc:
-                raise  # surfaced to the outer handler as a failed deployment
+        except InstallError:
+            raise  # surfaced to the outer handler as a failed deployment
         await _send_deployment_event(
             websocket,
             deployment_id=deployment_id,

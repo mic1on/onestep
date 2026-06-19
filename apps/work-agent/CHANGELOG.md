@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 - 2026-06-19
+
+- Install every deployment into a runtime virtualenv with the default onestep connector set, even when the uploaded package has no dependency manifest.
+- Support packages that include both `pyproject.toml` and `requirements.txt` by installing both sets of dependencies.
+- Rebuild cached runtime virtualenvs when the agent's default runtime dependency set changes.
+- Publish worker-agent package releases from GitHub Actions through PyPI Trusted Publishing.
+
 ## 0.1.1 - 2026-06-16
 
 - Honor the control plane's `hello_ack.heartbeat_interval_s` instead of a

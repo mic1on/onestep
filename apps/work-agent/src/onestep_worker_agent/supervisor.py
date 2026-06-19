@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shutil
 import signal
@@ -14,6 +15,10 @@ from onestep_worker_agent.state import DeploymentState, DeploymentStateStore
 #: crash-safe: an interrupted install leaves no marker, so the next attempt
 #: rebuilds the venv from scratch via pip's own idempotency.
 INSTALLED_MARKER = ".installed"
+DEFAULT_RUNTIME_REQUIREMENTS = (
+    "onestep[all]>=1.4.2",
+    "onestep-feishu-bitable>=0.1.2",
+)
 
 
 @dataclass(frozen=True)
@@ -128,12 +133,16 @@ class SubprocessSupervisor:
         """Return the pip install mode for a package, or ``None`` to skip.
 
         ``pip install .`` when ``pyproject.toml`` is present (an installable
-        package), else ``pip install -r requirements.txt`` when that file is
-        present, else ``None`` (no dependencies to install).
+        package), ``pip install -r requirements.txt`` when that file is present,
+        or both when the package declares both forms.
         """
-        if (package_dir / "pyproject.toml").exists():
+        has_pyproject = (package_dir / "pyproject.toml").exists()
+        has_requirements = (package_dir / "requirements.txt").exists()
+        if has_pyproject and has_requirements:
+            return "package+requirements"
+        if has_pyproject:
             return "package"
-        if (package_dir / "requirements.txt").exists():
+        if has_requirements:
             return "requirements"
         return None
 
@@ -152,7 +161,8 @@ class SubprocessSupervisor:
         assert spec.venv_dir is not None  # noqa: S101 - caller guarantees this
         venv_dir = spec.venv_dir
         marker = venv_dir.parent / INSTALLED_MARKER
-        if marker.exists():
+        expected_marker = _installed_marker_content()
+        if marker.exists() and marker.read_text() == expected_marker:
             return  # reuse: a prior install of this checksum succeeded
 
         venv_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -171,26 +181,39 @@ class SubprocessSupervisor:
             raise InstallError(f"venv creation exited with code {create_returncode}")
 
         pip = str(venv_bin / "python")
-        if mode == "package":
-            install_cmd = [pip, "-m", "pip", "install", "."]
+        install_commands: list[list[str]] = [
+            [pip, "-m", "pip", "install", *DEFAULT_RUNTIME_REQUIREMENTS],
+        ]
+        if mode == "runtime":
+            pass
+        elif mode == "package":
+            install_commands.append([pip, "-m", "pip", "install", "."])
         elif mode == "requirements":
-            install_cmd = [pip, "-m", "pip", "install", "-r", "requirements.txt"]
+            install_commands.append([pip, "-m", "pip", "install", "-r", "requirements.txt"])
+        elif mode == "package+requirements":
+            install_commands.extend(
+                [
+                    [pip, "-m", "pip", "install", "."],
+                    [pip, "-m", "pip", "install", "-r", "requirements.txt"],
+                ]
+            )
         else:
             raise InstallError(f"unknown install mode: {mode!r}")
 
-        install_returncode = await self._run_subprocess(
-            install_cmd,
-            cwd=spec.package_dir,
-            env={**os.environ},
-            timeout_s=timeout_s,
-            label="pip install",
-        )
-        if install_returncode != 0:
-            # Keep the partial venv (no marker written) so a retrigger can let
-            # pip resume from its own cache; the deployment itself fails.
-            raise InstallError(f"pip install exited with code {install_returncode}")
+        for install_cmd in install_commands:
+            install_returncode = await self._run_subprocess(
+                install_cmd,
+                cwd=spec.package_dir,
+                env={**os.environ},
+                timeout_s=timeout_s,
+                label="pip install",
+            )
+            if install_returncode != 0:
+                # Keep the partial venv (no marker written) so a retrigger can let
+                # pip resume from its own cache; the deployment itself fails.
+                raise InstallError(f"pip install exited with code {install_returncode}")
 
-        marker.write_text("ok\n")
+        marker.write_text(expected_marker)
 
     async def _run_subprocess(
         self,
@@ -319,3 +342,8 @@ def resolve_onestep_executable(venv_dir: Path | None) -> str:
     if venv_dir is not None:
         return SubprocessSupervisor._venv_onestep(venv_dir)
     return shutil.which("onestep") or "onestep"
+
+
+def _installed_marker_content() -> str:
+    digest = hashlib.sha256("\n".join(DEFAULT_RUNTIME_REQUIREMENTS).encode()).hexdigest()
+    return f"default-runtime={digest}\n"

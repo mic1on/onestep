@@ -7,10 +7,12 @@ import pytest
 
 from onestep_worker_agent.state import DeploymentState, DeploymentStateStore
 from onestep_worker_agent.supervisor import (
+    DEFAULT_RUNTIME_REQUIREMENTS,
+    INSTALLED_MARKER,
     DeploymentSpec,
     InstallError,
-    INSTALLED_MARKER,
     SubprocessSupervisor,
+    _installed_marker_content,
     resolve_onestep_executable,
 )
 
@@ -249,10 +251,10 @@ def test_detect_install_mode_returns_none_when_no_declaration(tmp_path) -> None:
     assert SubprocessSupervisor.detect_install_mode(tmp_path) is None
 
 
-def test_detect_install_mode_prefers_pyproject_over_requirements(tmp_path) -> None:
+def test_detect_install_mode_returns_package_and_requirements_when_both_exist(tmp_path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n")
     (tmp_path / "requirements.txt").write_text("httpx>=0.28\n")
-    assert SubprocessSupervisor.detect_install_mode(tmp_path) == "package"
+    assert SubprocessSupervisor.detect_install_mode(tmp_path) == "package+requirements"
 
 
 def test_venv_path_for_is_keyed_on_checksum(tmp_path) -> None:
@@ -321,18 +323,94 @@ def test_install_creates_venv_and_writes_marker_on_success(tmp_path, monkeypatch
 
     marker = venv_dir.parent / INSTALLED_MARKER
     assert marker.exists()
-    # First call creates the venv, second runs pip install.
+    # First call creates the venv, then the agent installs its default runtime
+    # dependencies before package-specific dependencies.
     assert "venv" in calls[0]
-    assert calls[1][1:] == ["-m", "pip", "install", "-r", "requirements.txt"]
+    assert calls[1][1:] == ["-m", "pip", "install", *DEFAULT_RUNTIME_REQUIREMENTS]
+    assert calls[2][1:] == ["-m", "pip", "install", "-r", "requirements.txt"]
 
 
-def test_install_skips_when_marker_already_present(tmp_path, monkeypatch) -> None:
+def test_install_runs_package_and_requirements_when_both_are_declared(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
+        calls.append(list(args))
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    (tmp_path / "package").mkdir()
+    (tmp_path / "package" / "pyproject.toml").write_text("[project]\nname='demo'\n")
+    (tmp_path / "package" / "requirements.txt").write_text("onestep-mysql>=0.3.0\n")
+    supervisor = SubprocessSupervisor(work_dir=tmp_path, max_concurrent_deployments=1)
+    venv_dir = supervisor.venv_path_for("checksum-1")
+    spec = DeploymentSpec(
+        deployment_id="deployment-1",
+        worker_agent_id="agent-1",
+        runtime_instance_id="runtime-1",
+        package_dir=tmp_path / "package",
+        entrypoint="worker.yaml",
+        env={},
+        venv_dir=venv_dir,
+        onestep_executable=str(venv_dir / "bin" / "onestep"),
+    )
+
+    asyncio.run(supervisor.install(spec, mode="package+requirements"))
+
+    assert calls[1][1:] == ["-m", "pip", "install", *DEFAULT_RUNTIME_REQUIREMENTS]
+    assert calls[2][1:] == ["-m", "pip", "install", "."]
+    assert calls[3][1:] == ["-m", "pip", "install", "-r", "requirements.txt"]
+    assert (venv_dir.parent / INSTALLED_MARKER).exists()
+
+
+def test_install_skips_when_current_marker_already_present(tmp_path, monkeypatch) -> None:
     # An already-installed venv (marker present) must not re-run venv or pip.
     def fake_create_subprocess_exec(*args, **kwargs):
         raise AssertionError("no subprocess should run when the venv is reused")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     (tmp_path / "package").mkdir()
+    supervisor = SubprocessSupervisor(work_dir=tmp_path, max_concurrent_deployments=1)
+    venv_dir = supervisor.venv_path_for("checksum-1")
+    venv_dir.parent.mkdir(parents=True, exist_ok=True)
+    (venv_dir.parent / INSTALLED_MARKER).write_text(_installed_marker_content())
+    spec = DeploymentSpec(
+        deployment_id="deployment-1",
+        worker_agent_id="agent-1",
+        runtime_instance_id="runtime-1",
+        package_dir=tmp_path / "package",
+        entrypoint="worker.yaml",
+        env={},
+        venv_dir=venv_dir,
+        onestep_executable=str(venv_dir / "bin" / "onestep"),
+    )
+
+    asyncio.run(supervisor.install(spec, mode="requirements"))  # must not raise
+
+
+def test_install_reruns_when_marker_predates_default_runtime_requirements(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    class FakeProcess:
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
+        calls.append(list(args))
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    (tmp_path / "package").mkdir()
+    (tmp_path / "package" / "requirements.txt").write_text("httpx>=0.28\n")
     supervisor = SubprocessSupervisor(work_dir=tmp_path, max_concurrent_deployments=1)
     venv_dir = supervisor.venv_path_for("checksum-1")
     venv_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -348,7 +426,10 @@ def test_install_skips_when_marker_already_present(tmp_path, monkeypatch) -> Non
         onestep_executable=str(venv_dir / "bin" / "onestep"),
     )
 
-    asyncio.run(supervisor.install(spec, mode="requirements"))  # must not raise
+    asyncio.run(supervisor.install(spec, mode="requirements"))
+
+    assert calls[1][1:] == ["-m", "pip", "install", *DEFAULT_RUNTIME_REQUIREMENTS]
+    assert (venv_dir.parent / INSTALLED_MARKER).read_text() == _installed_marker_content()
 
 
 def test_install_raises_when_venv_creation_fails(tmp_path, monkeypatch) -> None:
@@ -393,7 +474,7 @@ def test_install_raises_when_pip_install_fails(tmp_path, monkeypatch) -> None:
 
     async def fake_create_subprocess_exec(*args, **kwargs):
         state["call"] += 1
-        return FakeProcess() if state["call"] == 1 else FailProcess()
+        return FakeProcess() if state["call"] < 3 else FailProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     (tmp_path / "package").mkdir()

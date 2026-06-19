@@ -104,6 +104,15 @@ def _build_zip_with_requirements() -> bytes:
     return buffer.getvalue()
 
 
+def _build_zip_with_pyproject_and_requirements() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("worker.yaml", "app:\n  name: demo\n")
+        archive.writestr("pyproject.toml", "[project]\nname='demo'\nversion='0.1.0'\n")
+        archive.writestr("requirements.txt", "onestep-mysql>=0.3.0\n")
+    return buffer.getvalue()
+
+
 def _config(tmp_path: Path) -> AgentConfig:
     return AgentConfig(
         plane_url="http://control-plane.test",
@@ -160,7 +169,7 @@ def test_handle_start_deployment_downloads_and_starts_package(tmp_path) -> None:
         for message in websocket.messages
         if message["type"] == "deployment_event"
     ]
-    assert event_types == ["preparing", "checking", "running"]
+    assert event_types == ["preparing", "installing", "checking", "running"]
     result = _last_command_result(websocket.messages)
     assert result["payload"]["status"] == "succeeded"
     assert "runtime_instance_id" in result["payload"]["result"]
@@ -171,6 +180,7 @@ def test_handle_start_deployment_downloads_and_starts_package(tmp_path) -> None:
         )
     ]
     assert (tmp_path / "deployments" / deployment_id / "package" / "worker.yaml").exists()
+    assert supervisor.installed == [(deployment_id, "runtime")]
     assert supervisor.checked == ["worker.yaml"]
     assert supervisor.started == [deployment_id]
     assert supervisor.started_envs == [
@@ -323,9 +333,51 @@ def test_start_deployment_installs_dependencies_when_package_declares_them(tmp_p
     assert supervisor.started == [deployment_id]
 
 
-def test_start_deployment_skips_install_when_package_has_no_dependencies(tmp_path) -> None:
-    # A package with no requirements.txt / pyproject.toml takes the unchanged
-    # fast path: preparing -> checking -> running, no installing event.
+def test_start_deployment_installs_package_and_requirements_when_both_exist(
+    tmp_path,
+) -> None:
+    content = _build_zip_with_pyproject_and_requirements()
+    checksum = hashlib.sha256(content).hexdigest()
+    identity = AgentIdentity(
+        worker_agent_id=UUID("11111111-1111-4111-8111-111111111111"),
+        connection_token="connection-token",
+    )
+    deployment_id = str(uuid4())
+    websocket = FakeWebSocket()
+    supervisor = FakeSupervisor()
+
+    asyncio.run(
+        handle_control_message(
+            websocket=websocket,
+            http_client=FakeHttpClient(content),
+            config=_config(tmp_path),
+            identity=identity,
+            supervisor=supervisor,
+            message={
+                "type": "command",
+                "payload": {
+                    "command_id": str(uuid4()),
+                    "kind": "start_deployment",
+                    "args": {
+                        "deployment_id": deployment_id,
+                        "package_checksum": checksum,
+                        "download_url": "/api/v1/workflow-packages/package/download",
+                        "entrypoint": "worker.yaml",
+                    },
+                },
+            },
+        )
+    )
+
+    assert supervisor.installed == [(deployment_id, "package+requirements")]
+    assert supervisor.started == [deployment_id]
+
+
+def test_start_deployment_installs_runtime_when_package_has_no_dependencies(
+    tmp_path,
+) -> None:
+    # Even a package without user dependencies runs in a default runtime venv so
+    # platform-generated connector resources are available consistently.
     content = _build_zip()
     checksum = hashlib.sha256(content).hexdigest()
     identity = AgentIdentity(
@@ -364,8 +416,8 @@ def test_start_deployment_skips_install_when_package_has_no_dependencies(tmp_pat
         for message in websocket.messages
         if message["type"] == "deployment_event"
     ]
-    assert event_types == ["preparing", "checking", "running"]
-    assert supervisor.installed == []
+    assert event_types == ["preparing", "installing", "checking", "running"]
+    assert supervisor.installed == [(deployment_id, "runtime")]
 
 
 def test_start_deployment_fails_when_dependency_install_fails(tmp_path) -> None:
@@ -506,10 +558,11 @@ def test_handle_restart_deployment_stops_then_starts(tmp_path) -> None:
         for message in websocket.messages
         if message["type"] == "deployment_event"
     ]
-    assert event_types == ["preparing", "checking", "running"]
+    assert event_types == ["preparing", "installing", "checking", "running"]
     result = _last_command_result(websocket.messages)
     assert result["payload"]["status"] == "succeeded"
     assert supervisor.stopped == [deployment_id]
+    assert supervisor.installed == [(deployment_id, "runtime")]
     assert supervisor.checked == ["worker.yaml"]
     assert supervisor.started == [deployment_id]
 
