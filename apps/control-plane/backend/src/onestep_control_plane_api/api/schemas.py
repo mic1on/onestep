@@ -112,6 +112,7 @@ ServiceCommandFanoutOutcome = Literal["dispatched", "queued", "skipped", "reject
 UiStreamChannel = Literal["commands", "sessions"]
 WorkerAgentExecutionMode = Literal["subprocess"]
 WorkerAgentStatus = Literal["offline", "online", "unknown"]
+WorkerReportingMode = Literal["platform", "custom"]
 WorkerDeploymentDesiredStatus = Literal["running", "stopped"]
 WorkerDeploymentObservedStatus = Literal[
     "pending",
@@ -1399,6 +1400,21 @@ class WorkerSinkConfig(APIModel):
     fields: dict[str, object] = Field(default_factory=dict)
 
 
+class WorkerReportingConfig(APIModel):
+    mode: WorkerReportingMode = "platform"
+    endpoint_url: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_endpoint(self) -> WorkerReportingConfig:
+        if self.endpoint_url is not None:
+            self.endpoint_url = self.endpoint_url.strip() or None
+        return self
+
+
+class WorkerReportingSecret(APIModel):
+    token: str | None = None
+
+
 class WorkerSummary(APIModel):
     id: str
     name: str
@@ -1408,6 +1424,9 @@ class WorkerSummary(APIModel):
     source_config: WorkerSourceConfig
     sink_configs: list[WorkerSinkConfig]
     env: dict[str, str] = Field(default_factory=dict)
+    reporting_enabled: bool = True
+    reporting_config: WorkerReportingConfig = Field(default_factory=WorkerReportingConfig)
+    reporting_token_configured: bool = False
     status: str
     created_at: str | None = None
     updated_at: str | None = None
@@ -1428,6 +1447,9 @@ class WorkerCreateRequest(APIModel):
     )
     sink_configs: list[WorkerSinkConfig] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    reporting_enabled: bool = True
+    reporting_config: WorkerReportingConfig = Field(default_factory=WorkerReportingConfig)
+    reporting_secret: WorkerReportingSecret | None = None
 
 
 class WorkerUpdateRequest(APIModel):
@@ -1438,6 +1460,9 @@ class WorkerUpdateRequest(APIModel):
     source_config: WorkerSourceConfig | None = None
     sink_configs: list[WorkerSinkConfig] | None = None
     env: dict[str, str] | None = None
+    reporting_enabled: bool | None = None
+    reporting_config: WorkerReportingConfig | None = None
+    reporting_secret: WorkerReportingSecret | None = None
     status: str | None = None
 
 

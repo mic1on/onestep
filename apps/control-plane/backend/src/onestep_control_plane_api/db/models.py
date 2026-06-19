@@ -818,6 +818,13 @@ class Worker(Base):
     )
     sink_configs: Mapped[list[object]] = mapped_column(JSON_TYPE, nullable=False, default=list)
     env_json: Mapped[dict[str, str]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    reporting_enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
+    reporting_config_json: Mapped[dict[str, object]] = mapped_column(
+        JSON_TYPE,
+        nullable=False,
+        default=dict,
+    )
+    reporting_secret_encrypted: Mapped[str | None] = mapped_column(sa.Text)
     status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="draft")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(

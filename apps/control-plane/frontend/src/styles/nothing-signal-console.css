@@ -1194,6 +1194,84 @@ body {
   box-shadow: none;
 }
 
+.agent-install-open-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.agent-install-dialog.dialog-card {
+  width: min(100%, 50rem);
+  max-height: min(84vh, 52rem);
+  border-color: var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  box-shadow: none;
+}
+
+.agent-install-dialog-body {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-install-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agent-install-field {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-install-field input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--nd-border);
+  border-radius: 14px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-text);
+  font: inherit;
+  box-shadow: none;
+}
+
+.agent-install-command-section {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-install-command-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-install-command-heading span,
+.agent-install-hint {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-install-command {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-install-hint {
+  margin: 0;
+  line-height: 1.5;
+  text-transform: none;
+}
+
 .task-manual-run-field textarea:focus {
   outline: 2px solid rgba(15, 15, 15, 0.1);
   border-color: var(--nd-border-strong);
@@ -2938,6 +3016,71 @@ body {
   min-height: 36px;
   padding: 0 16px;
   border-radius: 999px;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-list {
+  display: grid;
+  gap: 10px;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 82px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-text);
+  text-align: left;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-card:hover:not(:disabled) {
+  border-color: var(--nd-accent);
+  transform: translateY(-1px);
+}
+
+.signal-console-runtime-page .worker-agent-deploy-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-main,
+.signal-console-runtime-page .worker-agent-deploy-meta {
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-main {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-main strong {
+  overflow: hidden;
+  color: var(--nd-text);
+  font-size: 16px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-main span,
+.signal-console-runtime-page .worker-agent-deploy-meta span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .worker-agent-deploy-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .signal-console-runtime-page .ref-modal-overlay {

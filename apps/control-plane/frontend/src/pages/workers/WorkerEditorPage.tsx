@@ -6,8 +6,12 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
+import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useConnectorsQuery } from "../../features/connectors/queries";
-import { useCreateWorkflowPackageMutation } from "../../features/worker-agents/queries";
+import {
+  useCreateWorkflowPackageMutation,
+  useWorkerAgentsQuery,
+} from "../../features/worker-agents/queries";
 import {
   sinkTypeSchemas,
   sinkTypeOrder,
@@ -31,11 +35,14 @@ import {
   useCreateWorkerMutation,
   useDeployWorkerMutation,
   useUpdateWorkerMutation,
-  useWorkersQuery,
+  useWorkerQuery,
 } from "../../features/workers/queries";
 import type {
   WorkerCreateRequest,
+  WorkerAgentSummary,
+  WorkerReportingConfig,
   WorkerSinkConfig,
+  WorkerSummary,
   WorkerSourceConfig,
 } from "../../lib/api/types";
 
@@ -48,6 +55,10 @@ type Draft = {
   source: WorkerSourceConfig;
   sinks: WorkerSinkConfig[];
   env: EnvVarDraft[];
+  reportingEnabled: boolean;
+  reportingConfig: WorkerReportingConfig;
+  reportingTokenConfigured: boolean;
+  reportingToken: string;
 };
 
 type EnvVarDraft = {
@@ -77,7 +88,7 @@ function normalizeEnvRows(rows: EnvVarDraft[]): Record<string, string> {
 }
 
 function buildWorkerConfigPayload(draft: Draft, handlerPackageId: string | null): WorkerCreateRequest {
-  return {
+  const payload: WorkerCreateRequest = {
     name: draft.name,
     description: draft.description,
     handler_package_id: handlerPackageId,
@@ -85,7 +96,17 @@ function buildWorkerConfigPayload(draft: Draft, handlerPackageId: string | null)
     source_config: normalizeSourceConfig(draft.source),
     sink_configs: draft.sinks.map(normalizeSinkConfig),
     env: normalizeEnvRows(draft.env),
+    reporting_enabled: draft.reportingEnabled,
+    reporting_config:
+      draft.reportingConfig.mode === "custom"
+        ? draft.reportingConfig
+        : { mode: "platform", endpoint_url: null },
   };
+  const reportingToken = draft.reportingToken.trim();
+  if (reportingToken) {
+    payload.reporting_secret = { token: reportingToken };
+  }
+  return payload;
 }
 
 function emptyDraft(): Draft {
@@ -96,7 +117,33 @@ function emptyDraft(): Draft {
     source: { type: "interval", connector_id: null, fields: {} },
     sinks: [],
     env: [],
+    reportingEnabled: true,
+    reportingConfig: { mode: "platform", endpoint_url: null },
+    reportingTokenConfigured: false,
+    reportingToken: "",
   };
+}
+
+function draftFromWorker(worker: WorkerSummary): Draft {
+  return {
+    name: worker.name,
+    description: worker.description,
+    handlerRef: worker.handler_ref,
+    source: worker.source_config,
+    sinks: worker.sink_configs,
+    env: envRecordToDraftRows(worker.env),
+    reportingEnabled: worker.reporting_enabled ?? true,
+    reportingConfig: worker.reporting_config ?? { mode: "platform", endpoint_url: null },
+    reportingTokenConfigured: worker.reporting_token_configured ?? false,
+    reportingToken: "",
+  };
+}
+
+function canSaveReportingDraft(draft: Draft) {
+  if (!draft.reportingEnabled || draft.reportingConfig.mode !== "custom") return true;
+  return Boolean(draft.reportingConfig.endpoint_url?.trim()) && (
+    draft.reportingTokenConfigured || Boolean(draft.reportingToken.trim())
+  );
 }
 
 function handlerFileName(handlerRef: string) {
@@ -122,7 +169,7 @@ function codePreviewLines(draft: Draft) {
     "",
     `async def ${functionName}(ctx, item) -> dict[str, Any]:`,
     `    """Handler for ${workerName}."""`,
-    "    payload = item.payload",
+    "    payload = item",
     "    # Add business logic here; source and sink wiring stays in worker.yaml.",
     "    return {\"ok\": True, \"payload\": payload}",
   ];
@@ -240,6 +287,14 @@ function normalizeSinkConfig(sink: WorkerSinkConfig): WorkerSinkConfig {
   };
 }
 
+function isDeployableAgent(agent: WorkerAgentSummary) {
+  return agent.status === "online" && agent.used_slots < agent.max_concurrent_deployments;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Recursive file tree item with expand/collapse support for directories.
  */
@@ -323,29 +378,18 @@ export function WorkerEditorPage() {
   const isEditing = Boolean(workerId && workerId !== "new");
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const workersQuery = useWorkersQuery();
+  const workerQuery = useWorkerQuery(workerId, isEditing);
   const connectorsQuery = useConnectorsQuery();
+  const agentsQuery = useWorkerAgentsQuery();
   const createMutation = useCreateWorkerMutation();
   const updateMutation = useUpdateWorkerMutation(workerId ?? "");
   const deployMutation = useDeployWorkerMutation(workerId ?? "");
   const packageMutation = useCreateWorkflowPackageMutation();
 
-  const existing = isEditing
-    ? workersQuery.data?.items.find((w) => w.id === workerId)
-    : undefined;
+  const existing = isEditing ? workerQuery.data : undefined;
+  const initialDraft = existing ? draftFromWorker(existing) : emptyDraft();
 
-  const initialDraft = existing
-    ? {
-        name: existing.name,
-        description: existing.description,
-        handlerRef: existing.handler_ref,
-        source: existing.source_config,
-        sinks: existing.sink_configs,
-        env: envRecordToDraftRows(existing.env),
-      }
-    : emptyDraft();
-
-  const [draft, setDraft] = useState<Draft>(initialDraft);
+  const [draft, setDraft] = useState<Draft>(() => initialDraft);
   const [filesMap, setFilesMap] = useState<Record<string, string>>(() =>
     buildInitialFilesMap(initialDraft.handlerRef),
   );
@@ -366,12 +410,49 @@ export function WorkerEditorPage() {
     return new Set(collectDirectoryPaths(tree));
   });
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deployingAgentId, setDeployingAgentId] = useState<string | null>(null);
+  const [deployError, setDeployError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const agentConfigRef = useRef<HTMLDivElement>(null);
 
   const connectors = connectorsQuery.data?.items ?? [];
+  const deployableAgents = (agentsQuery.data?.items ?? []).filter(isDeployableAgent);
+  const hydratedWorkerIdRef = useRef<string | null>(existing?.id ?? null);
+
+  const skipAutoSaveRef = useRef(true);
+  useEffect(() => {
+    if (!isEditing) {
+      if (hydratedWorkerIdRef.current !== null) {
+        const nextDraft = emptyDraft();
+        const nextFilesMap = buildInitialFilesMap(nextDraft.handlerRef);
+        const tree = buildTreeFromPaths(Object.keys(nextFilesMap));
+        setDraft(nextDraft);
+        setFilesMap(nextFilesMap);
+        setLastPackageId(null);
+        setTriggerDraft(nextDraft.source);
+        setActiveFilePath(handlerModulePath(nextDraft.handlerRef));
+        setExpandedDirs(new Set(collectDirectoryPaths(tree)));
+        hydratedWorkerIdRef.current = null;
+        skipAutoSaveRef.current = true;
+      }
+      return;
+    }
+    if (!existing || hydratedWorkerIdRef.current === existing.id) return;
+
+    const nextDraft = draftFromWorker(existing);
+    const nextFilesMap = buildInitialFilesMap(nextDraft.handlerRef);
+    const tree = buildTreeFromPaths(Object.keys(nextFilesMap));
+    setDraft(nextDraft);
+    setFilesMap(nextFilesMap);
+    setLastPackageId(existing.handler_package_id ?? null);
+    setTriggerDraft(nextDraft.source);
+    setActiveFilePath(handlerModulePath(nextDraft.handlerRef));
+    setExpandedDirs(new Set(collectDirectoryPaths(tree)));
+    hydratedWorkerIdRef.current = existing.id;
+    skipAutoSaveRef.current = true;
+  }, [existing, isEditing]);
 
   // Auto-save: debounce draft changes to the backend (config only, no package).
-  const skipAutoSaveRef = useRef(true);
   useEffect(() => {
     if (!isEditing || !workerId) return;
     if (skipAutoSaveRef.current) {
@@ -379,11 +460,22 @@ export function WorkerEditorPage() {
       return;
     }
     const timer = setTimeout(() => {
+      if (!canSaveReportingDraft(draft)) return;
       void updateMutation.mutateAsync(buildWorkerConfigPayload(draft, lastPackageId));
     }, 600);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.name, draft.description, draft.handlerRef, draft.source, draft.sinks, draft.env]);
+  }, [
+    draft.name,
+    draft.description,
+    draft.handlerRef,
+    draft.source,
+    draft.sinks,
+    draft.env,
+    draft.reportingEnabled,
+    draft.reportingConfig,
+    draft.reportingToken,
+  ]);
 
   function connectorTypeForSource(sourceType: string) {
     if (sourceType.startsWith("mysql_")) return "mysql";
@@ -484,15 +576,35 @@ export function WorkerEditorPage() {
     }
   }
 
-  async function handleDeploy() {
-    if (!workerId) return;
-    const agentId = window.prompt(t("workerEditor.chooseAgentPrompt"));
-    if (!agentId) return;
-    await deployMutation.mutateAsync({
-      worker_agent_id: agentId,
-      env: normalizeEnvRows(draft.env),
+  function openAgentDeployConfig() {
+    setActiveTab("config");
+    setActiveConfigSection("agent");
+    window.requestAnimationFrame(() => {
+      if (typeof agentConfigRef.current?.scrollIntoView === "function") {
+        agentConfigRef.current.scrollIntoView({ block: "start", behavior: "smooth" });
+      }
     });
-    navigate(`/agents/${encodeURIComponent(agentId)}`);
+  }
+
+  async function handleDeploy(agentId: string) {
+    if (!workerId) return;
+    setDeployError(null);
+    setDeployingAgentId(agentId);
+    try {
+      const deployment = await deployMutation.mutateAsync({
+        worker_agent_id: agentId,
+        env: normalizeEnvRows(draft.env),
+      });
+      navigate(
+        `/agents/${encodeURIComponent(agentId)}/deployments/${encodeURIComponent(
+          deployment.deployment_id,
+        )}/events`,
+      );
+    } catch (error) {
+      setDeployError(getErrorMessage(error));
+    } finally {
+      setDeployingAgentId(null);
+    }
   }
 
   const fileTree = useMemo(
@@ -509,7 +621,7 @@ export function WorkerEditorPage() {
     return flatten(fileTree).find((node) => node.path === activeFilePath) ?? null;
   }, [fileTree, activeFilePath]);
 
-  if (isEditing && workersQuery.isPending) {
+  if (isEditing && workerQuery.isPending) {
     return <div className="loading-block">{t("workerEditor.loading")}</div>;
   }
   if (isEditing && !existing) {
@@ -549,10 +661,13 @@ export function WorkerEditorPage() {
           ? t("workerEditor.targets")
           : activeConfigSection === "env"
             ? t("workerEditor.envVars")
-            : activeConfigSection === "agent"
-              ? t("workerEditor.agent")
-              : t("workerEditor.generalConfig");
+            : activeConfigSection === "reporting"
+              ? t("workerEditor.reporting")
+              : activeConfigSection === "agent"
+                ? t("workerEditor.agent")
+                : t("workerEditor.generalConfig");
   const isSavingConfig = createMutation.isPending || updateMutation.isPending;
+  const canSaveConfig = canSaveReportingDraft(draft);
 
   function selectFile(path: string) {
     setActiveFilePath(path);
@@ -705,7 +820,7 @@ export function WorkerEditorPage() {
             <button
               type="button"
               disabled={deployMutation.isPending}
-              onClick={() => void handleDeploy()}
+              onClick={openAgentDeployConfig}
             >
               {t("workerEditor.deploy")}
             </button>
@@ -872,6 +987,13 @@ export function WorkerEditorPage() {
             </button>
             <button
               type="button"
+              className={activeConfigSection === "reporting" ? "is-active" : ""}
+              onClick={() => setActiveConfigSection("reporting")}
+            >
+              {t("workerEditor.reporting")}
+            </button>
+            <button
+              type="button"
               className={activeConfigSection === "agent" ? "is-active" : ""}
               onClick={() => setActiveConfigSection("agent")}
             >
@@ -885,7 +1007,7 @@ export function WorkerEditorPage() {
               <button
                 type="button"
                 className="worker-config-save"
-                disabled={isSavingConfig}
+                disabled={isSavingConfig || !canSaveConfig}
                 onClick={() => void handleSaveConfig()}
               >
                 {isSavingConfig ? t("workerEditor.savingConfig") : t("workerEditor.saveConfig")}
@@ -1088,18 +1210,138 @@ export function WorkerEditorPage() {
               </div>
             ) : null}
 
-            {activeConfigSection === "agent" ? (
+            {activeConfigSection === "reporting" ? (
               <div className="worker-config-section">
-                <p className="runtime-empty-inline">{t("workerEditor.agentHint")}</p>
-                {isEditing ? (
-                  <button
-                    type="button"
-                    className="worker-config-agent-deploy"
-                    disabled={deployMutation.isPending}
-                    onClick={() => void handleDeploy()}
+                <label className="ref-inline-control">
+                  <span>{t("workerEditor.reportingEnabled")}</span>
+                  <input
+                    aria-label={t("workerEditor.reportingEnabled")}
+                    type="checkbox"
+                    checked={draft.reportingEnabled}
+                    onChange={(event) =>
+                      setDraft({ ...draft, reportingEnabled: event.target.checked })
+                    }
+                  />
+                </label>
+                <label className="ref-inline-control ref-inline-control-select">
+                  <span>{t("workerEditor.reportingMode")}</span>
+                  <select
+                    value={draft.reportingConfig.mode}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        reportingConfig:
+                          event.target.value === "custom"
+                            ? {
+                                mode: "custom",
+                                endpoint_url: draft.reportingConfig.endpoint_url ?? "",
+                              }
+                            : { mode: "platform", endpoint_url: null },
+                        reportingToken: event.target.value === "custom" ? draft.reportingToken : "",
+                        reportingTokenConfigured:
+                          event.target.value === "custom"
+                            ? draft.reportingTokenConfigured
+                            : false,
+                      })
+                    }
                   >
-                    {t("workerEditor.deploy")}
-                  </button>
+                    <option value="platform">{t("workerEditor.reportingModePlatform")}</option>
+                    <option value="custom">{t("workerEditor.reportingModeCustom")}</option>
+                  </select>
+                </label>
+                {draft.reportingConfig.mode === "custom" ? (
+                  <>
+                    <label className="ref-inline-control">
+                      <span>{t("workerEditor.reportingEndpoint")}</span>
+                      <input
+                        type="url"
+                        value={draft.reportingConfig.endpoint_url ?? ""}
+                        onChange={(event) =>
+                          setDraft({
+                            ...draft,
+                            reportingConfig: {
+                              mode: "custom",
+                              endpoint_url: event.target.value,
+                            },
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="ref-inline-control">
+                      <span>{t("workerEditor.reportingToken")}</span>
+                      <input
+                        aria-label={t("workerEditor.reportingToken")}
+                        type="password"
+                        placeholder={
+                          draft.reportingTokenConfigured
+                            ? t("workerEditor.reportingTokenPlaceholderConfigured")
+                            : t("workerEditor.reportingTokenPlaceholder")
+                        }
+                        value={draft.reportingToken}
+                        onChange={(event) =>
+                          setDraft({ ...draft, reportingToken: event.target.value })
+                        }
+                      />
+                    </label>
+                    {draft.reportingTokenConfigured ? (
+                      <p className="runtime-empty-inline">
+                        {t("workerEditor.reportingTokenConfigured")}
+                      </p>
+                    ) : null}
+                    {!canSaveConfig ? (
+                      <p className="ref-error-note">{t("workerEditor.reportingCustomRequired")}</p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="runtime-empty-inline">{t("workerEditor.reportingPlatformHint")}</p>
+                )}
+              </div>
+            ) : null}
+
+            {activeConfigSection === "agent" ? (
+              <div className="worker-config-section" ref={agentConfigRef}>
+                <p className="runtime-empty-inline">{t("workerEditor.agentHint")}</p>
+                {agentsQuery.error ? (
+                  <p className="ref-error-note">{t("workerEditor.agentLoadError")}</p>
+                ) : null}
+                {deployError ? (
+                  <p className="ref-error-note">
+                    {t("workerEditor.deployFailed")}: {deployError}
+                  </p>
+                ) : null}
+                {agentsQuery.isPending ? (
+                  <div className="loading-block">{t("workerEditor.agentLoading")}</div>
+                ) : null}
+                {!agentsQuery.isPending && !agentsQuery.error && deployableAgents.length === 0 ? (
+                  <p className="runtime-empty-inline">{t("workerEditor.noDeployableAgents")}</p>
+                ) : null}
+                {deployableAgents.length > 0 ? (
+                  <div className="worker-agent-deploy-list">
+                    {deployableAgents.map((agent) => (
+                      <button
+                        type="button"
+                        className="worker-agent-deploy-card"
+                        key={agent.worker_agent_id}
+                        disabled={!isEditing || deployMutation.isPending || Boolean(deployingAgentId)}
+                        onClick={() => void handleDeploy(agent.worker_agent_id)}
+                      >
+                        <span className="worker-agent-deploy-main">
+                          <strong>{agent.display_name}</strong>
+                          <span>{agent.worker_agent_id}</span>
+                        </span>
+                        <span className="worker-agent-deploy-meta">
+                          <StatusBadge value={agent.status} />
+                          <span>
+                            {agent.used_slots}/{agent.max_concurrent_deployments}
+                          </span>
+                          {deployingAgentId === agent.worker_agent_id ? (
+                            <span>{t("workerEditor.deploying")}</span>
+                          ) : null}
+                          <span>{agent.agent_version ?? t("common.notAvailable")}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 ) : null}
               </div>
             ) : null}

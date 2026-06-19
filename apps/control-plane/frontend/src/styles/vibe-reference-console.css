@@ -1,0 +1,1981 @@
+:root {
+  --vibe-bg: #fbfaf7;
+  --vibe-bg-strong: #ffffff;
+  --vibe-surface: #ffffff;
+  --vibe-surface-soft: #f5f4f1;
+  --vibe-surface-muted: #efede8;
+  --vibe-ink: #16130f;
+  --vibe-ink-soft: #5f594f;
+  --vibe-muted: #8a8377;
+  --vibe-line: #e7e2d9;
+  --vibe-line-strong: #d8d1c6;
+  --vibe-accent: #ff4d18;
+  --vibe-accent-soft: #fff0ea;
+  --vibe-blue: #2a6fdb;
+  --vibe-green: #1f8a5b;
+  --vibe-amber: #d98817;
+  --vibe-radius: 8px;
+  --vibe-shadow: 0 12px 34px rgba(22, 19, 15, 0.08);
+
+  --bg: var(--vibe-bg);
+  --bg-soft: var(--vibe-surface-soft);
+  --surface: var(--vibe-surface);
+  --surface-strong: var(--vibe-surface);
+  --surface-muted: var(--vibe-surface-soft);
+  --border: var(--vibe-line);
+  --text: var(--vibe-ink);
+  --muted: var(--vibe-muted);
+  --accent: var(--vibe-accent);
+  --accent-strong: #d63b10;
+  --accent-soft: var(--vibe-accent-soft);
+  --warning: var(--vibe-amber);
+  --danger: var(--vibe-accent);
+  --success: var(--vibe-green);
+  --shadow: none;
+  --shadow-strong: var(--vibe-shadow);
+  --radius-xl: var(--vibe-radius);
+  --radius-lg: var(--vibe-radius);
+  --radius-md: var(--vibe-radius);
+
+  --nd-bg: var(--vibe-bg);
+  --nd-surface: var(--vibe-surface);
+  --nd-surface-muted: var(--vibe-surface-soft);
+  --nd-surface-strong: var(--vibe-bg-strong);
+  --nd-border: var(--vibe-line);
+  --nd-border-strong: var(--vibe-line-strong);
+  --nd-text: var(--vibe-ink);
+  --nd-text-secondary: var(--vibe-ink-soft);
+  --nd-text-disabled: var(--vibe-muted);
+  --nd-accent: var(--vibe-accent);
+  --nd-success: var(--vibe-green);
+  --nd-warning: var(--vibe-amber);
+
+  --ref-ink-950: var(--vibe-ink);
+  --ref-ink-800: #2c271f;
+  --ref-ink-700: var(--vibe-ink-soft);
+  --ref-ink-600: var(--vibe-muted);
+  --ref-ink-500: #a0998e;
+  --ref-surface-strong: var(--vibe-surface);
+  --ref-surface-soft: var(--vibe-surface-soft);
+  --ref-surface-muted: var(--vibe-surface-muted);
+  --ref-surface-subtle: #faf9f6;
+  --ref-surface-accent: var(--vibe-accent-soft);
+  --ref-surface-positive: #edf8f2;
+  --ref-surface-critical: var(--vibe-accent-soft);
+  --ref-border: rgba(22, 19, 15, 0.08);
+  --ref-border-strong: var(--vibe-line);
+  --ref-border-emphasis: var(--vibe-line-strong);
+  --ref-shadow: none;
+}
+
+* {
+  letter-spacing: 0;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  color: var(--vibe-ink);
+  background: linear-gradient(180deg, var(--vibe-bg) 0%, #f7f4ee 100%);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+}
+
+::selection {
+  background: rgba(255, 77, 24, 0.2);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--vibe-accent);
+  outline-offset: 2px;
+}
+
+.app-shell {
+  min-height: 100vh;
+  max-width: none;
+  margin: 0;
+  padding: 22px;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.shell-topbar {
+  position: sticky;
+  top: 22px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  min-height: calc(100vh - 44px);
+  height: calc(100vh - 44px);
+  margin: 0;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 26px;
+  background: var(--vibe-ink);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.shell-topbar-main {
+  display: grid;
+  gap: 26px;
+  min-width: 0;
+}
+
+.shell-brand {
+  min-height: 54px;
+  gap: 12px;
+  padding: 0 2px;
+  color: #ffffff;
+}
+
+.shell-brand-mark {
+  min-width: 60px;
+  width: 60px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--vibe-accent);
+  color: transparent;
+  font-size: 0;
+}
+
+.shell-brand-copy {
+  display: block;
+}
+
+.shell-brand-title {
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.shell-brand-subtitle {
+  display: block;
+  margin-top: 5px;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.shell-nav {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.shell-nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.56);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.shell-nav-link::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+
+.shell-nav-link:hover,
+.shell-nav-link.active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.shell-nav-link.active {
+  padding-left: 32px;
+  background: var(--vibe-accent);
+}
+
+.shell-nav-link.active::after {
+  opacity: 1;
+  background: #ffffff;
+}
+
+.shell-topbar-side {
+  display: grid;
+  gap: 9px;
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.shell-username,
+.shell-lang-btn,
+.shell-logout-btn {
+  color: rgba(255, 255, 255, 0.62);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.shell-lang-btn,
+.shell-logout-btn {
+  justify-content: center;
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.shell-lang-btn:hover,
+.shell-logout-btn:hover {
+  border-color: rgba(255, 255, 255, 0.34);
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.app-main {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 28px 18px 60px 0;
+}
+
+.page-shell,
+.signal-console-frame {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.ref-console-page,
+.signal-console-services-page,
+.signal-console-detail-page,
+.signal-console-runtime-page,
+.signal-console-settings-page {
+  gap: 24px;
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+}
+
+.signal-console-hero,
+.signal-console-service-hero {
+  border: 0;
+  border-radius: 0;
+  padding: 0 0 12px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.signal-console-hero::after,
+.signal-console-service-hero::after {
+  display: none;
+}
+
+.signal-console-page-header-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 28px;
+  align-items: end;
+}
+
+.signal-console-page-header-copy {
+  gap: 14px;
+  max-width: 780px;
+}
+
+.signal-console-kicker,
+.apple-section-kicker,
+.apple-card-kicker {
+  color: var(--vibe-accent);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.signal-console-page-header-copy h2,
+.ref-detail-title-copy h2,
+.page-header h2 {
+  margin: 0;
+  color: var(--vibe-ink);
+  font-size: clamp(2.4rem, 5.4vw, 4.25rem);
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.signal-console-page-header-description,
+.signal-console-hero-note,
+.signal-console-detail-topbar-metric p,
+.ref-detail-title-copy p,
+.page-subtitle {
+  color: var(--vibe-ink-soft);
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.signal-console-page-header-side {
+  display: grid;
+  grid-template-columns: minmax(260px, 380px) auto;
+  gap: 22px;
+  align-items: end;
+}
+
+.signal-console-services-page .ref-page-actions {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.62fr) minmax(180px, 1fr);
+  gap: 10px;
+}
+
+.ref-inline-control,
+.signal-console-services-page .ref-inline-control,
+.signal-console-detail-page .ref-inline-control,
+.signal-console-settings-page .ref-inline-control {
+  display: grid;
+  gap: 7px;
+}
+
+.ref-inline-control span,
+.signal-console-services-page .ref-inline-control span,
+.signal-console-detail-page .ref-inline-control span,
+.signal-console-settings-page .ref-inline-control span {
+  color: var(--vibe-muted);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.ref-inline-control input,
+.ref-inline-control select,
+.signal-console-services-page .ref-inline-control input,
+.signal-console-services-page .ref-inline-control select,
+.signal-console-settings-page .ref-inline-control input,
+.signal-console-settings-page .ref-inline-control select {
+  min-height: 42px;
+  min-width: 0;
+  padding: 0 13px;
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  box-shadow: none;
+}
+
+.ref-inline-control input:focus,
+.ref-inline-control select:focus,
+.signal-console-services-page .ref-inline-control input:focus,
+.signal-console-services-page .ref-inline-control select:focus,
+.signal-console-settings-page .ref-inline-control input:focus,
+.signal-console-settings-page .ref-inline-control select:focus {
+  border-color: var(--vibe-accent);
+  box-shadow: 0 0 0 3px rgba(255, 77, 24, 0.14);
+}
+
+.signal-console-metric,
+.signal-console-service-metric,
+.signal-console-detail-topbar-metric {
+  gap: 5px;
+}
+
+.signal-console-metric span,
+.signal-console-service-metric span,
+.signal-console-detail-topbar-metric span {
+  color: var(--vibe-muted);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.signal-console-metric strong,
+.signal-console-service-metric strong,
+.signal-console-detail-topbar-metric strong {
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: clamp(2.6rem, 4.8vw, 4rem);
+  font-weight: 700;
+  line-height: 0.92;
+}
+
+.ref-tag-bar,
+.signal-console-services-page .ref-tag-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0;
+}
+
+.ref-tag-chip,
+.signal-console-services-page .ref-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--vibe-line);
+  border-radius: 999px;
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.ref-tag-chip:hover,
+.ref-tag-chip.is-active,
+.signal-console-services-page .ref-tag-chip:hover,
+.signal-console-services-page .ref-tag-chip.is-active {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent);
+  color: #ffffff;
+}
+
+.ref-tag-chip-count,
+.signal-console-services-page .ref-tag-chip-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--vibe-surface-soft);
+  color: inherit;
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+}
+
+.ref-tag-chip.is-active .ref-tag-chip-count,
+.signal-console-services-page .ref-tag-chip.is-active .ref-tag-chip-count {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.ref-summary-strip,
+.signal-console-services-page .ref-summary-strip,
+.signal-console-detail-page .ref-summary-band,
+.signal-console-detail-page .ref-summary-strip,
+.signal-console-settings-band,
+.runtime-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.ref-summary-chip,
+.ref-band-stat,
+.signal-console-services-page .ref-summary-chip,
+.signal-console-detail-page .ref-band-stat,
+.signal-console-detail-page .ref-summary-chip,
+.signal-console-settings-band .ref-summary-chip,
+.runtime-summary-strip .ref-summary-chip {
+  display: grid;
+  gap: 7px;
+  min-height: 76px;
+  padding: 16px 18px;
+  border: 0;
+  border-right: 1px solid var(--vibe-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.ref-summary-chip:last-child,
+.ref-band-stat:last-child,
+.signal-console-services-page .ref-summary-chip:last-child,
+.signal-console-detail-page .ref-band-stat:last-child,
+.signal-console-detail-page .ref-summary-chip:last-child,
+.signal-console-settings-band .ref-summary-chip:last-child,
+.runtime-summary-strip .ref-summary-chip:last-child {
+  border-right: 0;
+}
+
+.ref-summary-chip span,
+.ref-band-stat span,
+.signal-console-services-page .ref-summary-chip span,
+.signal-console-detail-page .ref-summary-chip span,
+.signal-console-detail-page .ref-band-stat span,
+.signal-console-settings-band .ref-summary-chip span {
+  color: var(--vibe-muted);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.ref-summary-chip strong,
+.ref-band-stat strong,
+.signal-console-services-page .ref-summary-chip strong,
+.signal-console-detail-page .ref-summary-chip strong,
+.signal-console-detail-page .ref-band-stat strong,
+.signal-console-settings-band .ref-summary-chip strong {
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ref-summary-chip-accent strong,
+.ref-summary-chip-danger strong,
+.signal-console-services-page .ref-summary-chip-danger strong,
+.signal-console-detail-page .ref-summary-chip-danger strong,
+.signal-console-settings-band .ref-summary-chip-danger strong {
+  color: var(--vibe-accent);
+}
+
+.ref-summary-chip-success strong,
+.signal-console-services-page .ref-summary-chip-success strong,
+.signal-console-detail-page .ref-summary-chip-success strong,
+.signal-console-settings-band .ref-summary-chip-success strong {
+  color: var(--vibe-green);
+}
+
+.ref-table-card,
+.signal-console-services-page .ref-table-card,
+.runtime-table-card,
+.ref-detail-table-card,
+.ref-card-panel,
+.panel,
+.auth-panel,
+.ref-collapse-card,
+.ref-task-browser-card,
+.signal-console-detail-page .ref-detail-topbar-main,
+.signal-console-detail-page .ref-detail-topbar-rail,
+.signal-console-detail-page .ref-side-nav {
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface);
+  box-shadow: none;
+}
+
+.ref-table-card,
+.signal-console-services-page .ref-table-card,
+.runtime-table-card,
+.ref-detail-table-card {
+  overflow: hidden;
+}
+
+.ref-table-head,
+.ref-detail-table-head,
+.runtime-table-head,
+.signal-console-services-page .ref-table-head,
+.signal-console-detail-page .ref-detail-table-head,
+.signal-console-detail-page .ref-table-head {
+  border-bottom: 1px solid var(--vibe-line);
+  background: var(--vibe-surface-soft);
+  color: var(--vibe-muted);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.ref-table-row,
+.ref-detail-table-row,
+.runtime-table-row,
+.signal-console-services-page .ref-table-row,
+.signal-console-detail-page .ref-detail-table-row {
+  border-top: 1px solid var(--vibe-line);
+  background: var(--vibe-surface);
+  transition:
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.ref-table-body > .ref-table-row:first-child,
+.ref-detail-table-body > .ref-detail-table-row:first-child {
+  border-top: 0;
+}
+
+.ref-table-row:hover,
+.ref-detail-table-row:hover,
+a.ref-detail-table-row:hover,
+.runtime-table-row:hover,
+.signal-console-services-page .ref-table-row:hover,
+.signal-console-detail-page a.ref-detail-table-row:hover {
+  background: #fff7f3;
+}
+
+.ref-service-link strong,
+.ref-service-cell strong,
+.ref-table-primary strong,
+.ref-meta-cell strong,
+.ref-coverage-cell strong,
+.signal-console-services-page .ref-service-link strong,
+.signal-console-services-page .ref-meta-cell strong,
+.signal-console-services-page .ref-coverage-cell strong,
+.signal-console-detail-page .ref-table-primary strong,
+.signal-console-detail-page .ref-table-status-group strong {
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-weight: 700;
+}
+
+.ref-service-link span,
+.ref-meta-cell span,
+.ref-coverage-cell span,
+.ref-table-primary span,
+.signal-console-services-page .ref-service-link span,
+.signal-console-services-page .ref-meta-cell span,
+.signal-console-services-page .ref-coverage-cell span,
+.signal-console-detail-page .ref-table-primary span,
+.signal-console-detail-page .ref-info-pair span,
+.signal-console-detail-page .ref-compact-kpi span {
+  color: var(--vibe-muted);
+}
+
+.ref-mini-tag,
+.signal-console-services-page .ref-mini-tag,
+.status-badge,
+.signal-console-detail-page .status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--vibe-line);
+  border-radius: 999px;
+  background: var(--vibe-surface-soft);
+  color: var(--vibe-ink-soft);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.ref-usage-bar,
+.signal-console-services-page .ref-usage-bar {
+  height: 9px;
+  border-radius: 999px;
+  background: var(--vibe-surface-muted);
+  overflow: hidden;
+}
+
+.ref-usage-fill,
+.signal-console-services-page .ref-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--vibe-accent);
+}
+
+.ref-usage-fill.is-healthy,
+.signal-console-services-page .ref-usage-fill.is-healthy {
+  background: var(--vibe-green);
+}
+
+.ref-usage-fill.is-warning,
+.signal-console-services-page .ref-usage-fill.is-warning {
+  background: var(--vibe-amber);
+}
+
+.ref-usage-fill.is-empty,
+.signal-console-services-page .ref-usage-fill.is-empty {
+  background: var(--vibe-accent);
+}
+
+.panel,
+.ref-card-panel,
+.signal-console-detail-page .ref-card-panel,
+.signal-console-detail-page .ref-card-panel-compact.panel {
+  padding: 20px;
+}
+
+.panel-header {
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--vibe-line);
+}
+
+.panel-header h3,
+.signal-console-detail-page .panel-header h3,
+.signal-console-settings-page .panel-header h3,
+.ref-section-headline h3 {
+  color: var(--vibe-ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.panel-header p,
+.signal-console-detail-page .panel-header p,
+.signal-console-settings-page .panel-header p {
+  color: var(--vibe-ink-soft);
+}
+
+.segmented-control,
+.signal-console-detail-page .segmented-control,
+.signal-console-settings-page .segmented-control {
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--vibe-line);
+  border-radius: 999px;
+  background: var(--vibe-surface-soft);
+}
+
+.segmented-option,
+.signal-console-detail-page .segmented-option,
+.signal-console-settings-page .segmented-option {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--vibe-ink-soft);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.segmented-option.active,
+.signal-console-detail-page .segmented-option.active,
+.signal-console-settings-page .segmented-option.active {
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  box-shadow: 0 1px 3px rgba(22, 19, 15, 0.12);
+}
+
+.ref-ghost-button,
+.button-secondary,
+.button-link,
+.notification-action-button,
+.signal-console-detail-page .ref-ghost-button,
+.signal-console-detail-page .ref-action-menu-trigger {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--vibe-line);
+  border-radius: 999px;
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.ref-ghost-button:hover,
+.button-secondary:hover,
+.button-link:hover,
+.notification-action-button:hover,
+.signal-console-detail-page .ref-ghost-button:hover,
+.signal-console-detail-page .ref-action-menu-trigger:hover {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent);
+  color: #ffffff;
+}
+
+.button-danger,
+.signal-console-detail-page .ref-ghost-button.is-danger {
+  border-color: rgba(255, 77, 24, 0.45);
+  background: var(--vibe-accent-soft);
+  color: var(--vibe-accent);
+}
+
+.button-danger:hover,
+.signal-console-detail-page .ref-ghost-button.is-danger:hover {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent);
+  color: #ffffff;
+}
+
+.signal-console-detail-page .ref-detail-topbar {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.signal-console-detail-page .ref-detail-topbar-rail {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+}
+
+.ref-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ref-back-button-icon,
+.signal-console-detail-page .ref-back-button-icon {
+  border-color: var(--vibe-line);
+  background: var(--vibe-surface-soft);
+  color: var(--vibe-ink);
+}
+
+.ref-back-button-label {
+  display: none;
+}
+
+.signal-console-detail-page .ref-detail-topbar-main {
+  padding: 22px 24px;
+}
+
+.signal-console-detail-page .ref-detail-title-row {
+  gap: 12px;
+}
+
+.signal-console-detail-page .ref-detail-title-copy h2 {
+  font-size: clamp(2rem, 4.4vw, 3.4rem);
+}
+
+.signal-console-detail-page .ref-detail-header-actions {
+  border-left: 1px solid var(--vibe-line);
+}
+
+.signal-console-detail-page .ref-side-nav {
+  top: 92px;
+  padding: 6px;
+}
+
+.signal-console-detail-page .ref-side-nav-item {
+  min-height: 38px;
+  border-radius: 999px;
+  color: var(--vibe-ink-soft);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.signal-console-detail-page .ref-side-nav-item.is-active,
+.signal-console-detail-page .ref-side-nav-item:hover {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent);
+  color: #ffffff;
+}
+
+.ref-collapse-card > summary,
+.signal-console-detail-page .ref-collapse-card > summary {
+  padding: 18px 20px;
+}
+
+.ref-collapse-card > summary strong,
+.signal-console-detail-page .ref-collapse-card > summary strong {
+  color: var(--vibe-ink);
+  font-weight: 700;
+}
+
+.ref-collapse-card > summary span,
+.signal-console-detail-page .ref-collapse-card > summary span {
+  color: var(--vibe-ink-soft);
+}
+
+.ref-action-menu-panel,
+.signal-console-detail-page .ref-action-menu-panel,
+.ref-modal-card,
+.dialog-card,
+.task-manual-run-dialog.dialog-card {
+  border-color: var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface);
+  box-shadow: var(--vibe-shadow);
+}
+
+.signal-console-detail-page .ref-action-menu-item {
+  border-radius: var(--vibe-radius);
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  text-transform: none;
+}
+
+.signal-console-detail-page .ref-action-menu-item:hover,
+.signal-console-detail-page .ref-action-menu-item:focus-visible {
+  background: var(--vibe-accent-soft);
+  color: var(--vibe-accent);
+}
+
+.auth-shell,
+.signal-console-auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: var(--vibe-bg);
+}
+
+.auth-panel {
+  width: min(100%, 480px);
+}
+
+.empty-state,
+.loading-block {
+  border-radius: var(--vibe-radius);
+}
+
+.loading-block {
+  border: 1px solid var(--vibe-line);
+  background: var(--vibe-surface);
+  color: var(--vibe-ink-soft);
+}
+
+.code-block,
+pre,
+code {
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+}
+
+/* List-detail layout */
+
+.signal-console-runtime-page .connectors-workbench,
+.signal-console-runtime-page .worker-config-layout,
+.signal-console-runtime-page .worker-code-shell,
+.signal-console-detail-page .ref-detail-layout,
+.signal-console-detail-page .ref-task-workbench {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 18px;
+  border: 1px solid var(--vibe-line);
+  border-radius: 26px;
+  background: #f4f4f4;
+  box-shadow: none;
+}
+
+.signal-console-runtime-page .connectors-type-rail,
+.signal-console-runtime-page .worker-config-sidebar,
+.signal-console-runtime-page .worker-code-explorer,
+.signal-console-detail-page .ref-task-browser,
+.signal-console-detail-page .ref-side-nav {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  max-height: calc(100vh - 48px);
+  padding: 12px;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  overflow: auto;
+}
+
+.signal-console-runtime-page .connectors-type-rail,
+.signal-console-runtime-page .worker-config-sidebar,
+.signal-console-runtime-page .worker-code-explorer {
+  border-right: 0;
+}
+
+.signal-console-runtime-page .connectors-detail-surface,
+.signal-console-runtime-page .worker-config-content,
+.signal-console-runtime-page .worker-code-pane,
+.signal-console-detail-page .ref-detail-content,
+.signal-console-detail-page .ref-task-detail-pane {
+  min-width: 0;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .connectors-detail-surface {
+  border: 1px solid var(--vibe-line-strong);
+  background: var(--vibe-surface);
+  display: grid;
+}
+
+.signal-console-runtime-page .worker-config-content,
+.signal-console-runtime-page .worker-code-pane,
+.signal-console-detail-page .ref-task-detail-pane {
+  border: 1px solid var(--vibe-line-strong);
+  background: var(--vibe-surface);
+}
+
+.signal-console-runtime-page .connector-type-option,
+.signal-console-runtime-page .worker-config-sidebar button,
+.signal-console-runtime-page .worker-file-tree-file,
+.signal-console-runtime-page .worker-file-tree-folder,
+.signal-console-detail-page .ref-task-browser-row,
+.signal-console-detail-page .ref-side-nav-item {
+  min-height: 42px;
+  width: 100%;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--vibe-radius);
+  background: #e6e3dc;
+  color: var(--vibe-ink-soft);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+  text-transform: none;
+  box-shadow: none;
+}
+
+.signal-console-runtime-page .connector-type-option {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.signal-console-runtime-page .connector-type-option:hover,
+.signal-console-runtime-page .connector-type-option.is-selected,
+.signal-console-runtime-page .worker-config-sidebar button:hover,
+.signal-console-runtime-page .worker-config-sidebar button.is-active,
+.signal-console-runtime-page .worker-file-tree-file:hover,
+.signal-console-runtime-page .worker-file-tree-file.is-active,
+.signal-console-detail-page .ref-task-browser-row:hover,
+.signal-console-detail-page .ref-task-browser-row.is-active,
+.signal-console-detail-page .ref-side-nav-item:hover,
+.signal-console-detail-page .ref-side-nav-item.is-active {
+  background: var(--vibe-accent);
+  color: #ffffff;
+}
+
+.signal-console-runtime-page .worker-config-sidebar button {
+  display: block;
+  letter-spacing: 0;
+}
+
+.signal-console-runtime-page .worker-config-sidebar button.is-active::before {
+  display: none;
+}
+
+.signal-console-runtime-page .connector-type-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .connector-type-copy strong,
+.signal-console-runtime-page .worker-file-tree-name,
+.signal-console-detail-page .ref-task-browser-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .connector-type-copy span,
+.signal-console-detail-page .ref-task-browser-copy span,
+.signal-console-detail-page .ref-task-browser-copy p {
+  color: currentColor;
+  opacity: 0.68;
+}
+
+.signal-console-runtime-page .connector-type-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.54);
+  color: inherit;
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+}
+
+.signal-console-runtime-page .connector-type-option.is-selected .connector-type-count {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.signal-console-runtime-page .connectors-detail-head,
+.signal-console-runtime-page .worker-config-titlebar,
+.signal-console-runtime-page .worker-code-toolbar {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--vibe-line);
+  background: var(--vibe-surface);
+}
+
+.signal-console-runtime-page .connectors-detail-head h3,
+.signal-console-runtime-page .worker-config-titlebar h3 {
+  margin: 0;
+  color: var(--vibe-ink);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .connectors-detail-head span,
+.signal-console-runtime-page .connectors-panel-heading span {
+  color: var(--vibe-muted);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .connectors-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  gap: 16px;
+  padding: 18px;
+  background: var(--vibe-surface);
+}
+
+.signal-console-runtime-page .connectors-list-panel,
+.signal-console-runtime-page .runtime-inline-form,
+.signal-console-runtime-page .worker-config-section,
+.signal-console-runtime-page .worker-code-editor,
+.signal-console-runtime-page .worker-code-placeholder {
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface);
+}
+
+.signal-console-runtime-page .connectors-list-panel {
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .connectors-panel-heading {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--vibe-line);
+  background: var(--vibe-surface-soft);
+}
+
+.signal-console-runtime-page .connectors-panel-heading strong {
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .connectors-list {
+  padding: 12px;
+}
+
+.signal-console-runtime-page .runtime-list-item,
+.signal-console-runtime-page .runtime-sink-card {
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface);
+  box-shadow: none;
+}
+
+.signal-console-runtime-page .runtime-list-item.is-selected {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent-soft);
+}
+
+.signal-console-runtime-page .connectors-editor-form,
+.signal-console-runtime-page .runtime-inline-form {
+  align-self: start;
+  padding: 18px;
+}
+
+.signal-console-runtime-page .runtime-inline-form h4 {
+  color: var(--vibe-ink);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .worker-config-content {
+  display: grid;
+  gap: 0;
+  padding: 0;
+}
+
+.signal-console-runtime-page .worker-config-section {
+  margin: 18px;
+  padding: 18px;
+}
+
+.signal-console-runtime-page .worker-config-meta > div,
+.signal-console-runtime-page .worker-trigger-summary,
+.signal-console-runtime-page .worker-identity-summary > div,
+.signal-console-runtime-page .worker-overview-summary,
+.signal-console-runtime-page .worker-config-block {
+  border-color: var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface-soft);
+}
+
+.signal-console-runtime-page .worker-code-source {
+  border: 1px solid var(--vibe-line);
+  border-radius: 26px;
+  background: #f4f4f4;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .worker-code-source-head {
+  border-bottom: 1px solid var(--vibe-line);
+  background: var(--vibe-surface);
+}
+
+.signal-console-runtime-page .worker-code-shell {
+  min-height: 430px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #f4f4f4;
+}
+
+.signal-console-runtime-page .worker-code-explorer {
+  padding: 18px 12px;
+}
+
+.signal-console-runtime-page .worker-file-tree-head {
+  padding: 0 2px 8px;
+  color: var(--vibe-ink-soft);
+}
+
+.signal-console-runtime-page .worker-file-tree-root,
+.signal-console-runtime-page .worker-file-tree-children {
+  gap: 7px;
+}
+
+.signal-console-runtime-page .worker-file-tree-row {
+  gap: 8px;
+}
+
+.signal-console-runtime-page .worker-file-tree-chevron,
+.signal-console-runtime-page .worker-file-tree-icon,
+.signal-console-runtime-page .worker-file-tree-tag {
+  color: currentColor;
+  opacity: 0.66;
+}
+
+.signal-console-runtime-page .worker-code-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.signal-console-runtime-page .worker-code-editor,
+.signal-console-runtime-page .worker-code-placeholder {
+  margin: 18px;
+  overflow: hidden;
+}
+
+.signal-console-detail-page .ref-task-browser {
+  padding: 12px;
+}
+
+.signal-console-detail-page .ref-task-detail-pane {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+/* Buttons and tabs */
+
+.ref-ghost-button,
+.button-secondary,
+.button-link,
+.notification-action-button,
+.signal-console-detail-page .ref-ghost-button,
+.signal-console-detail-page .ref-action-menu-trigger,
+.signal-console-detail-page .ref-action-menu-item,
+.signal-console-runtime-page .connectors-detail-head button,
+.signal-console-runtime-page .runtime-inline-form .ref-page-actions button,
+.signal-console-runtime-page .runtime-section-heading-actions button,
+.signal-console-runtime-page .runtime-editor-actions button,
+.signal-console-runtime-page .worker-code-source-actions button,
+.signal-console-runtime-page .worker-config-save,
+.signal-console-runtime-page .worker-config-section-actions button,
+.signal-console-runtime-page .runtime-sink-card > button,
+.signal-console-runtime-page .worker-env-remove,
+.ref-modal-head button,
+.ref-modal-foot button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 22px;
+  border: 1px solid var(--vibe-line-strong);
+  border-radius: 14px;
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: none;
+  box-shadow: 0 1px 2px rgba(22, 19, 15, 0.08);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.ref-ghost-button:hover,
+.button-secondary:hover,
+.button-link:hover,
+.notification-action-button:hover,
+.signal-console-detail-page .ref-ghost-button:hover,
+.signal-console-detail-page .ref-action-menu-trigger:hover,
+.signal-console-detail-page .ref-action-menu-item:hover,
+.signal-console-detail-page .ref-action-menu-item:focus-visible,
+.signal-console-runtime-page .connectors-detail-head button:hover,
+.signal-console-runtime-page .runtime-inline-form .ref-page-actions button:hover,
+.signal-console-runtime-page .runtime-section-heading-actions button:hover,
+.signal-console-runtime-page .runtime-editor-actions button:hover,
+.signal-console-runtime-page .worker-code-source-actions button:hover,
+.signal-console-runtime-page .worker-config-save:hover,
+.signal-console-runtime-page .worker-config-section-actions button:hover,
+.signal-console-runtime-page .runtime-sink-card > button:hover,
+.signal-console-runtime-page .worker-env-remove:hover,
+.ref-modal-head button:hover,
+.ref-modal-foot button:hover {
+  border-color: var(--vibe-line-strong);
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  box-shadow: 0 5px 16px rgba(22, 19, 15, 0.1);
+  transform: translateY(-1px);
+}
+
+.signal-console-runtime-page .connectors-detail-head button,
+.signal-console-runtime-page .runtime-inline-form .ref-page-actions button:first-child,
+.signal-console-runtime-page .runtime-section-heading-actions button,
+.signal-console-runtime-page .runtime-editor-actions button:first-child,
+.signal-console-runtime-page .worker-config-save,
+.signal-console-runtime-page .worker-config-section-actions button,
+.ref-modal-foot button:last-child {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent);
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.signal-console-runtime-page .connectors-detail-head button:hover,
+.signal-console-runtime-page .runtime-inline-form .ref-page-actions button:first-child:hover,
+.signal-console-runtime-page .runtime-section-heading-actions button:hover,
+.signal-console-runtime-page .runtime-editor-actions button:first-child:hover,
+.signal-console-runtime-page .worker-config-save:hover,
+.signal-console-runtime-page .worker-config-section-actions button:hover,
+.ref-modal-foot button:last-child:hover {
+  border-color: #ef4211;
+  background: #ef4211;
+  color: #ffffff;
+}
+
+.button-danger,
+.signal-console-detail-page .ref-ghost-button.is-danger,
+.signal-console-runtime-page .runtime-list-item .ref-page-actions button:last-child,
+.signal-console-runtime-page .runtime-sink-card > button,
+.signal-console-runtime-page .worker-env-remove,
+.ref-modal-head button,
+.ref-modal-foot button:first-child {
+  border-color: var(--vibe-accent);
+  background: transparent;
+  color: var(--vibe-accent);
+  box-shadow: none;
+}
+
+.button-danger:hover,
+.signal-console-detail-page .ref-ghost-button.is-danger:hover,
+.signal-console-runtime-page .runtime-list-item .ref-page-actions button:last-child:hover,
+.signal-console-runtime-page .runtime-sink-card > button:hover,
+.signal-console-runtime-page .worker-env-remove:hover,
+.ref-modal-head button:hover,
+.ref-modal-foot button:first-child:hover {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent-soft);
+  color: var(--vibe-accent);
+}
+
+.ref-ghost-button:disabled,
+.button-secondary:disabled,
+.button-link:disabled,
+.notification-action-button:disabled,
+.signal-console-runtime-page button:disabled,
+.signal-console-detail-page button:disabled,
+.ref-modal-head button:disabled,
+.ref-modal-foot button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
+.segmented-control,
+.signal-console-detail-page .segmented-control,
+.signal-console-settings-page .segmented-control,
+.signal-console-runtime-page .worker-tab-bar .segmented-control {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 34px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--vibe-line-strong);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.segmented-option,
+.signal-console-detail-page .segmented-option,
+.signal-console-settings-page .segmented-option,
+.signal-console-runtime-page .worker-tab-bar .segmented-option {
+  position: relative;
+  min-height: 44px;
+  padding: 0 4px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--vibe-muted);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: none;
+  box-shadow: none;
+}
+
+.segmented-option::after,
+.signal-console-detail-page .segmented-option::after,
+.signal-console-settings-page .segmented-option::after,
+.signal-console-runtime-page .worker-tab-bar .segmented-option::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 4px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.segmented-option:hover,
+.signal-console-detail-page .segmented-option:hover,
+.signal-console-settings-page .segmented-option:hover,
+.signal-console-runtime-page .worker-tab-bar .segmented-option:hover {
+  color: var(--vibe-ink);
+}
+
+.segmented-option.active,
+.signal-console-detail-page .segmented-option.active,
+.signal-console-settings-page .segmented-option.active,
+.signal-console-runtime-page .worker-tab-bar .segmented-option.active {
+  background: transparent;
+  color: var(--vibe-ink);
+  box-shadow: none;
+}
+
+.segmented-option.active::after,
+.signal-console-detail-page .segmented-option.active::after,
+.signal-console-settings-page .segmented-option.active::after,
+.signal-console-runtime-page .worker-tab-bar .segmented-option.active::after {
+  background: var(--vibe-accent);
+}
+
+/* Core component language: table, tree, select, input */
+
+.ref-table-card,
+.signal-console-services-page .ref-table-card,
+.runtime-table-card,
+.ref-detail-table-card,
+.signal-console-detail-page .ref-detail-table-card {
+  border: 1px solid var(--vibe-line-strong);
+  border-radius: 18px;
+  background: var(--vibe-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.ref-table-head,
+.ref-detail-table-head,
+.runtime-table-head,
+.signal-console-services-page .ref-table-head,
+.signal-console-detail-page .ref-detail-table-head,
+.signal-console-detail-page .ref-table-head {
+  min-height: 54px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--vibe-line-strong);
+  background: #faf8f3;
+  color: var(--vibe-muted);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.ref-table-row,
+.ref-detail-table-row,
+.runtime-table-row,
+.signal-console-services-page .ref-table-row,
+.signal-console-detail-page .ref-detail-table-row {
+  min-height: 76px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--vibe-line);
+  background: var(--vibe-surface);
+}
+
+.ref-table-row:hover,
+.ref-detail-table-row:hover,
+a.ref-detail-table-row:hover,
+.runtime-table-row:hover,
+.signal-console-services-page .ref-table-row:hover,
+.signal-console-detail-page a.ref-detail-table-row:hover {
+  background: #fff8f5;
+}
+
+.ref-table-primary strong,
+.ref-service-link strong,
+.ref-service-cell strong,
+.ref-meta-cell strong,
+.ref-coverage-cell strong,
+.signal-console-services-page .ref-service-link strong,
+.signal-console-services-page .ref-meta-cell strong,
+.signal-console-services-page .ref-coverage-cell strong,
+.signal-console-detail-page .ref-table-primary strong,
+.signal-console-detail-page .ref-table-status-group strong {
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.ref-inline-control input,
+.ref-inline-control select,
+.ref-inline-control textarea,
+.signal-console-services-page .ref-inline-control input,
+.signal-console-services-page .ref-inline-control select,
+.signal-console-settings-page .ref-inline-control input,
+.signal-console-settings-page .ref-inline-control select,
+.signal-console-runtime-page .ref-inline-control input,
+.signal-console-runtime-page .ref-inline-control select,
+.signal-console-runtime-page .ref-inline-control textarea,
+.signal-console-runtime-page .worker-config-general .ref-inline-control textarea {
+  min-height: 54px;
+  padding: 0 18px;
+  border: 2px solid var(--vibe-line-strong);
+  border-radius: 16px;
+  background: var(--vibe-surface);
+  color: var(--vibe-ink);
+  font-size: 18px;
+  box-shadow: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+.ref-inline-control textarea,
+.signal-console-runtime-page .ref-inline-control textarea,
+.signal-console-runtime-page .worker-config-general .ref-inline-control textarea {
+  min-height: 112px;
+  padding-block: 16px;
+  line-height: 1.45;
+}
+
+.ref-inline-control select,
+.signal-console-services-page .ref-inline-control select,
+.signal-console-settings-page .ref-inline-control select,
+.signal-console-runtime-page .ref-inline-control select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 46px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--vibe-muted) 50%),
+    linear-gradient(135deg, var(--vibe-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 25px) 50%,
+    calc(100% - 17px) 50%;
+  background-size:
+    8px 8px,
+    8px 8px;
+  background-repeat: no-repeat;
+}
+
+.ref-inline-control option,
+.signal-console-runtime-page .ref-inline-control option,
+.signal-console-services-page .ref-inline-control option {
+  color: var(--vibe-ink);
+  background: var(--vibe-surface);
+}
+
+.ref-inline-control option:checked,
+.signal-console-runtime-page .ref-inline-control option:checked,
+.signal-console-services-page .ref-inline-control option:checked {
+  background: var(--vibe-accent);
+  color: #ffffff;
+}
+
+.ref-inline-control input:focus,
+.ref-inline-control select:focus,
+.ref-inline-control textarea:focus,
+.signal-console-services-page .ref-inline-control input:focus,
+.signal-console-services-page .ref-inline-control select:focus,
+.signal-console-settings-page .ref-inline-control input:focus,
+.signal-console-settings-page .ref-inline-control select:focus,
+.signal-console-runtime-page .ref-inline-control input:focus,
+.signal-console-runtime-page .ref-inline-control select:focus,
+.signal-console-runtime-page .ref-inline-control textarea:focus,
+.signal-console-runtime-page .worker-config-general .ref-inline-control textarea:focus {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-surface);
+  box-shadow: 0 0 0 6px rgba(255, 77, 24, 0.14);
+}
+
+.ref-inline-control span,
+.signal-console-runtime-page .ref-inline-control span,
+.signal-console-services-page .ref-inline-control span,
+.signal-console-settings-page .ref-inline-control span {
+  color: var(--vibe-muted);
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.signal-console-runtime-page .worker-file-tree,
+.signal-console-runtime-page .worker-file-tree-root,
+.signal-console-runtime-page .worker-file-tree-children {
+  display: grid;
+  gap: 10px;
+}
+
+.signal-console-runtime-page .worker-file-tree-row {
+  display: grid;
+  grid-template-columns: 18px 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: var(--vibe-radius);
+  color: var(--vibe-ink);
+}
+
+.signal-console-runtime-page .worker-file-tree-file,
+.signal-console-runtime-page .worker-file-tree-folder {
+  display: grid;
+  grid-template-columns: 18px 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  justify-content: stretch;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--vibe-ink);
+}
+
+.signal-console-runtime-page .worker-file-tree-icon {
+  display: inline-block;
+  width: 20px;
+  height: 18px;
+  border-radius: 4px;
+  background: #e7e3dc;
+  color: transparent;
+  opacity: 1;
+}
+
+.signal-console-runtime-page .worker-file-tree-chevron {
+  color: var(--vibe-muted);
+  font-size: 13px;
+  opacity: 1;
+}
+
+.signal-console-runtime-page .worker-file-tree-file.is-active {
+  background: transparent;
+  color: var(--vibe-accent);
+}
+
+.signal-console-runtime-page .worker-file-tree-file.is-active .worker-file-tree-icon {
+  background: var(--vibe-accent);
+}
+
+.signal-console-runtime-page .worker-file-tree-file:hover,
+.signal-console-runtime-page .worker-file-tree-folder:hover {
+  background: rgba(22, 19, 15, 0.04);
+  color: var(--vibe-ink);
+}
+
+.signal-console-runtime-page .worker-file-tree-file.is-active:hover {
+  color: var(--vibe-accent);
+}
+
+.signal-console-runtime-page .worker-file-tree-name {
+  min-width: 0;
+  overflow: visible;
+  color: currentColor;
+  font-size: 17px;
+  font-weight: 700;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: 18px;
+    padding: 18px;
+  }
+
+  .shell-topbar {
+    top: 18px;
+    min-height: calc(100vh - 36px);
+    height: calc(100vh - 36px);
+    padding: 16px;
+  }
+
+  .shell-topbar-main {
+    gap: 22px;
+  }
+
+  .shell-nav {
+    gap: 8px;
+  }
+
+  .app-main {
+    padding: 24px 0 56px;
+  }
+
+  .signal-console-page-header-main,
+  .signal-console-page-header-side,
+  .signal-console-services-hero .signal-console-page-header-side {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-page-header-side {
+    justify-items: stretch;
+  }
+}
+
+@media (max-width: 900px) {
+  .ref-summary-strip,
+  .signal-console-services-page .ref-summary-strip,
+  .signal-console-detail-page .ref-summary-band,
+  .signal-console-detail-page .ref-summary-strip,
+  .signal-console-settings-band,
+  .runtime-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ref-summary-chip:nth-child(2n),
+  .ref-band-stat:nth-child(2n),
+  .signal-console-services-page .ref-summary-chip:nth-child(2n),
+  .signal-console-detail-page .ref-band-stat:nth-child(2n),
+  .signal-console-detail-page .ref-summary-chip:nth-child(2n),
+  .signal-console-settings-band .ref-summary-chip:nth-child(2n),
+  .runtime-summary-strip .ref-summary-chip:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .ref-summary-chip,
+  .ref-band-stat,
+  .signal-console-services-page .ref-summary-chip,
+  .signal-console-detail-page .ref-band-stat,
+  .signal-console-detail-page .ref-summary-chip,
+  .signal-console-settings-band .ref-summary-chip,
+  .runtime-summary-strip .ref-summary-chip {
+    border-bottom: 1px solid var(--vibe-line);
+  }
+
+  .signal-console-detail-page .ref-detail-topbar,
+  .signal-console-detail-page .ref-detail-layout,
+  .signal-console-detail-page .ref-task-workbench,
+  .signal-console-runtime-page .connectors-workbench,
+  .signal-console-runtime-page .connectors-detail-grid,
+  .signal-console-runtime-page .worker-config-layout,
+  .signal-console-runtime-page .worker-code-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-detail-page .ref-side-nav,
+  .signal-console-detail-page .ref-task-browser,
+  .signal-console-runtime-page .connectors-type-rail,
+  .signal-console-runtime-page .worker-config-sidebar,
+  .signal-console-runtime-page .worker-code-explorer {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+    max-height: none;
+  }
+
+  .signal-console-runtime-page .worker-config-sidebar button,
+  .signal-console-runtime-page .connector-type-option,
+  .signal-console-runtime-page .worker-file-tree-file,
+  .signal-console-runtime-page .worker-file-tree-folder,
+  .signal-console-detail-page .ref-task-browser-row,
+  .signal-console-detail-page .ref-side-nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 132px;
+  }
+
+  .signal-console-detail-page .ref-detail-header-actions {
+    border-left: 0;
+    border-top: 1px solid var(--vibe-line);
+    padding-top: 16px;
+    padding-left: 0;
+    justify-items: start;
+  }
+}
+
+@media (max-width: 720px) {
+  body {
+    background: var(--vibe-bg);
+  }
+
+  .app-shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 14px;
+  }
+
+  .shell-topbar {
+    position: sticky;
+    top: 14px;
+    display: grid;
+    min-height: auto;
+    height: auto;
+    gap: 12px;
+    padding: 14px 18px;
+    border-radius: 18px;
+  }
+
+  .shell-topbar-main {
+    display: grid;
+    gap: 12px;
+  }
+
+  .shell-brand {
+    min-height: auto;
+  }
+
+  .shell-brand-mark {
+    width: 42px;
+    min-width: 42px;
+    height: 11px;
+  }
+
+  .shell-nav {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .shell-nav-link {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 13px;
+    white-space: nowrap;
+  }
+
+  .shell-nav-link::after {
+    display: none;
+  }
+
+  .shell-nav-link.active {
+    padding-left: 13px;
+  }
+
+  .shell-topbar-side {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: 0;
+    padding-top: 12px;
+  }
+
+  .shell-lang-btn,
+  .shell-logout-btn {
+    width: auto;
+  }
+
+  .app-main {
+    padding: 8px 0 48px;
+  }
+
+  .signal-console-page-header-copy h2,
+  .ref-detail-title-copy h2,
+  .page-header h2 {
+    font-size: clamp(2rem, 12vw, 3rem);
+  }
+
+  .signal-console-services-page .ref-page-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .worker-build-head,
+  .signal-console-runtime-page .worker-code-source-head,
+  .signal-console-runtime-page .connectors-detail-head,
+  .signal-console-runtime-page .worker-config-titlebar {
+    display: grid;
+    align-items: start;
+  }
+
+  .signal-console-runtime-page .worker-build-head dl,
+  .signal-console-runtime-page .worker-build-grid,
+  .signal-console-runtime-page .worker-trigger-summary {
+    grid-template-columns: 1fr;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .signal-console-runtime-page .runtime-editor-actions,
+  .signal-console-runtime-page .worker-code-source-actions {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .signal-console-runtime-page .runtime-editor-actions button,
+  .signal-console-runtime-page .worker-code-source-actions button,
+  .signal-console-runtime-page .worker-config-save {
+    width: 100%;
+  }
+
+  .ref-summary-strip,
+  .signal-console-services-page .ref-summary-strip,
+  .signal-console-detail-page .ref-summary-band,
+  .signal-console-detail-page .ref-summary-strip,
+  .signal-console-settings-band,
+  .runtime-summary-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .ref-summary-chip,
+  .ref-band-stat,
+  .signal-console-services-page .ref-summary-chip,
+  .signal-console-detail-page .ref-band-stat,
+  .signal-console-detail-page .ref-summary-chip,
+  .signal-console-settings-band .ref-summary-chip,
+  .runtime-summary-strip .ref-summary-chip {
+    border-right: 0;
+  }
+
+  .ref-summary-chip:last-child,
+  .ref-band-stat:last-child,
+  .signal-console-services-page .ref-summary-chip:last-child,
+  .signal-console-detail-page .ref-band-stat:last-child,
+  .signal-console-detail-page .ref-summary-chip:last-child,
+  .signal-console-settings-band .ref-summary-chip:last-child,
+  .runtime-summary-strip .ref-summary-chip:last-child {
+    border-bottom: 0;
+  }
+}

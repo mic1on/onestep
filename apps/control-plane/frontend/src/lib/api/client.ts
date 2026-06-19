@@ -740,6 +740,10 @@ export function listWorkers() {
   return request<WorkerListResponse>("/api/v1/workers");
 }
 
+export function getWorker(workerId: string) {
+  return request<WorkerSummary>(`/api/v1/workers/${encodeURIComponent(workerId)}`);
+}
+
 export function createWorker(payload: WorkerCreateRequest) {
   return request<WorkerSummary>("/api/v1/workers", { method: "POST", body: payload });
 }
@@ -758,7 +762,7 @@ export function deleteWorker(workerId: string) {
 }
 
 export function deployWorker(workerId: string, payload: WorkerDeployRequest) {
-  return request<{ deployment_id: string }>(
+  return request<WorkerDeploymentSummary>(
     `/api/v1/workers/${encodeURIComponent(workerId)}/deploy`,
     { method: "POST", body: payload },
   );

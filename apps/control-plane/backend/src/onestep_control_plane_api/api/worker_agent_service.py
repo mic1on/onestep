@@ -369,6 +369,7 @@ def _deployment_package_args(
     *,
     deployment: WorkerDeployment,
     package: WorkflowPackage,
+    env: dict[str, str] | None = None,
 ) -> dict[str, object]:
     return {
         "deployment_id": str(deployment.deployment_id),
@@ -377,7 +378,7 @@ def _deployment_package_args(
         "download_url": f"/api/v1/workflow-packages/{package.package_id}/download",
         "entrypoint": package.entrypoint,
         "params": deployment.params_json,
-        "env": deployment.env_json,
+        "env": env if env is not None else deployment.env_json,
         "credential_refs": deployment.credential_refs_json,
     }
 
@@ -388,13 +389,14 @@ def create_worker_deployment_command(
     deployment: WorkerDeployment,
     kind: str,
     package: WorkflowPackage | None = None,
+    env: dict[str, str] | None = None,
     timeout_s: int = 30,
 ) -> WorkerAgentCommand:
     args_json: dict[str, object] = {"deployment_id": str(deployment.deployment_id)}
     if kind in {"start_deployment", "restart_deployment"}:
         if package is None:
             raise ValueError(f"package is required when kind={kind}")
-        args_json = _deployment_package_args(deployment=deployment, package=package)
+        args_json = _deployment_package_args(deployment=deployment, package=package, env=env)
 
     command = WorkerAgentCommand(
         command_id=uuid4(),
@@ -425,6 +427,7 @@ def create_start_deployment_command(
     *,
     deployment: WorkerDeployment,
     package: WorkflowPackage,
+    env: dict[str, str] | None = None,
     timeout_s: int = 30,
 ) -> WorkerAgentCommand:
     return create_worker_deployment_command(
@@ -432,6 +435,7 @@ def create_start_deployment_command(
         deployment=deployment,
         kind="start_deployment",
         package=package,
+        env=env,
         timeout_s=timeout_s,
     )
 
@@ -458,6 +462,7 @@ def create_restart_deployment_command(
     *,
     deployment: WorkerDeployment,
     package: WorkflowPackage,
+    env: dict[str, str] | None = None,
     timeout_s: int = 30,
 ) -> WorkerAgentCommand:
     deployment.desired_status = "running"
@@ -468,6 +473,7 @@ def create_restart_deployment_command(
         deployment=deployment,
         kind="restart_deployment",
         package=package,
+        env=env,
         timeout_s=timeout_s,
     )
 

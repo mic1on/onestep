@@ -60,6 +60,16 @@ def _validate_ingest_token_value(token: str) -> bool:
     return False
 
 
+def _validate_worker_agent_token_value(db: Session, token: str) -> bool:
+    token_hash = hash_worker_agent_token(token)
+    worker_agent_id = db.scalar(
+        select(WorkerAgent.worker_agent_id).where(
+            WorkerAgent.connection_token_hash == token_hash
+        )
+    )
+    return worker_agent_id is not None
+
+
 def hash_worker_agent_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -156,13 +166,10 @@ def require_websocket_worker_agent_connection(
     return worker_agent
 
 
-def require_websocket_ingest_token(websocket: WebSocket) -> WebSocketIngestAuth:
-    if not settings.ingest_tokens:
-        raise WebSocketException(
-            code=status.WS_1011_INTERNAL_ERROR,
-            reason="ingestion authentication is not configured",
-        )
-
+def require_websocket_ingest_token(
+    websocket: WebSocket,
+    db: Session = Depends(get_db_session),
+) -> WebSocketIngestAuth:
     subprotocols = [
         value.strip()
         for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
@@ -185,13 +192,13 @@ def require_websocket_ingest_token(websocket: WebSocket) -> WebSocketIngestAuth:
             reason="missing bearer token",
         )
 
-    if not _validate_ingest_token_value(token):
-        raise WebSocketException(
-            code=status.WS_1008_POLICY_VIOLATION,
-            reason="invalid bearer token",
-        )
+    if _validate_ingest_token_value(token) or _validate_worker_agent_token_value(db, token):
+        return WebSocketIngestAuth(token=token, accepted_subprotocol=accepted_subprotocol)
 
-    return WebSocketIngestAuth(token=token, accepted_subprotocol=accepted_subprotocol)
+    raise WebSocketException(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason="invalid bearer token",
+    )
 
 
 def is_local_auth_configured(db: Session) -> bool:

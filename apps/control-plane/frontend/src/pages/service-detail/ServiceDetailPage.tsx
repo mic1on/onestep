@@ -196,36 +196,28 @@ export function ServiceDetailPage() {
 
   return (
     <div className="ref-console-page ref-detail-page signal-console-detail-page signal-console-service-detail">
-      <section className="ref-detail-topbar">
-        <div className="ref-detail-topbar-rail">
-          <Link className="ref-back-button" to={`/services?environment=${environment}`}>
-            <span aria-hidden="true" className="ref-back-button-icon">
-              ←
-            </span>
-            <span className="ref-back-button-label">{isZh ? "返回" : "Back"}</span>
-          </Link>
-        </div>
-
-        <div className="ref-detail-topbar-main">
-          <div className="ref-detail-title">
-            <div className="ref-detail-title-copy">
-              <span className="signal-console-kicker">
-                {t("serviceDetail.eyebrow", { environment: t(`environment.${environment}`) })}
-              </span>
-              <div className="ref-detail-title-row">
-                <h2>{serviceName}</h2>
-                <StatusBadge {...getServiceStatusBadge(serviceStatus, isZh)} />
+      <section className="service-detail-header-stage" aria-labelledby="service-detail-title">
+        <div className="service-detail-header-card">
+          <div className="service-detail-header-main">
+            <div className="service-detail-heading">
+              <Link className="ref-back-button service-detail-back-button" to={`/services?environment=${environment}`}>
+                <span aria-hidden="true" className="ref-back-button-icon service-detail-back-icon">
+                  ‹
+                </span>
+                <span className="ref-back-button-label">{isZh ? "返回" : "Back"}</span>
+              </Link>
+              <div className="service-detail-title-copy">
+                <span className="signal-console-kicker">
+                  {t("serviceDetail.eyebrow", { environment: t(`environment.${environment}`) })}
+                </span>
+                <div className="service-detail-title-line">
+                  <h2 id="service-detail-title">{serviceName}</h2>
+                  <StatusBadge {...getServiceStatusBadge(serviceStatus, isZh)} />
+                </div>
               </div>
-              <p>
-                {isZh
-                  ? `${t(`environment.${environment}`)} · 最近同步 ${formatRelativeTime(dashboard?.service.latest_sync_at ?? null)}`
-                  : `${t(`environment.${environment}`)} · last sync ${formatRelativeTime(dashboard?.service.latest_sync_at ?? null)}`}
-              </p>
             </div>
-          </div>
 
-          <div className="ref-detail-header-actions signal-console-service-header-actions">
-            <div className="signal-console-detail-actions-row">
+            <div className="service-detail-header-actions">
               <SegmentedControl
                 ariaLabel={t("serviceDetail.lookbackAriaLabel")}
                 onChange={(value) => updateParam("lookback_minutes", String(value))}
@@ -279,9 +271,15 @@ export function ServiceDetailPage() {
                 </>
               ) : null}
             </div>
-
+          </div>
+          <div className="service-detail-header-meta">
+            <p className="service-detail-meta-line">
+              {isZh
+                ? `${t(`environment.${environment}`)} · 最近同步 ${formatRelativeTime(dashboard?.service.latest_sync_at ?? null)}`
+                : `${t(`environment.${environment}`)} · last sync ${formatRelativeTime(dashboard?.service.latest_sync_at ?? null)}`}
+            </p>
             <div
-              className="signal-console-detail-topbar-metric signal-console-service-topbar-metric-inline"
+              className="service-detail-runtime-chip"
               title={primaryRuntimeSignal?.note ?? undefined}
             >
               <span>{primaryRuntimeSignal?.label ?? (isZh ? "运行信号" : "Runtime signal")}</span>

@@ -90,9 +90,9 @@ def delete_worker_endpoint(
     "/workers/{worker_id}/deploy",
     dependencies=[Depends(require_console_auth)],
 )
-def deploy_worker_endpoint(
+async def deploy_worker_endpoint(
     worker_id: UUID,
     request: WorkerDeployRequest,
     db: Session = Depends(get_db_session),
 ) -> dict:
-    return deploy_worker(db, worker_id, request)
+    return await deploy_worker(db, worker_id, request)

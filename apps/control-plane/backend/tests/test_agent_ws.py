@@ -390,6 +390,32 @@ def test_agent_ws_accepts_bearer_token_via_subprotocol(client) -> None:
     assert response["type"] == "hello_ack"
 
 
+def test_agent_ws_accepts_worker_agent_connection_token(
+    client,
+    worker_agent_registration_token,
+) -> None:
+    registration = client.post(
+        "/api/v1/worker-agents/register",
+        json={
+            "registration_token": worker_agent_registration_token,
+            "display_name": "runtime-host",
+            "execution_mode": "subprocess",
+            "max_concurrent_deployments": 1,
+            "capabilities": ["deployment.start"],
+        },
+    )
+    assert registration.status_code == 200
+
+    with client.websocket_connect(
+        "/api/v1/agents/ws",
+        headers={"Authorization": f"Bearer {registration.json()['connection_token']}"},
+    ) as websocket:
+        websocket.send_json(_hello_message())
+        response = websocket.receive_json()
+
+    assert response["type"] == "hello_ack"
+
+
 def test_agent_ws_dispatches_created_command_and_tracks_ack_result(
     client,
     auth_headers,

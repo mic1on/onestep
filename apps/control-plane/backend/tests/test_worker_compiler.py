@@ -10,7 +10,14 @@ from onestep_control_plane_api.api.worker_compiler import (
 )
 
 
-def _worker(name="order-sync", handler_ref="myworker.handlers:sync", source=None, sinks=None):
+def _worker(
+    name="order-sync",
+    handler_ref="myworker.handlers:sync",
+    source=None,
+    sinks=None,
+    reporting_enabled=True,
+    reporting_config=None,
+):
     return {
         "name": name,
         "handler_ref": handler_ref,
@@ -26,6 +33,8 @@ def _worker(name="order-sync", handler_ref="myworker.handlers:sync", source=None
                 "fields": {"table": "synced", "mode": "upsert", "keys": ["id"]},
             }
         ],
+        "reporting_enabled": reporting_enabled,
+        "reporting_config": reporting_config or {"mode": "platform", "endpoint_url": None},
     }
 
 
@@ -60,6 +69,7 @@ def test_compile_single_source_single_sink():
         if data["resources"][k]["type"] == "mysql_table_sink"
     ]
     assert task["handler"]["ref"] == "myworker.handlers:sync"
+    assert data["reporter"] is True
 
 
 def test_compile_multiple_sinks_uses_emit_list():
@@ -80,7 +90,7 @@ def test_compile_builtin_source_has_no_connector_key():
         source={
             "type": "interval",
             "connector_id": None,
-            "fields": {"minutes": 5},
+            "fields": {"seconds": 1},
         },
         sinks=[
             {"type": "http_sink", "connector_id": None, "fields": {"url": "https://out.example.com"}},
@@ -88,9 +98,33 @@ def test_compile_builtin_source_has_no_connector_key():
     )
     yml = compile_worker_yaml(worker, {})
     data = yaml.safe_load(yml)
+    assert data["reporter"] is True
     src = [v for v in data["resources"].values() if v["type"] == "interval"][0]
     assert "connector" not in src
-    assert src["minutes"] == 5
+    assert src["seconds"] == 1
+
+
+def test_compile_omits_reporter_when_reporting_disabled():
+    yml = compile_worker_yaml(_worker(reporting_enabled=False), _connectors())
+    data = yaml.safe_load(yml)
+    assert "reporter" not in data
+
+
+def test_compile_custom_reporting_uses_token_env_placeholder():
+    yml = compile_worker_yaml(
+        _worker(
+            reporting_config={
+                "mode": "custom",
+                "endpoint_url": "https://telemetry.example.com",
+            }
+        ),
+        _connectors(),
+    )
+    data = yaml.safe_load(yml)
+    assert data["reporter"] == {
+        "base_url": "https://telemetry.example.com",
+        "token": "${ONESTEP_WORKER_REPORTING_TOKEN}",
+    }
 
 
 def test_compile_shared_connector_dedup():

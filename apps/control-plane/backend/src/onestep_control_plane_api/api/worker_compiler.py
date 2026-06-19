@@ -12,6 +12,7 @@ BUILTIN_SINK_TYPES = frozenset({"memory"})
 
 #: Sink types that have no connector dependency.
 NO_CONNECTOR_SINK_TYPES = frozenset({"http_sink"})
+REPORTING_TOKEN_ENV = "ONESTEP_WORKER_REPORTING_TOKEN"
 
 
 def _needs_connector(source_or_sink: dict[str, Any]) -> bool:
@@ -74,14 +75,34 @@ def compile_worker_yaml(
     if sinks:
         task["emit"] = [f"sink_{i}" for i in range(len(sinks))]
 
-    doc = {
+    doc: dict[str, Any] = {
         "apiVersion": "onestep/v1alpha1",
         "kind": "App",
         "app": {"name": worker["name"]},
         "resources": resources,
         "tasks": [task],
     }
+    reporter = _reporter_config(worker)
+    if reporter is not None:
+        doc["reporter"] = reporter
     return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+
+
+def _reporter_config(worker: dict[str, Any]) -> bool | dict[str, str] | None:
+    if worker.get("reporting_enabled", True) is False:
+        return None
+    reporting_config = worker.get("reporting_config")
+    if not isinstance(reporting_config, dict):
+        return True
+    if reporting_config.get("mode", "platform") != "custom":
+        return True
+    endpoint_url = str(reporting_config.get("endpoint_url") or "").strip()
+    if not endpoint_url:
+        raise ValueError("custom reporting endpoint_url is required")
+    return {
+        "base_url": endpoint_url,
+        "token": f"${{{REPORTING_TOKEN_ENV}}}",
+    }
 
 
 def merge_package(handler_zip_bytes: bytes, worker_yaml_str: str) -> bytes:

@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkerAgentsPage } from "./WorkerAgentsPage";
 
@@ -23,6 +24,10 @@ function renderPage() {
 }
 
 describe("WorkerAgentsPage", () => {
+  beforeEach(() => {
+    mockUseWorkerAgentsQuery.mockReset();
+  });
+
   it("renders agent rows", () => {
     mockUseWorkerAgentsQuery.mockReturnValue({
       data: {
@@ -71,5 +76,29 @@ describe("WorkerAgentsPage", () => {
     renderPage();
 
     expect(screen.getByText("No agents registered")).toBeInTheDocument();
+  });
+
+  it("opens the add agent guide and generates an install command", async () => {
+    const user = userEvent.setup();
+    mockUseWorkerAgentsQuery.mockReturnValue({
+      data: { items: [], total: 0, limit: 100, offset: 0 },
+      isPending: false,
+      error: null,
+    });
+
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: /Add agent/ }));
+    await user.clear(screen.getByLabelText("Registration token"));
+    await user.type(screen.getByLabelText("Registration token"), "registration-token");
+    await user.clear(screen.getByLabelText("Agent name"));
+    await user.type(screen.getByLabelText("Agent name"), "prod-runner-2");
+
+    expect(screen.getByRole("dialog", { name: "Add worker agent" })).toBeInTheDocument();
+    expect(screen.getByText(/curl -fsSL http:\/\/localhost:3000\/agent-install\.sh/)).toBeInTheDocument();
+    expect(screen.getByText(/\| bash -s --/)).toBeInTheDocument();
+    expect(screen.getByText(/--token 'registration-token'/)).toBeInTheDocument();
+    expect(screen.getByText(/--name 'prod-runner-2'/)).toBeInTheDocument();
+    expect(screen.getByText(/--max-concurrency 1/)).toBeInTheDocument();
   });
 });

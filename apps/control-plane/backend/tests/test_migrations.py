@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202606170003"
+HEAD_REVISION = "202606190001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -382,6 +382,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     assert isinstance(worker_deployment_columns["env_json"]["type"], sa.JSON)
     assert isinstance(worker_deployment_columns["credential_refs_json"]["type"], sa.JSON)
     assert isinstance(worker_columns["env_json"]["type"], sa.JSON)
+    assert isinstance(worker_columns["reporting_enabled"]["type"], sa.Boolean)
+    assert isinstance(worker_columns["reporting_config_json"]["type"], sa.JSON)
+    assert isinstance(worker_columns["reporting_secret_encrypted"]["type"], sa.Text)
     assert isinstance(worker_agent_command_columns["args_json"]["type"], sa.JSON)
     assert isinstance(worker_agent_command_columns["result_json"]["type"], sa.JSON)
     assert isinstance(worker_deployment_event_columns["payload_json"]["type"], sa.JSON)

@@ -635,6 +635,17 @@ export interface WorkerSinkConfig {
   fields: JsonObject;
 }
 
+export type WorkerReportingMode = "platform" | "custom";
+
+export interface WorkerReportingConfig {
+  mode: WorkerReportingMode;
+  endpoint_url: string | null;
+}
+
+export interface WorkerReportingSecret {
+  token?: string;
+}
+
 export interface WorkerSummary {
   id: string;
   name: string;
@@ -644,6 +655,9 @@ export interface WorkerSummary {
   source_config: WorkerSourceConfig;
   sink_configs: WorkerSinkConfig[];
   env: Record<string, string>;
+  reporting_enabled: boolean;
+  reporting_config: WorkerReportingConfig;
+  reporting_token_configured: boolean;
   status: string;
   created_at: string | null;
   updated_at: string | null;
@@ -662,6 +676,9 @@ export interface WorkerCreateRequest {
   source_config?: WorkerSourceConfig;
   sink_configs?: WorkerSinkConfig[];
   env?: Record<string, string>;
+  reporting_enabled?: boolean;
+  reporting_config?: WorkerReportingConfig;
+  reporting_secret?: WorkerReportingSecret;
 }
 
 export interface WorkerUpdateRequest {
@@ -672,6 +689,9 @@ export interface WorkerUpdateRequest {
   source_config?: WorkerSourceConfig;
   sink_configs?: WorkerSinkConfig[];
   env?: Record<string, string>;
+  reporting_enabled?: boolean;
+  reporting_config?: WorkerReportingConfig;
+  reporting_secret?: WorkerReportingSecret;
   status?: string;
 }
 

@@ -1,0 +1,293 @@
+.signal-console-service-detail {
+  --service-detail-header-stage: #f4f3f2;
+  --service-detail-header-card: #ffffff;
+  --service-detail-header-border: #ded9d2;
+  --service-detail-header-border-soft: #ebe7e1;
+  --service-detail-header-ink: #181010;
+  --service-detail-header-muted: #817b74;
+  --service-detail-header-soft: #f7f7f8;
+  --service-detail-header-accent: #ff4d18;
+  --service-detail-header-accent-hover: #ff6333;
+  --service-detail-header-accent-soft: #fff2ec;
+}
+
+.signal-console-service-detail .service-detail-header-stage {
+  display: grid;
+  place-items: center;
+  min-height: 178px;
+  padding: 30px 18px;
+  border: 1px solid var(--service-detail-header-border-soft);
+  border-radius: 8px;
+  background: var(--service-detail-header-stage);
+}
+
+.signal-console-service-detail .service-detail-header-card {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 920px);
+  padding: 22px 26px 20px;
+  border: 1px solid var(--service-detail-header-border);
+  border-radius: 8px;
+  background: var(--service-detail-header-card);
+  box-shadow: 0 1px 2px rgba(24, 16, 16, 0.04);
+}
+
+.signal-console-service-detail .service-detail-header-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+.signal-console-service-detail .service-detail-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.signal-console-service-detail .service-detail-back-button {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--service-detail-header-muted);
+}
+
+.signal-console-service-detail .service-detail-back-icon {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 0.86;
+}
+
+.signal-console-service-detail .service-detail-back-button:hover,
+.signal-console-service-detail .service-detail-back-button:focus-visible {
+  color: var(--service-detail-header-accent);
+  background: var(--service-detail-header-accent-soft);
+}
+
+.signal-console-service-detail .service-detail-back-button .ref-back-button-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.signal-console-service-detail .service-detail-title-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.signal-console-service-detail .service-detail-title-copy .signal-console-kicker {
+  color: var(--service-detail-header-muted);
+  font-size: 11px;
+}
+
+.signal-console-service-detail .service-detail-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.signal-console-service-detail .service-detail-title-line h2 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--service-detail-header-ink);
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: 0;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-service-detail .service-detail-title-line .status-badge {
+  flex: 0 0 auto;
+  border-color: var(--service-detail-header-border);
+  background: var(--service-detail-header-soft);
+  color: var(--service-detail-header-ink);
+}
+
+.signal-console-service-detail .service-detail-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.signal-console-service-detail .service-detail-header-actions .segmented-control {
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--service-detail-header-border-soft);
+  border-radius: 6px;
+  background: var(--service-detail-header-soft);
+  box-shadow: none;
+}
+
+.signal-console-service-detail .service-detail-header-actions .segmented-option {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--service-detail-header-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.signal-console-service-detail .service-detail-header-actions .segmented-option.active {
+  background: var(--service-detail-header-accent);
+  color: #ffffff;
+}
+
+.signal-console-service-detail .service-detail-header-actions .ref-ghost-button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--service-detail-header-border);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--service-detail-header-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+.signal-console-service-detail .service-detail-header-actions .ref-action-menu-trigger {
+  border-color: var(--service-detail-header-accent);
+  background: var(--service-detail-header-accent);
+  color: #ffffff;
+}
+
+.signal-console-service-detail .service-detail-header-actions .ref-action-menu-trigger:hover {
+  border-color: var(--service-detail-header-accent-hover);
+  background: var(--service-detail-header-accent-hover);
+  color: #ffffff;
+}
+
+.signal-console-service-detail .service-detail-header-actions .ref-ghost-button:hover {
+  border-color: var(--service-detail-header-accent);
+  background: var(--service-detail-header-accent-soft);
+  color: var(--service-detail-header-accent);
+}
+
+.signal-console-service-detail .service-detail-header-actions .ref-ghost-button.is-danger {
+  border-color: rgba(230, 59, 46, 0.28);
+  color: #e63b2e;
+}
+
+.signal-console-service-detail .service-detail-header-actions .ref-ghost-button.is-danger:hover {
+  border-color: #e63b2e;
+  background: rgba(230, 59, 46, 0.08);
+  color: #e63b2e;
+}
+
+.signal-console-service-detail .service-detail-header-card .ref-action-menu-panel {
+  z-index: 10;
+  border-radius: 8px;
+}
+
+.signal-console-service-detail .service-detail-header-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  padding-top: 13px;
+  border-top: 1px solid var(--service-detail-header-border-soft);
+}
+
+.signal-console-service-detail .service-detail-meta-line {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--service-detail-header-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-service-detail .service-detail-runtime-chip {
+  display: inline-flex;
+  align-items: baseline;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--service-detail-header-border-soft);
+  border-radius: 6px;
+  background: var(--service-detail-header-soft);
+  color: var(--service-detail-header-ink);
+}
+
+.signal-console-service-detail .service-detail-runtime-chip span {
+  color: var(--service-detail-header-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-console-service-detail .service-detail-runtime-chip strong {
+  color: var(--service-detail-header-ink);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+@media (max-width: 760px) {
+  .signal-console-service-detail .service-detail-header-stage {
+    min-height: auto;
+    padding: 12px;
+  }
+
+  .signal-console-service-detail .service-detail-header-card {
+    padding: 16px;
+  }
+
+  .signal-console-service-detail .service-detail-header-main {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 14px;
+  }
+
+  .signal-console-service-detail .service-detail-header-actions {
+    justify-content: flex-start;
+  }
+
+  .signal-console-service-detail .service-detail-header-actions .segmented-control {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .signal-console-service-detail .service-detail-title-line h2 {
+    font-size: 24px;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .signal-console-service-detail .service-detail-header-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .signal-console-service-detail .service-detail-meta-line {
+    white-space: normal;
+  }
+}
