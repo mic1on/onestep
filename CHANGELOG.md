@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+## 1.4.3
+
 - Adds YAML conditional sink routing with `when` / `then` / `otherwise` emit entries while preserving legacy fan-out emit behavior.
 - Keeps CLI, app description, and control-plane topology output on the existing flattened `emit` sink list.
+- Publishes core package releases from GitHub Actions through PyPI Trusted Publishing.
 
 ## onestep-postgres 0.1.0
 
