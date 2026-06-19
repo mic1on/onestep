@@ -34,3 +34,5 @@ def save_identity(path: Path, identity: AgentIdentity) -> None:
             sort_keys=True,
         )
     )
+    # connection_token is a long-lived credential: restrict to owner.
+    path.chmod(0o600)

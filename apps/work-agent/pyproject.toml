@@ -1,6 +1,6 @@
 [project]
 name = "onestep-worker-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Execution host agent for OneStep Control Plane deployments."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,6 +11,7 @@ authors = [
 dependencies = [
   "httpx>=0.28.0",
   "onestep[yaml]>=1.4.2",
+  "python-socks>=2.8.1",
   "websockets>=12.0",
 ]
 
