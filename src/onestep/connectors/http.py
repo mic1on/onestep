@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import re
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -18,6 +20,9 @@ _DEFAULT_SUCCESS_STATUSES = (200, 201, 202, 204)
 _DEFAULT_TIMEOUT_S = 5.0
 _BODYLESS_METHODS = {"DELETE", "GET"}
 _REDACTED = "<redacted>"
+_VARIABLE_PATH = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*"
+_VARIABLE_RE = re.compile(r"\{\{\s*(" + _VARIABLE_PATH + r")\s*\}\}")
+_FULL_VARIABLE_RE = re.compile(r"^\s*\{\{\s*(" + _VARIABLE_PATH + r")\s*\}\}\s*$")
 
 
 class HttpSinkStatusError(RuntimeError):
@@ -38,6 +43,7 @@ class HttpSink(Sink):
         method: str = "POST",
         headers: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
+        body: Any | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
         success_statuses: Sequence[int] | None = None,
     ) -> None:
@@ -46,15 +52,24 @@ class HttpSink(Sink):
         self.method = _normalize_method(method)
         self.headers = _normalize_headers(headers)
         self.params = _normalize_params(params, field="params")
+        self.body = _normalize_body(body)
         self.timeout_s = _normalize_timeout(timeout_s)
         self.success_statuses = _normalize_success_statuses(success_statuses)
 
     async def send(self, envelope: Envelope) -> None:
-        request_url = self._request_url(envelope)
-        payload = self._request_payload(envelope)
-        headers = dict(self.headers)
-        if payload is not None:
-            _set_header_default(headers, "Content-Type", "application/json")
+        try:
+            request_url = self._request_url(envelope)
+            payload = self._request_payload(envelope)
+            headers = self._request_headers(envelope, has_payload=payload is not None)
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ConnectorOperationError(
+                backend="http_sink",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.MISCONFIGURED,
+                source_name=self.name,
+                cause=exc,
+                message=f"http_sink variable rendering failed for {self.name!r}: {exc}",
+            ) from exc
         request = urllib.request.Request(
             request_url,
             data=payload,
@@ -92,29 +107,45 @@ class HttpSink(Sink):
             ) from status_error
 
     def control_plane_descriptor(self) -> dict[str, Any]:
+        config: dict[str, Any] = {
+            "url": _redact_url(self.url),
+            "method": self.method,
+            "headers": {key: _REDACTED for key in sorted(self.headers)},
+            "params": {key: _REDACTED for key in sorted(self.params)},
+            "timeout_s": self.timeout_s,
+            "success_statuses": list(self.success_statuses),
+        }
+        if self.body is not None:
+            config["body"] = _REDACTED
         return {
             "kind": "http_sink",
             "name": self.name,
-            "config": {
-                "url": _redact_url(self.url),
-                "method": self.method,
-                "headers": {key: _REDACTED for key in sorted(self.headers)},
-                "params": {key: _REDACTED for key in sorted(self.params)},
-                "timeout_s": self.timeout_s,
-                "success_statuses": list(self.success_statuses),
-            },
+            "config": config,
         }
 
     def _request_payload(self, envelope: Envelope) -> bytes | None:
         if self.method in _BODYLESS_METHODS:
             return None
-        return json.dumps(envelope.body, default=str).encode("utf-8")
+        body = envelope.body
+        if self.body is not None:
+            body = _render_variables(self.body, envelope)
+        return json.dumps(body, default=str).encode("utf-8")
 
     def _request_url(self, envelope: Envelope) -> str:
-        params: dict[str, Any] = dict(self.params)
+        params: dict[str, Any] = _render_variables(self.params, envelope)
         if self.method in _BODYLESS_METHODS and envelope.body is not None:
             params.update(_normalize_params(envelope.body, field="envelope.body"))
-        return _append_query_params(self.url, params)
+        url = _render_variables(self.url, envelope)
+        return _append_query_params(_normalize_url(url), params)
+
+    def _request_headers(self, envelope: Envelope, *, has_payload: bool) -> dict[str, str]:
+        headers = {
+            key: "" if value is None else str(value)
+            for key, value in _render_variables(self.headers, envelope).items()
+        }
+        if has_payload:
+            _set_header_default(headers, "Content-Type", "application/json")
+        return headers
 
     def _send_request(self, request: urllib.request.Request) -> tuple[int, str, bytes]:
         try:
@@ -171,6 +202,75 @@ def _normalize_params(value: Mapping[str, Any] | None, *, field: str) -> dict[st
             raise ValueError("parameter names must be non-empty")
         params[name] = item
     return params
+
+
+def _normalize_body(value: Any) -> Any | None:
+    if value is None:
+        return None
+    _validate_json_like(value, field="body")
+    return copy.deepcopy(value)
+
+
+def _validate_json_like(value: Any, *, field: str) -> None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"'{field}' mapping keys must be strings")
+            _validate_json_like(item, field=f"{field}.{key}")
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, item in enumerate(value):
+            _validate_json_like(item, field=f"{field}[{index}]")
+        return
+    raise TypeError(f"'{field}' must be a JSON-compatible value")
+
+
+def _render_variables(value: Any, envelope: Envelope) -> Any:
+    context = {
+        "body": envelope.body,
+        "payload": envelope.body,
+        "meta": envelope.meta,
+        "attempts": envelope.attempts,
+    }
+    return _render_variable_value(value, context)
+
+
+def _render_variable_value(value: Any, context: Mapping[str, Any]) -> Any:
+    if isinstance(value, str):
+        full_match = _FULL_VARIABLE_RE.match(value)
+        if full_match:
+            return _resolve_variable_path(context, full_match.group(1))
+
+        def replace(match: re.Match[str]) -> str:
+            resolved = _resolve_variable_path(context, match.group(1))
+            return "" if resolved is None else str(resolved)
+
+        return _VARIABLE_RE.sub(replace, value)
+    if isinstance(value, Mapping):
+        return {key: _render_variable_value(item, context) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_render_variable_value(item, context) for item in value]
+    return value
+
+
+def _resolve_variable_path(context: Mapping[str, Any], path: str) -> Any:
+    current: Any = context
+    for part in path.split("."):
+        if isinstance(current, Mapping):
+            if part not in current:
+                raise KeyError(path)
+            current = current[part]
+            continue
+        if isinstance(current, Sequence) and not isinstance(current, (str, bytes, bytearray)):
+            try:
+                current = current[int(part)]
+            except ValueError as exc:
+                raise KeyError(path) from exc
+            continue
+        raise KeyError(path)
+    return current
 
 
 def _append_query_params(url: str, params: Mapping[str, Any]) -> str:

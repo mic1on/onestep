@@ -489,6 +489,11 @@ long-lived YAML workers from creating unbounded in-process queues by accident.
 Scheduled `interval` and `cron` resources accept `max_queued_runs` for
 `overlap: queue`, defaulting to `1000`.
 
+`http_sink` sends task results as JSON by default. Configure `body` only when
+the outbound payload should be reshaped. `url`, `headers`, `params`, and
+configured `body` values can reference `body`, `payload`, `meta`, and
+`attempts` with `{{ ... }}` variables.
+
 Plugin resource types:
 
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`

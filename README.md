@@ -234,6 +234,26 @@ Plugin YAML resource types:
 Install the corresponding plugin package in the worker environment before
 using plugin resource types in YAML.
 
+`http_sink` sends task results as JSON by default. Configure `body` only when
+the outbound payload should be reshaped. `url`, `headers`, `params`, and
+configured `body` values can reference `body`, `payload`, `meta`, and
+`attempts` with `{{ ... }}` variables:
+
+```yaml
+resources:
+  notify:
+    type: http_sink
+    url: "https://api.example.com/orders/{{ body.order_id }}"
+    method: POST
+    headers:
+      X-Trace-Id: "{{ meta.trace_id }}"
+    params:
+      attempt: "{{ attempts }}"
+    body:
+      id: "{{ body.order_id }}"
+      status: "{{ body.status }}"
+```
+
 YAML apps can also bind app-level state explicitly:
 
 ```yaml

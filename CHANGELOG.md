@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.4.4
+
+- Adds `HttpSink` variable replacement for configured URLs, headers, params, and request bodies.
+- Adds the YAML `http_sink.body` field for reshaping outbound JSON while keeping default task-result forwarding unchanged.
+- Redacts configured HTTP request bodies in control-plane topology descriptors.
+
 ## 1.4.3
 
 - Adds YAML conditional sink routing with `when` / `then` / `otherwise` emit entries while preserving legacy fan-out emit behavior.
