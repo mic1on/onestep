@@ -27,11 +27,21 @@ onestep-agent setup \
   --no-start
 ```
 
-Then start the agent:
+Then start the agent in the background:
 
 ```bash
 onestep-agent start
 ```
+
+For foreground debugging, use `run` instead:
+
+```bash
+onestep-agent run
+```
+
+`run` keeps the control loop attached to the current terminal. `start` launches
+the same control loop in the background and writes logs to
+`<worker-agent-dir>/agent.log`.
 
 `onestep-worker-agent` remains available as a compatibility alias.
 

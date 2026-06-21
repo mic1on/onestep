@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from onestep_worker_agent.client import register_agent, run_control_loop
@@ -20,7 +22,7 @@ from onestep_worker_agent.state import DeploymentStateStore
 from onestep_worker_agent.supervisor import SubprocessSupervisor
 
 
-async def start(config_dir: Path | str | None = None) -> None:
+async def run(config_dir: Path | str | None = None) -> None:
     config = load_config(config_dir)
     identity = load_identity(config.identity_path)
     if identity is None:
@@ -58,7 +60,7 @@ def setup(args: argparse.Namespace) -> int:
         _print_setup_summary(config, target_config_path)
         return 0
 
-    return _run_start(args.config_dir)
+    return _start_background(args.config_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,7 +69,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    start_parser = subparsers.add_parser("start", help="Start the worker agent")
+    run_parser = subparsers.add_parser("run", help="Run the worker agent in the foreground")
+    run_parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=None,
+        help="Directory containing worker agent config.json",
+    )
+
+    start_parser = subparsers.add_parser("start", help="Start the worker agent in the background")
     start_parser.add_argument(
         "--config-dir",
         type=Path,
@@ -116,16 +126,60 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    if args.command == "run":
+        return _run_foreground(args.config_dir)
     if args.command == "start":
-        return _run_start(args.config_dir)
+        return _start_background(args.config_dir)
     if args.command == "setup":
         return setup(args)
     return 2
 
 
-def _run_start(config_dir: Path | str | None = None) -> int:
+def _run_foreground(config_dir: Path | str | None = None) -> int:
     try:
-        asyncio.run(start(config_dir=config_dir))
+        asyncio.run(run(config_dir=config_dir))
+    except Exception as exc:
+        print(f"onestep-worker-agent: run failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _start_background(config_dir: Path | str | None = None) -> int:
+    try:
+        config = load_config(config_dir)
+        config.work_dir.mkdir(parents=True, exist_ok=True)
+        log_path = config.work_dir / "agent.log"
+        command = [
+            sys.executable,
+            "-m",
+            "onestep_worker_agent.cli",
+            "run",
+        ]
+        if config_dir is not None:
+            command.extend(["--config-dir", str(config_dir)])
+
+        with Path("/dev/null").open("rb") as stdin, log_path.open("ab") as log_file:
+            process = subprocess.Popen(
+                command,
+                stdin=stdin,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                start_new_session=True,
+            )
+
+        time.sleep(0.25)
+        exit_code = process.poll()
+        if exit_code is not None:
+            print(
+                f"onestep-worker-agent: background start failed with exit code {exit_code}; "
+                f"see log: {log_path}",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(f"worker agent started in background: pid {process.pid}")
+        print(f"Log: {log_path}")
     except Exception as exc:
         print(f"onestep-worker-agent: failed to start: {exc}", file=sys.stderr)
         return 1
@@ -230,3 +284,7 @@ def _print_setup_summary(config: StoredAgentConfig, path: Path) -> None:
     print(f"Agent name: {config.display_name}")
     print(f"Worker dir: {config.work_dir}")
     print(f"Max concurrency: {config.max_concurrent_deployments}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

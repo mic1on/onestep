@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 - 2026-06-22
+
+- Add `onestep-agent run` for foreground execution and change
+  `onestep-agent start` to launch the agent in the background with logs written
+  to `agent.log`.
+
 ## 0.1.2 - 2026-06-19
 
 - Install every deployment into a runtime virtualenv with the default onestep connector set, even when the uploaded package has no dependency manifest.
