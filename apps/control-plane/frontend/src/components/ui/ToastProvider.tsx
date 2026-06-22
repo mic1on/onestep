@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-export type ToastTone = "success" | "error" | "warning" | "info";
+import { VibeAlert, type VibeAlertTone } from "./VibeAlert";
+
+export type ToastTone = VibeAlertTone;
 
 type ToastItem = {
   id: number;
@@ -58,18 +60,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div aria-live="polite" className="toast-stack" role="status">
         {toasts.map((toast) => (
-          <div className={`toast-card is-${toast.tone}`} key={toast.id}>
-            <span className="toast-card-dot" aria-hidden="true" />
-            <p>{toast.message}</p>
-            <button
-              aria-label="Dismiss notification"
-              className="toast-card-close"
-              onClick={() => dismissToast(toast.id)}
-              type="button"
-            >
-              ×
-            </button>
-          </div>
+          <VibeAlert
+            dismissLabel="Dismiss notification"
+            key={toast.id}
+            onDismiss={() => dismissToast(toast.id)}
+            title={toast.message}
+            tone={toast.tone}
+          />
         ))}
       </div>
     </ToastContext.Provider>

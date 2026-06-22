@@ -158,8 +158,8 @@ function buildWorkerItems(workers?: WorkerListResponse): CommandCenterAttentionI
       kind: "worker",
       severity: "info",
       label: worker.name,
-      signal: `worker is ${worker.status}`,
-      nextActionLabel: "Open worker",
+      signal: `step is ${worker.status}`,
+      nextActionLabel: "Open step",
       href: `/workers/${encodeURIComponent(worker.id)}`,
       updatedAt: worker.updated_at,
     }));

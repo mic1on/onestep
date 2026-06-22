@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
+import { VibeField } from "../../components/ui/VibeField";
+import { VibeSummaryStrip } from "../../components/ui/VibeSummary";
+import { VibehubSelect } from "../../components/ui/VibehubSelect";
 import {
   buildCommandCenterModel,
   type CommandCenterAttentionItem,
@@ -65,7 +68,7 @@ export function CommandCenterPage() {
     connectorsQuery.error;
 
   return (
-    <div className="command-center-page">
+    <div className="ref-console-page command-center-page">
       <header className="command-center-header">
         <div className="command-center-header-copy">
           <span className="signal-console-kicker">{t("commandCenter.eyebrow")}</span>
@@ -74,48 +77,40 @@ export function CommandCenterPage() {
         </div>
 
         <div className="command-center-controls">
-          <label className="ref-inline-control">
-            <span>{t("commandCenter.scopeLabel")}</span>
-            <select disabled value="all">
-              <option value="all">{t("commandCenter.scopeAll")}</option>
-            </select>
-          </label>
-          <label className="ref-inline-control">
-            <span>{t("commandCenter.searchLabel")}</span>
-            <input
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder={t("commandCenter.searchPlaceholder")}
-              type="search"
-              value={search}
-            />
-          </label>
+          <VibehubSelect
+            disabled
+            label={t("commandCenter.scopeLabel")}
+            options={[{ value: "all", label: t("commandCenter.scopeAll") }]}
+            value="all"
+          />
+          <VibeField
+            label={t("commandCenter.searchLabel")}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t("commandCenter.searchPlaceholder")}
+            type="search"
+            value={search}
+          />
         </div>
       </header>
 
-      <section className="command-center-summary ref-summary-strip">
-        <SummaryChip
-          label={t("commandCenter.summaryAttention")}
-          tone="danger"
-          value={String(model.summary.attentionCount)}
-        />
-        <SummaryChip
-          label={t("commandCenter.summaryInstances")}
-          tone="success"
-          value={model.summary.onlineInstancesLabel}
-        />
-        <SummaryChip
-          label={t("commandCenter.summaryServices")}
-          value={String(model.summary.activeServices)}
-        />
-        <SummaryChip
-          label={t("commandCenter.summaryDeployments")}
-          value={String(model.summary.deploymentCount)}
-        />
-        <SummaryChip
-          label={t("commandCenter.summaryCapacity")}
-          value={model.summary.agentCapacityLabel}
-        />
-      </section>
+      <VibeSummaryStrip
+        className="command-center-summary"
+        items={[
+          {
+            label: t("commandCenter.summaryAttention"),
+            tone: "danger",
+            value: String(model.summary.attentionCount),
+          },
+          {
+            label: t("commandCenter.summaryInstances"),
+            tone: "success",
+            value: model.summary.onlineInstancesLabel,
+          },
+          { label: t("commandCenter.summaryServices"), value: String(model.summary.activeServices) },
+          { label: t("commandCenter.summaryDeployments"), value: String(model.summary.deploymentCount) },
+          { label: t("commandCenter.summaryCapacity"), value: model.summary.agentCapacityLabel },
+        ]}
+      />
 
       {firstError ? (
         <EmptyState title={t("commandCenter.loadErrorTitle")} body={String(firstError)} />
@@ -154,13 +149,7 @@ export function CommandCenterPage() {
             </header>
             <div className="command-center-action-list">
               {filteredItems.slice(0, 3).map((item) => (
-                <Link className="command-center-action" key={`action:${item.id}`} to={item.href}>
-                  <span className={`command-center-dot is-${item.severity}`} />
-                  <span>
-                    <strong>{actionVerb(item.nextActionLabel)}</strong>
-                    <small>{item.label}</small>
-                  </span>
-                </Link>
+                <CommandCenterAction item={item} key={`action:${item.id}`} />
               ))}
             </div>
           </section>
@@ -187,38 +176,39 @@ export function CommandCenterPage() {
   );
 }
 
-function SummaryChip({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  tone?: "default" | "success" | "danger";
-}) {
-  return (
-    <article className={`ref-summary-chip ref-summary-chip-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
-
 function AttentionRow({ item }: { item: CommandCenterAttentionItem }) {
+  const { t } = useTranslation();
+  const actionLabel = translateActionLabel(item.nextActionLabel, t);
+
   return (
     <article className="command-center-attention-row">
       <div className="command-center-attention-main">
         <span className={`status-badge badge-${badgeTone(item.severity)}`}>
-          {item.kind.replace("_", " ")}
+          {translateKindLabel(item.kind, t)}
         </span>
         <strong>{item.label}</strong>
         <p>{item.signal}</p>
       </div>
       <div className="command-center-attention-meta">
         <span>{item.updatedAt ? formatRelativeTime(item.updatedAt) : "--"}</span>
-        <Link to={item.href}>{item.nextActionLabel}</Link>
+        <Link to={item.href}>{actionLabel}</Link>
       </div>
     </article>
+  );
+}
+
+function CommandCenterAction({ item }: { item: CommandCenterAttentionItem }) {
+  const { t } = useTranslation();
+  const actionLabel = translateActionLabel(item.nextActionLabel, t);
+
+  return (
+    <Link className="command-center-action" to={item.href}>
+      <span className={`command-center-dot is-${item.severity}`} />
+      <span>
+        <strong>{actionVerb(actionLabel)}</strong>
+        <small>{item.label}</small>
+      </span>
+    </Link>
   );
 }
 
@@ -240,4 +230,26 @@ function badgeTone(severity: CommandCenterAttentionItem["severity"]) {
 
 function actionVerb(label: string) {
   return label.split(" ")[0] ?? label;
+}
+
+const actionLabelKeys: Record<string, string> = {
+  "Open service": "commandCenter.actionOpenService",
+  "Inspect agent": "commandCenter.actionInspectAgent",
+  "Watch events": "commandCenter.actionWatchEvents",
+  "Open step": "commandCenter.actionOpenWorker",
+  "Review live updates": "commandCenter.actionReviewLiveUpdates",
+};
+
+function translateActionLabel(label: string, t: (key: string) => unknown) {
+  const key = actionLabelKeys[label];
+  return key ? String(t(key)) : label;
+}
+
+function translateKindLabel(
+  kind: CommandCenterAttentionItem["kind"],
+  t: (key: string) => unknown,
+) {
+  if (kind === "worker") return String(t("commandCenter.kindWorker"));
+  if (kind === "worker_agent") return String(t("commandCenter.kindWorkerAgent"));
+  return kind.replace("_", " ");
 }

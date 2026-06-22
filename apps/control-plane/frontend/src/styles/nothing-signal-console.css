@@ -1489,6 +1489,176 @@ body {
   border-color: var(--nd-border);
 }
 
+.signal-console-settings-page .notification-channel-title-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.signal-console-settings-page .notification-channel-title-content > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-settings-page .notification-provider-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid var(--nd-border);
+  border-radius: 10px;
+  background: var(--nd-surface);
+  color: var(--nd-accent);
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.signal-console-settings-page .notification-provider-mark-large {
+  width: 48px;
+  height: 48px;
+  border-color: var(--nd-text);
+  background: var(--nd-text);
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.signal-console-settings-page .notification-route-overview {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--nd-border);
+  border-radius: 22px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-settings-page .notification-route-hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.signal-console-settings-page .notification-route-hero-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.signal-console-settings-page .notification-route-hero-copy span,
+.signal-console-settings-page .notification-route-facts span,
+.signal-console-settings-page .notification-route-preview > span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.signal-console-settings-page .notification-route-hero-copy strong {
+  color: var(--nd-text);
+  font-size: 19px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.signal-console-settings-page .notification-route-hero-copy p {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-console-settings-page .notification-route-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: var(--nd-surface);
+  color: var(--nd-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.signal-console-settings-page .notification-route-status.is-enabled {
+  border-color: var(--nd-text);
+  color: var(--nd-text);
+}
+
+.signal-console-settings-page .notification-route-facts {
+  display: grid;
+  grid-template-columns: 1.3fr 0.7fr 0.7fr;
+  gap: 8px;
+}
+
+.signal-console-settings-page .notification-route-facts article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--nd-border);
+  border-radius: 14px;
+  background: var(--nd-surface);
+}
+
+.signal-console-settings-page .notification-route-facts strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nd-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-console-settings-page .notification-route-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.signal-console-settings-page .notification-route-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.signal-console-settings-page .notification-route-token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.signal-console-settings-page .notification-route-token-list span,
+.signal-console-settings-page .notification-route-token-list em {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  max-width: 100%;
+  padding: 0 9px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: var(--nd-surface);
+  color: var(--nd-text-secondary);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1;
+}
+
 .signal-console-settings-page .notification-choice-card.is-selected .notification-choice-indicator,
 .signal-console-settings-page .notification-choice-card-toggle.is-selected .notification-choice-indicator {
   background: var(--nd-accent);
@@ -2094,8 +2264,8 @@ body {
   gap: 4px;
 }
 
-.signal-console-runtime-page .connectors-detail-head span,
-.signal-console-runtime-page .connectors-panel-heading span {
+.signal-console-runtime-page .connectors-detail-head > div > span,
+.signal-console-runtime-page .connectors-panel-heading > span {
   color: var(--nd-text-secondary);
   font-family: "Space Mono", monospace;
   font-size: 11px;
@@ -2164,6 +2334,71 @@ body {
 
 .signal-console-runtime-page .connectors-form-full {
   grid-column: 1 / -1;
+}
+
+.signal-console-runtime-page .connectors-uri-import {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--nd-border);
+  border-radius: 16px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .connectors-uri-import-label {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .connectors-uri-import-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.signal-console-runtime-page .connectors-uri-import-input {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 10px 13px;
+  border: 1px solid var(--nd-border);
+  border-radius: 14px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-text);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 14px;
+}
+
+.signal-console-runtime-page .connectors-uri-import-input:focus {
+  outline: none;
+  border-color: var(--nd-text);
+  box-shadow: 0 0 0 1px var(--nd-text);
+}
+
+.signal-console-runtime-page .connectors-uri-import-action {
+  align-self: stretch;
+  height: 44px;
+  white-space: nowrap;
+}
+
+.signal-console-runtime-page .connectors-uri-import-note {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.signal-console-runtime-page .connectors-uri-import-note.is-success {
+  color: var(--nd-success);
+}
+
+.signal-console-runtime-page .connectors-uri-import-note.is-error {
+  color: var(--nd-accent);
 }
 
 .signal-console-runtime-page .runtime-list-item {
@@ -2306,6 +2541,375 @@ body {
 .signal-console-runtime-page .runtime-editor-actions {
   padding: 18px 22px;
   border-top: 1px solid var(--nd-border);
+}
+
+/* Step asset console. */
+
+.signal-console-runtime-page .workers-asset-workbench,
+.signal-console-runtime-page .worker-studio-workbench {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.38fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.signal-console-runtime-page .workers-asset-rail,
+.signal-console-runtime-page .worker-studio-rail,
+.signal-console-runtime-page .workers-detail-surface,
+.signal-console-runtime-page .worker-studio-surface,
+.signal-console-runtime-page .workers-route-panel,
+.signal-console-runtime-page .workers-runbook-panel,
+.signal-console-runtime-page .worker-overview-card {
+  border: 1px solid var(--nd-border);
+  border-radius: 24px;
+  background: var(--nd-surface);
+  box-shadow: none;
+}
+
+.signal-console-runtime-page .workers-asset-rail,
+.signal-console-runtime-page .worker-studio-rail {
+  position: sticky;
+  top: 104px;
+  display: grid;
+  gap: 7px;
+  align-content: start;
+  max-height: calc(100vh - 128px);
+  padding: 6px;
+  overflow: auto;
+}
+
+.signal-console-runtime-page .workers-asset-list {
+  display: grid;
+  gap: 7px;
+}
+
+.signal-console-runtime-page .workers-asset-rail-head,
+.signal-console-runtime-page .worker-studio-rail-head {
+  display: grid;
+  gap: 4px;
+  padding: 10px 10px 2px;
+}
+
+.signal-console-runtime-page .workers-asset-rail-head span,
+.signal-console-runtime-page .worker-studio-rail-head span,
+.signal-console-runtime-page .workers-detail-head > div > span,
+.signal-console-runtime-page .worker-studio-head > div > span,
+.signal-console-runtime-page .workers-panel-heading span,
+.signal-console-runtime-page .workers-runbook-panel > span,
+.signal-console-runtime-page .worker-overview-card > span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .workers-asset-rail-head h3,
+.signal-console-runtime-page .worker-studio-rail-head strong {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.signal-console-runtime-page .workers-asset-card,
+.signal-console-runtime-page .worker-studio-rail button {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--nd-text);
+  text-align: left;
+}
+
+.signal-console-runtime-page .worker-studio-rail button {
+  grid-template-columns: minmax(0, 1fr);
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .workers-asset-card:hover,
+.signal-console-runtime-page .workers-asset-card.is-selected,
+.signal-console-runtime-page .worker-studio-rail button:hover,
+.signal-console-runtime-page .worker-studio-rail button.is-active {
+  border-color: var(--nd-text);
+  background: rgba(0, 0, 0, 0.025);
+}
+
+.signal-console-runtime-page .workers-asset-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--nd-border);
+  border-radius: 14px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-accent);
+  font-family: "Doto", "Space Mono", monospace;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.signal-console-runtime-page .workers-asset-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .workers-asset-copy strong,
+.signal-console-runtime-page .workers-detail-head h3,
+.signal-console-runtime-page .worker-studio-head h3,
+.signal-console-runtime-page .worker-overview-card strong {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.signal-console-runtime-page .workers-asset-copy span,
+.signal-console-runtime-page .workers-detail-head p,
+.signal-console-runtime-page .worker-studio-head p,
+.signal-console-runtime-page .worker-overview-card p {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.signal-console-runtime-page .workers-asset-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--nd-border);
+  border-radius: 999px;
+  background: var(--nd-surface-strong);
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .workers-detail-surface,
+.signal-console-runtime-page .worker-studio-surface {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.signal-console-runtime-page .workers-detail-head,
+.signal-console-runtime-page .worker-studio-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-runtime-page .workers-detail-grid,
+.signal-console-runtime-page .worker-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.42fr);
+  gap: 18px;
+  padding: 20px;
+}
+
+.signal-console-runtime-page .workers-route-panel,
+.signal-console-runtime-page .workers-runbook-panel,
+.signal-console-runtime-page .worker-overview-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 16px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .workers-panel-heading strong,
+.signal-console-runtime-page .workers-runbook-panel h4 {
+  margin: 0;
+  color: var(--nd-text);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.signal-console-runtime-page .workers-route-facts,
+.signal-console-runtime-page .workers-runbook-facts,
+.signal-console-runtime-page .worker-studio-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.signal-console-runtime-page .workers-route-facts article,
+.signal-console-runtime-page .workers-runbook-facts div,
+.signal-console-runtime-page .worker-studio-status-strip span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--nd-border);
+  border-radius: 16px;
+  background: var(--nd-surface);
+}
+
+.signal-console-runtime-page .worker-studio-surface .worker-config-section {
+  padding: 18px;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-detail-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-health-panel,
+.signal-console-runtime-page.worker-agents-page .agents-runbook-panel {
+  align-items: center;
+  align-content: center;
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-health-panel {
+  grid-template-columns: minmax(140px, 0.26fr) minmax(0, 1fr);
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-runbook-panel {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  align-content: start;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-panel-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-runbook-panel h4 {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-runbook-panel > span,
+.signal-console-runtime-page.worker-agents-page .agents-runbook-panel h4,
+.signal-console-runtime-page.worker-agents-page .agents-runbook-facts {
+  grid-column: 1 / -1;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-route-facts,
+.signal-console-runtime-page.worker-agents-page .agents-runbook-facts {
+  display: grid;
+  gap: 6px;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-route-facts {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-runbook-facts {
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-route-facts article,
+.signal-console-runtime-page.worker-agents-page .agents-runbook-facts div {
+  padding: 8px 9px;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-runbook-facts strong {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.signal-console-runtime-page.worker-agents-page .agents-label-tags {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+}
+
+.signal-console-runtime-page.agent-detail-page .ref-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.signal-console-runtime-page.agent-detail-page .ref-meta-row span {
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.signal-console-runtime-page.agent-detail-page .agent-panel-body {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.signal-console-runtime-page.agent-detail-page .deployments-table-card {
+  border-radius: 18px;
+}
+
+.signal-console-runtime-page.agent-detail-page .agent-platform-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.signal-console-runtime-page.agent-detail-page .agent-platform-list span {
+  color: var(--nd-text-secondary);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.signal-console-runtime-page.agent-detail-page .agent-overview-card .ref-service-tags,
+.signal-console-runtime-page.worker-agents-page .agents-label-tags {
+  justify-content: flex-start;
+}
+
+@media (max-width: 1080px) {
+  .signal-console-runtime-page .workers-asset-workbench,
+  .signal-console-runtime-page .worker-studio-workbench,
+  .signal-console-runtime-page .workers-detail-grid,
+  .signal-console-runtime-page .worker-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .workers-asset-rail,
+  .signal-console-runtime-page .worker-studio-rail {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .signal-console-runtime-page .workers-detail-head,
+  .signal-console-runtime-page .worker-studio-head,
+  .signal-console-runtime-page .workers-asset-card {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .agents-open-detail {
+    width: 100%;
+  }
+
+  .signal-console-runtime-page.worker-agents-page .agents-health-panel,
+  .signal-console-runtime-page.worker-agents-page .agents-runbook-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page.worker-agents-page .agents-route-facts,
+  .signal-console-runtime-page.worker-agents-page .agents-runbook-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
 }
 
 .signal-console-runtime-page .worker-build-panel,
@@ -3313,6 +3917,11 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .signal-console-settings-page .notification-route-facts,
+  .signal-console-settings-page .notification-route-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
   .signal-console-runtime-page .runtime-summary-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3422,6 +4031,11 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .signal-console-settings-page .notification-route-hero {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+
   .signal-console-services-page .ref-summary-chip,
   .signal-console-detail-page .ref-band-stat,
   .signal-console-detail-page .ref-summary-chip,
@@ -3518,5 +4132,238 @@ body {
     align-content: center;
     justify-content: stretch;
     padding: 10px 14px;
+  }
+}
+
+/* Connectors integration console. */
+
+.signal-console-runtime-page.connectors-page .connectors-workbench {
+  grid-template-columns: minmax(280px, 0.38fr) minmax(0, 1fr);
+}
+
+.signal-console-runtime-page .connectors-gallery,
+.signal-console-runtime-page .connectors-gallery-group,
+.signal-console-runtime-page .connectors-gallery-head,
+.signal-console-runtime-page .connectors-playbook-panel,
+.signal-console-runtime-page .connectors-playbook-steps {
+  display: grid;
+}
+
+.signal-console-runtime-page .connectors-gallery {
+  gap: 14px;
+  padding: 0;
+}
+
+.signal-console-runtime-page .connectors-gallery-head,
+.signal-console-runtime-page .connectors-gallery-group {
+  gap: 7px;
+}
+
+.signal-console-runtime-page .connectors-gallery-grid {
+  display: grid;
+  gap: 7px;
+}
+
+.signal-console-runtime-page .connectors-gallery .connector-type-option {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 60px;
+  padding: 10px;
+}
+
+.signal-console-runtime-page .connector-type-glyph,
+.signal-console-runtime-page .connector-instance-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--nd-border);
+  border-radius: 12px;
+  background: var(--nd-surface);
+  color: var(--nd-accent);
+  font-family: "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-console-runtime-page .connectors-detail-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+
+.signal-console-runtime-page .connectors-asset-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.42fr);
+}
+
+.signal-console-runtime-page .connectors-selected-brief,
+.signal-console-runtime-page .connectors-playbook-panel {
+  padding: 16px;
+  border: 1px solid var(--nd-border);
+  border-radius: 18px;
+  background: var(--nd-surface-strong);
+}
+
+.signal-console-runtime-page .connectors-selected-brief p,
+.signal-console-runtime-page .connectors-playbook-steps p {
+  margin: 0;
+  color: var(--nd-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.signal-console-runtime-page .connectors-selected-facts,
+.signal-console-runtime-page .connectors-instance-meta,
+.signal-console-runtime-page .connectors-capability-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.signal-console-runtime-page .connectors-list .runtime-list-item {
+  grid-template-columns: 36px minmax(0, 1fr) minmax(150px, auto) auto;
+}
+
+.signal-console-runtime-page .connectors-playbook-panel {
+  gap: 14px;
+  align-content: start;
+}
+
+.signal-console-runtime-page .connectors-playbook-steps {
+  gap: 10px;
+}
+
+.signal-console-runtime-page .connectors-playbook-steps div {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.signal-console-runtime-page .connectors-editor-modal-body .connectors-editor-form {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+@media (max-width: 1080px) {
+  .signal-console-runtime-page.connectors-page .connectors-workbench,
+  .signal-console-runtime-page .connectors-asset-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .connectors-gallery {
+    position: static;
+    max-height: none;
+  }
+
+  .signal-console-runtime-page .connectors-gallery-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .signal-console-runtime-page .connectors-gallery-grid,
+  .signal-console-runtime-page .connectors-uri-import-control-row,
+  .signal-console-runtime-page .connectors-detail-head,
+  .signal-console-runtime-page .connectors-list .runtime-list-item {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-runtime-page .connectors-uri-import-action {
+    width: 100%;
+  }
+}
+
+/* Notifications route console follows the connectors workbench rhythm. */
+
+.signal-console-settings-page .notification-settings-layout {
+  grid-template-columns: minmax(280px, 0.38fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.signal-console-settings-page .notification-channel-panel.panel {
+  position: sticky;
+  top: 104px;
+  align-content: start;
+  max-height: calc(100vh - 128px);
+  padding: 6px;
+  overflow: auto;
+}
+
+.signal-console-settings-page .notification-channel-panel .panel-header {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 12px;
+  border-bottom: 0;
+}
+
+.signal-console-settings-page .notification-channel-panel .panel-header h3 {
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.signal-console-settings-page .notification-channel-panel .panel-header p {
+  font-family: "Space Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.signal-console-settings-page .notification-channel-panel .notification-channel-list {
+  gap: 7px;
+}
+
+.signal-console-settings-page .notification-channel-panel .notification-channel-card {
+  min-height: 60px;
+  padding: 10px;
+  border-radius: 18px;
+}
+
+.signal-console-settings-page .notification-route-panel.panel {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.signal-console-settings-page .notification-route-panel .panel-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  margin: 0;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--nd-border);
+}
+
+.signal-console-settings-page .notification-route-panel .panel-header h3 {
+  font-size: 22px;
+  line-height: 1.12;
+}
+
+.signal-console-settings-page .notification-route-panel .notification-route-overview {
+  margin: 18px 20px 0;
+}
+
+.signal-console-settings-page .notification-route-panel .notification-settings-form {
+  padding: 0 20px 20px;
+}
+
+@media (max-width: 1080px) {
+  .signal-console-settings-page .notification-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-console-settings-page .notification-channel-panel.panel {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .signal-console-settings-page .notification-route-panel .panel-header {
+    grid-template-columns: 1fr;
   }
 }

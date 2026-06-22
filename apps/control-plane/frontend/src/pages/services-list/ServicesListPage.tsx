@@ -4,6 +4,12 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
+import { VibeActionGroup } from "../../components/ui/VibeActionGroup";
+import { VibeDataRow, VibeDataTable } from "../../components/ui/VibeDataTable";
+import { VibeField } from "../../components/ui/VibeField";
+import { VibeSummaryStrip } from "../../components/ui/VibeSummary";
+import { VibeFilterChip, VibeTag, VibeTagGroup } from "../../components/ui/VibeTag";
+import { VibehubSelect } from "../../components/ui/VibehubSelect";
 import { useServicesQuery } from "../../features/services/queries";
 import { formatConnectorKind } from "../../features/tasks/components/TaskTopologySummary";
 import type { ServiceSummary } from "../../lib/api/types";
@@ -61,37 +67,35 @@ export function ServicesListPage() {
         side={
           <>
             <div className="signal-console-hero-actions signal-console-services-hero-actions">
-              <div className="ref-page-actions">
-                <label className="ref-inline-control ref-inline-control-select">
-                  <span>{t("servicesList.filterScope")}</span>
-                  <select
-                    onChange={(event) => updateSearchParam("environment", event.target.value)}
-                    value={selectedEnvironment}
-                  >
-                    <option value="all">{t("environment.all")}</option>
-                    <option value="prod">{t("environment.prod")}</option>
-                    <option value="staging">{t("environment.staging")}</option>
-                    <option value="dev">{t("environment.dev")}</option>
-                  </select>
-                </label>
+              <VibeActionGroup>
+                <VibehubSelect
+                  label={t("servicesList.filterScope")}
+                  onChange={(nextValue) => updateSearchParam("environment", nextValue)}
+                  options={[
+                    { value: "all", label: t("environment.all") },
+                    { value: "prod", label: t("environment.prod") },
+                    { value: "staging", label: t("environment.staging") },
+                    { value: "dev", label: t("environment.dev") },
+                  ]}
+                  value={selectedEnvironment}
+                />
 
-                <label className="ref-inline-control ref-inline-control-search">
-                  <span>{t("common.search")}</span>
-                  <input
-                    name="service-search"
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setSearch(nextValue);
-                      startTransition(() => {
-                        updateSearchParam("q", nextValue || undefined);
-                      });
-                    }}
-                    placeholder={t("servicesList.searchPlaceholder")}
-                    type="search"
-                    value={search}
-                  />
-                </label>
-              </div>
+                <VibeField
+                  className="ref-inline-control-search"
+                  label={t("common.search")}
+                  name="service-search"
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    setSearch(nextValue);
+                    startTransition(() => {
+                      updateSearchParam("q", nextValue || undefined);
+                    });
+                  }}
+                  placeholder={t("servicesList.searchPlaceholder")}
+                  type="search"
+                  value={search}
+                />
+              </VibeActionGroup>
             </div>
 
             <div className="signal-console-metric signal-console-services-metric">
@@ -112,53 +116,43 @@ export function ServicesListPage() {
             .map(([kind, count]) => {
               const isActive = sourceKindParam === kind;
               return (
-                <button
+                <VibeFilterChip
+                  active={isActive}
+                  count={count}
                   key={kind}
-                  className={`ref-tag-chip${isActive ? " is-active" : ""}`}
+                  label={formatConnectorKind(kind, isZh)}
                   onClick={() =>
                     updateSearchParam("source_kind", isActive ? undefined : kind)
                   }
-                  type="button"
-                >
-                  <span className="ref-tag-chip-kind">{formatConnectorKind(kind, isZh)}</span>
-                  <span className="ref-tag-chip-count">{count}</span>
-                </button>
+                />
               );
             })}
           {sourceKindParam ? (
-            <button
-              className="ref-tag-chip ref-tag-chip-clear"
+            <VibeFilterChip
+              clear
+              label="clear filter"
               onClick={() => updateSearchParam("source_kind", undefined)}
-              type="button"
-            >
-              clear filter
-            </button>
+            />
           ) : null}
         </nav>
       ) : null}
 
-      <section className="ref-summary-strip">
-        <SummaryChip
-          label={t("servicesList.summaryServices")}
-          tone="default"
-          value={String(sortedItems.length)}
-        />
-        <SummaryChip
-          label={t("servicesList.summaryOnline")}
-          tone="success"
-          value={`${summary?.online_instances ?? 0}/${summary?.total_instances ?? 0}`}
-        />
-        <SummaryChip
-          label={t("servicesList.summaryReady")}
-          tone="accent"
-          value={String(summary?.ready_services ?? 0)}
-        />
-        <SummaryChip
-          label={t("servicesList.summaryAttention")}
-          tone={(summary?.attention_services ?? 0) > 0 ? "danger" : "default"}
-          value={String(summary?.attention_services ?? 0)}
-        />
-      </section>
+      <VibeSummaryStrip
+        items={[
+          { label: t("servicesList.summaryServices"), value: String(sortedItems.length) },
+          {
+            label: t("servicesList.summaryOnline"),
+            tone: "success",
+            value: `${summary?.online_instances ?? 0}/${summary?.total_instances ?? 0}`,
+          },
+          { label: t("servicesList.summaryReady"), tone: "accent", value: String(summary?.ready_services ?? 0) },
+          {
+            label: t("servicesList.summaryAttention"),
+            tone: (summary?.attention_services ?? 0) > 0 ? "danger" : "default",
+            value: String(summary?.attention_services ?? 0),
+          },
+        ]}
+      />
 
       {error ? <EmptyState title={t("servicesList.loadErrorTitle")} body={String(error)} /> : null}
       {isPending ? <div className="loading-block">{t("servicesList.loading")}</div> : null}
@@ -187,27 +181,25 @@ export function ServicesListPage() {
 
 function ServicesTable({ isZh, items, t }: { isZh: boolean; items: ServiceSummary[]; t: Translate }) {
   return (
-    <section className="ref-table-card">
-      <div className="ref-table-head">
-        <span>{t("servicesList.tableHeaderName")}</span>
-        <span>{t("servicesList.tableHeaderCreated")}</span>
-        <span>{t("servicesList.tableHeaderLastActive")}</span>
-        <span>{t("servicesList.tableHeaderDeployment")}</span>
-        <span>{t("servicesList.tableHeaderInstances")}</span>
-      </div>
-
-      <div className="ref-table-body">
-        {items.map((service) => (
-          <ServiceRow key={`${service.environment}:${service.name}`} isZh={isZh} service={service} t={t} />
-        ))}
-      </div>
-    </section>
+    <VibeDataTable
+      columns={[
+        { key: "name", label: t("servicesList.tableHeaderName") },
+        { key: "created", label: t("servicesList.tableHeaderCreated") },
+        { key: "lastActive", label: t("servicesList.tableHeaderLastActive") },
+        { key: "deployment", label: t("servicesList.tableHeaderDeployment") },
+        { key: "instances", label: t("servicesList.tableHeaderInstances") },
+      ]}
+    >
+      {items.map((service) => (
+        <ServiceRow key={`${service.environment}:${service.name}`} isZh={isZh} service={service} t={t} />
+      ))}
+    </VibeDataTable>
   );
 }
 
 function ServiceRow({ isZh, service, t }: { isZh: boolean; service: ServiceSummary; t: Translate }) {
   return (
-    <article className="ref-table-row" key={`${service.environment}:${service.name}`}>
+    <VibeDataRow>
       <div className="ref-service-cell">
         <Link
           className="ref-service-link"
@@ -219,16 +211,16 @@ function ServiceRow({ isZh, service, t }: { isZh: boolean; service: ServiceSumma
           <strong>{service.name}</strong>
           <span>{t(`environment.${service.environment}`)}</span>
           {service.task_count > 0 || service.source_kinds.length > 0 ? (
-            <span className="ref-service-tags">
+            <VibeTagGroup>
               {service.task_count > 0 ? (
-                <span className="ref-mini-tag ref-mini-tag-tasks">
+                <VibeTag variant="tasks">
                   {service.task_count} {service.task_count === 1 ? "task" : "tasks"}
-                </span>
+                </VibeTag>
               ) : null}
               {service.source_kinds.map((kind) => (
-                <span key={kind} className="ref-mini-tag">{formatConnectorKind(kind, isZh)}</span>
+                <VibeTag key={kind}>{formatConnectorKind(kind, isZh)}</VibeTag>
               ))}
-            </span>
+            </VibeTagGroup>
           ) : null}
         </Link>
       </div>
@@ -261,24 +253,7 @@ function ServiceRow({ isZh, service, t }: { isZh: boolean; service: ServiceSumma
           {t("servicesList.instanceLive")}: {service.online_instance_count}/{service.instance_count}
         </strong>
       </div>
-    </article>
-  );
-}
-
-function SummaryChip({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "default" | "accent" | "success" | "danger";
-}) {
-  return (
-    <article className={`ref-summary-chip ref-summary-chip-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
+    </VibeDataRow>
   );
 }
 

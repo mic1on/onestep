@@ -6,7 +6,11 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
-import { StatusBadge } from "../../components/ui/StatusBadge";
+import { VibeButton } from "../../components/ui/VibeButton";
+import { VibeField } from "../../components/ui/VibeField";
+import { VibeInlineNotice } from "../../components/ui/VibeInlineNotice";
+import { VibeModal } from "../../components/ui/VibeModal";
+import { VibehubSelect } from "../../components/ui/VibehubSelect";
 import { useConnectorsQuery } from "../../features/connectors/queries";
 import {
   useCreateWorkflowPackageMutation,
@@ -34,6 +38,7 @@ import {
 import {
   useCreateWorkerMutation,
   useDeployWorkerMutation,
+  useDownloadWorkerPackageMutation,
   useUpdateWorkerMutation,
   useWorkerQuery,
 } from "../../features/workers/queries";
@@ -45,8 +50,11 @@ import type {
   WorkerSummary,
   WorkerSourceConfig,
 } from "../../lib/api/types";
+import { WorkerAgentDeployCard } from "./components/WorkerAgentDeployCard";
+import { WorkerConfigSection } from "./components/WorkerConfigSection";
+import { WorkerEnvRow } from "./components/WorkerEnvRow";
 
-type WorkerTab = "code" | "config";
+type WorkerTab = "overview" | "config" | "code" | "deploy";
 
 type Draft = {
   name: string;
@@ -160,7 +168,7 @@ function handlerFunctionName(handlerRef: string) {
 
 function codePreviewLines(draft: Draft) {
   const functionName = handlerFunctionName(draft.handlerRef);
-  const workerName = draft.name || "new-worker";
+  const stepName = draft.name || "new-step";
   return [
     "from __future__ import annotations",
     "",
@@ -168,9 +176,9 @@ function codePreviewLines(draft: Draft) {
     "",
     "",
     `async def ${functionName}(ctx, item) -> dict[str, Any]:`,
-    `    """Handler for ${workerName}."""`,
+    `    """Handler for ${stepName}."""`,
     "    payload = item",
-    "    # Add business logic here; source and sink wiring stays in worker.yaml.",
+    "    # Add business logic here; source and sink wiring stays in step config.",
     "    return {\"ok\": True, \"payload\": payload}",
   ];
 }
@@ -196,7 +204,11 @@ function packageInitPaths(handlerPath: string) {
 
 function safePackageName(name: string) {
   const safe = name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return safe || "worker";
+  return safe || "step";
+}
+
+function displayFileName(node: Pick<FileNode, "name" | "path">) {
+  return node.path === "worker.yaml" ? "step.yaml" : node.name;
 }
 
 /**
@@ -227,6 +239,7 @@ function detectLanguage(fileName: string): string {
 
 function fieldDisplayValue(value: unknown) {
   if (Array.isArray(value)) return value.map(String).join(", ");
+  if (value && typeof value === "object") return JSON.stringify(value, null, 2);
   if (value === null || value === undefined) return "";
   return String(value);
 }
@@ -249,6 +262,13 @@ function normalizeFieldValue(field: SourceSinkField, rawValue: unknown) {
   if (field.type === "number") {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : value;
+  }
+  if (field.type === "json") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
   }
   return value;
 }
@@ -281,10 +301,26 @@ function normalizeSourceConfig(source: WorkerSourceConfig): WorkerSourceConfig {
 }
 
 function normalizeSinkConfig(sink: WorkerSinkConfig): WorkerSinkConfig {
+  const fields = normalizeConfigFields(sinkTypeSchemas[sink.type], sink.fields);
+  if (sink.type === "http_sink" && isBodylessHttpMethod(fields.method)) {
+    delete fields.body;
+  }
   return {
     ...sink,
-    fields: normalizeConfigFields(sinkTypeSchemas[sink.type], sink.fields),
+    fields,
   };
+}
+
+function isBodylessHttpMethod(method: unknown) {
+  const normalized = String(method || "POST").trim().toUpperCase();
+  return normalized === "GET" || normalized === "DELETE";
+}
+
+function shouldRenderSinkField(sink: WorkerSinkConfig, field: SourceSinkField) {
+  if (sink.type === "http_sink" && field.name === "body") {
+    return !isBodylessHttpMethod(sink.fields.method);
+  }
+  return true;
 }
 
 function defaultFieldsForSchema(schema: SourceSinkTypeSchema | undefined) {
@@ -316,7 +352,10 @@ function isDeployableAgent(agent: WorkerAgentSummary) {
 }
 
 function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/\bworker\b/gi, (match) =>
+    match[0] === "W" ? "Step" : "step",
+  );
 }
 
 /**
@@ -352,7 +391,7 @@ function FileTreeItem({
           <span className="worker-file-tree-chevron" aria-hidden>
             {isOpen ? "▾" : "▸"}
           </span>
-          <span className="worker-file-tree-name">{node.name}</span>
+          <span className="worker-file-tree-name">{displayFileName(node)}</span>
         </button>
         {isOpen ? (
           <ul className="worker-file-tree-children">
@@ -390,7 +429,7 @@ function FileTreeItem({
         <span className="worker-file-tree-icon" aria-hidden>
           {isReadonly ? "◦" : "›"}
         </span>
-        <span className="worker-file-tree-name">{node.name}</span>
+        <span className="worker-file-tree-name">{displayFileName(node)}</span>
         {isReadonly ? <span className="worker-file-tree-tag">ro</span> : null}
       </button>
     </li>
@@ -408,6 +447,7 @@ export function WorkerEditorPage() {
   const createMutation = useCreateWorkerMutation();
   const updateMutation = useUpdateWorkerMutation(workerId ?? "");
   const deployMutation = useDeployWorkerMutation(workerId ?? "");
+  const downloadPackageMutation = useDownloadWorkerPackageMutation(workerId ?? "");
   const packageMutation = useCreateWorkflowPackageMutation();
 
   const existing = isEditing ? workerQuery.data : undefined;
@@ -420,11 +460,10 @@ export function WorkerEditorPage() {
   const [lastPackageId, setLastPackageId] = useState<string | null>(
     existing?.handler_package_id ?? null,
   );
+  const [isPackageCurrent, setIsPackageCurrent] = useState(Boolean(existing?.handler_package_id));
   const [isTriggerDialogOpen, setIsTriggerDialogOpen] = useState(false);
   const [triggerDraft, setTriggerDraft] = useState<WorkerSourceConfig>(initialDraft.source);
-  // Default to the config tab so the labelled "Name" input is reachable by tests
-  // and the form is the first thing a user interacts with.
-  const [activeTab, setActiveTab] = useState<WorkerTab>("config");
+  const [activeTab, setActiveTab] = useState<WorkerTab>("overview");
   const [activeConfigSection, setActiveConfigSection] = useState<string>("general");
   const [activeFilePath, setActiveFilePath] = useState<string>(() =>
     handlerModulePath(initialDraft.handlerRef),
@@ -453,6 +492,7 @@ export function WorkerEditorPage() {
         setDraft(nextDraft);
         setFilesMap(nextFilesMap);
         setLastPackageId(null);
+        setIsPackageCurrent(false);
         setTriggerDraft(nextDraft.source);
         setActiveFilePath(handlerModulePath(nextDraft.handlerRef));
         setExpandedDirs(new Set(collectDirectoryPaths(tree)));
@@ -469,6 +509,7 @@ export function WorkerEditorPage() {
     setDraft(nextDraft);
     setFilesMap(nextFilesMap);
     setLastPackageId(existing.handler_package_id ?? null);
+    setIsPackageCurrent(Boolean(existing.handler_package_id));
     setTriggerDraft(nextDraft.source);
     setActiveFilePath(handlerModulePath(nextDraft.handlerRef));
     setExpandedDirs(new Set(collectDirectoryPaths(tree)));
@@ -501,13 +542,22 @@ export function WorkerEditorPage() {
     draft.reportingToken,
   ]);
 
-  function connectorTypeForSource(sourceType: string) {
-    if (sourceType.startsWith("mysql_")) return "mysql";
-    if (sourceType.startsWith("postgres_")) return "postgres";
-    if (sourceType.startsWith("redis_")) return "redis";
-    if (sourceType.startsWith("rabbitmq_")) return "rabbitmq";
-    if (sourceType.startsWith("sqs_")) return "sqs";
+  function connectorTypeForResource(resourceType: string) {
+    if (resourceType.startsWith("mysql_")) return "mysql";
+    if (resourceType.startsWith("postgres_")) return "postgres";
+    if (resourceType.startsWith("redis_")) return "redis";
+    if (resourceType.startsWith("rabbitmq_")) return "rabbitmq";
+    if (resourceType.startsWith("sqs_")) return "sqs";
+    if (resourceType.startsWith("feishu_bitable_")) return "feishu_bitable";
     return null;
+  }
+
+  function connectorTypeForSource(sourceType: string) {
+    return connectorTypeForResource(sourceType);
+  }
+
+  function connectorTypeForSink(sinkType: string) {
+    return connectorTypeForResource(sinkType);
   }
 
   function openTriggerDialog() {
@@ -578,30 +628,50 @@ export function WorkerEditorPage() {
     navigate(`/workers/${encodeURIComponent(created.id)}`);
   }
 
-  async function handlePackageCode() {
-    // Build zip from the full filesMap (all uploaded/edited files).
+  function buildPackageArchive() {
     const entries = Object.entries(filesMap).map(([path, content]) => ({ path, content }));
     const blob = buildZipBlob(entries);
-    const handlerPath = handlerModulePath(draft.handlerRef);
+    const filename = `${safePackageName(draft.name || "new-step")}-handler.zip`;
+    return {
+      blob,
+      entrypoint: handlerModulePath(draft.handlerRef),
+      filename,
+    };
+  }
+
+  async function handlePackageCode() {
+    const archive = buildPackageArchive();
     const workflowPackage = await packageMutation.mutateAsync({
-      file: blob,
+      file: archive.blob,
       workflowId: isEditing && workerId ? workerId : crypto.randomUUID(),
       version: new Date().toISOString(),
-      filename: `${safePackageName(draft.name || "new-worker")}-handler.zip`,
-      entrypoint: handlerPath,
+      filename: archive.filename,
+      entrypoint: archive.entrypoint,
     });
-    setLastPackageId(workflowPackage.package_id);
 
     if (isEditing && workerId) {
-      // Only update the package binding; config fields auto-save separately.
-      await updateMutation.mutateAsync({
-        handler_package_id: workflowPackage.package_id,
-      });
+      await updateMutation.mutateAsync(buildWorkerConfigPayload(draft, workflowPackage.package_id));
     }
+    setLastPackageId(workflowPackage.package_id);
+    setIsPackageCurrent(true);
+  }
+
+  async function handleDownloadPackage() {
+    if (!isEditing || !workerId || !lastPackageId || !isPackageCurrent || !canSaveConfig) return;
+    await updateMutation.mutateAsync(buildWorkerConfigPayload(draft, lastPackageId));
+    const packageDownload = await downloadPackageMutation.mutateAsync();
+    const url = URL.createObjectURL(packageDownload.blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = packageDownload.filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   function openAgentDeployConfig() {
-    setActiveTab("config");
+    setActiveTab("deploy");
     setActiveConfigSection("agent");
     window.requestAnimationFrame(() => {
       if (typeof agentConfigRef.current?.scrollIntoView === "function") {
@@ -662,9 +732,6 @@ export function WorkerEditorPage() {
     : sourceSchema?.needsConnector
       ? t("workerEditor.connectorUnset")
       : t("workerEditor.builtinSource");
-  const sinkSummary = draft.sinks.length
-    ? t("workerEditor.targetCount", { count: draft.sinks.length })
-    : t("workerEditor.noTargets");
   const triggerSchema = sourceTypeSchemas[triggerDraft.type];
   const triggerConnectorType = connectorTypeForSource(triggerDraft.type);
   const triggerConnectorOptions = triggerConnectorType
@@ -692,6 +759,14 @@ export function WorkerEditorPage() {
                 : t("workerEditor.generalConfig");
   const isSavingConfig = createMutation.isPending || updateMutation.isPending;
   const canSaveConfig = canSaveReportingDraft(draft);
+  const sourceTypeLabel = (type: string) =>
+    t(`workerEditor.sourceTypeLabels.${type}`, {
+      defaultValue: sourceTypeSchemas[type]?.label ?? type,
+    });
+  const sinkTypeLabel = (type: string) =>
+    t(`workerEditor.sinkTypeLabels.${type}`, {
+      defaultValue: sinkTypeSchemas[type]?.label ?? type,
+    });
 
   function selectFile(path: string) {
     setActiveFilePath(path);
@@ -723,6 +798,7 @@ export function WorkerEditorPage() {
         newMap[entry.path] = entry.content;
       }
       setFilesMap(newMap);
+      setIsPackageCurrent(false);
       // Expand all directories by default.
       const tree = buildTreeFromPaths(Object.keys(newMap));
       setExpandedDirs(new Set(collectDirectoryPaths(tree)));
@@ -741,16 +817,30 @@ export function WorkerEditorPage() {
     event.target.value = "";
   }
 
-  const activeFileName = activeFileNode?.name ?? handlerFileName(draft.handlerRef);
+  const activeFileName = activeFileNode
+    ? displayFileName(activeFileNode)
+    : handlerFileName(draft.handlerRef);
   const isReadonlyFile = activeFilePath === "worker.yaml";
   const activeFileContent = filesMap[activeFilePath] ?? "";
+  const packageStateLabel = lastPackageId && isPackageCurrent
+    ? t("workerEditor.packageReady")
+    : t("workerEditor.packageUnsaved");
+  const reportingStateLabel = draft.reportingEnabled
+    ? t("workerEditor.reportingActive")
+    : t("workerEditor.reportingPaused");
+  const sourceTypeName = sourceTypeLabel(draft.source.type);
+  const deployableAgentCount = deployableAgents.length;
 
   return (
     <div className="ref-console-page signal-console-runtime-page worker-editor-page">
       <SignalConsoleHeader
         kicker={t("workerEditor.eyebrow")}
         title={isEditing ? draft.name : t("workerEditor.newTitle")}
-        description={<p className="signal-console-hero-note">{t("workerEditor.subtitle")}</p>}
+        description={
+          <p className="signal-console-hero-note">
+            {draft.description || t("workerEditor.subtitle")}
+          </p>
+        }
         side={
           <div className="signal-console-metric">
             <span>{t("workerEditor.sinkCount")}</span>
@@ -759,110 +849,66 @@ export function WorkerEditorPage() {
         }
       />
 
-      <section className="worker-build-panel">
-        <header className="worker-build-head">
-          <div>
-            <h3>{t("workerEditor.workerSetup")}</h3>
-            <p>{t("workerEditor.workerSetupSubtitle")}</p>
-          </div>
-          <dl>
-            <div>
-              <dt>{t("workerEditor.sourceStage")}</dt>
-              <dd>{sourceSchema?.label ?? draft.source.type}</dd>
-            </div>
-            <div>
-              <dt>{t("workerEditor.sinkStage")}</dt>
-              <dd>{sinkSummary}</dd>
-            </div>
-            <div>
-              <dt>{t("workerEditor.handlerPackage")}</dt>
-              <dd>{lastPackageId ?? t("workerEditor.packageUnsaved")}</dd>
-            </div>
-          </dl>
-        </header>
-
-        <div className="worker-build-grid">
-          <section className="runtime-form-section runtime-form-section-wide">
-            <div className="runtime-section-heading">
-              <span>01</span>
-              <h3>{t("workerEditor.identity")}</h3>
-            </div>
-            <div className="worker-identity-summary">
-              <div>
-                <span>{t("workerEditor.name")}</span>
-                <strong>{draft.name || t("workerEditor.newTitle")}</strong>
-              </div>
-              <div>
-                <span>{t("workerEditor.description")}</span>
-                <strong>{draft.description || "—"}</strong>
-              </div>
-            </div>
-          </section>
-
-          <section className="runtime-form-section">
-            <div className="runtime-section-heading runtime-section-heading-actions">
-              <div>
-                <span>02</span>
-                <h3>{t("workerEditor.source")}</h3>
-              </div>
-              <button type="button" onClick={openTriggerDialog}>
-                {t("workerEditor.addTrigger")}
-              </button>
-            </div>
-            <div className="worker-overview-summary">
-              <span>{t("workerEditor.sourceType")}</span>
-              <strong>{sourceSchema?.label ?? draft.source.type}</strong>
-            </div>
-          </section>
-
-          <section className="runtime-form-section">
-            <div className="runtime-section-heading runtime-section-heading-actions">
-              <div>
-                <span>03</span>
-                <h3>{t("workerEditor.sinks")}</h3>
-              </div>
-              <button type="button" onClick={addSink}>
-                {t("workerEditor.addSink")}
-              </button>
-            </div>
-            <div className="worker-overview-summary">
-              <span>{t("workerEditor.sinkStage")}</span>
-              <strong>{sinkSummary}</strong>
-            </div>
-          </section>
-        </div>
-
-        <div className="ref-page-actions runtime-editor-actions">
-          <button
-            type="button"
-            disabled={packageMutation.isPending}
-            onClick={() => void handlePackageCode()}
-          >
-            {packageMutation.isPending ? t("workerEditor.packaging") : t("workerEditor.packageCode")}
-          </button>
-          {isEditing ? (
-            <button
-              type="button"
-              disabled={deployMutation.isPending}
-              onClick={openAgentDeployConfig}
-            >
-              {t("workerEditor.deploy")}
-            </button>
-          ) : null}
-        </div>
-      </section>
-
       <div className="worker-tab-bar" role="tablist" aria-label={t("workerEditor.workerSetup")}>
         <SegmentedControl<WorkerTab>
           ariaLabel={t("workerEditor.workerSetup")}
           value={activeTab}
           onChange={setActiveTab}
           options={[
-            { label: t("workerEditor.tabCode"), value: "code" },
+            { label: t("workerEditor.tabOverview"), value: "overview" },
             { label: t("workerEditor.tabConfig"), value: "config" },
+            { label: t("workerEditor.tabCode"), value: "code" },
+            { label: t("workerEditor.tabDeploy"), value: "deploy" },
           ]}
         />
       </div>
+
+      <section
+        className={
+          activeTab === "overview"
+            ? "worker-overview-panel worker-tab-panel is-active"
+            : "worker-overview-panel worker-tab-panel"
+        }
+        role="tabpanel"
+        hidden={activeTab !== "overview"}
+      >
+        <section className="worker-studio-surface">
+          <header className="worker-studio-head">
+            <div>
+              <span>{t("workerEditor.overviewLabel")}</span>
+              <h3>{t("workerEditor.overviewTitle")}</h3>
+              <p>{t("workerEditor.overviewSubtitle")}</p>
+            </div>
+            <div className="worker-studio-status-strip">
+              <span>{packageStateLabel}</span>
+              <span>{reportingStateLabel}</span>
+            </div>
+          </header>
+
+          <div className="worker-overview-grid">
+            <article className="worker-overview-card">
+              <span>{t("workerEditor.sourceSummary")}</span>
+              <strong>{sourceTypeName}</strong>
+              <p>{sourceDetail}</p>
+            </article>
+            <article className="worker-overview-card">
+              <span>{t("workerEditor.handlerStage")}</span>
+              <strong>{draft.handlerRef}</strong>
+              <p>{packageStateLabel}</p>
+            </article>
+            <article className="worker-overview-card">
+              <span>{t("workerEditor.sinksSummary")}</span>
+              <strong>{t("workerEditor.targetCount", { count: draft.sinks.length })}</strong>
+              <p>{draft.sinks.length > 0 ? t("workerEditor.targetsConfigured") : t("workerEditor.emptySinks")}</p>
+            </article>
+            <article className="worker-overview-card">
+              <span>{t("workerEditor.agent")}</span>
+              <strong>{t("workerEditor.deployableAgentCount", { count: deployableAgentCount })}</strong>
+              <p>{t("workerEditor.agentHint")}</p>
+            </article>
+          </div>
+        </section>
+      </section>
 
       <section
         className={
@@ -874,11 +920,16 @@ export function WorkerEditorPage() {
         hidden={activeTab !== "code"}
       >
         <header className="worker-code-source-head">
-          <div>
+          <div className="worker-code-source-copy">
             <h3>{t("workerEditor.codeSource")}</h3>
             <p>{t("workerEditor.codeSourceSubtitle")}</p>
+            {uploadError ? (
+              <VibeInlineNotice as="span" variant="error">
+                {uploadError}
+              </VibeInlineNotice>
+            ) : null}
           </div>
-          <div className="worker-code-source-actions">
+          <div className="worker-action-dock" aria-label={t("workerEditor.codeActions")} role="group">
             <input
               ref={fileInputRef}
               type="file"
@@ -886,14 +937,47 @@ export function WorkerEditorPage() {
               onChange={handleFileInputChange}
               style={{ display: "none" }}
             />
-            <button
-              type="button"
+            <VibeButton
+              className="worker-action-button worker-action-upload"
               onClick={() => fileInputRef.current?.click()}
+              variant="secondary"
             >
               {t("workerEditor.uploadZip")}
-            </button>
-            {uploadError ? (
-              <span className="ref-error-note">{uploadError}</span>
+            </VibeButton>
+            <VibeButton
+              className="worker-action-button worker-action-package"
+              disabled={packageMutation.isPending}
+              onClick={() => void handlePackageCode()}
+              variant="primary"
+            >
+              {packageMutation.isPending
+                ? t("workerEditor.packaging")
+                : t("workerEditor.packageCode")}
+            </VibeButton>
+            <VibeButton
+              className="worker-action-button worker-action-download"
+              disabled={
+                !isEditing ||
+                !lastPackageId ||
+                !isPackageCurrent ||
+                !canSaveConfig ||
+                updateMutation.isPending ||
+                downloadPackageMutation.isPending
+              }
+              onClick={() => void handleDownloadPackage()}
+              variant="secondary"
+            >
+              {t("workerEditor.downloadZip")}
+            </VibeButton>
+            {isEditing ? (
+              <VibeButton
+                className="worker-action-button worker-action-deploy"
+                disabled={deployMutation.isPending}
+                onClick={openAgentDeployConfig}
+                variant="secondary"
+              >
+                {t("workerEditor.deploy")}
+              </VibeButton>
             ) : null}
           </div>
         </header>
@@ -927,7 +1011,7 @@ export function WorkerEditorPage() {
               <span>
                 {isReadonlyFile
                   ? t("workerEditor.fileReadonly")
-                  : lastPackageId
+                  : lastPackageId && isPackageCurrent
                     ? t("workerEditor.packageReady")
                     : t("workerEditor.packageUnsaved")}
               </span>
@@ -953,9 +1037,10 @@ export function WorkerEditorPage() {
                     readOnly: false,
                   }}
                   value={activeFileContent}
-                  onChange={(value) =>
-                    setFilesMap((prev) => ({ ...prev, [activeFilePath]: value ?? "" }))
-                  }
+                  onChange={(value) => {
+                    setFilesMap((prev) => ({ ...prev, [activeFilePath]: value ?? "" }));
+                    setIsPackageCurrent(false);
+                  }}
                 />
               </div>
             )}
@@ -1039,56 +1124,55 @@ export function WorkerEditorPage() {
             </header>
 
             {activeConfigSection === "general" ? (
-              <div className="worker-config-section">
-                <label className="ref-inline-control">
-                  <span>{t("workerEditor.name")}</span>
-                  <input
-                    type="text"
-                    value={draft.name}
-                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  />
-                </label>
-                <label className="ref-inline-control">
-                  <span>{t("workerEditor.description")}</span>
-                  <textarea
-                    rows={3}
-                    value={draft.description}
-                    onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-                  />
-                </label>
-              </div>
+              <WorkerConfigSection>
+                <VibeField
+                  label={t("workerEditor.name")}
+                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                  type="text"
+                  value={draft.name}
+                />
+                <VibeField
+                  label={t("workerEditor.description")}
+                  multiline
+                  onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+                  rows={3}
+                  value={draft.description}
+                />
+              </WorkerConfigSection>
             ) : null}
 
             {activeConfigSection === "handler" ? (
-              <div className="worker-config-section">
-                <label className="ref-inline-control">
-                  <span>{t("workerEditor.handlerRef")}</span>
-                  <input
-                    type="text"
-                    value={draft.handlerRef}
-                    onChange={(e) => setDraft({ ...draft, handlerRef: e.target.value })}
-                  />
-                </label>
+              <WorkerConfigSection>
+                <VibeField
+                  label={t("workerEditor.handlerRef")}
+                  onChange={(event) => {
+                    setDraft({ ...draft, handlerRef: event.target.value });
+                    setIsPackageCurrent(false);
+                  }}
+                  type="text"
+                  value={draft.handlerRef}
+                />
                 <div className="worker-config-meta">
                   <div>
                     <span>{t("workerEditor.handlerPackage")}</span>
                     <strong>{lastPackageId ?? t("workerEditor.packageUnsaved")}</strong>
                   </div>
                 </div>
-              </div>
+              </WorkerConfigSection>
             ) : null}
 
             {activeConfigSection === "trigger" ? (
-              <div className="worker-config-section">
-                <div className="worker-config-section-actions">
+              <WorkerConfigSection
+                actions={
                   <button type="button" onClick={openTriggerDialog}>
                     {t("workerEditor.configure")}
                   </button>
-                </div>
+                }
+              >
                 <div className="worker-trigger-summary">
                   <div>
                     <span>{t("workerEditor.sourceType")}</span>
-                    <strong>{sourceSchema?.label ?? draft.source.type}</strong>
+                    <strong>{sourceTypeLabel(draft.source.type)}</strong>
                   </div>
                   <div>
                     <span>{t("workerEditor.connector")}</span>
@@ -1110,100 +1194,100 @@ export function WorkerEditorPage() {
                     )}
                   </div>
                 </div>
-              </div>
+              </WorkerConfigSection>
             ) : null}
 
             {activeConfigSection === "targets" ? (
-              <div className="worker-config-section">
-                <div className="worker-config-section-actions">
+              <WorkerConfigSection
+                actions={
                   <button type="button" onClick={addSink}>
                     {t("workerEditor.addTarget")}
                   </button>
-                </div>
+                }
+              >
                 <div className="runtime-sink-list">
                   {draft.sinks.length === 0 ? (
-                    <div className="runtime-empty-inline">{t("workerEditor.emptySinks")}</div>
+                    <VibeInlineNotice as="div" variant="empty">
+                      {t("workerEditor.emptySinks")}
+                    </VibeInlineNotice>
                   ) : null}
                   {draft.sinks.map((sink, index) => {
                     const sinkSchema = sinkTypeSchemas[sink.type];
+                    const sinkConnectorType = connectorTypeForSink(sink.type);
+                    const sinkConnectorOptions = sinkConnectorType
+                      ? connectors.filter((connector) => connector.type === sinkConnectorType)
+                      : connectors;
                     return (
                       <div className="ref-accordion-item runtime-sink-card" key={index}>
-                        <label className="ref-inline-control ref-inline-control-select">
-                          <span>
-                            {t("workerEditor.sinkType")} {index + 1}
-                          </span>
-                          <select
-                            value={sink.type}
-                            onChange={(e) => {
+                        <VibehubSelect
+                          label={`${t("workerEditor.sinkType")} ${index + 1}`}
+                          onChange={(nextValue) => {
+                            const sinks = [...draft.sinks];
+                            sinks[index] = createSinkConfig(nextValue);
+                            setDraft({ ...draft, sinks });
+                          }}
+                          options={sinkTypeOrder.map((typ) => ({
+                            value: typ,
+                            label: sinkTypeLabel(typ),
+                          }))}
+                          value={sink.type}
+                        />
+                        {sinkSchema?.needsConnector ? (
+                          <VibehubSelect
+                            label={t("workerEditor.connector")}
+                            onChange={(nextValue) => {
                               const sinks = [...draft.sinks];
-                              sinks[index] = createSinkConfig(e.target.value);
+                              sinks[index] = { ...sinks[index], connector_id: nextValue };
                               setDraft({ ...draft, sinks });
                             }}
-                          >
-                            {sinkTypeOrder.map((typ) => (
-                              <option key={typ} value={typ}>
-                                {sinkTypeSchemas[typ].label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {sinkSchema?.needsConnector ? (
-                          <label className="ref-inline-control ref-inline-control-select">
-                            <span>{t("workerEditor.connector")}</span>
-                            <select
-                              value={sink.connector_id ?? ""}
-                              onChange={(e) => {
-                                const sinks = [...draft.sinks];
-                                sinks[index] = { ...sinks[index], connector_id: e.target.value };
-                                setDraft({ ...draft, sinks });
-                              }}
-                            >
-                              <option value="">{t("workerEditor.selectConnector")}</option>
-                              {connectors.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name} ({c.type})
-                                </option>
-                              ))}
-                            </select>
-                          </label>
+                            options={[
+                              { value: "", label: t("workerEditor.selectConnector") },
+                              ...sinkConnectorOptions.map((connector) => ({
+                                value: connector.id,
+                                label: `${connector.name} (${connector.type})`,
+                              })),
+                            ]}
+                            value={sink.connector_id ?? ""}
+                          />
                         ) : null}
-                        {sinkSchema?.fields.map((field) => {
-                          const value = fieldDisplayValue(sink.fields[field.name] ?? field.defaultValue);
-                          return (
-                            <label
-                              className={
-                                field.type === "select"
-                                  ? "ref-inline-control ref-inline-control-select"
-                                  : "ref-inline-control"
-                              }
+                        {sinkSchema?.needsConnector && sinkConnectorOptions.length === 0 ? (
+                          <VibeInlineNotice variant="error">
+                            {t("workerEditor.noAvailableConnectors")}
+                          </VibeInlineNotice>
+                        ) : null}
+                        {sinkSchema?.fields.filter((field) => shouldRenderSinkField(sink, field)).map((field) => (
+                          field.type === "select" ? (
+                            <VibehubSelect
                               key={field.name}
-                            >
-                              <span>{field.label}</span>
-                              {field.type === "select" ? (
-                                <select
-                                  value={value}
-                                  onChange={(e) => setSinkField(index, field.name, e.target.value)}
-                                >
-                                  {!field.required && field.defaultValue === undefined ? (
-                                    <option value="">{t("common.notAvailable")}</option>
-                                  ) : null}
-                                  {(field.options ?? []).map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <input
-                                  type={fieldInputType(field)}
-                                  placeholder={field.placeholder}
-                                  value={value}
-                                  onChange={(e) => setSinkField(index, field.name, e.target.value)}
-                                />
-                              )}
-                            </label>
-                          );
-                        })}
+                              label={field.label}
+                              onChange={(nextValue) => setSinkField(index, field.name, nextValue)}
+                              options={(field.options ?? []).map((option) => ({
+                                value: option,
+                                label: option,
+                              }))}
+                              value={fieldDisplayValue(sink.fields[field.name])}
+                            />
+                          ) : field.type === "json" ? (
+                            <VibeField
+                              key={field.name}
+                              label={field.label}
+                              multiline
+                              onChange={(event) => setSinkField(index, field.name, event.target.value)}
+                              placeholder={field.placeholder}
+                              rows={6}
+                              value={fieldDisplayValue(sink.fields[field.name])}
+                            />
+                          ) : (
+                            <VibeField
+                              key={field.name}
+                              label={field.label}
+                              onChange={(event) => setSinkField(index, field.name, event.target.value)}
+                              placeholder={field.placeholder}
+                              type={fieldInputType(field)}
+                              value={fieldDisplayValue(sink.fields[field.name])}
+                            />
+                          )
+                        ))}
                         <button type="button" onClick={() => removeSink(index)}>
                           {t("workerEditor.removeSink")}
                         </button>
@@ -1211,277 +1295,314 @@ export function WorkerEditorPage() {
                     );
                   })}
                 </div>
-              </div>
+              </WorkerConfigSection>
             ) : null}
 
             {activeConfigSection === "env" ? (
-              <div className="worker-config-section">
-                <div className="worker-config-section-actions">
+              <WorkerConfigSection
+                actions={
                   <button type="button" onClick={addEnvVar}>
                     {t("workerEditor.addEnvVar")}
                   </button>
-                </div>
+                }
+              >
                 <div className="worker-env-list">
                   {draft.env.length === 0 ? (
-                    <p className="runtime-empty-inline">{t("workerEditor.envVarsEmpty")}</p>
+                    <VibeInlineNotice variant="empty">
+                      {t("workerEditor.envVarsEmpty")}
+                    </VibeInlineNotice>
                   ) : null}
                   {draft.env.map((row, index) => (
-                    <div className="worker-env-row" key={row.id}>
-                      <label className="ref-inline-control">
-                        <span>{t("workerEditor.envKey")}</span>
-                        <input
-                          type="text"
-                          aria-label={`${t("workerEditor.envKey")} ${index + 1}`}
-                          placeholder={t("workerEditor.envKeyPlaceholder")}
-                          value={row.key}
-                          onChange={(e) => setEnvVar(row.id, { key: e.target.value })}
-                        />
-                      </label>
-                      <label className="ref-inline-control">
-                        <span>{t("workerEditor.envValue")}</span>
-                        <input
-                          type="text"
-                          aria-label={`${t("workerEditor.envValue")} ${index + 1}`}
-                          placeholder={t("workerEditor.envValuePlaceholder")}
-                          value={row.value}
-                          onChange={(e) => setEnvVar(row.id, { value: e.target.value })}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        className="worker-env-remove"
-                        onClick={() => removeEnvVar(row.id)}
-                      >
-                        {t("workerEditor.removeEnvVar")}
-                      </button>
-                    </div>
+                    <WorkerEnvRow
+                      envKey={row.key}
+                      envValue={row.value}
+                      key={row.id}
+                      keyAriaLabel={`${t("workerEditor.envKey")} ${index + 1}`}
+                      keyLabel={t("workerEditor.envKey")}
+                      keyPlaceholder={t("workerEditor.envKeyPlaceholder")}
+                      onKeyChange={(value) => setEnvVar(row.id, { key: value })}
+                      onRemove={() => removeEnvVar(row.id)}
+                      onValueChange={(value) => setEnvVar(row.id, { value })}
+                      removeLabel={t("workerEditor.removeEnvVar")}
+                      valueAriaLabel={`${t("workerEditor.envValue")} ${index + 1}`}
+                      valueLabel={t("workerEditor.envValue")}
+                      valuePlaceholder={t("workerEditor.envValuePlaceholder")}
+                    />
                   ))}
                 </div>
-              </div>
+              </WorkerConfigSection>
             ) : null}
 
             {activeConfigSection === "reporting" ? (
-              <div className="worker-config-section">
-                <label className="ref-inline-control">
-                  <span>{t("workerEditor.reportingEnabled")}</span>
-                  <input
-                    aria-label={t("workerEditor.reportingEnabled")}
-                    type="checkbox"
-                    checked={draft.reportingEnabled}
-                    onChange={(event) =>
-                      setDraft({ ...draft, reportingEnabled: event.target.checked })
-                    }
-                  />
-                </label>
-                <label className="ref-inline-control ref-inline-control-select">
-                  <span>{t("workerEditor.reportingMode")}</span>
-                  <select
-                    value={draft.reportingConfig.mode}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        reportingConfig:
-                          event.target.value === "custom"
-                            ? {
-                                mode: "custom",
-                                endpoint_url: draft.reportingConfig.endpoint_url ?? "",
-                              }
-                            : { mode: "platform", endpoint_url: null },
-                        reportingToken: event.target.value === "custom" ? draft.reportingToken : "",
-                        reportingTokenConfigured:
-                          event.target.value === "custom"
-                            ? draft.reportingTokenConfigured
-                            : false,
-                      })
-                    }
-                  >
-                    <option value="platform">{t("workerEditor.reportingModePlatform")}</option>
-                    <option value="custom">{t("workerEditor.reportingModeCustom")}</option>
-                  </select>
-                </label>
+              <WorkerConfigSection>
+                <div className="worker-reporting-toggle-row">
+                  <div className="worker-reporting-toggle-copy">
+                    <strong>{t("workerEditor.reportingEnabled")}</strong>
+                    <span>
+                      {draft.reportingEnabled
+                        ? t("workerEditor.reportingEnabledOn")
+                        : t("workerEditor.reportingEnabledOff")}
+                    </span>
+                  </div>
+                  <label className="worker-reporting-switch">
+                    <input
+                      aria-label={t("workerEditor.reportingEnabled")}
+                      role="switch"
+                      type="checkbox"
+                      checked={draft.reportingEnabled}
+                      onChange={(event) =>
+                        setDraft({ ...draft, reportingEnabled: event.target.checked })
+                      }
+                    />
+                    <span className="worker-reporting-switch-track" aria-hidden="true">
+                      <span className="worker-reporting-switch-thumb" />
+                    </span>
+                  </label>
+                </div>
+                <VibehubSelect
+                  label={t("workerEditor.reportingMode")}
+                  onChange={(nextValue) =>
+                    setDraft({
+                      ...draft,
+                      reportingConfig:
+                        nextValue === "custom"
+                          ? {
+                              mode: "custom",
+                              endpoint_url: draft.reportingConfig.endpoint_url ?? "",
+                            }
+                          : { mode: "platform", endpoint_url: null },
+                      reportingToken: nextValue === "custom" ? draft.reportingToken : "",
+                      reportingTokenConfigured:
+                        nextValue === "custom" ? draft.reportingTokenConfigured : false,
+                    })
+                  }
+                  options={[
+                    { value: "platform", label: t("workerEditor.reportingModePlatform") },
+                    { value: "custom", label: t("workerEditor.reportingModeCustom") },
+                  ]}
+                  value={draft.reportingConfig.mode}
+                />
                 {draft.reportingConfig.mode === "custom" ? (
                   <>
-                    <label className="ref-inline-control">
-                      <span>{t("workerEditor.reportingEndpoint")}</span>
-                      <input
-                        type="url"
-                        value={draft.reportingConfig.endpoint_url ?? ""}
-                        onChange={(event) =>
-                          setDraft({
-                            ...draft,
-                            reportingConfig: {
-                              mode: "custom",
-                              endpoint_url: event.target.value,
-                            },
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="ref-inline-control">
-                      <span>{t("workerEditor.reportingToken")}</span>
-                      <input
-                        aria-label={t("workerEditor.reportingToken")}
-                        type="password"
-                        placeholder={
-                          draft.reportingTokenConfigured
-                            ? t("workerEditor.reportingTokenPlaceholderConfigured")
-                            : t("workerEditor.reportingTokenPlaceholder")
-                        }
-                        value={draft.reportingToken}
-                        onChange={(event) =>
-                          setDraft({ ...draft, reportingToken: event.target.value })
-                        }
-                      />
-                    </label>
+                    <VibeField
+                      label={t("workerEditor.reportingEndpoint")}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          reportingConfig: {
+                            mode: "custom",
+                            endpoint_url: event.target.value,
+                          },
+                        })
+                      }
+                      type="url"
+                      value={draft.reportingConfig.endpoint_url ?? ""}
+                    />
+                    <VibeField
+                      aria-label={t("workerEditor.reportingToken")}
+                      label={t("workerEditor.reportingToken")}
+                      onChange={(event) =>
+                        setDraft({ ...draft, reportingToken: event.target.value })
+                      }
+                      placeholder={
+                        draft.reportingTokenConfigured
+                          ? t("workerEditor.reportingTokenPlaceholderConfigured")
+                          : t("workerEditor.reportingTokenPlaceholder")
+                      }
+                      type="password"
+                      value={draft.reportingToken}
+                    />
                     {draft.reportingTokenConfigured ? (
-                      <p className="runtime-empty-inline">
+                      <VibeInlineNotice variant="empty">
                         {t("workerEditor.reportingTokenConfigured")}
-                      </p>
+                      </VibeInlineNotice>
                     ) : null}
                     {!canSaveConfig ? (
-                      <p className="ref-error-note">{t("workerEditor.reportingCustomRequired")}</p>
+                      <VibeInlineNotice variant="error">
+                        {t("workerEditor.reportingCustomRequired")}
+                      </VibeInlineNotice>
                     ) : null}
                   </>
                 ) : (
-                  <p className="runtime-empty-inline">{t("workerEditor.reportingPlatformHint")}</p>
+                  <VibeInlineNotice variant="empty">
+                    {t("workerEditor.reportingPlatformHint")}
+                  </VibeInlineNotice>
                 )}
-              </div>
+              </WorkerConfigSection>
             ) : null}
 
-            {activeConfigSection === "agent" ? (
-              <div className="worker-config-section" ref={agentConfigRef}>
-                <p className="runtime-empty-inline">{t("workerEditor.agentHint")}</p>
+            {activeTab === "config" && activeConfigSection === "agent" ? (
+              <WorkerConfigSection ref={agentConfigRef}>
+                <VibeInlineNotice variant="empty">
+                  {t("workerEditor.agentHint")}
+                </VibeInlineNotice>
                 {agentsQuery.error ? (
-                  <p className="ref-error-note">{t("workerEditor.agentLoadError")}</p>
+                  <VibeInlineNotice variant="error">
+                    {t("workerEditor.agentLoadError")}
+                  </VibeInlineNotice>
                 ) : null}
                 {deployError ? (
-                  <p className="ref-error-note">
+                  <VibeInlineNotice variant="error">
                     {t("workerEditor.deployFailed")}: {deployError}
-                  </p>
+                  </VibeInlineNotice>
                 ) : null}
                 {agentsQuery.isPending ? (
                   <div className="loading-block">{t("workerEditor.agentLoading")}</div>
                 ) : null}
                 {!agentsQuery.isPending && !agentsQuery.error && deployableAgents.length === 0 ? (
-                  <p className="runtime-empty-inline">{t("workerEditor.noDeployableAgents")}</p>
+                  <VibeInlineNotice variant="empty">
+                    {t("workerEditor.noDeployableAgents")}
+                  </VibeInlineNotice>
                 ) : null}
                 {deployableAgents.length > 0 ? (
                   <div className="worker-agent-deploy-list">
                     {deployableAgents.map((agent) => (
-                      <button
-                        type="button"
-                        className="worker-agent-deploy-card"
+                      <WorkerAgentDeployCard
+                        agent={agent}
                         key={agent.worker_agent_id}
                         disabled={!isEditing || deployMutation.isPending || Boolean(deployingAgentId)}
-                        onClick={() => void handleDeploy(agent.worker_agent_id)}
-                      >
-                        <span className="worker-agent-deploy-main">
-                          <strong>{agent.display_name}</strong>
-                          <span>{agent.worker_agent_id}</span>
-                        </span>
-                        <span className="worker-agent-deploy-meta">
-                          <StatusBadge value={agent.status} />
-                          <span>
-                            {agent.used_slots}/{agent.max_concurrent_deployments}
-                          </span>
-                          {deployingAgentId === agent.worker_agent_id ? (
-                            <span>{t("workerEditor.deploying")}</span>
-                          ) : null}
-                          <span>{agent.agent_version ?? t("common.notAvailable")}</span>
-                        </span>
-                      </button>
+                        deploying={deployingAgentId === agent.worker_agent_id}
+                        deployingLabel={t("workerEditor.deploying")}
+                        fallbackVersionLabel={t("common.notAvailable")}
+                        onDeploy={(agentId) => void handleDeploy(agentId)}
+                      />
                     ))}
                   </div>
                 ) : null}
-              </div>
+              </WorkerConfigSection>
             ) : null}
           </div>
         </div>
       </section>
 
-      {isTriggerDialogOpen ? (
-        <div className="ref-modal-overlay">
-          <section className="ref-modal-card worker-trigger-modal">
-            <header className="ref-modal-head">
-              <strong>{t("workerEditor.configureTrigger")}</strong>
-              <button type="button" onClick={() => setIsTriggerDialogOpen(false)}>
-                {t("common.close")}
-              </button>
-            </header>
-            <div className="ref-modal-body">
-              <label className="ref-inline-control ref-inline-control-select">
-                <span>{t("workerEditor.sourceType")}</span>
-                <select
-                  value={triggerDraft.type}
-                  onChange={(e) =>
-                    setTriggerDraft(createSourceConfig(e.target.value))
-                  }
-                >
-                  {sourceTypeOrder.map((typ) => (
-                    <option key={typ} value={typ}>
-                      {sourceTypeSchemas[typ].label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {triggerSchema?.needsConnector ? (
-                <label className="ref-inline-control ref-inline-control-select">
-                  <span>{t("workerEditor.availableConnector")}</span>
-                  <select
-                    value={triggerDraft.connector_id ?? ""}
-                    onChange={(e) =>
-                      setTriggerDraft({ ...triggerDraft, connector_id: e.target.value })
-                    }
-                  >
-                    <option value="">{t("workerEditor.selectConnector")}</option>
-                    {triggerConnectorOptions.map((connector) => (
-                      <option key={connector.id} value={connector.id}>
-                        {connector.name} ({connector.type})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {triggerSchema?.needsConnector && triggerConnectorOptions.length === 0 ? (
-                <p className="ref-error-note">{t("workerEditor.noAvailableConnectors")}</p>
-              ) : null}
-              {triggerSchema?.fields.map((field) => (
-                <label className="ref-inline-control" key={field.name}>
-                  <span>{field.label}</span>
-                  {field.type === "select" && field.options ? (
-                    <select
-                      value={fieldDisplayValue(triggerDraft.fields[field.name])}
-                      onChange={(e) => setTriggerField(field.name, e.target.value)}
-                    >
-                      <option value="">{t("common.unset")}</option>
-                      {field.options.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type={fieldInputType(field)}
-                      placeholder={field.placeholder}
-                      value={fieldDisplayValue(triggerDraft.fields[field.name])}
-                      onChange={(e) => setTriggerField(field.name, e.target.value)}
-                    />
-                  )}
-                </label>
-              ))}
+      <section
+        className={
+          activeTab === "deploy"
+            ? "worker-deploy-panel worker-tab-panel is-active"
+            : "worker-deploy-panel worker-tab-panel"
+        }
+        role="tabpanel"
+        hidden={activeTab !== "deploy"}
+      >
+        <section className="worker-studio-surface">
+          <header className="worker-studio-head">
+            <div>
+              <span>{t("workerEditor.deployEyebrow")}</span>
+              <h3>{t("workerEditor.deployTitle")}</h3>
+              <p>{t("workerEditor.deploySubtitle")}</p>
             </div>
-            <footer className="ref-modal-foot">
-              <button type="button" onClick={() => setIsTriggerDialogOpen(false)}>
-                {t("common.cancel")}
-              </button>
-              <button type="button" disabled={!canApplyTrigger} onClick={applyTrigger}>
-                {t("workerEditor.applyTrigger")}
-              </button>
-            </footer>
-          </section>
-        </div>
-      ) : null}
+          </header>
+          <WorkerConfigSection ref={agentConfigRef}>
+            <VibeInlineNotice variant="empty">
+              {t("workerEditor.agentHint")}
+            </VibeInlineNotice>
+            {agentsQuery.error ? (
+              <VibeInlineNotice variant="error">
+                {t("workerEditor.agentLoadError")}
+              </VibeInlineNotice>
+            ) : null}
+            {deployError ? (
+              <VibeInlineNotice variant="error">
+                {t("workerEditor.deployFailed")}: {deployError}
+              </VibeInlineNotice>
+            ) : null}
+            {agentsQuery.isPending ? (
+              <div className="loading-block">{t("workerEditor.agentLoading")}</div>
+            ) : null}
+            {!agentsQuery.isPending && !agentsQuery.error && deployableAgents.length === 0 ? (
+              <VibeInlineNotice variant="empty">
+                {t("workerEditor.noDeployableAgents")}
+              </VibeInlineNotice>
+            ) : null}
+            {deployableAgents.length > 0 ? (
+              <div className="worker-agent-deploy-list">
+                {deployableAgents.map((agent) => (
+                  <WorkerAgentDeployCard
+                    agent={agent}
+                    key={agent.worker_agent_id}
+                    disabled={!isEditing || deployMutation.isPending || Boolean(deployingAgentId)}
+                    deploying={deployingAgentId === agent.worker_agent_id}
+                    deployingLabel={t("workerEditor.deploying")}
+                    fallbackVersionLabel={t("common.notAvailable")}
+                    onDeploy={(agentId) => void handleDeploy(agentId)}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </WorkerConfigSection>
+        </section>
+      </section>
+
+      <VibeModal
+        className="worker-trigger-modal"
+        footer={
+          <>
+            <VibeButton onClick={() => setIsTriggerDialogOpen(false)} variant="secondary">
+              {t("common.cancel")}
+            </VibeButton>
+            <VibeButton disabled={!canApplyTrigger} onClick={applyTrigger} variant="primary">
+              {t("workerEditor.applyTrigger")}
+            </VibeButton>
+          </>
+        }
+        onClose={() => setIsTriggerDialogOpen(false)}
+        open={isTriggerDialogOpen}
+        title={t("workerEditor.configureTrigger")}
+      >
+        <VibehubSelect
+          label={t("workerEditor.sourceType")}
+          onChange={(nextValue) => setTriggerDraft(createSourceConfig(nextValue))}
+          options={sourceTypeOrder.map((typ) => ({
+            value: typ,
+            label: sourceTypeLabel(typ),
+          }))}
+          value={triggerDraft.type}
+        />
+        {triggerSchema?.needsConnector ? (
+          <VibehubSelect
+            label={t("workerEditor.availableConnector")}
+            onChange={(nextValue) =>
+              setTriggerDraft({ ...triggerDraft, connector_id: nextValue })
+            }
+            options={[
+              { value: "", label: t("workerEditor.selectConnector") },
+              ...triggerConnectorOptions.map((connector) => ({
+                value: connector.id,
+                label: `${connector.name} (${connector.type})`,
+              })),
+            ]}
+            value={triggerDraft.connector_id ?? ""}
+          />
+        ) : null}
+        {triggerSchema?.needsConnector && triggerConnectorOptions.length === 0 ? (
+          <VibeInlineNotice variant="error">
+            {t("workerEditor.noAvailableConnectors")}
+          </VibeInlineNotice>
+        ) : null}
+        {triggerSchema?.fields.map((field) =>
+          field.type === "select" && field.options ? (
+            <VibehubSelect
+              key={field.name}
+              label={field.label}
+              onChange={(nextValue) => setTriggerField(field.name, nextValue)}
+              options={[
+                { value: "", label: t("common.unset") },
+                ...field.options.map((option) => ({ value: option, label: option })),
+              ]}
+              value={fieldDisplayValue(triggerDraft.fields[field.name])}
+            />
+          ) : (
+            <VibeField
+              key={field.name}
+              label={field.label}
+              onChange={(event) => setTriggerField(field.name, event.target.value)}
+              placeholder={field.placeholder}
+              type={fieldInputType(field)}
+              value={fieldDisplayValue(triggerDraft.fields[field.name])}
+            />
+          ),
+        )}
+      </VibeModal>
     </div>
   );
 }

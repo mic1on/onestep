@@ -7,6 +7,7 @@ import { consoleSessionQueryKey, useConsoleSessionQuery } from "../../features/a
 import { SessionExpiredError, loginConsole } from "../../lib/api/client";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Panel } from "../../components/ui/Panel";
+import onestepPlaneLogo from "../../assets/onestep-plane-logo.svg";
 
 function sanitizeNextPath(candidate: string | null) {
   if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) {
@@ -127,7 +128,9 @@ function AuthFrame({
   return (
     <div className="auth-shell signal-console-auth-shell">
       <section className="signal-console-auth-brand">
-        <span className="shell-brand-mark">01</span>
+        <span className="shell-brand-mark">
+          <img className="shell-brand-logo" src={onestepPlaneLogo} alt="" />
+        </span>
         <div className="signal-console-auth-brand-copy">
           <strong>OneStep</strong>
           <span>Control Plane</span>

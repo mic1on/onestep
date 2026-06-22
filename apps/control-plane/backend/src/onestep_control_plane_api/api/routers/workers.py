@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.schemas import (
@@ -15,6 +16,7 @@ from onestep_control_plane_api.api.schemas import (
 from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.api.worker_service import (
     _serialize,
+    compile_worker_package_for_download,
     create_worker,
     delete_worker,
     deploy_worker,
@@ -84,6 +86,22 @@ def delete_worker_endpoint(
     db: Session = Depends(get_db_session),
 ) -> None:
     delete_worker(db, worker_id)
+
+
+@router.get(
+    "/workers/{worker_id}/package/download",
+    dependencies=[Depends(require_console_auth)],
+)
+def download_worker_package_endpoint(
+    worker_id: UUID,
+    db: Session = Depends(get_db_session),
+) -> Response:
+    package = compile_worker_package_for_download(db, worker_id)
+    return Response(
+        content=package.content,
+        media_type="application/zip",
+        headers={"content-disposition": f'attachment; filename="{package.filename}"'},
+    )
 
 
 @router.post(

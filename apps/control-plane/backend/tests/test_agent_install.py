@@ -11,7 +11,10 @@ def test_agent_install_script_uses_request_origin(client) -> None:
     assert response.headers["content-type"].startswith("text/x-shellscript")
     body = response.text
     assert "PLANE_URL=https://plane.example.com" in body
-    assert "python3 -m pip install --upgrade onestep-worker-agent" in body
+    assert "python3 -m pip install --upgrade" in body
+    assert "onestep-worker-agent" in body
+    assert "'onestep[all]>=1.4.2'" in body
+    assert "'onestep-feishu-bitable>=0.1.2'" in body
     assert "--registration-token \"$TOKEN\"" in body
     assert "--name \"$NAME\"" in body
     assert "--max-concurrency \"$MAX_CONCURRENCY\"" in body

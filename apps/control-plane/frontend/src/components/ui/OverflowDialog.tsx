@@ -1,6 +1,8 @@
 import { useEffect, useId, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import { VibeInlineButton } from "./VibeInlineButton";
+
 type OverflowDialogProps = {
   open: boolean;
   title: string;
@@ -66,15 +68,15 @@ export function OverflowDialog({
             <h3 id={titleId}>{title}</h3>
             {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
-          <button
+          <VibeInlineButton
             aria-label={t("common.close")}
-            className="ref-ghost-button detail-dialog-close"
+            className="detail-dialog-close"
             onClick={onClose}
             title={t("common.close")}
-            type="button"
+            variant="ghost"
           >
             <span aria-hidden="true">×</span>
-          </button>
+          </VibeInlineButton>
         </div>
 
         <div className="detail-dialog-body">{children}</div>

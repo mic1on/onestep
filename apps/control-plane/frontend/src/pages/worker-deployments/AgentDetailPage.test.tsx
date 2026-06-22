@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
@@ -39,7 +40,8 @@ function renderPage() {
 }
 
 describe("AgentDetailPage", () => {
-  it("renders agent header and deployment row with actions", () => {
+  it("renders agent header and deployment tab with actions", async () => {
+    const user = userEvent.setup();
     mockUseWorkerAgentQuery.mockReturnValue({
       data: {
         worker_agent_id: AGENT_ID,
@@ -98,8 +100,12 @@ describe("AgentDetailPage", () => {
     renderPage();
 
     expect(screen.getByRole("heading", { name: "prod-runner-1" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Agent detail sections" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Deployments" }));
+
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Deploy workflow" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Deploy workflow" })).toHaveLength(2);
   });
 });

@@ -19,7 +19,11 @@ def _needs_connector(source_or_sink: dict[str, Any]) -> bool:
     typ = source_or_sink["type"]
     if source_or_sink.get("connector_id"):
         return True
-    return typ not in BUILTIN_SOURCE_TYPES and typ not in NO_CONNECTOR_SINK_TYPES
+    return (
+        typ not in BUILTIN_SOURCE_TYPES
+        and typ not in BUILTIN_SINK_TYPES
+        and typ not in NO_CONNECTOR_SINK_TYPES
+    )
 
 
 def _sink_fields(sink: dict[str, Any]) -> dict[str, Any]:

@@ -7,6 +7,8 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
+import { VibeInlineButton } from "../../components/ui/VibeInlineButton";
+import { VibeSummaryStrip } from "../../components/ui/VibeSummary";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { canViewCommandControls } from "../../features/auth/session";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
@@ -208,31 +210,38 @@ export function TaskDetailPage() {
                   <h3>{isZh ? `任务列表 (${tasks.length})` : `Tasks (${tasks.length})`}</h3>
                 </div>
                 <div className="ref-task-browser-card">
-                  {tasks.map((task) => {
-                    const issueCount = task.failed + task.dead_lettered;
-                    const isActive = task.task_name === resolvedTaskName;
+                  {tasks.length ? (
+                    tasks.map((task) => {
+                      const issueCount = task.failed + task.dead_lettered;
+                      const isActive = task.task_name === resolvedTaskName;
 
-                    return (
-                      <Link
-                        className={isActive ? "ref-task-browser-row is-active" : "ref-task-browser-row"}
-                        key={task.task_name}
-                        to={taskPath(resolvedServiceName, task.task_name, {
-                          environment,
-                          lookback_minutes: lookbackMinutes,
-                        })}
-                      >
-                        <div className="ref-task-browser-copy">
-                          <strong>{task.task_name}</strong>
-                          <span>{task.description ?? t("common.notAvailable")}</span>
-                          <TaskTopologyPreview isZh={isZh} task={task} />
-                        </div>
-                        <div className="ref-task-browser-metrics">
-                          <span>{t("taskDetail.failedDlq")}: {formatCount(issueCount)}</span>
-                          <span>{t("taskDetail.maxP95")}: {formatDurationMs(task.max_p95_duration_ms)}</span>
-                        </div>
-                      </Link>
-                    );
-                  })}
+                      return (
+                        <Link
+                          className={isActive ? "ref-task-browser-row is-active" : "ref-task-browser-row"}
+                          key={task.task_name}
+                          to={taskPath(resolvedServiceName, task.task_name, {
+                            environment,
+                            lookback_minutes: lookbackMinutes,
+                          })}
+                        >
+                          <div className="ref-task-browser-copy">
+                            <strong>{task.task_name}</strong>
+                            <span>{task.description ?? t("common.notAvailable")}</span>
+                            <TaskTopologyPreview isZh={isZh} task={task} />
+                          </div>
+                          <div className="ref-task-browser-metrics">
+                            <span>{t("taskDetail.failedDlq")}: {formatCount(issueCount)}</span>
+                            <span>{t("taskDetail.maxP95")}: {formatDurationMs(task.max_p95_duration_ms)}</span>
+                          </div>
+                        </Link>
+                      );
+                    })
+                  ) : (
+                    <EmptyState
+                      title={t("serviceTasksList.emptyTitle")}
+                      body={t("serviceTasksList.emptyBody")}
+                    />
+                  )}
                 </div>
                 {tasksQuery.data && tasksQuery.data.total > 0 ? (
                   <div className="ref-inline-pagination">
@@ -243,13 +252,12 @@ export function TaskDetailPage() {
                       })}
                     </span>
                     {tasks.length < tasksQuery.data.total ? (
-                      <button
-                        className="ref-ghost-button"
+                      <VibeInlineButton
                         onClick={() => setVisibleTaskCount((count) => count + 100)}
-                        type="button"
+                        variant="ghost"
                       >
                         {t("common.loadMore")}
-                      </button>
+                      </VibeInlineButton>
                     ) : null}
                   </div>
                 ) : null}
@@ -259,16 +267,25 @@ export function TaskDetailPage() {
                 <div aria-hidden="true" className="ref-section-headline ref-section-headline-ghost">
                   <h3>{isZh ? "任务列表" : "Tasks"}</h3>
                 </div>
-                <section className="ref-summary-strip">
-                  <SummaryChip label={t("taskDetail.succeeded")} tone="success" value={formatCount(summary.succeeded)} />
-                  <SummaryChip
-                    label={t("taskDetail.failedDlq")}
-                    tone={summary.failed + summary.dead_lettered > 0 ? "danger" : "default"}
-                    value={formatCount(summary.failed + summary.dead_lettered)}
-                  />
-                  <SummaryChip label={t("taskDetail.retried")} tone="accent" value={formatCount(summary.retried)} />
-                  <SummaryChip label={t("taskDetail.maxP95")} tone="default" value={formatDurationMs(summary.max_p95_duration_ms)} />
-                </section>
+                <VibeSummaryStrip
+                  items={[
+                    {
+                      label: t("taskDetail.succeeded"),
+                      tone: "success",
+                      value: formatCount(summary.succeeded),
+                    },
+                    {
+                      label: t("taskDetail.failedDlq"),
+                      tone: summary.failed + summary.dead_lettered > 0 ? "danger" : "default",
+                      value: formatCount(summary.failed + summary.dead_lettered),
+                    },
+                    { label: t("taskDetail.retried"), tone: "accent", value: formatCount(summary.retried) },
+                    {
+                      label: t("taskDetail.maxP95"),
+                      value: formatDurationMs(summary.max_p95_duration_ms),
+                    },
+                  ]}
+                />
 
                 <Panel
                   className="ref-card-panel"
@@ -381,13 +398,12 @@ export function TaskDetailPage() {
                                 })}
                               </span>
                               {visibleTaskCommands.length < taskCommands.length ? (
-                                <button
-                                  className="ref-ghost-button"
+                                <VibeInlineButton
                                   onClick={() => setVisibleTaskCommandCount((count) => count + 4)}
-                                  type="button"
+                                  variant="ghost"
                                 >
                                   {t("common.loadMore")}
-                                </button>
+                                </VibeInlineButton>
                               ) : null}
                             </div>
                           ) : null}
@@ -518,23 +534,6 @@ function buildTaskConnectionNotice(
   }
 
   return null;
-}
-
-function SummaryChip({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "default" | "accent" | "success" | "danger";
-}) {
-  return (
-    <article className={`ref-summary-chip ref-summary-chip-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
 }
 
 function InfoPair({ label, value }: { label: string; value: ReactNode }) {

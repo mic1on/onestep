@@ -8,6 +8,7 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useToast } from "../../components/ui/ToastProvider";
+import { VibeInlineButton } from "../../components/ui/VibeInlineButton";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { canViewCommandControls, canViewDestructiveControls } from "../../features/auth/session";
 import { CommandReasonDialog } from "../../features/commands/components/CommandReasonDialog";
@@ -230,12 +231,16 @@ export function ServiceDetailPage() {
               {canViewControls ? (
                 <>
                   <div className="ref-action-menu" role="group">
-                    <button className="ref-ghost-button ref-action-menu-trigger" disabled={quickActionMutation.isPending} type="button">
+                    <VibeInlineButton
+                      className="ref-action-menu-trigger"
+                      disabled={quickActionMutation.isPending}
+                      variant="ghost"
+                    >
                       <span>{t("serviceDetail.syncMenu.trigger")}</span>
                       <span aria-hidden="true" className="ref-action-menu-caret">
                         ▾
                       </span>
-                    </button>
+                    </VibeInlineButton>
                     <div className="ref-action-menu-panel">
                       {SYNC_ACTIONS.map((kind) => (
                         <button
@@ -259,14 +264,14 @@ export function ServiceDetailPage() {
                     </div>
                   </div>
                   {canViewDestructiveActions ? (
-                    <button
-                      className="ref-ghost-button is-danger"
+                    <VibeInlineButton
                       disabled={quickActionMutation.isPending}
                       onClick={() => setPendingQuickAction("restart")}
-                      type="button"
+                      tone="danger"
+                      variant="ghost"
                     >
                       {t("commandKind.restart", { defaultValue: "restart" })}
-                    </button>
+                    </VibeInlineButton>
                   ) : null}
                 </>
               ) : null}
@@ -300,23 +305,24 @@ export function ServiceDetailPage() {
       ) : null}
 
       {dashboard ? (
-        <div className="ref-detail-layout">
-          <aside className="ref-side-nav">
-            <Link className={currentView === "overview" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("overview")}>
-              <span>{isZh ? "概览" : "Overview"}</span>
-            </Link>
-            <Link className={currentView === "instances" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("instances")}>
-              <span>{isZh ? "实例" : "Instances"}</span>
-            </Link>
-            <Link className={currentView === "tasks" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("tasks")}>
-              <span>{isZh ? "任务" : "Tasks"}</span>
-            </Link>
-            <Link className={currentView === "commands" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("commands")}>
-              <span>{isZh ? "命令" : "Commands"}</span>
-            </Link>
-          </aside>
+        <div className="ref-detail-layout cf-service-layout">
+          <div className="cf-service-main">
+            <aside className="ref-side-nav">
+              <Link className={currentView === "overview" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("overview")}>
+                <span>{isZh ? "概览" : "Overview"}</span>
+              </Link>
+              <Link className={currentView === "instances" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("instances")}>
+                <span>{isZh ? "实例" : "Instances"}</span>
+              </Link>
+              <Link className={currentView === "tasks" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("tasks")}>
+                <span>{isZh ? "任务" : "Tasks"}</span>
+              </Link>
+              <Link className={currentView === "commands" ? "ref-side-nav-item is-active" : "ref-side-nav-item"} to={buildViewHref("commands")}>
+                <span>{isZh ? "命令" : "Commands"}</span>
+              </Link>
+            </aside>
 
-          <div className="ref-detail-content">
+            <div className="ref-detail-content">
             {currentView === "overview" ? (
               <>
                 <section className="ref-summary-band signal-console-summary-band">
@@ -416,35 +422,42 @@ export function ServiceDetailPage() {
                   <span>{isZh ? "最近可见" : "Last seen"}</span>
                 </div>
                 <div className="ref-detail-table-body">
-                  {instances.map((instance) => (
-                    <Link
-                      className="ref-detail-table-row ref-instance-grid"
-                      key={instance.instance_id}
-                      to={instancePath(serviceName, instance.instance_id, {
-                        environment,
-                        lookback_minutes: lookbackMinutes,
-                      })}
-                    >
-                      <div className="ref-table-primary">
-                        <strong>{instance.node_name}</strong>
-                        <span>{formatIdentifierPreview(instance.instance_id)}</span>
-                      </div>
-                      <div className="ref-table-primary" data-label={isZh ? "会话" : "Session"}>
-                        <strong>{instance.active_session ? t(`status.${instance.active_session.status}`) : t("status.offline")}</strong>
-                        <span>{instance.hostname ?? t("common.notAvailable")}</span>
-                      </div>
-                      <div className="ref-table-status-group" data-label={isZh ? "状态" : "Health"}>
-                        <StatusBadge value={instance.connectivity} />
-                        <StatusBadge value={instance.status} />
-                      </div>
-                      <div className="ref-table-primary" data-label={isZh ? "最近同步" : "Last sync"}>
-                        <strong>{formatDateTime(instance.last_sync_at)}</strong>
-                      </div>
-                      <div className="ref-table-primary" data-label={isZh ? "最近可见" : "Last seen"}>
-                        <strong>{formatRelativeTime(instance.last_seen_at)}</strong>
-                      </div>
-                    </Link>
-                  ))}
+                  {instances.length ? (
+                    instances.map((instance) => (
+                      <Link
+                        className="ref-detail-table-row ref-instance-grid"
+                        key={instance.instance_id}
+                        to={instancePath(serviceName, instance.instance_id, {
+                          environment,
+                          lookback_minutes: lookbackMinutes,
+                        })}
+                      >
+                        <div className="ref-table-primary">
+                          <strong>{instance.node_name}</strong>
+                          <span>{formatIdentifierPreview(instance.instance_id)}</span>
+                        </div>
+                        <div className="ref-table-primary" data-label={isZh ? "会话" : "Session"}>
+                          <strong>{instance.active_session ? t(`status.${instance.active_session.status}`) : t("status.offline")}</strong>
+                          <span>{instance.hostname ?? t("common.notAvailable")}</span>
+                        </div>
+                        <div className="ref-table-status-group" data-label={isZh ? "状态" : "Health"}>
+                          <StatusBadge value={instance.connectivity} />
+                          <StatusBadge value={instance.status} />
+                        </div>
+                        <div className="ref-table-primary" data-label={isZh ? "最近同步" : "Last sync"}>
+                          <strong>{formatDateTime(instance.last_sync_at)}</strong>
+                        </div>
+                        <div className="ref-table-primary" data-label={isZh ? "最近可见" : "Last seen"}>
+                          <strong>{formatRelativeTime(instance.last_seen_at)}</strong>
+                        </div>
+                      </Link>
+                    ))
+                  ) : (
+                    <EmptyState
+                      title={t("serviceInstancesList.emptyTitle")}
+                      body={t("serviceInstancesList.emptyBody")}
+                    />
+                  )}
                 </div>
                 {instancesQuery.data && instancesQuery.data.total > 0 ? (
                   <div className="ref-inline-pagination">
@@ -455,13 +468,12 @@ export function ServiceDetailPage() {
                       })}
                     </span>
                     {instances.length < instancesQuery.data.total ? (
-                      <button
-                        className="ref-ghost-button"
+                      <VibeInlineButton
                         onClick={() => setVisibleInstanceCount((count) => count + 100)}
-                        type="button"
+                        variant="ghost"
                       >
                         {t("common.loadMore")}
-                      </button>
+                      </VibeInlineButton>
                     ) : null}
                   </div>
                 ) : null}
@@ -483,34 +495,41 @@ export function ServiceDetailPage() {
                   <span>{isZh ? "最近事件" : "Last event"}</span>
                 </div>
                 <div className="ref-detail-table-body">
-                  {tasks.map((task) => (
-                    <Link
-                      className="ref-detail-table-row ref-task-grid"
-                      key={task.task_name}
-                      to={taskPath(serviceName, task.task_name, {
-                        environment,
-                        lookback_minutes: lookbackMinutes,
-                      })}
-                    >
-                      <div className="ref-table-primary">
-                        <strong>{task.task_name}</strong>
-                        <span>{task.description ?? t("common.notAvailable")}</span>
-                        <TaskTopologyPreview isZh={isZh} task={task} />
-                      </div>
-                      <div className="ref-table-primary" data-label={isZh ? "成功" : "Succeeded"}>
-                        <strong>{task.succeeded}</strong>
-                      </div>
-                      <div className="ref-table-primary" data-label={isZh ? "异常 / DLQ" : "Failed / DLQ"}>
-                        <strong>{task.failed + task.dead_lettered}</strong>
-                      </div>
-                      <div className="ref-table-primary" data-label="P95">
-                        <strong>{formatDurationMs(task.max_p95_duration_ms)}</strong>
-                      </div>
-                      <div className="ref-table-primary" data-label={isZh ? "最近事件" : "Last event"}>
-                        <strong>{formatDateTime(task.last_event_at)}</strong>
-                      </div>
-                    </Link>
-                  ))}
+                  {tasks.length ? (
+                    tasks.map((task) => (
+                      <Link
+                        className="ref-detail-table-row ref-task-grid"
+                        key={task.task_name}
+                        to={taskPath(serviceName, task.task_name, {
+                          environment,
+                          lookback_minutes: lookbackMinutes,
+                        })}
+                      >
+                        <div className="ref-table-primary">
+                          <strong>{task.task_name}</strong>
+                          <span>{task.description ?? t("common.notAvailable")}</span>
+                          <TaskTopologyPreview isZh={isZh} task={task} />
+                        </div>
+                        <div className="ref-table-primary" data-label={isZh ? "成功" : "Succeeded"}>
+                          <strong>{task.succeeded}</strong>
+                        </div>
+                        <div className="ref-table-primary" data-label={isZh ? "异常 / DLQ" : "Failed / DLQ"}>
+                          <strong>{task.failed + task.dead_lettered}</strong>
+                        </div>
+                        <div className="ref-table-primary" data-label="P95">
+                          <strong>{formatDurationMs(task.max_p95_duration_ms)}</strong>
+                        </div>
+                        <div className="ref-table-primary" data-label={isZh ? "最近事件" : "Last event"}>
+                          <strong>{formatDateTime(task.last_event_at)}</strong>
+                        </div>
+                      </Link>
+                    ))
+                  ) : (
+                    <EmptyState
+                      title={t("serviceTasksList.emptyTitle")}
+                      body={t("serviceTasksList.emptyBody")}
+                    />
+                  )}
                 </div>
                 {tasksQuery.data && tasksQuery.data.total > 0 ? (
                   <div className="ref-inline-pagination">
@@ -521,13 +540,12 @@ export function ServiceDetailPage() {
                       })}
                     </span>
                     {tasks.length < tasksQuery.data.total ? (
-                      <button
-                        className="ref-ghost-button"
+                      <VibeInlineButton
                         onClick={() => setVisibleTaskCount((count) => count + 100)}
-                        type="button"
+                        variant="ghost"
                       >
                         {t("common.loadMore")}
-                      </button>
+                      </VibeInlineButton>
                     ) : null}
                   </div>
                 ) : null}
@@ -572,7 +590,10 @@ export function ServiceDetailPage() {
                       </div>
                     ))
                   ) : (
-                    <div className="ref-empty-inline">{t("serviceDetail.noCommandsBody")}</div>
+                    <EmptyState
+                      title={t("serviceDetail.noCommandsTitle")}
+                      body={t("serviceDetail.noCommandsBody")}
+                    />
                   )}
                 </div>
                 {commands.length > 0 ? (
@@ -584,13 +605,12 @@ export function ServiceDetailPage() {
                       })}
                     </span>
                     {commands.length < (commandsQuery.data?.total ?? commands.length) ? (
-                      <button
-                        className="ref-ghost-button"
+                      <VibeInlineButton
                         onClick={() => setVisibleCommandCount((count) => count + 50)}
-                        type="button"
+                        variant="ghost"
                       >
                         {t("common.loadMore")}
-                      </button>
+                      </VibeInlineButton>
                     ) : null}
                   </div>
                 ) : null}
@@ -637,7 +657,63 @@ export function ServiceDetailPage() {
                 ) : null}
               </>
             ) : null}
+            </div>
           </div>
+
+          <aside className="cf-service-rail" aria-label={isZh ? "服务详情" : "Service details"}>
+            <section className="cf-rail-card">
+              <h3>{isZh ? "服务详情" : "Service details"}</h3>
+              <dl className="cf-rail-fields">
+                <div>
+                  <dt>{isZh ? "名称" : "Name"}</dt>
+                  <dd>{serviceName}</dd>
+                </div>
+                <div>
+                  <dt>{isZh ? "环境" : "Environment"}</dt>
+                  <dd>{t(`environment.${environment}`)}</dd>
+                </div>
+                <div>
+                  <dt>{isZh ? "部署版本" : "Deployment"}</dt>
+                  <dd>{dashboard.service.latest_deployment_version}</dd>
+                </div>
+                <div>
+                  <dt>{isZh ? "拓扑" : "Topology"}</dt>
+                  <dd>{formatIdentifierPreview(dashboard.service.latest_topology_hash)}</dd>
+                </div>
+                <div>
+                  <dt>{isZh ? "最近同步" : "Last sync"}</dt>
+                  <dd>{formatRelativeTime(dashboard.service.latest_sync_at)}</dd>
+                </div>
+              </dl>
+            </section>
+
+            {canViewControls ? (
+              <section className="cf-rail-card">
+                <h3>{isZh ? "刷新数据" : "Refresh data"}</h3>
+                <p>{isZh ? "同步配置、指标和事件，保持页面数据新鲜。" : "Sync configuration, metrics, and events to keep this view fresh."}</p>
+                <div className="cf-rail-actions">
+                  {SYNC_ACTIONS.map((kind) => (
+                    <button
+                      disabled={quickActionMutation.isPending}
+                      key={`rail:${kind}`}
+                      onClick={() => setPendingQuickAction(kind)}
+                      type="button"
+                    >
+                      {getQuickActionLabel(kind, t)}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <Link className="cf-rail-card cf-rail-link-card" to="/settings/notifications">
+              <span>
+                <strong>{isZh ? "配置告警" : "Configure alerts"}</strong>
+                <small>{isZh ? "监控服务健康与命令状态变化。" : "Watch service health and command status changes."}</small>
+              </span>
+              <span aria-hidden="true">›</span>
+            </Link>
+          </aside>
         </div>
       ) : null}
 

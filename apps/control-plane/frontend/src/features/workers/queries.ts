@@ -4,6 +4,7 @@ import {
   createWorker,
   deleteWorker,
   deployWorker,
+  downloadWorkerPackage,
   getWorker,
   listWorkers,
   updateWorker,
@@ -75,5 +76,11 @@ export function useDeployWorkerMutation(workerId: string) {
   return useMutation({
     mutationFn: (payload: WorkerDeployRequest) => deployWorker(workerId, payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: WORKERS_QUERY_KEY }),
+  });
+}
+
+export function useDownloadWorkerPackageMutation(workerId: string) {
+  return useMutation({
+    mutationFn: () => downloadWorkerPackage(workerId),
   });
 }

@@ -8,6 +8,8 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { TaskEventFailureDetails } from "../../components/ui/TaskEventFailureDetails";
 import { useToast } from "../../components/ui/ToastProvider";
+import { VibeInlineButton } from "../../components/ui/VibeInlineButton";
+import { VibeSummaryStrip } from "../../components/ui/VibeSummary";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import { canViewCommandControls, canViewDestructiveControls } from "../../features/auth/session";
 import { CommandFeed } from "../../features/commands/components/CommandFeed";
@@ -262,25 +264,32 @@ export function InstanceDetailPage() {
                   <h3>{isZh ? `实例列表 (${instances.length})` : `Instances (${instances.length})`}</h3>
                 </div>
                 <div className="ref-task-browser-card">
-                  {instances.map((item) => (
-                    <Link
-                      className={item.instance_id === resolvedInstanceId ? "ref-task-browser-row is-active" : "ref-task-browser-row"}
-                      key={item.instance_id}
-                      to={instancePath(resolvedServiceName, item.instance_id, {
-                        environment,
-                        lookback_minutes: lookbackMinutes,
-                      })}
-                    >
-                      <div className="ref-task-browser-copy">
-                        <strong>{item.node_name}</strong>
-                        <span>{formatIdentifierPreview(item.instance_id)}</span>
-                      </div>
-                      <div className="ref-task-browser-metrics">
-                        <span>{t(`status.${item.connectivity}`)}</span>
-                        <span>{formatRelativeTime(item.last_seen_at)}</span>
-                      </div>
-                    </Link>
-                  ))}
+                  {instances.length ? (
+                    instances.map((item) => (
+                      <Link
+                        className={item.instance_id === resolvedInstanceId ? "ref-task-browser-row is-active" : "ref-task-browser-row"}
+                        key={item.instance_id}
+                        to={instancePath(resolvedServiceName, item.instance_id, {
+                          environment,
+                          lookback_minutes: lookbackMinutes,
+                        })}
+                      >
+                        <div className="ref-task-browser-copy">
+                          <strong>{item.node_name}</strong>
+                          <span>{formatIdentifierPreview(item.instance_id)}</span>
+                        </div>
+                        <div className="ref-task-browser-metrics">
+                          <span>{t(`status.${item.connectivity}`)}</span>
+                          <span>{formatRelativeTime(item.last_seen_at)}</span>
+                        </div>
+                      </Link>
+                    ))
+                  ) : (
+                    <EmptyState
+                      title={t("serviceInstancesList.emptyTitle")}
+                      body={t("serviceInstancesList.emptyBody")}
+                    />
+                  )}
                 </div>
                 {instancesQuery.data && instancesQuery.data.total > 0 ? (
                   <div className="ref-inline-pagination">
@@ -291,13 +300,12 @@ export function InstanceDetailPage() {
                       })}
                     </span>
                     {instances.length < instancesQuery.data.total ? (
-                      <button
-                        className="ref-ghost-button"
+                      <VibeInlineButton
                         onClick={() => setVisibleInstanceCount((count) => count + 100)}
-                        type="button"
+                        variant="ghost"
                       >
                         {t("common.loadMore")}
-                      </button>
+                      </VibeInlineButton>
                     ) : null}
                   </div>
                 ) : null}
@@ -307,12 +315,22 @@ export function InstanceDetailPage() {
                 <div aria-hidden="true" className="ref-section-headline ref-section-headline-ghost">
                   <h3>{isZh ? "实例列表" : "Instances"}</h3>
                 </div>
-                <section className="ref-summary-strip">
-                  <SummaryChip label={t("instanceDetail.connectivity")} tone={instance.connectivity === "online" ? "success" : "danger"} value={t(`status.${instance.connectivity}`)} />
-                  <SummaryChip label={t("instanceDetail.health")} tone={instance.status === "ok" ? "success" : "accent"} value={t(`status.${instance.status}`, { defaultValue: instance.status })} />
-                  <SummaryChip label={t("instanceDetail.lastSeen")} tone="default" value={formatRelativeTime(instance.last_seen_at)} />
-                  <SummaryChip label={t("instanceDetail.lastSync")} tone="default" value={formatDateTime(instance.last_sync_at)} />
-                </section>
+                <VibeSummaryStrip
+                  items={[
+                    {
+                      label: t("instanceDetail.connectivity"),
+                      tone: instance.connectivity === "online" ? "success" : "danger",
+                      value: t(`status.${instance.connectivity}`),
+                    },
+                    {
+                      label: t("instanceDetail.health"),
+                      tone: instance.status === "ok" ? "success" : "accent",
+                      value: t(`status.${instance.status}`, { defaultValue: instance.status }),
+                    },
+                    { label: t("instanceDetail.lastSeen"), value: formatRelativeTime(instance.last_seen_at) },
+                    { label: t("instanceDetail.lastSync"), value: formatDateTime(instance.last_sync_at) },
+                  ]}
+                />
 
                 <Panel
                   className="ref-card-panel"
@@ -408,13 +426,12 @@ export function InstanceDetailPage() {
                                 })}
                               </span>
                               {(commandsQuery.data?.items.length ?? 0) < (commandsQuery.data?.total ?? 0) ? (
-                                <button
-                                  className="ref-ghost-button"
+                                <VibeInlineButton
                                   onClick={() => setVisibleCommandCount((count) => count + 50)}
-                                  type="button"
+                                  variant="ghost"
                                 >
                                   {t("common.loadMore")}
-                                </button>
+                                </VibeInlineButton>
                               ) : null}
                             </div>
                           ) : null}
@@ -499,23 +516,6 @@ export function InstanceDetailPage() {
         title={reasonDialogKind ? t(`commandReasonDialog.instanceTitle.${reasonDialogKind}`) : ""}
       />
     </div>
-  );
-}
-
-function SummaryChip({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "default" | "accent" | "success" | "danger";
-}) {
-  return (
-    <article className={`ref-summary-chip ref-summary-chip-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
   );
 }
 

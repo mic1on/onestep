@@ -79,6 +79,27 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "Agents" })).toBeInTheDocument();
   });
 
+  it("shows a single logout action for authenticated accounts", async () => {
+    mockUseConsoleSessionQuery.mockReturnValue({
+      isPending: false,
+      error: null,
+      data: {
+        auth_configured: true,
+        bootstrap_required: false,
+        authenticated: true,
+        username: "viewer",
+        role: "viewer",
+        roles: ["viewer"],
+      },
+    });
+
+    renderShell();
+
+    expect(await screen.findByText("Command center page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Log out all sessions" })).not.toBeInTheDocument();
+  });
+
   it("groups primary navigation around command center workflows", async () => {
     mockUseConsoleSessionQuery.mockReturnValue({
       isPending: false,
@@ -121,7 +142,7 @@ describe("AppShell", () => {
 
     expect(await screen.findByText("Command center page")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connectors" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Workers" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Steps" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Notifications" })).toBeInTheDocument();
   });
 });

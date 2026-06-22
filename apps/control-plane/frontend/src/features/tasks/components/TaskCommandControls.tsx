@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 
 import { OverflowDialog } from "../../../components/ui/OverflowDialog";
 import { useToast } from "../../../components/ui/ToastProvider";
+import { VibeDialogField } from "../../../components/ui/VibeDialogField";
+import { VibeInlineButton } from "../../../components/ui/VibeInlineButton";
+import { VibeInlineNotice } from "../../../components/ui/VibeInlineNotice";
 import { ApiTimeoutError } from "../../../lib/api/client";
 import type {
   Environment,
@@ -15,6 +18,7 @@ import { CommandReasonDialog } from "../../commands/components/CommandReasonDial
 import { DestructiveCommandReviewDialog } from "../../commands/components/DestructiveCommandReviewDialog";
 import { getCommandRiskLevel, isDestructiveCommand } from "../../commands/capabilities";
 import { useCreateTaskCommandFanoutMutation } from "../../commands/queries";
+import { TaskManualRunSection } from "./TaskManualRunSection";
 
 type TaskCommandControlsProps = {
   serviceName: string;
@@ -210,7 +214,9 @@ export function TaskCommandControls({
             ) : null}
           </div>
         ) : (
-          <p className="fanout-note">{t("taskCommandControls.noOnlineInstances")}</p>
+          <VibeInlineNotice variant="fanout">
+            {t("taskCommandControls.noOnlineInstances")}
+          </VibeInlineNotice>
         )}
       </div>
 
@@ -288,19 +294,17 @@ export function TaskCommandControls({
         title={t("taskCommandControls.manualRun.title")}
       >
         <div className="task-manual-run-dialog-body">
-          <section className="task-manual-run-dialog-section task-manual-run-dialog-section-targets">
+          <TaskManualRunSection variant="targets">
             <div className="task-manual-run-dialog-toolbar">
               <div className="fanout-inline-actions">
-                <button
-                  className="button-link"
+                <VibeInlineButton
                   onClick={() => setManualRunTargetIds(manualRunStates.map((state) => state.instance_id))}
-                  type="button"
                 >
                   {t("taskCommandControls.manualRun.selectAll")}
-                </button>
-                <button className="button-link" onClick={() => setManualRunTargetIds([])} type="button">
+                </VibeInlineButton>
+                <VibeInlineButton onClick={() => setManualRunTargetIds([])}>
                   {t("taskCommandControls.manualRun.clearSelection")}
-                </button>
+                </VibeInlineButton>
               </div>
             </div>
             <div className="task-manual-instance-list">
@@ -327,47 +331,47 @@ export function TaskCommandControls({
                 );
               })}
             </div>
-          </section>
+          </TaskManualRunSection>
 
-          <section className="task-manual-run-dialog-section task-manual-run-dialog-section-payload">
-            <label className="dialog-field task-manual-run-field">
-              <span>{t("taskCommandControls.manualRun.payloadLabel")}</span>
-              <textarea
-                className="task-manual-run-payload"
-                onChange={(event) => setManualRunPayloadText(event.target.value)}
-                placeholder={t("taskCommandControls.manualRun.payloadPlaceholder")}
-                rows={12}
-                value={manualRunPayloadText}
-              />
-            </label>
-          </section>
+          <TaskManualRunSection variant="payload">
+            <VibeDialogField
+              className="task-manual-run-field"
+              inputClassName="task-manual-run-payload"
+              label={t("taskCommandControls.manualRun.payloadLabel")}
+              multiline
+              onChange={(event) => setManualRunPayloadText(event.target.value)}
+              placeholder={t("taskCommandControls.manualRun.payloadPlaceholder")}
+              rows={12}
+              value={manualRunPayloadText}
+            />
+          </TaskManualRunSection>
 
-          <section className="task-manual-run-dialog-section task-manual-run-dialog-section-reason">
-            <label className="dialog-field task-manual-run-field">
-              <span>{t("taskCommandControls.manualRun.reasonLabel")}</span>
-              <textarea
-                className="task-manual-run-reason"
-                onChange={(event) => setManualRunReason(event.target.value)}
-                placeholder={t("taskCommandControls.manualRun.reasonPlaceholder")}
-                rows={3}
-                value={manualRunReason}
-              />
-            </label>
-          </section>
+          <TaskManualRunSection variant="reason">
+            <VibeDialogField
+              className="task-manual-run-field"
+              inputClassName="task-manual-run-reason"
+              label={t("taskCommandControls.manualRun.reasonLabel")}
+              multiline
+              onChange={(event) => setManualRunReason(event.target.value)}
+              placeholder={t("taskCommandControls.manualRun.reasonPlaceholder")}
+              rows={3}
+              value={manualRunReason}
+            />
+          </TaskManualRunSection>
 
           {manualRunError || submitError ? (
-            <p className="fanout-note inline-feedback inline-feedback-error">{manualRunError ?? submitError}</p>
+            <VibeInlineNotice tone="error" variant="fanout">
+              {manualRunError ?? submitError}
+            </VibeInlineNotice>
           ) : null}
 
           <div className="dialog-actions task-manual-run-actions">
-            <button
-              className="button-link"
+            <VibeInlineButton
               disabled={mutation.isPending}
               onClick={() => setManualRunOpen(false)}
-              type="button"
             >
               {t("commandReasonDialog.cancel")}
-            </button>
+            </VibeInlineButton>
             <button
               className="button-secondary"
               disabled={mutation.isPending}

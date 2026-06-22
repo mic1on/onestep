@@ -46,6 +46,7 @@ describe("ConnectorsPage", () => {
     renderPage();
 
     expect(screen.getByRole("heading", { name: "Connectors" })).toBeInTheDocument();
+    expect(screen.getByText("Adapter library")).toBeInTheDocument();
     expect(screen.getAllByText("MySQL").length).toBeGreaterThan(0);
     expect(screen.getByText("Redis")).toBeInTheDocument();
   });
@@ -88,6 +89,7 @@ describe("ConnectorsPage", () => {
 
     renderPage();
 
+    await user.click(screen.getAllByRole("button", { name: "New" })[0]);
     await user.type(screen.getByLabelText("Name"), "prod-db");
     await user.type(screen.getByLabelText("Host"), "10.0.0.1");
     await user.type(screen.getByLabelText("Database"), "orders");
@@ -100,6 +102,48 @@ describe("ConnectorsPage", () => {
       type: "mysql",
       config: {
         host: "10.0.0.1",
+        database: "orders",
+        username: "ops@example.com",
+      },
+      secret: { password: "pa@ss" },
+    });
+  });
+
+  it("creates MySQL connectors from an imported URI", async () => {
+    const user = userEvent.setup();
+    mockUseConnectorsQuery.mockReturnValue({
+      data: { items: [], total: 0 },
+      isPending: false,
+      error: null,
+    });
+    mockCreate.mockResolvedValue({});
+
+    renderPage();
+
+    await user.click(screen.getAllByRole("button", { name: "New" })[0]);
+    fireEvent.change(screen.getByLabelText("Connection URI"), {
+      target: {
+        value: "mysql://ops%40example.com:pa%40ss@10.0.0.1:3307/orders",
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Import URI" }));
+
+    expect(screen.getByLabelText("Connection URI")).toHaveValue("");
+    expect(screen.getByLabelText("Name")).toHaveValue("orders");
+    expect(screen.getByLabelText("Host")).toHaveValue("10.0.0.1");
+    expect(screen.getByLabelText("Port")).toHaveValue("3307");
+    expect(screen.getByLabelText("Database")).toHaveValue("orders");
+    expect(screen.getByLabelText("Username")).toHaveValue("ops@example.com");
+    expect(screen.getByLabelText("Password")).toHaveValue("pa@ss");
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(mockCreate).toHaveBeenCalledWith({
+      name: "orders",
+      type: "mysql",
+      config: {
+        host: "10.0.0.1",
+        port: "3307",
         database: "orders",
         username: "ops@example.com",
       },

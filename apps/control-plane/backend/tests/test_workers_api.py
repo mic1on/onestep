@@ -5,6 +5,7 @@ import io
 import zipfile
 from uuid import UUID, uuid4
 
+import yaml
 from onestep_control_plane_api.api.connector_service import get_cipher
 from onestep_control_plane_api.db.models import Worker, WorkerAgentCommand
 from sqlalchemy import select
@@ -252,6 +253,27 @@ def test_deploy_without_handler_package_returns_422(client):
         json={"worker_agent_id": "11111111-1111-1111-1111-111111111111"},
     )
     assert response.status_code == 422
+
+
+def test_download_worker_package_includes_compiled_worker_yaml(client):
+    package = _upload_handler_package(client)
+    payload = _create_worker_payload()
+    payload["handler_package_id"] = package["package_id"]
+    create = client.post("/api/v1/workers", json=payload)
+    worker_id = create.json()["id"]
+
+    response = client.get(f"/api/v1/workers/{worker_id}/package/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(response.content), "r") as archive:
+        names = set(archive.namelist())
+        assert "myworker/handlers.py" in names
+        assert "worker.yaml" in names
+        worker_yaml = archive.read("worker.yaml").decode()
+    compiled = yaml.safe_load(worker_yaml)
+    assert compiled["app"]["name"] == "order-sync"
+    assert compiled["tasks"][0]["handler"]["ref"] == "myworker.handlers:sync"
 
 
 def test_deploy_worker_uses_saved_env(client, worker_agent_registration_token):

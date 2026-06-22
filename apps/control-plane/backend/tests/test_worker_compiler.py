@@ -106,6 +106,59 @@ def test_compile_builtin_source_has_no_connector_key():
     assert sink["method"] == "POST"
 
 
+def test_compile_builtin_sink_has_no_connector_key():
+    worker = _worker(
+        source={
+            "type": "interval",
+            "connector_id": None,
+            "fields": {"seconds": 1},
+        },
+        sinks=[
+            {"type": "memory", "connector_id": None, "fields": {"name": "processed"}},
+        ],
+    )
+    yml = compile_worker_yaml(worker, {})
+    data = yaml.safe_load(yml)
+    sink = [v for v in data["resources"].values() if v["type"] == "memory"][0]
+    assert "connector" not in sink
+    assert sink["name"] == "processed"
+
+
+def test_compile_http_sink_body_fields():
+    worker = _worker(
+        source={
+            "type": "interval",
+            "connector_id": None,
+            "fields": {"seconds": 1},
+        },
+        sinks=[
+            {
+                "type": "http_sink",
+                "connector_id": None,
+                "fields": {
+                    "url": "https://out.example.com/{{ body.order_id }}",
+                    "method": "POST",
+                    "headers": {"X-Trace-Id": "{{ meta.trace_id }}"},
+                    "params": {"attempt": "{{ attempts }}"},
+                    "body": {"order_id": "{{ body.order_id }}"},
+                    "timeout_s": 8,
+                    "success_statuses": [200, 202],
+                },
+            },
+        ],
+    )
+    yml = compile_worker_yaml(worker, {})
+    data = yaml.safe_load(yml)
+    sink = [v for v in data["resources"].values() if v["type"] == "http_sink"][0]
+    assert sink["url"] == "https://out.example.com/{{ body.order_id }}"
+    assert sink["method"] == "POST"
+    assert sink["headers"] == {"X-Trace-Id": "{{ meta.trace_id }}"}
+    assert sink["params"] == {"attempt": "{{ attempts }}"}
+    assert sink["body"] == {"order_id": "{{ body.order_id }}"}
+    assert sink["timeout_s"] == 8
+    assert sink["success_statuses"] == [200, 202]
+
+
 def test_compile_omits_reporter_when_reporting_disabled():
     yml = compile_worker_yaml(_worker(reporting_enabled=False), _connectors())
     data = yaml.safe_load(yml)

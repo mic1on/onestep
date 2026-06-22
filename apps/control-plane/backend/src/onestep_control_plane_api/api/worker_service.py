@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -36,6 +37,12 @@ from onestep_control_plane_api.api.worker_compiler import (
 from onestep_control_plane_api.db.models import Worker
 
 DEFAULT_REPORTING_CONFIG: dict[str, object] = {"mode": "platform", "endpoint_url": None}
+
+
+@dataclass(frozen=True)
+class CompiledWorkerPackage:
+    content: bytes
+    filename: str
 
 
 def _normalize_reporting_config(config: dict[str, object] | None) -> dict[str, object]:
@@ -263,12 +270,7 @@ def _resolve_connectors(db: Session, worker: Worker) -> dict[str, dict[str, obje
     return resolved
 
 
-async def deploy_worker(
-    db: Session,
-    worker_id: UUID,
-    request: WorkerDeployRequest,
-) -> dict[str, object]:
-    worker = get_worker_or_404(db, worker_id)
+def compile_worker_package(db: Session, worker: Worker) -> CompiledWorkerPackage:
     if worker.handler_package_id is None:
         raise HTTPException(status_code=422, detail="worker has no handler package")
 
@@ -286,15 +288,31 @@ async def deploy_worker(
         "reporting_config": _normalize_reporting_config(worker.reporting_config_json),
     }
     yaml_str = compile_worker_yaml(worker_dict, connectors)
-    merged_bytes = merge_package(handler_bytes, yaml_str)
+    return CompiledWorkerPackage(
+        content=merge_package(handler_bytes, yaml_str),
+        filename=f"{worker.name}.zip",
+    )
+
+
+def compile_worker_package_for_download(db: Session, worker_id: UUID) -> CompiledWorkerPackage:
+    return compile_worker_package(db, get_worker_or_404(db, worker_id))
+
+
+async def deploy_worker(
+    db: Session,
+    worker_id: UUID,
+    request: WorkerDeployRequest,
+) -> dict[str, object]:
+    worker = get_worker_or_404(db, worker_id)
+    compiled_package = compile_worker_package(db, worker)
 
     merged_pkg = create_workflow_package(
         db,
         workflow_id=uuid4(),
         version=worker.updated_at.isoformat() if worker.updated_at else "deploy",
-        filename=f"{worker.name}.zip",
+        filename=compiled_package.filename,
         content_type="application/zip",
-        content=merged_bytes,
+        content=compiled_package.content,
         entrypoint="worker.yaml",
         created_by="worker-builder",
     )

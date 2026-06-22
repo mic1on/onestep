@@ -7,6 +7,8 @@ import { CodeBlock } from "../../../components/ui/CodeBlock";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { OverflowDialog } from "../../../components/ui/OverflowDialog";
 import { StatusBadge } from "../../../components/ui/StatusBadge";
+import { VibeDetailField } from "../../../components/ui/VibeDetailField";
+import { VibeInlineButton } from "../../../components/ui/VibeInlineButton";
 import type { AgentCommandSummary, Environment } from "../../../lib/api/types";
 import {
   formatCompactJson,
@@ -65,17 +67,17 @@ export function CommandFeed({
                 <div className="command-card-copy">
                   <div className="command-card-topline">
                     <strong>{t(`commandKind.${command.kind}`, { defaultValue: command.kind })}</strong>
-                    <button
+                    <VibeInlineButton
                       aria-label={t("common.moreDetails")}
-                      className="ref-ghost-button command-card-more-button"
+                      className="command-card-more-button"
                       onClick={() => setSelectedCommandId(command.command_id)}
                       title={t("common.moreDetails")}
-                      type="button"
+                      variant="ghost"
                     >
                       <span aria-hidden="true" className="ref-menu-dots">
                         ...
                       </span>
-                    </button>
+                    </VibeInlineButton>
                   </div>
                   <p>
                     {t("commands.commandMeta", {
@@ -175,7 +177,7 @@ function CommandDetailsBody({
   return (
     <>
       <dl className="detail-dialog-grid">
-        <DetailField
+        <VibeDetailField
           label={t("commands.instanceLabel")}
           value={
             canLinkToInstance ? (
@@ -193,11 +195,11 @@ function CommandDetailsBody({
             )
           }
         />
-        <DetailField label={t("commands.commandIdLabel")} value={command.command_id} />
-        <DetailField label={t("commands.sessionIdLabel")} value={command.session_id ?? t("common.notAvailable")} />
-        <DetailField label={t("commands.createdAtLabel")} value={formatDateTime(command.created_at)} />
-        <DetailField label={t("commands.updatedAtLabel")} value={formatDateTime(command.updated_at)} />
-        <DetailField label={t("commands.durationLabel")} value={formatDurationMs(command.duration_ms)} />
+        <VibeDetailField label={t("commands.commandIdLabel")} value={command.command_id} />
+        <VibeDetailField label={t("commands.sessionIdLabel")} value={command.session_id ?? t("common.notAvailable")} />
+        <VibeDetailField label={t("commands.createdAtLabel")} value={formatDateTime(command.created_at)} />
+        <VibeDetailField label={t("commands.updatedAtLabel")} value={formatDateTime(command.updated_at)} />
+        <VibeDetailField label={t("commands.durationLabel")} value={formatDurationMs(command.duration_ms)} />
       </dl>
 
       {Object.keys(command.args).length > 0 ? (
@@ -231,15 +233,6 @@ function CommandDetailsBody({
         </DetailSection>
       ) : null}
     </>
-  );
-}
-
-function DetailField({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="detail-dialog-field">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
   );
 }
 

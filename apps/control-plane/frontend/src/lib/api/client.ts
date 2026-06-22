@@ -767,3 +767,43 @@ export function deployWorker(workerId: string, payload: WorkerDeployRequest) {
     { method: "POST", body: payload },
   );
 }
+
+function filenameFromContentDisposition(value: string | null, fallback: string) {
+  if (!value) return fallback;
+  const match = /filename="([^"]+)"/.exec(value) ?? /filename=([^;]+)/.exec(value);
+  return match?.[1]?.trim() || fallback;
+}
+
+export async function downloadWorkerPackage(workerId: string) {
+  const response = await fetch(
+    buildApiUrl(`/api/v1/workers/${encodeURIComponent(workerId)}/package/download`),
+    {
+      credentials: "include",
+      headers: { Accept: "application/zip" },
+    },
+  );
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      detail = payload.detail ?? detail;
+    } catch {
+      // ignore json parse failures on error bodies
+    }
+    if (response.status === 401) {
+      redirectToLogin();
+      notifySessionExpired();
+      throw new SessionExpiredError(detail || "Session expired");
+    }
+    throw new ApiError(detail, response.status);
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: filenameFromContentDisposition(
+      response.headers.get("content-disposition"),
+      "worker.zip",
+    ),
+  };
+}

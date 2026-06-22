@@ -5,6 +5,8 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { SegmentedControl } from "../../../components/ui/SegmentedControl";
 import { StatusBadge } from "../../../components/ui/StatusBadge";
 import { useToast } from "../../../components/ui/ToastProvider";
+import { VibeInlineButton } from "../../../components/ui/VibeInlineButton";
+import { VibeInlineNotice } from "../../../components/ui/VibeInlineNotice";
 import { ApiTimeoutError } from "../../../lib/api/client";
 import { CommandReasonDialog } from "./CommandReasonDialog";
 import { DestructiveCommandReviewDialog } from "./DestructiveCommandReviewDialog";
@@ -129,11 +131,11 @@ export function ServiceCommandFanout({
           ]}
           value={targetMode}
         />
-        <p className="fanout-note">
+        <VibeInlineNotice variant="fanout">
           {targetMode === "all_online"
             ? t("serviceCommandFanout.targetScopeSummary", { count: onlineInstances.length })
             : t("serviceCommandFanout.selectedSummary", { count: selectedInstances.length })}
-        </p>
+        </VibeInlineNotice>
       </div>
 
       <div className="fanout-section">
@@ -153,11 +155,11 @@ export function ServiceCommandFanout({
           ]}
           value={offlineBehavior}
         />
-        <p className="fanout-note">
+        <VibeInlineNotice variant="fanout">
           {offlineBehavior === "queue"
             ? t("serviceCommandFanout.offlineBehaviorHint.queue")
             : t("serviceCommandFanout.offlineBehaviorHint.skip")}
-        </p>
+        </VibeInlineNotice>
       </div>
 
       {targetMode === "selected_instances" ? (
@@ -165,16 +167,14 @@ export function ServiceCommandFanout({
           <div className="fanout-section-header">
             <span className="list-row-label">{t("serviceCommandFanout.selectionLabel")}</span>
             <div className="fanout-inline-actions">
-              <button
-                className="button-link"
+              <VibeInlineButton
                 onClick={() => setSelectedInstanceIds(onlineInstances.map((instance) => instance.instance_id))}
-                type="button"
               >
                 {t("serviceCommandFanout.selectOnline")}
-              </button>
-              <button className="button-link" onClick={() => setSelectedInstanceIds([])} type="button">
+              </VibeInlineButton>
+              <VibeInlineButton onClick={() => setSelectedInstanceIds([])}>
                 {t("serviceCommandFanout.clearSelection")}
-              </button>
+              </VibeInlineButton>
             </div>
           </div>
           <div className="fanout-instance-grid">
@@ -201,7 +201,9 @@ export function ServiceCommandFanout({
             })}
           </div>
           {selectionEmpty ? (
-            <p className="fanout-note">{t("serviceCommandFanout.noSelectionBody")}</p>
+            <VibeInlineNotice variant="fanout">
+              {t("serviceCommandFanout.noSelectionBody")}
+            </VibeInlineNotice>
           ) : null}
         </div>
       ) : null}
@@ -355,7 +357,7 @@ function OutcomeGroup({ title, emptyBody, items }: OutcomeGroupProps) {
     <section className="fanout-result-group">
       <h4>{title}</h4>
       {items.length === 0 ? (
-        <p className="fanout-note">{emptyBody}</p>
+        <VibeInlineNotice variant="fanout">{emptyBody}</VibeInlineNotice>
       ) : (
         <div className="fanout-result-list">
           {items.map((item) => (

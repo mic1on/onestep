@@ -1,8 +1,8 @@
-import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Panel } from "../../components/ui/Panel";
+import { VibeLinkButton } from "../../components/ui/VibeLinkButton";
 
 export function NotFoundPage() {
   const { t } = useTranslation();
@@ -27,9 +27,9 @@ export function NotFoundPage() {
       >
         <EmptyState title={t("notFound.emptyTitle")} body={t("notFound.emptyBody")} />
         <div className="panel-footer">
-          <Link className="button-link" to="/services?environment=all">
+          <VibeLinkButton to="/services?environment=all">
             {t("notFound.backToServices")}
-          </Link>
+          </VibeLinkButton>
         </div>
       </Panel>
     </div>

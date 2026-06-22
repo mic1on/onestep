@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useToast } from "../../../components/ui/ToastProvider";
+import { VibeDialogField } from "../../../components/ui/VibeDialogField";
+import { VibeInlineButton } from "../../../components/ui/VibeInlineButton";
 
 type CommandReasonDialogProps = {
   open: boolean;
@@ -68,20 +70,19 @@ export function CommandReasonDialog({
           <p id="command-reason-dialog-description">{description}</p>
         </div>
 
-        <label className="dialog-field">
-          <span>{t("commandReasonDialog.reasonLabel")}</span>
-          <textarea
-            onChange={(event) => setReason(event.target.value)}
-            placeholder={t("commandReasonDialog.reasonPlaceholder")}
-            rows={4}
-            value={reason}
-          />
-        </label>
+        <VibeDialogField
+          label={t("commandReasonDialog.reasonLabel")}
+          multiline
+          onChange={(event) => setReason(event.target.value)}
+          placeholder={t("commandReasonDialog.reasonPlaceholder")}
+          rows={4}
+          value={reason}
+        />
 
         <div className="dialog-actions">
-          <button className="button-link" disabled={isSubmitting} onClick={onCancel} type="button">
+          <VibeInlineButton disabled={isSubmitting} onClick={onCancel}>
             {t("commandReasonDialog.cancel")}
-          </button>
+          </VibeInlineButton>
           <button className="button-secondary" disabled={isSubmitting} onClick={() => void handleConfirm()} type="button">
             {isSubmitting ? t("commandReasonDialog.submitting") : t("commandReasonDialog.confirm")}
           </button>

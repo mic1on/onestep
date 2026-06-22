@@ -3,6 +3,9 @@ import { useTranslation } from "react-i18next";
 
 import { OverflowDialog } from "../../../components/ui/OverflowDialog";
 import { useToast } from "../../../components/ui/ToastProvider";
+import { VibeDialogField } from "../../../components/ui/VibeDialogField";
+import { VibeInlineButton } from "../../../components/ui/VibeInlineButton";
+import { VibeInlineNotice } from "../../../components/ui/VibeInlineNotice";
 import type { CommandRiskLevel } from "../../../lib/api/types";
 
 type DestructiveCommandReviewDialogProps = {
@@ -96,15 +99,14 @@ export function DestructiveCommandReviewDialog({
           </article>
         </div>
 
-        <label className="dialog-field">
-          <span>{t("destructiveCommandReview.reasonLabel")}</span>
-          <textarea
-            onChange={(event) => setReason(event.target.value)}
-            placeholder={t("destructiveCommandReview.reasonPlaceholder")}
-            rows={4}
-            value={reason}
-          />
-        </label>
+        <VibeDialogField
+          label={t("destructiveCommandReview.reasonLabel")}
+          multiline
+          onChange={(event) => setReason(event.target.value)}
+          placeholder={t("destructiveCommandReview.reasonPlaceholder")}
+          rows={4}
+          value={reason}
+        />
 
         <label className="destructive-review-check">
           <input
@@ -115,12 +117,16 @@ export function DestructiveCommandReviewDialog({
           <span>{t("destructiveCommandReview.acknowledgment")}</span>
         </label>
 
-        {error ? <p className="inline-feedback inline-feedback-error">{error}</p> : null}
+        {error ? (
+          <VibeInlineNotice tone="error" variant="feedback">
+            {error}
+          </VibeInlineNotice>
+        ) : null}
 
         <div className="dialog-actions">
-          <button className="button-link" disabled={isSubmitting} onClick={onCancel} type="button">
+          <VibeInlineButton disabled={isSubmitting} onClick={onCancel}>
             {t("destructiveCommandReview.cancel")}
-          </button>
+          </VibeInlineButton>
           <button className="button-secondary" disabled={isSubmitting} onClick={() => void handleConfirm()} type="button">
             {isSubmitting ? t("destructiveCommandReview.submitting") : t("destructiveCommandReview.confirm")}
           </button>

@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { OverflowDialog } from "../../../components/ui/OverflowDialog";
 import { StatusBadge } from "../../../components/ui/StatusBadge";
+import { VibeDetailField } from "../../../components/ui/VibeDetailField";
+import { VibeInlineButton } from "../../../components/ui/VibeInlineButton";
 import type { AgentSessionSummary } from "../../../lib/api/types";
 import {
   formatDateTime,
@@ -36,17 +38,17 @@ export function SessionList({ sessions, emptyTitle, emptyBody }: SessionListProp
               <div className="command-card-copy">
                 <div className="command-card-topline">
                   <strong>{session.node_name ?? formatIdentifierPreview(session.instance_id)}</strong>
-                  <button
+                  <VibeInlineButton
                     aria-label={t("common.moreDetails")}
-                    className="ref-ghost-button command-card-more-button"
+                    className="command-card-more-button"
                     onClick={() => setSelectedSessionId(session.session_id)}
                     title={t("common.moreDetails")}
-                    type="button"
+                    variant="ghost"
                   >
                     <span aria-hidden="true" className="ref-menu-dots">
                       ...
                     </span>
-                  </button>
+                  </VibeInlineButton>
                 </div>
                 <p>
                   {t("commands.sessionMeta", {
@@ -94,13 +96,13 @@ function SessionDetailsBody({ session }: { session: AgentSessionSummary }) {
   return (
     <>
       <dl className="detail-dialog-grid">
-        <DetailField label={t("commands.instanceLabel")} value={session.instance_id} />
-        <DetailField label={t("commands.sessionIdLabel")} value={session.session_id} />
-        <DetailField label={t("commands.hostLabel")} value={session.hostname ?? t("common.notAvailable")} />
-        <DetailField label={t("commands.protocolLabel")} value={session.protocol_version} />
-        <DetailField label={t("commands.connectedAtLabel")} value={formatDateTime(session.connected_at)} />
-        <DetailField label={t("commands.disconnectedAtLabel")} value={formatDateTime(session.disconnected_at)} />
-        <DetailField label={t("commands.lastMessageLabel")} value={formatDateTime(session.last_message_at)} />
+        <VibeDetailField label={t("commands.instanceLabel")} value={session.instance_id} />
+        <VibeDetailField label={t("commands.sessionIdLabel")} value={session.session_id} />
+        <VibeDetailField label={t("commands.hostLabel")} value={session.hostname ?? t("common.notAvailable")} />
+        <VibeDetailField label={t("commands.protocolLabel")} value={session.protocol_version} />
+        <VibeDetailField label={t("commands.connectedAtLabel")} value={formatDateTime(session.connected_at)} />
+        <VibeDetailField label={t("commands.disconnectedAtLabel")} value={formatDateTime(session.disconnected_at)} />
+        <VibeDetailField label={t("commands.lastMessageLabel")} value={formatDateTime(session.last_message_at)} />
       </dl>
 
       {session.accepted_capabilities.length > 0 ? (
@@ -127,15 +129,6 @@ function SessionDetailsBody({ session }: { session: AgentSessionSummary }) {
         </DetailSection>
       ) : null}
     </>
-  );
-}
-
-function DetailField({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="detail-dialog-field">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
   );
 }
 

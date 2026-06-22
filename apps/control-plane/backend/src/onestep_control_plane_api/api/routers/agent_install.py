@@ -104,7 +104,10 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 -m pip install --upgrade onestep-worker-agent
+python3 -m pip install --upgrade \\
+  onestep-worker-agent \\
+  'onestep[all]>=1.4.2' \\
+  'onestep-feishu-bitable>=0.1.2'
 
 if command -v onestep-agent >/dev/null 2>&1; then
   ONESTEP_AGENT=(onestep-agent)

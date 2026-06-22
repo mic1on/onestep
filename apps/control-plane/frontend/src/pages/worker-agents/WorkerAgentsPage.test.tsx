@@ -62,8 +62,10 @@ describe("WorkerAgentsPage", () => {
     renderPage();
 
     expect(screen.getByRole("heading", { name: "Agents" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /prod-runner-1/ })).toBeInTheDocument();
-    expect(screen.getByText("online")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /prod-runner-1/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open agent" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Add agent/ })).toHaveLength(1);
+    expect(screen.getAllByText("online")).toHaveLength(2);
   });
 
   it("renders empty state when no agents", () => {
@@ -88,13 +90,13 @@ describe("WorkerAgentsPage", () => {
 
     renderPage();
 
-    await user.click(screen.getByRole("button", { name: /Add agent/ }));
+    await user.click(screen.getAllByRole("button", { name: /Add agent/ })[0]);
     await user.clear(screen.getByLabelText("Registration token"));
     await user.type(screen.getByLabelText("Registration token"), "registration-token");
     await user.clear(screen.getByLabelText("Agent name"));
     await user.type(screen.getByLabelText("Agent name"), "prod-runner-2");
 
-    expect(screen.getByRole("dialog", { name: "Add worker agent" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add step agent" })).toBeInTheDocument();
     expect(screen.getByText(/curl -fsSL http:\/\/localhost:3000\/agent-install\.sh/)).toBeInTheDocument();
     expect(screen.getByText(/\| bash -s --/)).toBeInTheDocument();
     expect(screen.getByText(/--token 'registration-token'/)).toBeInTheDocument();

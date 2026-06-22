@@ -7,6 +7,12 @@ import {
   useCreateWorkflowPackageMutation,
   useWorkerAgentsQuery,
 } from "../queries";
+import { VibeButton } from "../../../components/ui/VibeButton";
+import { VibeField } from "../../../components/ui/VibeField";
+import { VibeInlineNotice } from "../../../components/ui/VibeInlineNotice";
+import { VibeModal } from "../../../components/ui/VibeModal";
+import { VibehubSelect } from "../../../components/ui/VibehubSelect";
+import { VibehubUpload } from "../../../components/ui/VibehubUpload";
 import type { WorkerDeploymentDesiredStatus } from "../../../lib/api/types";
 
 type DeployDialogProps = {
@@ -25,10 +31,6 @@ export function DeployDialog({ open, onClose }: DeployDialogProps) {
   const [version, setVersion] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  if (!open) {
-    return null;
-  }
 
   const agents = agentsQuery.data?.items ?? [];
   const isPending = packageMutation.isPending || deploymentMutation.isPending;
@@ -64,70 +66,79 @@ export function DeployDialog({ open, onClose }: DeployDialogProps) {
   }
 
   return (
-    <div className="ref-modal-overlay" role="dialog" aria-modal="true">
-      <div className="ref-modal-card">
-        <header className="ref-modal-head">
-          <strong>{t("agentsDeploy.title")}</strong>
-          <button type="button" onClick={onClose} aria-label={t("common.close")}>
-            ×
-          </button>
-        </header>
-        <div className="ref-modal-body">
-          <label className="ref-inline-control ref-inline-control-search">
-            <span>{t("agentsDeploy.packageFile")}</span>
-            <input
-              type="file"
-              accept=".zip,application/zip"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-
-          <label className="ref-inline-control ref-inline-control-select">
-            <span>{t("agentsDeploy.targetAgent")}</span>
-            <select onChange={(event) => setAgentId(event.target.value)} value={agentId}>
-              <option value="">{t("agentsDeploy.selectAgent")}</option>
-              {agents.map((agent) => (
-                <option key={agent.worker_agent_id} value={agent.worker_agent_id}>
-                  {agent.display_name} ({agent.status})
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="ref-inline-control">
-            <span>{t("agentsDeploy.version")}</span>
-            <input
-              type="text"
-              value={version}
-              onChange={(event) => setVersion(event.target.value)}
-              placeholder={t("agentsDeploy.versionPlaceholder")}
-            />
-          </label>
-
-          <label className="ref-inline-control ref-inline-control-select">
-            <span>{t("agentsDeploy.desiredStatus")}</span>
-            <select
-              onChange={(event) =>
-                setDesiredStatus(event.target.value as WorkerDeploymentDesiredStatus)
-              }
-              value={desiredStatus}
-            >
-              <option value="running">{t("agentsDeploy.statusRunning")}</option>
-              <option value="stopped">{t("agentsDeploy.statusStopped")}</option>
-            </select>
-          </label>
-
-          {error ? <p className="ref-error-note">{error}</p> : null}
-        </div>
-        <footer className="ref-modal-foot">
-          <button type="button" onClick={onClose} disabled={isPending}>
+    <VibeModal
+      footer={
+        <>
+          <VibeButton disabled={isPending} onClick={onClose} variant="secondary">
             {t("common.cancel")}
-          </button>
-          <button type="button" onClick={() => void handleDeploy()} disabled={isPending}>
+          </VibeButton>
+          <VibeButton
+            disabled={isPending}
+            onClick={() => void handleDeploy()}
+            variant="primary"
+          >
             {isPending ? t("agentsDeploy.deploying") : t("agentsDeploy.deploy")}
-          </button>
-        </footer>
-      </div>
-    </div>
+          </VibeButton>
+        </>
+      }
+      onClose={onClose}
+      open={open}
+      title={t("agentsDeploy.title")}
+    >
+      <VibehubUpload
+        accept=".zip,application/zip"
+        actionLabel={t("agentsDeploy.packageUploadAction")}
+        badgeLabel={t("agentsDeploy.packageUploadBadge")}
+        description={t("agentsDeploy.packageUploadDescription")}
+        disabled={isPending}
+        emptyText={t("agentsDeploy.packageUploadPrompt")}
+        label={t("agentsDeploy.packageFile")}
+        onChange={(nextFile) => {
+          setFile(nextFile);
+          setError(null);
+        }}
+        selectedText={t("agentsDeploy.packageUploadSelected")}
+        value={file}
+      />
+
+      <VibehubSelect
+        label={t("agentsDeploy.targetAgent")}
+        onChange={setAgentId}
+        options={[
+          { value: "", label: t("agentsDeploy.selectAgent") },
+          ...agents.map((agent) => ({
+            value: agent.worker_agent_id,
+            label: `${agent.display_name} (${agent.status})`,
+          })),
+        ]}
+        value={agentId}
+      />
+
+      <VibeField
+        label={t("agentsDeploy.version")}
+        onChange={(event) => setVersion(event.target.value)}
+        placeholder={t("agentsDeploy.versionPlaceholder")}
+        type="text"
+        value={version}
+      />
+
+      <VibehubSelect
+        label={t("agentsDeploy.desiredStatus")}
+        onChange={(nextValue) =>
+          setDesiredStatus(nextValue as WorkerDeploymentDesiredStatus)
+        }
+        options={[
+          { value: "running", label: t("agentsDeploy.statusRunning") },
+          { value: "stopped", label: t("agentsDeploy.statusStopped") },
+        ]}
+        value={desiredStatus}
+      />
+
+      {error ? (
+        <VibeInlineNotice variant="error">
+          {error}
+        </VibeInlineNotice>
+      ) : null}
+    </VibeModal>
   );
 }

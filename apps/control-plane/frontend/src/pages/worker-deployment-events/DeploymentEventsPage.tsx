@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
 import { StatusBadge } from "../../components/ui/StatusBadge";
+import { VibeDataRow, VibeDataTable } from "../../components/ui/VibeDataTable";
+import { VibeSummaryStrip } from "../../components/ui/VibeSummary";
 import {
   useWorkerDeploymentEventsQuery,
   useWorkerDeploymentQuery,
@@ -53,20 +55,18 @@ export function DeploymentEventsPage() {
         }
       />
 
-      <section className="ref-summary-strip runtime-summary-strip">
-        <article className="ref-summary-chip ref-summary-chip-default">
-          <span>{t("deploymentEvents.summaryEvents")}</span>
-          <strong>{events.length}</strong>
-        </article>
-        <article className="ref-summary-chip ref-summary-chip-default">
-          <span>{t("agentsDetail.tableHeaderDesired")}</span>
-          <strong>{deployment?.desired_status ?? "—"}</strong>
-        </article>
-        <article className="ref-summary-chip ref-summary-chip-success">
-          <span>{t("agentsDetail.tableHeaderObserved")}</span>
-          <strong>{deployment?.observed_status ?? "—"}</strong>
-        </article>
-      </section>
+      <VibeSummaryStrip
+        className="runtime-summary-strip"
+        items={[
+          { label: t("deploymentEvents.summaryEvents"), value: events.length },
+          { label: t("agentsDetail.tableHeaderDesired"), value: deployment?.desired_status ?? "—" },
+          {
+            label: t("agentsDetail.tableHeaderObserved"),
+            tone: "success",
+            value: deployment?.observed_status ?? "—",
+          },
+        ]}
+      />
 
       {eventsQuery.error ? (
         <EmptyState title={t("deploymentEvents.loadErrorTitle")} body={String(eventsQuery.error)} />
@@ -79,32 +79,38 @@ export function DeploymentEventsPage() {
       ) : null}
 
       {events.length > 0 ? (
-        <section className="ref-table-card runtime-table-card deployment-events-table-card">
-          <div className="ref-table-head runtime-table-head runtime-events-grid">
-            <span>{t("deploymentEvents.tableHeaderTime")}</span>
-            <span>{t("deploymentEvents.tableHeaderType")}</span>
-            <span>{t("deploymentEvents.tableHeaderStatus")}</span>
-            <span>{t("deploymentEvents.tableHeaderMessage")}</span>
-          </div>
-          <div className="ref-table-body">
-            {events.map((event, index) => (
-              <article className="ref-table-row runtime-table-row runtime-events-grid" key={`${event.created_at}-${index}`}>
-                <div className="ref-meta-cell">
-                  <strong>{formatDateTime(event.created_at)}</strong>
-                </div>
-                <div className="ref-meta-cell">
-                  <strong>{event.event_type}</strong>
-                </div>
-                <div className="ref-meta-cell">
-                  {event.observed_status ? <span>{event.observed_status}</span> : "—"}
-                </div>
-                <div className="ref-meta-cell">
-                  <span>{event.message || "—"}</span>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
+        <VibeDataTable
+          className="runtime-table-card deployment-events-table-card"
+          columns={[
+            { key: "time", label: t("deploymentEvents.tableHeaderTime") },
+            { key: "type", label: t("deploymentEvents.tableHeaderType") },
+            { key: "status", label: t("deploymentEvents.tableHeaderStatus") },
+            { key: "message", label: t("deploymentEvents.tableHeaderMessage") },
+          ]}
+          gridClassName="runtime-events-grid"
+          headClassName="runtime-table-head"
+        >
+          {events.map((event, index) => (
+            <VibeDataRow
+              className="runtime-table-row"
+              gridClassName="runtime-events-grid"
+              key={`${event.created_at}-${index}`}
+            >
+              <div className="ref-meta-cell">
+                <strong>{formatDateTime(event.created_at)}</strong>
+              </div>
+              <div className="ref-meta-cell">
+                <strong>{event.event_type}</strong>
+              </div>
+              <div className="ref-meta-cell">
+                {event.observed_status ? <span>{event.observed_status}</span> : "—"}
+              </div>
+              <div className="ref-meta-cell">
+                <span>{event.message || "—"}</span>
+              </div>
+            </VibeDataRow>
+          ))}
+        </VibeDataTable>
       ) : null}
     </div>
   );

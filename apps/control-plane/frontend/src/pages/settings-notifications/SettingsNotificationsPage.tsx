@@ -6,6 +6,15 @@ import { Panel } from "../../components/ui/Panel";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { SignalConsoleHeader } from "../../components/ui/SignalConsoleHeader";
 import { useToast } from "../../components/ui/ToastProvider";
+import { VibeActionGroup } from "../../components/ui/VibeActionGroup";
+import { VibeButton } from "../../components/ui/VibeButton";
+import { VibeChoiceCard } from "../../components/ui/VibeChoiceCard";
+import { VibeField } from "../../components/ui/VibeField";
+import { VibePopconfirm } from "../../components/ui/VibePopconfirm";
+import { VibeSelectableListItem } from "../../components/ui/VibeSelectableListItem";
+import { VibeSummaryStrip } from "../../components/ui/VibeSummary";
+import { VibeSwitch } from "../../components/ui/VibeSwitch";
+import { VibehubSelect } from "../../components/ui/VibehubSelect";
 import { canManageNotificationSettings } from "../../features/auth/session";
 import { useConsoleSessionQuery } from "../../features/auth/queries";
 import {
@@ -75,11 +84,22 @@ export function SettingsNotificationsPage() {
   const testMutation = useTestNotificationChannelMutation();
 
   const channels = channelsQuery.data?.items ?? [];
+  const firstChannelId = channels[0]?.id ?? null;
   const availableServices = servicesQuery.data?.items ?? [];
   const canManageNotifications = canManageNotificationSettings(sessionQuery.data);
   const enabledChannelCount = channels.filter((channel) => channel.enabled).length;
+  const coveredServiceCount = useMemo(
+    () =>
+      new Set(
+        channels.flatMap((channel) =>
+          channel.service_scopes.map((scope) => `${scope.environment}:${scope.name}`),
+        ),
+      ).size,
+    [channels],
+  );
+  const eventRouteCount = channels.reduce((total, channel) => total + channel.event_types.length, 0);
 
-  const [selectedChannelId, setSelectedChannelId] = useState<string | "new">("new");
+  const [selectedChannelId, setSelectedChannelId] = useState<string | "new" | null>(null);
   const [serviceEnvironmentFilter, setServiceEnvironmentFilter] = useState<ServiceEnvironmentFilter>(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
   const [formState, setFormState] = useState<FormState>(DEFAULT_FORM_STATE);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -105,6 +125,14 @@ export function SettingsNotificationsPage() {
   );
 
   useEffect(() => {
+    if (selectedChannelId === null) {
+      if (channelsQuery.isPending) {
+        return;
+      }
+      setSelectedChannelId(firstChannelId ?? "new");
+      return;
+    }
+
     if (selectedChannelId === "new") {
       setFormState(DEFAULT_FORM_STATE);
       setServiceEnvironmentFilter(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
@@ -122,7 +150,7 @@ export function SettingsNotificationsPage() {
       setFormState(DEFAULT_FORM_STATE);
       setServiceEnvironmentFilter(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
     }
-  }, [channels.length, selectedChannel, selectedChannelId]);
+  }, [channels.length, channelsQuery.isPending, firstChannelId, selectedChannel, selectedChannelId]);
 
   useEffect(() => {
     if (selectedChannelId === "new") {
@@ -138,6 +166,14 @@ export function SettingsNotificationsPage() {
   const isTesting = testMutation.isPending;
   const hasMissedStart = formState.event_types.includes("task_missed_start");
   const togglingChannelId = updateMutation.isPending ? updateMutation.variables?.channelId ?? null : null;
+  const routeServicePreview = formState.service_scopes.slice(0, 4);
+  const routeServiceOverflowCount = Math.max(formState.service_scopes.length - routeServicePreview.length, 0);
+  const routeEventPreview = formState.event_types.slice(0, 4);
+  const routeEventOverflowCount = Math.max(formState.event_types.length - routeEventPreview.length, 0);
+  const webhookTargetLabel =
+    formState.webhook_url.trim() ||
+    formState.webhook_url_masked ||
+    (formState.id ? t("notifications.webhookStoredTarget") : t("notifications.webhookDraftTarget"));
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -236,6 +272,13 @@ export function SettingsNotificationsPage() {
     }
   }
 
+  function startNewChannel() {
+    setSelectedChannelId("new");
+    setFormState(DEFAULT_FORM_STATE);
+    setServiceEnvironmentFilter(DEFAULT_SERVICE_ENVIRONMENT_FILTER);
+    setIsDeleteConfirmOpen(false);
+  }
+
   return (
     <div className="ref-console-page settings-notifications-page signal-console-settings-page">
       <SignalConsoleHeader
@@ -248,58 +291,38 @@ export function SettingsNotificationsPage() {
           ) : null
         }
         side={
-          <>
-            {canManageNotifications ? (
-              <div className="signal-console-hero-actions signal-console-settings-hero-actions">
-                <div className="page-actions-stack">
-                  <button
-                    className="notification-action-button notification-action-button-primary"
-                    onClick={() => {
-                      setSelectedChannelId("new");
-                      setFormState(DEFAULT_FORM_STATE);
-                      setIsDeleteConfirmOpen(false);
-                    }}
-                    type="button"
-                  >
-                    {t("notifications.newChannel")}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="signal-console-metric signal-console-settings-metric">
-              <span>{t("notifications.channelsTitle")}</span>
-              <strong>{channels.length}</strong>
+          canManageNotifications ? (
+            <div className="signal-console-hero-actions signal-console-header-actions signal-console-settings-hero-actions">
+              <VibeActionGroup>
+                <VibeButton
+                  icon="+"
+                  onClick={startNewChannel}
+                  variant="primary"
+                >
+                  {t("notifications.newChannel")}
+                </VibeButton>
+              </VibeActionGroup>
             </div>
-          </>
+          ) : null
         }
         title={t("notifications.title")}
       />
 
-      <section className="signal-console-settings-band">
-        <article className="ref-summary-chip ref-summary-chip-default">
-          <span>{t("notifications.channelsTitle")}</span>
-          <strong>{channels.length}</strong>
-        </article>
-        <article className="ref-summary-chip ref-summary-chip-success">
-          <span>{t("notifications.enabled")}</span>
-          <strong>{enabledChannelCount}</strong>
-        </article>
-        <article className="ref-summary-chip ref-summary-chip-accent">
-          <span>{t("notifications.servicesTitle")}</span>
-          <strong>{formState.service_scopes.length}</strong>
-        </article>
-        <article className="ref-summary-chip ref-summary-chip-default">
-          <span>{t("notifications.eventTypesTitle")}</span>
-          <strong>{formState.event_types.length}</strong>
-        </article>
-      </section>
+      <VibeSummaryStrip
+        className="signal-console-settings-band"
+        items={[
+          { label: t("notifications.routeEndpoints"), value: channels.length },
+          { label: t("notifications.enabled"), tone: "success", value: enabledChannelCount },
+          { label: t("notifications.coveredServices"), tone: "accent", value: coveredServiceCount },
+          { label: t("notifications.eventRoutes"), value: eventRouteCount },
+        ]}
+      />
 
       <div className="notification-settings-layout">
         <Panel
-          title={t("notifications.channelsTitle")}
-          subtitle={t("notifications.channelsSubtitle")}
-          className="ref-card-panel ref-card-panel-compact"
+          title={t("notifications.libraryTitle")}
+          subtitle={t("notifications.librarySubtitle")}
+          className="ref-card-panel ref-card-panel-compact notification-channel-panel"
         >
           {channelsQuery.isPending ? <div className="loading-block">{t("notifications.loadingChannels")}</div> : null}
           {channelsQuery.error ? <EmptyState title={t("notifications.loadErrorTitle")} body={String(channelsQuery.error)} /> : null}
@@ -307,6 +330,13 @@ export function SettingsNotificationsPage() {
             <EmptyState
               title={t("notifications.emptyTitle")}
               body={t("notifications.emptyBody")}
+              action={
+                canManageNotifications ? (
+                  <VibeButton icon="+" onClick={startNewChannel} variant="primary">
+                    {t("notifications.newChannel")}
+                  </VibeButton>
+                ) : null
+              }
             />
           ) : null}
 
@@ -316,50 +346,47 @@ export function SettingsNotificationsPage() {
                 const selected = channel.id === selectedChannelId;
                 const isToggling = togglingChannelId === channel.id;
                 return (
-                  <article
+                  <VibeSelectableListItem
+                    actions={
+                      <VibeSwitch
+                        checked={channel.enabled}
+                        disabled={!canManageNotifications || isToggling}
+                        label={
+                          isToggling
+                            ? channel.enabled
+                              ? t("notifications.disabling")
+                              : t("notifications.enabling")
+                            : channel.enabled
+                              ? t("notifications.disable")
+                              : t("notifications.enable")
+                        }
+                        onClick={() => void handleToggleEnabled(channel)}
+                        pending={isToggling}
+                      />
+                    }
                     key={channel.id}
-                    className={`notification-channel-card${selected ? " is-selected" : ""}`}
-                  >
-                    <button
-                      onClick={() => {
-                        setSelectedChannelId(channel.id);
-                        setIsDeleteConfirmOpen(false);
-                      }}
-                      type="button"
-                      className="notification-channel-main"
-                    >
-                      <div className="notification-channel-title-row">
-                        <strong>{channel.name}</strong>
-                      </div>
-                      <div className="notification-channel-meta">
+                    meta={
+                      <>
                         <span>
                           {getProviderLabel(channel.provider, t)} · {t("notifications.servicesCount", { count: channel.service_scopes.length })}
                         </span>
-                        <span>
-                          {formatEventTypes(channel.event_types, t)}
+                        <span>{formatEventTypes(channel.event_types, t)}</span>
+                      </>
+                    }
+                    onSelect={() => {
+                      setSelectedChannelId(channel.id);
+                      setIsDeleteConfirmOpen(false);
+                    }}
+                    selected={selected}
+                    title={
+                      <span className="notification-channel-title-content">
+                        <span className="notification-provider-mark" aria-hidden="true">
+                          {getProviderGlyph(channel.provider)}
                         </span>
-                      </div>
-                    </button>
-                    <div className="notification-channel-actions">
-                      <button
-                        className={`notification-channel-toggle${channel.enabled ? " is-enabled" : " is-disabled"}${isToggling ? " is-pending" : ""}`}
-                        disabled={!canManageNotifications || isToggling}
-                        onClick={() => void handleToggleEnabled(channel)}
-                        type="button"
-                      >
-                        <span className="notification-channel-toggle-dot" aria-hidden="true" />
-                        <span className="notification-channel-toggle-label">
-                        {isToggling
-                          ? channel.enabled
-                            ? t("notifications.disabling")
-                            : t("notifications.enabling")
-                          : channel.enabled
-                            ? t("notifications.disable")
-                            : t("notifications.enable")}
-                        </span>
-                      </button>
-                    </div>
-                  </article>
+                        <span>{channel.name}</span>
+                      </span>
+                    }
+                  />
                 );
               })}
             </div>
@@ -367,22 +394,30 @@ export function SettingsNotificationsPage() {
         </Panel>
 
         <Panel
-          title={formState.id ? t("notifications.editChannel") : t("notifications.createChannel")}
-          subtitle={t("notifications.formSubtitle")}
-          className="ref-card-panel"
+          title={formState.id ? formState.name || t("notifications.editChannel") : t("notifications.createChannel")}
+          subtitle={t("notifications.routePanelSubtitle")}
+          className="ref-card-panel notification-route-panel"
           actions={
-            <div className="page-actions-inline notification-actions-row">
-              <button
-                className="notification-action-button notification-action-button-secondary"
+            <VibeActionGroup className="notification-actions-row" variant="inline">
+              <VibeButton
                 disabled={!canManageNotifications || isTesting || isSaving}
                 onClick={() => void handleTest()}
-                type="button"
+                variant="secondary"
               >
                 {isTesting ? t("notifications.sending") : t("notifications.sendTest")}
-              </button>
-              <div className="notification-delete-popconfirm">
-                <button
-                  className={formState.id ? "notification-action-button notification-action-button-danger" : "notification-action-button notification-action-button-secondary"}
+              </VibeButton>
+              <VibePopconfirm
+                body={t("notifications.deleteConfirmBody")}
+                cancelDisabled={isDeleting}
+                cancelLabel={t("notifications.cancelDelete")}
+                confirmDisabled={isDeleting}
+                confirmLabel={isDeleting ? t("notifications.deleting") : t("notifications.confirmDelete")}
+                onCancel={() => setIsDeleteConfirmOpen(false)}
+                onConfirm={() => void handleDelete()}
+                open={Boolean(formState.id && isDeleteConfirmOpen)}
+                title={t("notifications.deleteConfirmTitle")}
+              >
+                <VibeButton
                   disabled={!canManageNotifications || isDeleting || isSaving}
                   onClick={() => {
                     if (!formState.id) {
@@ -391,109 +426,137 @@ export function SettingsNotificationsPage() {
                     }
                     setIsDeleteConfirmOpen((current) => !current);
                   }}
-                  type="button"
+                  variant={formState.id ? "danger" : "secondary"}
                 >
                   {formState.id ? t("notifications.delete") : t("notifications.reset")}
-                </button>
-
-                {formState.id && isDeleteConfirmOpen ? (
-                  <div className="notification-delete-bubble" role="alertdialog" aria-live="polite">
-                    <div className="notification-delete-bubble-arrow" aria-hidden="true" />
-                    <div className="notification-delete-bubble-copy">
-                      <strong>{t("notifications.deleteConfirmTitle")}</strong>
-                      <p>{t("notifications.deleteConfirmBody")}</p>
-                    </div>
-                    <div className="notification-delete-bubble-actions">
-                      <button
-                        className="notification-action-button notification-action-button-secondary"
-                        disabled={isDeleting}
-                        onClick={() => setIsDeleteConfirmOpen(false)}
-                        type="button"
-                      >
-                        {t("notifications.cancelDelete")}
-                      </button>
-                      <button
-                        className="notification-action-button notification-action-button-danger-solid"
-                        disabled={isDeleting}
-                        onClick={() => void handleDelete()}
-                        type="button"
-                      >
-                        {isDeleting ? t("notifications.deleting") : t("notifications.confirmDelete")}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </div>
+                </VibeButton>
+              </VibePopconfirm>
+            </VibeActionGroup>
           }
         >
+          <section className="notification-route-overview">
+            <div className="notification-route-hero">
+              <span className="notification-provider-mark notification-provider-mark-large" aria-hidden="true">
+                {getProviderGlyph(formState.provider)}
+              </span>
+              <div className="notification-route-hero-copy">
+                <span>{t("notifications.routeOverviewLabel")}</span>
+                <strong>{getProviderLabel(formState.provider, t)}</strong>
+                <p>{formState.enabled ? t("notifications.routeEnabledHint") : t("notifications.routeDisabledHint")}</p>
+              </div>
+              <span className={formState.enabled ? "notification-route-status is-enabled" : "notification-route-status"}>
+                {formState.enabled ? t("notifications.enabled") : t("notifications.disabled")}
+              </span>
+            </div>
+
+            <div className="notification-route-facts">
+              <article>
+                <span>{t("notifications.webhookTargetTitle")}</span>
+                <strong>{webhookTargetLabel}</strong>
+              </article>
+              <article>
+                <span>{t("notifications.servicesTitle")}</span>
+                <strong>{t("notifications.servicesCount", { count: formState.service_scopes.length })}</strong>
+              </article>
+              <article>
+                <span>{t("notifications.eventTypesTitle")}</span>
+                <strong>{formState.event_types.length || t("notifications.noEventsSelected")}</strong>
+              </article>
+            </div>
+
+            <div className="notification-route-preview-grid">
+              <div className="notification-route-preview">
+                <span>{t("notifications.routeServicesPreview")}</span>
+                <div className="notification-route-token-list">
+                  {routeServicePreview.length > 0 ? (
+                    routeServicePreview.map((scope) => (
+                      <span key={`${scope.environment}:${scope.name}`}>
+                        {t(`environment.${scope.environment}`)} / {scope.name}
+                      </span>
+                    ))
+                  ) : (
+                    <em>{t("notifications.noServicesSelected")}</em>
+                  )}
+                  {routeServiceOverflowCount > 0 ? <span>+{routeServiceOverflowCount}</span> : null}
+                </div>
+              </div>
+              <div className="notification-route-preview">
+                <span>{t("notifications.routeEventsPreview")}</span>
+                <div className="notification-route-token-list">
+                  {routeEventPreview.length > 0 ? (
+                    routeEventPreview.map((eventType) => (
+                      <span key={eventType}>{getEventLabel(eventType, t)}</span>
+                    ))
+                  ) : (
+                    <em>{t("notifications.noEventsSelected")}</em>
+                  )}
+                  {routeEventOverflowCount > 0 ? <span>+{routeEventOverflowCount}</span> : null}
+                </div>
+              </div>
+            </div>
+          </section>
+
           <form className="notification-settings-form" onSubmit={(event) => void handleSubmit(event)}>
-            <div className="notification-form-grid">
-              <label className="ref-inline-control">
-                <span>{t("notifications.nameLabel")}</span>
-                <input
-                  onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
+            <section className="notification-form-section notification-destination-section">
+              <div className="notification-section-heading">
+                <strong>{t("notifications.destinationTitle")}</strong>
+                <span>{t("notifications.destinationSubtitle")}</span>
+              </div>
+              <div className="notification-form-grid">
+                <VibeField
                   disabled={!canManageNotifications}
+                  label={t("notifications.nameLabel")}
+                  onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
                   placeholder={t("notifications.namePlaceholder")}
                   required
                   type="text"
                   value={formState.name}
                 />
-              </label>
 
-              <label className="ref-inline-control">
-                <span>{t("notifications.providerLabel")}</span>
-                <select
+                <VibehubSelect
                   disabled={!canManageNotifications}
-                  onChange={(event) =>
+                  label={t("notifications.providerLabel")}
+                  onChange={(nextValue) =>
                     setFormState((current) => ({
                       ...current,
-                      provider: event.target.value as NotificationProvider,
+                      provider: nextValue as NotificationProvider,
                     }))
                   }
+                  options={[
+                    { value: "feishu", label: t("notifications.providerFeishu") },
+                    { value: "wechat_work", label: t("notifications.providerWecom") },
+                  ]}
                   value={formState.provider}
-                >
-                  <option value="feishu">{t("notifications.providerFeishu")}</option>
-                  <option value="wechat_work">{t("notifications.providerWecom")}</option>
-                </select>
-              </label>
-            </div>
+                />
+              </div>
 
-            <label className="ref-inline-control">
-              <span>{t("notifications.webhookUrlLabel")}</span>
-              <input
+              <VibeField
+                disabled={!canManageNotifications}
+                label={t("notifications.webhookUrlLabel")}
+                note={
+                  formState.id && formState.webhook_url_masked
+                    ? t("notifications.webhookConfiguredHint", {
+                        masked: formState.webhook_url_masked,
+                      })
+                    : null
+                }
+                noteClassName="notification-services-filter-note"
                 onChange={(event) => setFormState((current) => ({ ...current, webhook_url: event.target.value }))}
                 placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
-                disabled={!canManageNotifications}
                 required={formState.id === null}
                 type="url"
                 value={formState.webhook_url}
               />
-              {formState.id && formState.webhook_url_masked ? (
-                <p className="notification-services-filter-note">
-                  {t("notifications.webhookConfiguredHint", {
-                    masked: formState.webhook_url_masked,
-                  })}
-                </p>
-              ) : null}
-            </label>
 
-            <label className={`notification-choice-card notification-choice-card-toggle${formState.enabled ? " is-selected" : ""}`}>
-              <input
-                className="notification-choice-input"
+              <VibeChoiceCard
                 checked={formState.enabled}
+                description={t("notifications.enabledHint")}
                 disabled={!canManageNotifications}
                 onChange={(event) => setFormState((current) => ({ ...current, enabled: event.target.checked }))}
-                type="checkbox"
+                title={t("notifications.enabledLabel")}
+                toggle
               />
-              <span className="notification-choice-indicator" aria-hidden="true" />
-              <div className="notification-choice-copy">
-                <strong>{t("notifications.enabledLabel")}</strong>
-                <span>
-                  {t("notifications.enabledHint")}
-                </span>
-              </div>
-            </label>
+            </section>
 
             <section className="notification-form-section">
               <div className="notification-section-heading">
@@ -535,28 +598,19 @@ export function SettingsNotificationsPage() {
                     {visibleServices.map((service) => {
                       const checked = hasServiceScope(formState.service_scopes, service);
                       return (
-                        <label
+                        <VibeChoiceCard
                           key={`${service.environment}:${service.name}`}
-                          className={`notification-choice-card${checked ? " is-selected" : ""}`}
-                        >
-                          <input
-                            className="notification-choice-input"
-                            checked={checked}
-                            disabled={!canManageNotifications}
-                            onChange={() =>
-                              setFormState((current) => ({
-                                ...current,
-                                service_scopes: toggleServiceScope(current.service_scopes, service),
-                              }))
-                            }
-                            type="checkbox"
-                          />
-                          <span className="notification-choice-indicator" aria-hidden="true" />
-                          <div className="notification-choice-copy">
-                            <strong>{service.name}</strong>
-                            <span>{service.environment}</span>
-                          </div>
-                        </label>
+                          checked={checked}
+                          description={service.environment}
+                          disabled={!canManageNotifications}
+                          onChange={() =>
+                            setFormState((current) => ({
+                              ...current,
+                              service_scopes: toggleServiceScope(current.service_scopes, service),
+                            }))
+                          }
+                          title={service.name}
+                        />
                       );
                     })}
                   </div>
@@ -577,61 +631,51 @@ export function SettingsNotificationsPage() {
                 {EVENT_VALUES.map((value) => {
                   const checked = formState.event_types.includes(value);
                   return (
-                    <label
+                    <VibeChoiceCard
                       key={value}
-                      className={`notification-choice-card${checked ? " is-selected" : ""}`}
-                    >
-                      <input
-                        className="notification-choice-input"
-                        checked={checked}
-                        disabled={!canManageNotifications}
-                        onChange={() =>
-                          setFormState((current) => ({
-                            ...current,
-                            event_types: toggleEventType(current.event_types, value),
-                          }))
-                        }
-                        type="checkbox"
-                      />
-                      <span className="notification-choice-indicator" aria-hidden="true" />
-                      <div className="notification-choice-copy">
-                        <strong>{getEventLabel(value, t)}</strong>
-                        <span>{getEventDesc(value, t)}</span>
-                      </div>
-                    </label>
+                      checked={checked}
+                      description={getEventDesc(value, t)}
+                      disabled={!canManageNotifications}
+                      onChange={() =>
+                        setFormState((current) => ({
+                          ...current,
+                          event_types: toggleEventType(current.event_types, value),
+                        }))
+                      }
+                      title={getEventLabel(value, t)}
+                    />
                   );
                 })}
               </div>
             </section>
 
             {hasMissedStart ? (
-              <label className="ref-inline-control notification-grace-control">
-                <span>{t("notifications.graceLabel")}</span>
-                <input
-                  disabled={!canManageNotifications}
-                  min={1}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      missed_start_grace_seconds: event.target.value,
-                    }))
-                  }
-                  step={1}
-                  type="number"
-                  value={formState.missed_start_grace_seconds}
-                />
-              </label>
+              <VibeField
+                className="notification-grace-control"
+                disabled={!canManageNotifications}
+                label={t("notifications.graceLabel")}
+                min={1}
+                onChange={(event) =>
+                  setFormState((current) => ({
+                    ...current,
+                    missed_start_grace_seconds: event.target.value,
+                  }))
+                }
+                step={1}
+                type="number"
+                value={formState.missed_start_grace_seconds}
+              />
             ) : null}
 
-            <div className="page-actions-inline notification-actions-row">
-              <button
-                className="notification-action-button notification-action-button-primary"
+            <VibeActionGroup className="notification-actions-row" variant="inline">
+              <VibeButton
                 disabled={!canManageNotifications || isSaving}
                 type="submit"
+                variant="primary"
               >
                 {isSaving ? t("notifications.saving") : formState.id ? t("notifications.saveChanges") : t("notifications.createChannel")}
-              </button>
-            </div>
+              </VibeButton>
+            </VibeActionGroup>
           </form>
         </Panel>
       </div>
@@ -757,6 +801,10 @@ function getEventDesc(eventType: NotificationEventType, t: (key: string) => stri
 
 function getProviderLabel(provider: NotificationProvider, t: (key: string) => string) {
   return provider === "feishu" ? t("notifications.providerFeishu") : t("notifications.providerWecom");
+}
+
+function getProviderGlyph(provider: NotificationProvider) {
+  return provider === "feishu" ? "FS" : "WX";
 }
 
 function formatEventTypes(eventTypes: NotificationEventType[], t: (key: string) => string) {
