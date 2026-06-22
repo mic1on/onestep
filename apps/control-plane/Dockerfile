@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS api
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS api-base
 
 WORKDIR /app
 
@@ -12,10 +12,6 @@ COPY backend ./backend
 COPY scripts ./scripts
 
 RUN uv sync --frozen --no-dev
-
-EXPOSE 8000
-
-CMD ["uvicorn", "onestep_control_plane_api.main:app", "--app-dir", "backend/src", "--host", "0.0.0.0", "--port", "8000"]
 
 
 FROM node:22-alpine AS frontend-build
@@ -33,14 +29,13 @@ COPY frontend ./frontend
 RUN pnpm ui:build
 
 
-FROM nginx:1.27-alpine AS frontend
+FROM api-base AS plane
 
-ENV ONESTEP_CP_UI_API_BASE_URL=/
+ENV ONESTEP_CP_UI_DIST_DIR=/app/frontend/dist \
+    ONESTEP_CP_UI_API_BASE_URL=/
 
-COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
-COPY docker/nginx/write-runtime-config.sh /docker-entrypoint.d/40-write-runtime-config.sh
-COPY --from=frontend-build /app/frontend/dist /usr/share/nginx/html
+COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
-EXPOSE 80
+EXPOSE 8000
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["uvicorn", "onestep_control_plane_api.main:app", "--app-dir", "backend/src", "--host", "0.0.0.0", "--port", "8000"]

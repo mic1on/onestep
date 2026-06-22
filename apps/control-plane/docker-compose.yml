@@ -1,7 +1,7 @@
-x-api-build: &api-build
+x-plane-build: &plane-build
   context: .
   dockerfile: Dockerfile
-  target: api
+  target: plane
 
 services:
   postgres:
@@ -26,9 +26,9 @@ services:
     volumes:
       - onestep-control-plane-postgres-data:/var/lib/postgresql/data
 
-  api:
-    build: *api-build
-    image: onestep-control-plane-api:latest
+  plane:
+    build: *plane-build
+    image: ${ONESTEP_CP_IMAGE:-onestep-control-plane:latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -44,9 +44,10 @@ services:
       ONESTEP_CP_CORS_ALLOW_ORIGINS: ${ONESTEP_CP_CORS_ALLOW_ORIGINS:-}
       ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S: ${ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S:-90}
       ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S: ${ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S:-3600}
+      ONESTEP_CP_UI_API_BASE_URL: ${ONESTEP_CP_UI_API_BASE_URL:-/}
       TZ: ${ONESTEP_CP_TIMEZONE:-Asia/Shanghai}
     ports:
-      - "${ONESTEP_CP_API_PORT:-8000}:8000"
+      - "${ONESTEP_CP_PORT:-4173}:8000"
     healthcheck:
       test:
         [
@@ -61,8 +62,8 @@ services:
       start_period: 10s
 
   migrate:
-    build: *api-build
-    image: onestep-control-plane-api:latest
+    build: *plane-build
+    image: ${ONESTEP_CP_IMAGE:-onestep-control-plane:latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,26 +74,6 @@ services:
     command: ["/app/.venv/bin/python", "-m", "alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
     restart: "no"
     profiles: ["tools"]
-
-  frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: frontend
-    restart: unless-stopped
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      ONESTEP_CP_UI_API_BASE_URL: ${ONESTEP_CP_UI_API_BASE_URL:-/}
-    ports:
-      - "${ONESTEP_CP_FRONTEND_PORT:-4173}:80"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
 
 volumes:
   onestep-control-plane-postgres-data:

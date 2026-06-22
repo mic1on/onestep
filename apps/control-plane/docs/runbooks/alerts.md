@@ -5,7 +5,7 @@ The Prometheus rules for the control plane live in
 
 Some alerts depend on standard exporters:
 
-- `up{job="onestep-control-plane-api"}` from the direct API scrape target
+- `up{job="onestep-control-plane"}` from the control plane scrape target
 - `probe_success{job="onestep-control-plane-readyz"}` from a blackbox `/readyz` probe
 - `pg_up{job="onestep-control-plane-postgres"}` from `postgres_exporter`
 
@@ -24,8 +24,8 @@ Immediate meaning:
 Operator actions:
 
 1. Confirm container state with `docker compose ... ps`.
-2. Check `docker compose ... logs api`.
-3. Check whether the API process crashed, the port bind changed, or the host is unreachable.
+2. Check `docker compose ... logs plane`.
+3. Check whether the control plane process crashed, the port bind changed, or the host is unreachable.
 4. If the issue began during rollout, use `docs/runbooks/rollback.md`.
 
 ## OneStepControlPlaneReadyzFailing
@@ -62,8 +62,8 @@ Immediate meaning:
 
 Operator actions:
 
-1. Check whether API restarts or reverse proxy reloads happened in the same window.
-2. Compare frontend availability with `/readyz` and browser console errors.
+1. Check whether control plane restarts or reverse proxy reloads happened in the same window.
+2. Compare console availability with `/readyz` and browser console errors.
 3. Inspect upstream proxy timeouts and idle connection limits.
 4. If disconnects correlate with deploys, slow or pause rollout traffic shifts.
 

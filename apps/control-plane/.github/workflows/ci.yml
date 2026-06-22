@@ -62,10 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build API image
-        run: docker build --target api -t onestep-control-plane-api:ci .
-      - name: Build frontend image
-        run: docker build --target frontend -t onestep-control-plane-frontend:ci .
+      - name: Build control plane image
+        run: docker build --target plane -t onestep-control-plane:ci .
 
   smoke:
     runs-on: ubuntu-latest
@@ -109,42 +107,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata (api)
-        id: meta_api
+      - name: Docker metadata
+        id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/onestep-control-plane-api
+          images: ghcr.io/${{ github.repository_owner }}/onestep-control-plane
           tags: |
             type=raw,value=latest
             type=sha,format=long
 
-      - name: Build and push API image
+      - name: Build and push control plane image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          target: api
+          target: plane
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta_api.outputs.tags }}
-          labels: ${{ steps.meta_api.outputs.labels }}
-
-      - name: Docker metadata (frontend)
-        id: meta_frontend
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/onestep-control-plane-frontend
-          tags: |
-            type=raw,value=latest
-            type=sha,format=long
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          target: frontend
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta_frontend.outputs.tags }}
-          labels: ${{ steps.meta_frontend.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

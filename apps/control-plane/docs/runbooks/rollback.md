@@ -4,8 +4,7 @@ Use this runbook when a release passed image pull and rollout started, but migra
 
 ## Inputs Required
 
-- The last known good API image tag.
-- The last known good frontend image tag.
+- The last known good control plane image tag.
 - The current `.env.deploy`.
 - Access to the target host and registry.
 
@@ -15,27 +14,26 @@ Use this runbook when a release passed image pull and rollout started, but migra
 - Capture the failing logs before changing container state:
 
 ```bash
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml logs --tail=200 api frontend
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml logs --tail=200 plane
 ```
 
 ## 2. Decide Whether Database Rollback Is Needed
 
 - If the release failed before `docker compose ... run --rm migrate`, do not roll back the database. Revert only images or env vars.
-- If the migration ran and was backward-compatible, prefer rolling back application images first.
+- If the migration ran and was backward-compatible, prefer rolling back the application image first.
 - If the migration was destructive or the previous application version cannot run on the new schema, stop and use the matching Alembic downgrade or restore from backup before reopening traffic.
 
 ## 3. Revert Images
 
 Edit `.env.deploy` and set:
 
-- `ONESTEP_CP_API_IMAGE` to the last known good API image
-- `ONESTEP_CP_FRONTEND_IMAGE` to the last known good frontend image
+- `ONESTEP_CP_IMAGE` to the last known good control plane image
 
 Then pull and restart only the application services:
 
 ```bash
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml pull api frontend
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d api frontend
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml pull plane
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d plane
 ```
 
 ## 4. Revert Environment Variables If Needed
@@ -51,7 +49,7 @@ If the release changed configuration values, restore the previous `.env.deploy` 
 Restart after reverting:
 
 ```bash
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d api frontend
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d plane
 ```
 
 ## 5. Re-Run Smoke
@@ -76,7 +74,7 @@ bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.d
 - If an Alembic downgrade exists and has already been validated for this release, run it explicitly:
 
 ```bash
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm api alembic downgrade -1
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migrate alembic downgrade -1
 ```
 
 Do not invent a downgrade command during the incident if the migration was never tested in reverse.

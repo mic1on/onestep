@@ -72,11 +72,12 @@ docker compose version >/dev/null 2>&1 || {
 
 docker compose ${ENV_ARG:+$ENV_ARG }-f "$COMPOSE_PATH" config >/dev/null
 
-if [ "$(basename "$COMPOSE_PATH")" = "docker-compose.deploy.yml" ]; then
-  : "${ONESTEP_CP_API_IMAGE:?set ONESTEP_CP_API_IMAGE in the deploy env file}"
-  : "${ONESTEP_CP_FRONTEND_IMAGE:?set ONESTEP_CP_FRONTEND_IMAGE in the deploy env file}"
-  : "${ONESTEP_CP_INGEST_TOKENS:?set ONESTEP_CP_INGEST_TOKENS in the deploy env file}"
-fi
+case "$(basename "$COMPOSE_PATH")" in
+  docker-compose.deploy.yml|docker-compose.nodb.yml)
+    : "${ONESTEP_CP_IMAGE:?set ONESTEP_CP_IMAGE in the deploy env file}"
+    : "${ONESTEP_CP_INGEST_TOKENS:?set ONESTEP_CP_INGEST_TOKENS in the deploy env file}"
+    ;;
+esac
 
 if [ -z "${ONESTEP_CP_DATABASE_URL:-}" ]; then
   : "${ONESTEP_CP_POSTGRES_PASSWORD:?set ONESTEP_CP_POSTGRES_PASSWORD when using the bundled postgres service}"

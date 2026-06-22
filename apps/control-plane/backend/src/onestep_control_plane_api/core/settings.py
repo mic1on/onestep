@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
     console_sensitive_auth_window_s: int = Field(default=15 * 60, ge=60)
     console_base_url: str = ""
+    ui_dist_dir: str = "frontend/dist"
+    ui_api_base_url: str = "/"
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     api_response_timezone: str = ""
     notification_missed_start_scan_interval_s: int = Field(default=60, ge=5)

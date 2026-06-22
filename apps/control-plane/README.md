@@ -102,17 +102,15 @@ Docker Compose files, deploy flow, and `scripts/start-local.sh`.
 | `ONESTEP_CP_API_RESPONSE_TIMEZONE` | Backend API | unset | Explicit timezone for datetime fields returned by the API. If unset, the backend falls back to container `TZ`, then `UTC`. |
 | `ONESTEP_CP_DEBUG` | Backend API | `false` | Enables FastAPI debug mode. Advanced troubleshooting option. |
 | `ONESTEP_CP_TIMEZONE` | Compose / deploy helper | `Asia/Shanghai` | Compose-level helper used to set container `TZ`. This indirectly affects API timestamp rendering when `ONESTEP_CP_API_RESPONSE_TIMEZONE` is unset. |
-| `ONESTEP_CP_API_PORT` | Compose / deploy | `8000` | Host port bound to the raw API container. |
-| `ONESTEP_CP_FRONTEND_PORT` | Compose / deploy | `4173` | Host port bound to the packaged frontend container. |
-| `ONESTEP_CP_UI_API_BASE_URL` | Frontend runtime | `/` | Runtime API base path written into `/app-config.js` for the packaged frontend image. Not used by `pnpm dev`. |
+| `ONESTEP_CP_IMAGE` | Compose / deploy | `onestep-control-plane:latest` | Unified control plane image used by Compose services. |
+| `ONESTEP_CP_PORT` | Compose / deploy / `scripts/start-local.sh` | `4173` | Host port bound to the unified control plane service. |
+| `ONESTEP_CP_UI_DIST_DIR` | Packaged runtime | `frontend/dist` locally / `/app/frontend/dist` in Docker | Directory containing the built Vite console assets served by FastAPI. |
+| `ONESTEP_CP_UI_API_BASE_URL` | Frontend runtime | `/` | Runtime API base path served from `/app-config.js` by the packaged control plane image. Not used by `pnpm dev`. |
 | `ONESTEP_CP_POSTGRES_DB` | Bundled PostgreSQL | `onestep_control_plane` | Database name for the bundled PostgreSQL container used by local/deploy Compose files. |
 | `ONESTEP_CP_POSTGRES_USER` | Bundled PostgreSQL | `postgres` | Database user for the bundled PostgreSQL container. |
 | `ONESTEP_CP_POSTGRES_PASSWORD` | Bundled PostgreSQL | `postgres` locally | Database password for the bundled PostgreSQL container. Change this in real deployments. |
 | `ONESTEP_CP_POSTGRES_PORT` | Bundled PostgreSQL | `5432` | Host port exposed for the bundled PostgreSQL container. If you change it locally, update `ONESTEP_CP_DATABASE_URL` to match. |
-| `ONESTEP_CP_API_IMAGE` | Deploy only | `registry.example.com/onestep-control-plane-api:latest` | API image reference used by `docker-compose.deploy.yml`. |
-| `ONESTEP_CP_FRONTEND_IMAGE` | Deploy only | `registry.example.com/onestep-control-plane-frontend:latest` | Frontend image reference used by `docker-compose.deploy.yml`. |
 | `ONESTEP_CP_HOST` | `scripts/start-local.sh` | `0.0.0.0` | Bind host used by the local helper script. |
-| `ONESTEP_CP_PORT` | `scripts/start-local.sh` | `8080` | Bind port used by the local helper script. |
 | `ONESTEP_CP_SQLITE_PATH` | `scripts/start-local.sh` | `.data/control-plane-dev.db` | SQLite file path used by the local helper script when `ONESTEP_CP_DATABASE_URL` is not set. |
 
 For Vite frontend development, `frontend/.env` uses `VITE_API_BASE_URL`, which is separate
@@ -147,39 +145,38 @@ If port `5432` is already occupied locally, change `ONESTEP_CP_POSTGRES_PORT` an
 
 ## Docker Compose
 
-The repository now includes a multi-stage `Dockerfile` and a full `docker-compose.yml`
-for `postgres`, `api`, and `frontend`.
+The repository includes a multi-stage `Dockerfile` and a full `docker-compose.yml`
+for `postgres`, `plane`, and `migrate`.
 
 Bring the full stack up:
 
 ```bash
 cp .env.example .env
 bash scripts/release-preflight.sh --compose-file docker-compose.yml --env-file .env
-docker compose build api frontend
+docker compose build plane
 docker compose up -d postgres
 docker compose run --rm migrate
-docker compose up --build -d api frontend
+docker compose up --build -d plane
 bash scripts/run-smoke.sh --compose-file docker-compose.yml --env-file .env
 ```
 
 Endpoints after startup:
 
-- frontend: `http://127.0.0.1:4173`
-- API: `http://127.0.0.1:8000`
+- control plane: `http://127.0.0.1:4173`
 - PostgreSQL: `127.0.0.1:5432`
 
-The API container now starts Uvicorn only. Schema migrations run through the one-shot
-`migrate` compose service so a bad migration can stop the release before the API
-restarts. The frontend is built as static assets and served by Nginx, which proxies `/api/*`,
-`/docs`, `/redoc`, `/healthz`, and `/readyz` back to the API container. At container
-startup, Nginx writes `/app-config.js` from `ONESTEP_CP_UI_API_BASE_URL`, so you can
-reuse the same frontend image across environments without rebuilding it. The default
-runtime API base is `/`, which works with the bundled reverse proxy. If
+The packaged control plane image starts Uvicorn and serves the API, WebSocket endpoints,
+SSE stream, `/healthz`, `/readyz`, `/docs`, and the built React console on one port.
+Schema migrations run through the one-shot `migrate` compose service so a bad migration
+can stop the release before the application restarts. FastAPI serves `/app-config.js`
+from `ONESTEP_CP_UI_API_BASE_URL`, so you can reuse the same image across environments
+without rebuilding it. The default runtime API base is `/`, which works with the unified
+service port. If
 `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and
 `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` are set in `.env`, this local full-stack compose flow
 also serves the login page and enforces console auth.
-The local `migrate` service now reuses the same `onestep-control-plane-api:latest` image
-as the `api` service, so rebuilding `api` also refreshes the migration runner.
+The local `migrate` service reuses the same `onestep-control-plane:latest` image as the
+`plane` service, so rebuilding `plane` also refreshes the migration runner.
 
 To create database-backed local console users, use the helper scripts from the repo root:
 
@@ -190,10 +187,10 @@ uv run python scripts/create_local_user.py --username operator1 --role operator
 ```
 
 When using the bundled Docker Compose stack, the same scripts are available inside the
-API container after rebuild:
+control plane container after rebuild:
 
 ```bash
-docker exec -it onestep-control-plane-api-1 /app/.venv/bin/python /app/scripts/create_local_user.py --username viewer1 --role viewer
+docker compose exec plane /app/.venv/bin/python /app/scripts/create_local_user.py --username viewer1 --role viewer
 ```
 
 For the first production-style deployment, bootstrap a local admin before opening the
@@ -201,7 +198,7 @@ console to operators:
 
 ```bash
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm \
-  api /app/.venv/bin/python /app/scripts/create_local_admin.py --username admin
+  plane /app/.venv/bin/python /app/scripts/create_local_admin.py --username admin
 ```
 
 The API now runs retention cleanup automatically in the background every
@@ -225,11 +222,11 @@ bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.d
 
 ## Registry Deployment
 
-If you have already pushed the API and frontend images to a registry, use
+If you have already pushed the control plane image to a registry, use
 `docker-compose.deploy.yml` instead of rebuilding from source on the server.
 
-The `CI` workflow now publishes both images to GitHub Container Registry as multi-architecture
-images for `linux/amd64` and `linux/arm64` after a successful `push` to `main`. If you need to
+The `CI` workflow publishes the unified image to GitHub Container Registry as a multi-architecture
+image for `linux/amd64` and `linux/arm64` after a successful `push` to `main`. If you need to
 republish a `main` revision without creating a new merge commit, open GitHub Actions and manually
 run the `CI` workflow with `workflow_dispatch` against `main`.
 
@@ -241,27 +238,24 @@ cp .env.deploy.example .env.deploy
 
 Set at least these values in `.env.deploy`:
 
-- `ONESTEP_CP_API_IMAGE`
-- `ONESTEP_CP_FRONTEND_IMAGE`
+- `ONESTEP_CP_IMAGE`
 - `ONESTEP_CP_INGEST_TOKENS`
 - `ONESTEP_CP_CONSOLE_AUTH_USERNAME`
 - `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`
 - `ONESTEP_CP_UI_API_BASE_URL`
 - `ONESTEP_CP_POSTGRES_PASSWORD`
 
-`ONESTEP_CP_DATABASE_URL` is optional. Leave it empty to use the bundled `postgres`
-service. If you set it to an external PostgreSQL DSN, the API will use that database,
-but this deployment file still starts the bundled `postgres` container unless you trim
-the compose file for your environment.
+Use `docker-compose.deploy.yml` with the bundled `postgres` service, or use
+`docker-compose.nodb.yml` and set `ONESTEP_CP_DATABASE_URL` for an external PostgreSQL
+database.
 
 Prefer commit-pinned image tags for real deployments:
 
 ```bash
-ONESTEP_CP_API_IMAGE=ghcr.io/mic1on/onestep-control-plane-api:sha-<full git sha>
-ONESTEP_CP_FRONTEND_IMAGE=ghcr.io/mic1on/onestep-control-plane-frontend:sha-<full git sha>
+ONESTEP_CP_IMAGE=ghcr.io/mic1on/onestep-control-plane:sha-<full git sha>
 ```
 
-`latest` is also published for both images, but `sha-<full git sha>` is the safer rollback and
+`latest` is also published, but `sha-<full git sha>` is the safer rollback and
 audit trail for production-style rollouts.
 
 Deploy on the target machine:
@@ -269,10 +263,10 @@ Deploy on the target machine:
 ```bash
 docker login <registry>
 bash scripts/release-preflight.sh --compose-file docker-compose.deploy.yml --env-file .env.deploy
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml pull api frontend
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml pull plane
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d postgres
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migrate
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d api frontend
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d plane
 ```
 
 Verify the rollout:
@@ -282,11 +276,10 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml ps
 bash scripts/run-smoke.sh --compose-file docker-compose.deploy.yml --env-file .env.deploy
 ```
 
-When console auth is configured, the browser authenticates through the frontend login
-page and receives an `HttpOnly` session cookie from the API. Agent ingestion remains
-separate and still authenticates with `ONESTEP_CP_INGEST_TOKENS` only. The deploy file
-also binds PostgreSQL and the raw API port to `127.0.0.1`, so external traffic should go
-through the frontend port or an upstream reverse proxy.
+When console auth is configured, the browser authenticates through the login page and
+receives an `HttpOnly` session cookie from the same control plane service. Agent ingestion
+remains separate and still authenticates with `ONESTEP_CP_INGEST_TOKENS` only. External
+traffic should go through the `plane` service port or an upstream reverse proxy.
 
 Release and rollback procedures are documented in:
 

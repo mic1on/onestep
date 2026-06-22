@@ -2,7 +2,7 @@ groups:
   - name: onestep-control-plane-availability
     rules:
       - alert: OneStepControlPlaneApiDown
-        expr: up{job="onestep-control-plane-api"} == 0
+        expr: up{job="onestep-control-plane"} == 0
         for: 2m
         labels:
           severity: critical

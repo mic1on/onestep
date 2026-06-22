@@ -22,6 +22,7 @@ from onestep_control_plane_api.db.session import SessionLocal
 from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
 )
+from onestep_control_plane_api.ui import router as ui_router
 from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
     run_notification_missed_start_scanner,
@@ -119,6 +120,8 @@ def create_app() -> FastAPI:
             openapi_url="/openapi.json",
             title=f"{app.title} - ReDoc",
         )
+
+    app.include_router(ui_router)
 
     return app
 

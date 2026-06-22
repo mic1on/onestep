@@ -64,8 +64,9 @@ if [ -n "$ENV_FILE" ]; then
 fi
 
 READY_TIMEOUT_S="${ONESTEP_CP_SMOKE_READY_TIMEOUT_S:-120}"
-API_URL="${ONESTEP_CP_SMOKE_API_URL:-http://127.0.0.1:${ONESTEP_CP_API_PORT:-8000}}"
-FRONTEND_URL="${ONESTEP_CP_SMOKE_FRONTEND_URL:-http://127.0.0.1:${ONESTEP_CP_FRONTEND_PORT:-4173}}"
+BASE_URL="${ONESTEP_CP_SMOKE_BASE_URL:-http://127.0.0.1:${ONESTEP_CP_PORT:-4173}}"
+API_URL="${ONESTEP_CP_SMOKE_API_URL:-$BASE_URL}"
+FRONTEND_URL="${ONESTEP_CP_SMOKE_FRONTEND_URL:-$BASE_URL}"
 
 compose() {
   docker compose ${ENV_ARG:+$ENV_ARG }-f "$COMPOSE_PATH" "$@"
@@ -98,11 +99,13 @@ trap cleanup EXIT INT TERM
 
 if [ "$SMOKE_MANAGE_STACK" = "1" ] || [ "$SMOKE_MANAGE_STACK" = "true" ]; then
   if [ "$SMOKE_BUILD" = "1" ] || [ "$SMOKE_BUILD" = "true" ]; then
-    compose build api frontend
+    compose build plane
   fi
-  compose up -d postgres
+  if compose config --services | grep -qx postgres; then
+    compose up -d postgres
+  fi
   compose run --rm migrate
-  compose up -d api frontend
+  compose up -d plane
 fi
 
 compose ps
@@ -118,5 +121,9 @@ printf '%s\n' "$frontend_payload" | grep -qi '<html'
 printf '%s\n' "$config_payload" | grep -q 'window.__APP_CONFIG__'
 
 printf 'smoke ok\n'
-printf '  api: %s\n' "$API_URL"
-printf '  frontend: %s\n' "$FRONTEND_URL"
+if [ "$API_URL" = "$FRONTEND_URL" ]; then
+  printf '  control plane: %s\n' "$API_URL"
+else
+  printf '  api: %s\n' "$API_URL"
+  printf '  frontend: %s\n' "$FRONTEND_URL"
+fi

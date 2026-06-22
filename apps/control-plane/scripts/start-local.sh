@@ -3,7 +3,7 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 HOST="${ONESTEP_CP_HOST:-0.0.0.0}"
-PORT="${ONESTEP_CP_PORT:-8080}"
+PORT="${ONESTEP_CP_PORT:-4173}"
 DB_PATH="${ONESTEP_CP_SQLITE_PATH:-$ROOT_DIR/.data/control-plane-dev.db}"
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 

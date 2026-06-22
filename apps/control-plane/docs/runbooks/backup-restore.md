@@ -14,7 +14,7 @@ plain PostgreSQL URLs before calling `pg_dump` or `pg_restore`.
 - `pg_dump` and `pg_restore` are installed on the operator host.
 - The target database is PostgreSQL.
 - The operator has a validated env file such as `.env.deploy`.
-- The API release candidate has already passed smoke checks before the backup is taken for
+- The control plane release candidate has already passed smoke checks before the backup is taken for
   a restore drill.
 
 ## 1. Create A Backup
@@ -73,7 +73,7 @@ bash scripts/run-smoke.sh --compose-file docker-compose.deploy.yml --env-file .e
 Manual checks:
 
 - `GET /readyz` returns `200` with `"status":"ready"`
-- the login page loads through the frontend
+- the login page loads through the control plane port
 - a known local admin can authenticate
 - at least one service list page and one task detail page render correctly
 - recent rows are present in `task_events`, `task_metric_windows`, and `agent_commands`
