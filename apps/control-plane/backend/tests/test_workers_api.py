@@ -5,10 +5,9 @@ import io
 import zipfile
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
-
 from onestep_control_plane_api.api.connector_service import get_cipher
 from onestep_control_plane_api.db.models import Worker, WorkerAgentCommand
+from sqlalchemy import select
 
 
 def _create_worker_payload(name="order-sync"):

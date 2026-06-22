@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.connector_service import (
     build_runtime_connector_payload,
-    get_connector_or_404,
     get_cipher,
+    get_connector_or_404,
 )
 from onestep_control_plane_api.api.schemas import (
     WorkerCreateRequest,
@@ -263,7 +263,11 @@ def _resolve_connectors(db: Session, worker: Worker) -> dict[str, dict[str, obje
     return resolved
 
 
-async def deploy_worker(db: Session, worker_id: UUID, request: WorkerDeployRequest) -> dict[str, object]:
+async def deploy_worker(
+    db: Session,
+    worker_id: UUID,
+    request: WorkerDeployRequest,
+) -> dict[str, object]:
     worker = get_worker_or_404(db, worker_id)
     if worker.handler_package_id is None:
         raise HTTPException(status_code=422, detail="worker has no handler package")
