@@ -178,6 +178,56 @@ describe("WorkerEditorPage", () => {
     expect(screen.getByRole("button", { name: "Data reporting" })).toBeInTheDocument();
   });
 
+  it("configures interval triggers with operational labels while preserving fields", async () => {
+    const user = userEvent.setup();
+    mockUseWorkerQuery.mockReturnValue({
+      data: {
+        ...EXISTING_WORKER,
+        source_config: {
+          type: "interval",
+          connector_id: null,
+          fields: { minutes: 15, immediate: false },
+        },
+      },
+      isPending: false,
+      error: null,
+    });
+    mockUpdateWorker.mockResolvedValue({});
+    renderPage(`/workers/${EXISTING_WORKER.id}`);
+
+    await user.click(screen.getByRole("button", { name: "Configuration" }));
+    await user.click(screen.getByRole("button", { name: "Trigger" }));
+
+    expect(screen.getByText("Run every")).toBeInTheDocument();
+    expect(screen.getByText("15 min")).toBeInTheDocument();
+    expect(screen.getByText("Wait for first interval")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    const intervalInput = screen.getByRole("spinbutton", { name: /Run every/ });
+    await user.clear(intervalInput);
+    await user.type(intervalInput, "30");
+    await user.click(screen.getByRole("combobox", { name: "Unit" }));
+    await user.click(screen.getByRole("option", { name: "Seconds" }));
+    await user.click(screen.getByRole("button", { name: /Run once right away/ }));
+    await user.click(screen.getByRole("button", { name: "Apply trigger" }));
+    mockUpdateWorker.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    expect(mockUpdateWorker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source_config: {
+          type: "interval",
+          connector_id: null,
+          fields: {
+            seconds: 30,
+            immediate: "true",
+          },
+        },
+      }),
+    );
+  });
+
   it("hydrates worker details when the edit page data loads after a direct refresh", async () => {
     let workersQueryResult: {
       data: WorkerSummary | undefined;

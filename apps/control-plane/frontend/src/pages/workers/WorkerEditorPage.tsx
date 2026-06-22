@@ -75,6 +75,9 @@ type EnvVarDraft = {
   value: string;
 };
 
+type IntervalUnit = "minutes" | "seconds";
+type ImmediateValue = "true" | "false" | "";
+
 let envVarDraftSequence = 0;
 
 function createEnvVarDraft(key = "", value = ""): EnvVarDraft {
@@ -244,10 +247,52 @@ function fieldDisplayValue(value: unknown) {
   return String(value);
 }
 
+function sourceParamSortKey(name: string) {
+  if (name === "minutes" || name === "seconds") return 0;
+  if (name === "immediate") return 1;
+  return 2;
+}
+
 function fieldInputType(field: SourceSinkField) {
   if (field.type === "password") return "password";
   if (field.type === "number") return "number";
   return "text";
+}
+
+function intervalUnitForFields(fields: Record<string, unknown>): IntervalUnit {
+  return fieldDisplayValue(fields.seconds).trim() ? "seconds" : "minutes";
+}
+
+function intervalValueForFields(fields: Record<string, unknown>, unit: IntervalUnit) {
+  return fieldDisplayValue(fields[unit]);
+}
+
+function immediateValueForFields(fields: Record<string, unknown>): ImmediateValue {
+  const value = fieldDisplayValue(fields.immediate).trim().toLowerCase();
+  if (value === "true") return "true";
+  if (value === "false") return "false";
+  return "";
+}
+
+function setIntervalScheduleFields(
+  fields: Record<string, unknown>,
+  unit: IntervalUnit,
+  value: string,
+) {
+  const nextFields = { ...fields };
+  nextFields[unit] = value;
+  delete nextFields[unit === "minutes" ? "seconds" : "minutes"];
+  return nextFields;
+}
+
+function setIntervalImmediateField(fields: Record<string, unknown>, value: ImmediateValue) {
+  const nextFields = { ...fields };
+  if (value) {
+    nextFields.immediate = value;
+  } else {
+    delete nextFields.immediate;
+  }
+  return nextFields;
 }
 
 function normalizeFieldValue(field: SourceSinkField, rawValue: unknown) {
@@ -576,6 +621,13 @@ export function WorkerEditorPage() {
     });
   }
 
+  function setTriggerFields(fields: Record<string, unknown>) {
+    setTriggerDraft({
+      ...triggerDraft,
+      fields,
+    });
+  }
+
   function applyTrigger() {
     setDraft({ ...draft, source: normalizeSourceConfig(triggerDraft) });
     setIsTriggerDialogOpen(false);
@@ -737,9 +789,9 @@ export function WorkerEditorPage() {
   const triggerConnectorOptions = triggerConnectorType
     ? connectors.filter((connector) => connector.type === triggerConnectorType)
     : connectors;
-  const sourceParams = Object.entries(draft.source.fields).filter(
-    ([, value]) => value !== null && value !== undefined && value !== "",
-  );
+  const sourceParams = Object.entries(draft.source.fields)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .sort(([left], [right]) => sourceParamSortKey(left) - sourceParamSortKey(right));
   const canApplyTrigger =
     (!triggerSchema?.needsConnector || Boolean(triggerDraft.connector_id)) &&
     hasRequiredFields(triggerSchema, triggerDraft.fields);
@@ -767,6 +819,155 @@ export function WorkerEditorPage() {
     t(`workerEditor.sinkTypeLabels.${type}`, {
       defaultValue: sinkTypeSchemas[type]?.label ?? type,
     });
+
+  function sourceParamLabel(key: string) {
+    return t(`workerEditor.sourceParamLabels.${draft.source.type}.${key}`, {
+      defaultValue: key,
+    });
+  }
+
+  function sourceParamValue(key: string, value: unknown) {
+    if (draft.source.type === "interval" && (key === "minutes" || key === "seconds")) {
+      return t("workerEditor.intervalParamFrequency", {
+        amount: fieldDisplayValue(value),
+        unit: t(`workerEditor.intervalUnitShort.${key}`),
+      });
+    }
+    if (draft.source.type === "interval" && key === "immediate") {
+      const normalized = fieldDisplayValue(value).trim().toLowerCase();
+      if (normalized === "true") return t("workerEditor.intervalImmediateEnabled");
+      if (normalized === "false") return t("workerEditor.intervalImmediateDisabled");
+    }
+    return fieldDisplayValue(value);
+  }
+
+  function renderTriggerFields() {
+    if (triggerDraft.type === "interval") {
+      const unit = intervalUnitForFields(triggerDraft.fields);
+      const value = intervalValueForFields(triggerDraft.fields, unit);
+      const immediate = immediateValueForFields(triggerDraft.fields);
+      const unitLabel = t(`workerEditor.intervalUnitShort.${unit}`);
+
+      return (
+        <div className="worker-trigger-form">
+          <section className="worker-trigger-guide">
+            <div>
+              <span>{t("workerEditor.intervalTriggerEyebrow")}</span>
+              <strong>{t("workerEditor.intervalTriggerTitle")}</strong>
+              <p>{t("workerEditor.intervalTriggerBody")}</p>
+            </div>
+            <div className="worker-trigger-guide-metric">
+              <span>{t("workerEditor.intervalSchedulePreview")}</span>
+              <strong>
+                {value.trim()
+                  ? t("workerEditor.intervalScheduleSummary", { amount: value, unit: unitLabel })
+                  : t("workerEditor.intervalScheduleUnset")}
+              </strong>
+            </div>
+          </section>
+
+          <div className="worker-trigger-field-grid">
+            <VibeField
+              label={t("workerEditor.intervalRunEvery")}
+              min="1"
+              note={t("workerEditor.intervalRunEveryNote")}
+              onChange={(event) =>
+                setTriggerFields(
+                  setIntervalScheduleFields(triggerDraft.fields, unit, event.target.value),
+                )
+              }
+              type="number"
+              value={value}
+            />
+            <VibehubSelect
+              label={t("workerEditor.intervalUnit")}
+              onChange={(nextValue) =>
+                setTriggerFields(
+                  setIntervalScheduleFields(
+                    triggerDraft.fields,
+                    nextValue as IntervalUnit,
+                    intervalValueForFields(triggerDraft.fields, unit),
+                  ),
+                )
+              }
+              options={[
+                { value: "minutes", label: t("workerEditor.intervalUnitMinutes") },
+                { value: "seconds", label: t("workerEditor.intervalUnitSeconds") },
+              ]}
+              value={unit}
+            />
+          </div>
+
+          <div className="worker-trigger-choice-group">
+            <div className="worker-trigger-choice-head">
+              <strong>{t("workerEditor.intervalStartupRun")}</strong>
+              <p>{t("workerEditor.intervalStartupNote")}</p>
+            </div>
+            <div
+              aria-label={t("workerEditor.intervalStartupRun")}
+              className="worker-trigger-choice-grid"
+              role="group"
+            >
+              {(["true", "false", ""] as ImmediateValue[]).map((option) => (
+                <button
+                  className={[
+                    "worker-trigger-choice-option",
+                    immediate === option ? "is-selected" : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={option || "unset"}
+                  onClick={() =>
+                    setTriggerFields(setIntervalImmediateField(triggerDraft.fields, option))
+                  }
+                  type="button"
+                >
+                  <strong>
+                    {option === "true"
+                      ? t("workerEditor.intervalStartupImmediate")
+                      : option === "false"
+                        ? t("workerEditor.intervalStartupDeferred")
+                        : t("workerEditor.intervalStartupUnset")}
+                  </strong>
+                  <span>
+                    {option === "true"
+                      ? t("workerEditor.intervalStartupImmediateDesc")
+                      : option === "false"
+                        ? t("workerEditor.intervalStartupDeferredDesc")
+                        : t("workerEditor.intervalStartupUnsetDesc")}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return triggerSchema?.fields.map((field) =>
+      field.type === "select" && field.options ? (
+        <VibehubSelect
+          key={field.name}
+          label={field.label}
+          onChange={(nextValue) => setTriggerField(field.name, nextValue)}
+          options={[
+            { value: "", label: t("common.unset") },
+            ...field.options.map((option) => ({ value: option, label: option })),
+          ]}
+          value={fieldDisplayValue(triggerDraft.fields[field.name])}
+        />
+      ) : (
+        <VibeField
+          key={field.name}
+          label={field.label}
+          onChange={(event) => setTriggerField(field.name, event.target.value)}
+          placeholder={field.placeholder}
+          type={fieldInputType(field)}
+          value={fieldDisplayValue(triggerDraft.fields[field.name])}
+        />
+      ),
+    );
+  }
 
   function selectFile(path: string) {
     setActiveFilePath(path);
@@ -832,7 +1033,14 @@ export function WorkerEditorPage() {
   const deployableAgentCount = deployableAgents.length;
 
   return (
-    <div className="ref-console-page signal-console-runtime-page worker-editor-page">
+    <div
+      className={[
+        "ref-console-page signal-console-runtime-page worker-editor-page",
+        isTriggerDialogOpen ? "has-open-modal" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <SignalConsoleHeader
         kicker={t("workerEditor.eyebrow")}
         title={isEditing ? draft.name : t("workerEditor.newTitle")}
@@ -1184,8 +1392,8 @@ export function WorkerEditorPage() {
                       <dl>
                         {sourceParams.map(([key, value]) => (
                           <div key={key}>
-                            <dt>{key}</dt>
-                            <dd>{fieldDisplayValue(value)}</dd>
+                            <dt>{sourceParamLabel(key)}</dt>
+                            <dd>{sourceParamValue(key, value)}</dd>
                           </div>
                         ))}
                       </dl>
@@ -1579,29 +1787,7 @@ export function WorkerEditorPage() {
             {t("workerEditor.noAvailableConnectors")}
           </VibeInlineNotice>
         ) : null}
-        {triggerSchema?.fields.map((field) =>
-          field.type === "select" && field.options ? (
-            <VibehubSelect
-              key={field.name}
-              label={field.label}
-              onChange={(nextValue) => setTriggerField(field.name, nextValue)}
-              options={[
-                { value: "", label: t("common.unset") },
-                ...field.options.map((option) => ({ value: option, label: option })),
-              ]}
-              value={fieldDisplayValue(triggerDraft.fields[field.name])}
-            />
-          ) : (
-            <VibeField
-              key={field.name}
-              label={field.label}
-              onChange={(event) => setTriggerField(field.name, event.target.value)}
-              placeholder={field.placeholder}
-              type={fieldInputType(field)}
-              value={fieldDisplayValue(triggerDraft.fields[field.name])}
-            />
-          ),
-        )}
+        {renderTriggerFields()}
       </VibeModal>
     </div>
   );

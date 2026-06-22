@@ -19,9 +19,9 @@ export const sourceTypeSchemas: Record<string, SourceSinkTypeSchema> = {
     label: "Interval (schedule)",
     needsConnector: false,
     fields: [
-      { name: "minutes", label: "Minutes", type: "number", required: false },
-      { name: "seconds", label: "Seconds", type: "number", required: false },
-      { name: "immediate", label: "Immediate", type: "text", required: false },
+      { name: "minutes", label: "Run every", type: "number", required: false },
+      { name: "seconds", label: "Run every", type: "number", required: false },
+      { name: "immediate", label: "Startup run", type: "text", required: false },
     ],
   },
   cron: {

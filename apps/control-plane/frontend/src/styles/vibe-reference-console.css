@@ -3828,6 +3828,117 @@ a.ref-detail-table-row:hover,
   padding: 16px;
 }
 
+.signal-console-runtime-page .worker-trigger-form {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-trigger-guide {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.34fr);
+  gap: 12px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-radius);
+  background: var(--vibe-surface-soft);
+}
+
+.signal-console-runtime-page .worker-trigger-guide > div,
+.signal-console-runtime-page .worker-trigger-guide-metric,
+.signal-console-runtime-page .worker-trigger-choice-head {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-trigger-guide span {
+  color: var(--vibe-muted);
+  font-family: "IBM Plex Mono", "Space Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.signal-console-runtime-page .worker-trigger-guide strong,
+.signal-console-runtime-page .worker-trigger-choice-head strong {
+  color: var(--vibe-ink);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.signal-console-runtime-page .worker-trigger-guide p,
+.signal-console-runtime-page .worker-trigger-choice-head p,
+.signal-console-runtime-page .worker-trigger-choice-option span,
+.signal-console-runtime-page .ref-inline-control p {
+  margin: 0;
+  color: var(--vibe-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.signal-console-runtime-page .worker-trigger-guide-metric {
+  align-content: center;
+  padding: 12px;
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-control-radius);
+  background: var(--vibe-surface);
+}
+
+.signal-console-runtime-page .worker-trigger-field-grid,
+.signal-console-runtime-page .worker-trigger-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-trigger-choice-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.signal-console-runtime-page .worker-trigger-choice-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.signal-console-runtime-page .worker-trigger-choice-option {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  min-width: 0;
+  min-height: 104px;
+  padding: 12px;
+  border: 1px solid var(--vibe-line);
+  border-radius: var(--vibe-control-radius);
+  background: var(--vibe-surface-soft);
+  color: var(--vibe-ink);
+  text-align: left;
+}
+
+.signal-console-runtime-page .worker-trigger-choice-option.is-selected {
+  border-color: var(--vibe-accent);
+  background: var(--vibe-accent-soft);
+  box-shadow: inset 3px 0 0 var(--vibe-accent);
+}
+
+.signal-console-runtime-page .worker-trigger-choice-option strong {
+  color: var(--vibe-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.signal-console-runtime-page.has-open-modal {
+  position: relative;
+  z-index: 4600;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 210px minmax(0, 1fr);
@@ -3869,6 +3980,9 @@ a.ref-detail-table-row:hover,
   .signal-console-runtime-page .connectors-workbench,
   .signal-console-runtime-page .connectors-detail-grid,
   .signal-console-runtime-page .worker-config-layout,
+  .signal-console-runtime-page .worker-trigger-guide,
+  .signal-console-runtime-page .worker-trigger-field-grid,
+  .signal-console-runtime-page .worker-trigger-choice-grid,
   .signal-console-runtime-page .worker-code-shell,
   .signal-console-service-detail .service-detail-header-main,
   .notification-form-grid {
@@ -3931,6 +4045,11 @@ a.ref-detail-table-row:hover,
     flex-wrap: wrap;
     margin-top: 0;
     padding-top: 10px;
+  }
+
+  .signal-console-runtime-page .ref-modal-overlay {
+    align-items: start;
+    overflow-y: auto;
   }
 
   .signal-console-page-header,
