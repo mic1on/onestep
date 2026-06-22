@@ -114,7 +114,7 @@ function emptyDraft(): Draft {
     name: "",
     description: "",
     handlerRef: "handler:handler",
-    source: { type: "interval", connector_id: null, fields: {} },
+    source: createSourceConfig("interval"),
     sinks: [],
     env: [],
     reportingEnabled: true,
@@ -257,7 +257,7 @@ function normalizeConfigFields(schema: SourceSinkTypeSchema | undefined, fields:
   if (!schema) return fields;
   const normalized: Record<string, unknown> = {};
   for (const field of schema.fields) {
-    const value = normalizeFieldValue(field, fields[field.name]);
+    const value = normalizeFieldValue(field, fields[field.name] ?? field.defaultValue);
     if (Array.isArray(value) && value.length === 0) continue;
     if (value !== undefined) normalized[field.name] = value;
   }
@@ -284,6 +284,30 @@ function normalizeSinkConfig(sink: WorkerSinkConfig): WorkerSinkConfig {
   return {
     ...sink,
     fields: normalizeConfigFields(sinkTypeSchemas[sink.type], sink.fields),
+  };
+}
+
+function defaultFieldsForSchema(schema: SourceSinkTypeSchema | undefined) {
+  const fields: Record<string, unknown> = {};
+  for (const field of schema?.fields ?? []) {
+    if (field.defaultValue !== undefined) fields[field.name] = field.defaultValue;
+  }
+  return fields;
+}
+
+function createSourceConfig(type: string): WorkerSourceConfig {
+  return {
+    type,
+    connector_id: null,
+    fields: defaultFieldsForSchema(sourceTypeSchemas[type]),
+  };
+}
+
+function createSinkConfig(type: string): WorkerSinkConfig {
+  return {
+    type,
+    connector_id: null,
+    fields: defaultFieldsForSchema(sinkTypeSchemas[type]),
   };
 }
 
@@ -519,7 +543,7 @@ export function WorkerEditorPage() {
   function addSink() {
     setDraft({
       ...draft,
-      sinks: [...draft.sinks, { type: "http_sink", connector_id: null, fields: {} }],
+      sinks: [...draft.sinks, createSinkConfig("http_sink")],
     });
   }
 
@@ -1112,7 +1136,7 @@ export function WorkerEditorPage() {
                             value={sink.type}
                             onChange={(e) => {
                               const sinks = [...draft.sinks];
-                              sinks[index] = { type: e.target.value, connector_id: null, fields: {} };
+                              sinks[index] = createSinkConfig(e.target.value);
                               setDraft({ ...draft, sinks });
                             }}
                           >
@@ -1143,17 +1167,43 @@ export function WorkerEditorPage() {
                             </select>
                           </label>
                         ) : null}
-                        {sinkSchema?.fields.map((field) => (
-                          <label className="ref-inline-control" key={field.name}>
-                            <span>{field.label}</span>
-                            <input
-                              type={fieldInputType(field)}
-                              placeholder={field.placeholder}
-                              value={fieldDisplayValue(sink.fields[field.name])}
-                              onChange={(e) => setSinkField(index, field.name, e.target.value)}
-                            />
-                          </label>
-                        ))}
+                        {sinkSchema?.fields.map((field) => {
+                          const value = fieldDisplayValue(sink.fields[field.name] ?? field.defaultValue);
+                          return (
+                            <label
+                              className={
+                                field.type === "select"
+                                  ? "ref-inline-control ref-inline-control-select"
+                                  : "ref-inline-control"
+                              }
+                              key={field.name}
+                            >
+                              <span>{field.label}</span>
+                              {field.type === "select" ? (
+                                <select
+                                  value={value}
+                                  onChange={(e) => setSinkField(index, field.name, e.target.value)}
+                                >
+                                  {!field.required && field.defaultValue === undefined ? (
+                                    <option value="">{t("common.notAvailable")}</option>
+                                  ) : null}
+                                  {(field.options ?? []).map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={fieldInputType(field)}
+                                  placeholder={field.placeholder}
+                                  value={value}
+                                  onChange={(e) => setSinkField(index, field.name, e.target.value)}
+                                />
+                              )}
+                            </label>
+                          );
+                        })}
                         <button type="button" onClick={() => removeSink(index)}>
                           {t("workerEditor.removeSink")}
                         </button>
@@ -1364,11 +1414,7 @@ export function WorkerEditorPage() {
                 <select
                   value={triggerDraft.type}
                   onChange={(e) =>
-                    setTriggerDraft({
-                      type: e.target.value,
-                      connector_id: null,
-                      fields: {},
-                    })
+                    setTriggerDraft(createSourceConfig(e.target.value))
                   }
                 >
                   {sourceTypeOrder.map((typ) => (

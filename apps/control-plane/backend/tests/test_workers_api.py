@@ -103,6 +103,25 @@ def test_create_and_list_worker(client):
     }
 
 
+def test_create_worker_defaults_http_sink_method_to_post(client):
+    payload = _create_worker_payload()
+    payload["sink_configs"] = [
+        {
+            "type": "http_sink",
+            "connector_id": None,
+            "fields": {"url": "https://example.com/events"},
+        }
+    ]
+
+    response = client.post("/api/v1/workers", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["sink_configs"][0]["fields"] == {
+        "url": "https://example.com/events",
+        "method": "POST",
+    }
+
+
 def test_update_worker(client):
     create = client.post("/api/v1/workers", json=_create_worker_payload())
     worker_id = create.json()["id"]

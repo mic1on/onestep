@@ -1399,6 +1399,12 @@ class WorkerSinkConfig(APIModel):
     connector_id: str | None = None
     fields: dict[str, object] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def apply_type_defaults(self) -> WorkerSinkConfig:
+        if self.type == "http_sink" and not str(self.fields.get("method") or "").strip():
+            self.fields = {**self.fields, "method": "POST"}
+        return self
+
 
 class WorkerReportingConfig(APIModel):
     mode: WorkerReportingMode = "platform"

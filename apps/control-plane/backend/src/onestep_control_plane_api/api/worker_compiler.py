@@ -22,6 +22,13 @@ def _needs_connector(source_or_sink: dict[str, Any]) -> bool:
     return typ not in BUILTIN_SOURCE_TYPES and typ not in NO_CONNECTOR_SINK_TYPES
 
 
+def _sink_fields(sink: dict[str, Any]) -> dict[str, Any]:
+    fields = dict(sink.get("fields", {}))
+    if sink["type"] == "http_sink" and not str(fields.get("method") or "").strip():
+        fields["method"] = "POST"
+    return fields
+
+
 def compile_worker_yaml(
     worker: dict[str, Any],
     connectors: dict[str, dict[str, Any]],
@@ -63,7 +70,7 @@ def compile_worker_yaml(
         sink_resource: dict[str, Any] = {"type": sink["type"]}
         if _needs_connector(sink) and sink.get("connector_id"):
             sink_resource["connector"] = resolve_connector(sink["connector_id"])
-        sink_resource.update(sink.get("fields", {}))
+        sink_resource.update(_sink_fields(sink))
         resources[f"sink_{index}"] = sink_resource
 
     # Single task.

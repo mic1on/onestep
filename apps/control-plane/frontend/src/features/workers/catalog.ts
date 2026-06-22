@@ -5,6 +5,7 @@ export interface SourceSinkField {
   required: boolean;
   options?: string[];
   placeholder?: string;
+  defaultValue?: string | number | string[];
 }
 
 export interface SourceSinkTypeSchema {
@@ -103,7 +104,14 @@ export const sinkTypeSchemas: Record<string, SourceSinkTypeSchema> = {
     needsConnector: false,
     fields: [
       { name: "url", label: "URL", type: "text", required: true, placeholder: "https://..." },
-      { name: "method", label: "Method", type: "select", required: false, options: ["POST", "PUT", "PATCH", "DELETE"] },
+      {
+        name: "method",
+        label: "Method",
+        type: "select",
+        required: false,
+        options: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+        defaultValue: "POST",
+      },
     ],
   },
   rabbitmq_queue: {

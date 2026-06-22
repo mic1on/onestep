@@ -102,6 +102,8 @@ def test_compile_builtin_source_has_no_connector_key():
     src = [v for v in data["resources"].values() if v["type"] == "interval"][0]
     assert "connector" not in src
     assert src["seconds"] == 1
+    sink = [v for v in data["resources"].values() if v["type"] == "http_sink"][0]
+    assert sink["method"] == "POST"
 
 
 def test_compile_omits_reporter_when_reporting_disabled():

@@ -288,6 +288,36 @@ describe("WorkerEditorPage", () => {
     );
   });
 
+  it("defaults new HTTP sinks to POST", async () => {
+    const user = userEvent.setup();
+    mockCreateWorker.mockResolvedValue({ id: EXISTING_WORKER.id });
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Targets" }));
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+
+    const method = screen.getByLabelText("Method") as HTMLSelectElement;
+    expect(method.value).toBe("POST");
+
+    await user.type(screen.getByLabelText("URL"), "https://example.com/events");
+    await user.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    expect(mockCreateWorker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sink_configs: [
+          {
+            type: "http_sink",
+            connector_id: null,
+            fields: {
+              url: "https://example.com/events",
+              method: "POST",
+            },
+          },
+        ],
+      }),
+    );
+  });
+
   it("lists deployable agents and sends current environment variables when one is clicked", async () => {
     const user = userEvent.setup();
     mockUseWorkerQuery.mockReturnValue({
