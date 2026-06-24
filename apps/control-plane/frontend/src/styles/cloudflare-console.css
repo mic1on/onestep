@@ -1130,6 +1130,324 @@ body {
   width: 100%;
 }
 
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius);
+  background: var(--cf-surface);
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-topbar-rail {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--cf-border);
+  border-radius: 6px;
+  background: var(--cf-surface-subtle);
+  color: var(--cf-text);
+  text-decoration: none;
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-back-button:hover {
+  border-color: var(--cf-border-strong);
+  background: var(--cf-surface-muted);
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-back-button-icon {
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-topbar-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-title,
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-title-copy {
+  min-width: 0;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-title-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-title-row h2 {
+  margin: 0;
+  color: var(--cf-text);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-title-copy p {
+  margin: 0;
+  color: var(--cf-text-soft);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-header-actions {
+  flex: 0 0 188px;
+  padding: 0;
+  border: 0;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .signal-console-detail-topbar-metric {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius);
+  background: var(--cf-surface-subtle);
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .signal-console-detail-topbar-metric span,
+.cloudflare-console-shell .signal-console-task-detail .signal-console-detail-topbar-metric p {
+  margin: 0;
+  color: var(--cf-text-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .signal-console-detail-topbar-metric strong {
+  color: var(--cf-text);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-layout {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-side-nav {
+  position: sticky;
+  top: 84px;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  min-width: 0;
+  max-height: none;
+  padding: 8px;
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius);
+  background: var(--cf-surface);
+  box-shadow: none;
+  overflow: visible;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 36px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cf-text-soft);
+  text-align: left;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 650;
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item:hover {
+  background: var(--cf-surface-muted);
+  color: var(--cf-text);
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item.is-active {
+  background: var(--cf-orange-soft);
+  color: var(--cf-text);
+  box-shadow: inset 3px 0 0 var(--cf-orange);
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-detail-content {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser,
+.cloudflare-console-shell .signal-console-task-detail .ref-task-detail-pane {
+  position: static;
+  min-width: 0;
+  max-height: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-detail-pane {
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius);
+  background: var(--cf-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-section-headline {
+  margin: 0 0 10px;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-section-headline h3 {
+  margin: 0;
+  color: var(--cf-text);
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-section-headline-ghost {
+  display: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-card {
+  border: 1px solid var(--cf-border);
+  border-radius: var(--cf-radius);
+  background: var(--cf-surface);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  min-height: 0;
+  padding: 14px 16px;
+  border: 0;
+  border-top: 1px solid var(--cf-border);
+  border-radius: 0;
+  background: var(--cf-surface);
+  color: var(--cf-text);
+  text-align: left;
+  text-decoration: none;
+  box-shadow: none;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row:first-child {
+  border-top: 0;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row:hover {
+  background: var(--cf-surface-subtle);
+  color: var(--cf-text);
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row.is-active {
+  background: var(--cf-orange-soft);
+  color: var(--cf-text);
+  box-shadow: inset 3px 0 0 var(--cf-orange);
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row.is-active * {
+  color: inherit;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-copy strong {
+  min-width: 0;
+  overflow: visible;
+  color: var(--cf-text);
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.28;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-copy span,
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-copy p,
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-metrics {
+  color: var(--cf-text-soft);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row.is-active .ref-task-browser-copy span,
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row.is-active .ref-task-browser-copy p,
+.cloudflare-console-shell .signal-console-task-detail .ref-task-browser-row.is-active .ref-task-browser-metrics {
+  color: var(--cf-text-soft);
+}
+
 @media (max-width: 1180px) {
   :root {
     --cf-sidebar-width: 212px;
@@ -1144,6 +1462,22 @@ body {
   .cloudflare-console-shell .cf-service-rail {
     position: static;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cloudflare-console-shell .signal-console-task-detail .ref-detail-layout,
+  .cloudflare-console-shell .signal-console-task-detail .ref-task-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .cloudflare-console-shell .signal-console-task-detail .ref-side-nav {
+    position: static;
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item {
+    flex: 0 0 auto;
+    min-width: 92px;
   }
 
   .cloudflare-console-shell .cf-rail-link-card {
@@ -1221,9 +1555,19 @@ body {
   .cloudflare-console-shell .command-center-header,
   .cloudflare-console-shell .signal-console-page-header-main,
   .cloudflare-console-shell .service-detail-header-main,
+  .cloudflare-console-shell .signal-console-task-detail .ref-detail-topbar,
+  .cloudflare-console-shell .signal-console-task-detail .ref-detail-topbar-main,
   .cloudflare-console-shell .service-detail-header-meta {
     display: grid;
     justify-content: stretch;
+  }
+
+  .cloudflare-console-shell .signal-console-task-detail .ref-detail-topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .cloudflare-console-shell .signal-console-task-detail .ref-detail-header-actions {
+    flex: initial;
   }
 
   .cloudflare-console-shell .ref-summary-strip,
