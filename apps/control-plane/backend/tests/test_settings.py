@@ -102,6 +102,15 @@ def test_settings_replace_blank_database_url_with_default() -> None:
     assert settings.database_url == DEFAULT_DATABASE_URL
 
 
+def test_settings_accept_plain_connector_secret(monkeypatch) -> None:
+    monkeypatch.setenv("ONESTEP_CP_CONNECTOR_SECRET", "  my-dev-secret  ")
+    monkeypatch.delenv("ONESTEP_CP_CONNECTOR_SECRET_KEY", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.connector_secret == "my-dev-secret"
+
+
 def test_settings_parse_readiness_task_stale_after_seconds(monkeypatch) -> None:
     monkeypatch.setenv("ONESTEP_CP_READINESS_TASK_STALE_AFTER_S", "180")
 

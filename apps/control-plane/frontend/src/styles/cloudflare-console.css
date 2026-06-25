@@ -1260,7 +1260,7 @@ body {
 
 .cloudflare-console-shell .signal-console-task-detail .ref-detail-layout {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
   padding: 0;
@@ -1268,52 +1268,6 @@ body {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-}
-
-.cloudflare-console-shell .signal-console-task-detail .ref-side-nav {
-  position: sticky;
-  top: 84px;
-  display: grid;
-  gap: 2px;
-  align-content: start;
-  min-width: 0;
-  max-height: none;
-  padding: 8px;
-  border: 1px solid var(--cf-border);
-  border-radius: var(--cf-radius);
-  background: var(--cf-surface);
-  box-shadow: none;
-  overflow: visible;
-}
-
-.cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  min-height: 36px;
-  width: 100%;
-  min-width: 0;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--cf-text-soft);
-  text-align: left;
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 650;
-  box-shadow: none;
-}
-
-.cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item:hover {
-  background: var(--cf-surface-muted);
-  color: var(--cf-text);
-}
-
-.cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item.is-active {
-  background: var(--cf-orange-soft);
-  color: var(--cf-text);
-  box-shadow: inset 3px 0 0 var(--cf-orange);
 }
 
 .cloudflare-console-shell .signal-console-task-detail .ref-detail-content {
@@ -1464,20 +1418,8 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cloudflare-console-shell .signal-console-task-detail .ref-detail-layout,
   .cloudflare-console-shell .signal-console-task-detail .ref-task-workbench {
     grid-template-columns: 1fr;
-  }
-
-  .cloudflare-console-shell .signal-console-task-detail .ref-side-nav {
-    position: static;
-    display: flex;
-    overflow-x: auto;
-  }
-
-  .cloudflare-console-shell .signal-console-task-detail .ref-side-nav-item {
-    flex: 0 0 auto;
-    min-width: 92px;
   }
 
   .cloudflare-console-shell .cf-rail-link-card {

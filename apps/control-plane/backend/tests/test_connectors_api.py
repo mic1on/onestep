@@ -3,9 +3,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from onestep_control_plane_api.api.connector_service import (
+    ConnectorSecretError,
+    _reset_cipher,
     build_connector_summary,
     build_runtime_connector_payload,
 )
+from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import Connector
 from sqlalchemy import select
 
@@ -182,6 +185,31 @@ def test_update_connector_secret_overwrites_value(client, db_session) -> None:
     row = db_session.get(Connector, UUID(connector_id))
     summary = build_connector_summary(row, include_cleartext_secret=True)
     assert summary["secret"] == {"url": "redis://new@host"}
+
+
+def test_build_connector_summary_requires_connector_secret(client, db_session) -> None:
+    create = client.post(
+        "/api/v1/connectors",
+        json={"name": "needs-secret", "type": "mysql", "config": {}, "secret": {}},
+    )
+    assert create.status_code == 200
+
+    row = db_session.scalar(select(Connector).where(Connector.name == "needs-secret"))
+    assert row is not None
+
+    original_secret = settings.connector_secret
+    settings.connector_secret = ""
+    _reset_cipher()
+    try:
+        try:
+            build_connector_summary(row)
+        except ConnectorSecretError as exc:
+            assert str(exc) == "ONESTEP_CP_CONNECTOR_SECRET is not configured"
+        else:
+            raise AssertionError("expected ConnectorSecretError")
+    finally:
+        settings.connector_secret = original_secret
+        _reset_cipher()
 
 
 def test_delete_connector(client) -> None:

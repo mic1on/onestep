@@ -86,6 +86,7 @@ Docker Compose files, deploy flow, and `scripts/start-local.sh`.
 | `ONESTEP_CP_APP_ENV` | Backend | `dev` | Runtime environment label. Also affects API auth cookie behavior, such as whether cookies are marked `Secure` in production. |
 | `ONESTEP_CP_DATABASE_URL` | Backend | `postgresql+psycopg://...` | SQLAlchemy DSN for the control plane database. In `.env.deploy`, leave it empty to use the bundled PostgreSQL container. |
 | `ONESTEP_CP_INGEST_TOKENS` | Backend ingress | empty | Bearer tokens accepted by ingestion endpoints and the agent WS endpoint. Supports a single token, comma-separated string, or JSON array. |
+| `ONESTEP_CP_CONNECTOR_SECRET` | Backend connectors | empty / `my-dev-secret` | Plain string used to derive the encryption key for connector secrets at rest. Required when using the Connectors feature to create, read, update, or compile connectors with stored secrets. |
 | `ONESTEP_CP_CONSOLE_AUTH_USERNAME` | Backend auth | empty | Shared username for the monitoring console. Must be set together with `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. |
 | `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` | Backend auth | empty | Shared password for the monitoring console. Must be set together with `ONESTEP_CP_CONSOLE_AUTH_USERNAME`. |
 | `ONESTEP_CP_CONSOLE_AUTH_SESSION_TTL_S` | Backend auth | `604800` | Console session lifetime in seconds. Advanced option for login cookie expiry. |
@@ -159,6 +160,10 @@ docker compose run --rm migrate
 docker compose up --build -d plane
 bash scripts/run-smoke.sh --compose-file docker-compose.yml --env-file .env
 ```
+
+If you plan to use the Connectors feature, set `ONESTEP_CP_CONNECTOR_SECRET` in
+`.env` to any non-empty string such as `my-dev-secret`. The backend derives the
+actual encryption key internally; you do not need to generate a Fernet key.
 
 Endpoints after startup:
 

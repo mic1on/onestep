@@ -82,10 +82,8 @@ def client(test_engine, configure_ingest_tokens, tmp_path) -> Generator[TestClie
     settings.console_auth_password = ""
     settings.worker_agent_registration_tokens = [TEST_WORKER_AGENT_REGISTRATION_TOKEN]
     settings.worker_package_storage_dir = str(tmp_path / "worker-packages")
-    original_connector_secret_key = settings.connector_secret_key
-    from cryptography.fernet import Fernet
-
-    settings.connector_secret_key = Fernet.generate_key().decode("ascii")
+    original_connector_secret = settings.connector_secret
+    settings.connector_secret = "test-connector-secret"
     from onestep_control_plane_api.api.connector_service import _reset_cipher
 
     _reset_cipher()
@@ -118,7 +116,7 @@ def client(test_engine, configure_ingest_tokens, tmp_path) -> Generator[TestClie
     settings.console_auth_password = original_password
     settings.worker_agent_registration_tokens = original_worker_registration_tokens
     settings.worker_package_storage_dir = original_worker_package_storage_dir
-    settings.connector_secret_key = original_connector_secret_key
+    settings.connector_secret = original_connector_secret
     _reset_cipher()
 
 

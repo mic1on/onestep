@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     retention_agent_commands_days: int = Field(default=30, ge=1)
     retention_delete_batch_size: int = Field(default=1000, ge=1)
     retention_run_interval_s: int = Field(default=60 * 60 * 24, ge=60)
-    connector_secret_key: str = ""
+    connector_secret: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="ONESTEP_CP_",
@@ -82,16 +82,12 @@ class Settings(BaseSettings):
             return DEFAULT_DATABASE_URL
         return value
 
-    @field_validator("connector_secret_key")
+    @field_validator("connector_secret", mode="before")
     @classmethod
-    def validate_connector_secret_key(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            return ""
-        from cryptography.fernet import Fernet
-
-        Fernet(stripped.encode("ascii"))
-        return stripped
+    def normalize_connector_secret(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
     @model_validator(mode="after")
     def validate_console_auth_pair(self) -> Settings:

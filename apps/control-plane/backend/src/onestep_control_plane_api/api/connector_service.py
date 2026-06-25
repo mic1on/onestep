@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID, uuid4
@@ -44,6 +46,11 @@ class ConnectorSecretError(RuntimeError):
     """Raised when encryption/decryption is attempted without a key configured."""
 
 
+def _derive_fernet_key(secret: str) -> bytes:
+    digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
 class ConnectorCipher:
     """Lazily-loaded Fernet cipher bound to the configured key."""
 
@@ -53,12 +60,12 @@ class ConnectorCipher:
     @property
     def fernet(self) -> Fernet:
         if self._fernet is None:
-            key = settings.connector_secret_key.strip()
-            if not key:
+            secret = settings.connector_secret.strip()
+            if not secret:
                 raise ConnectorSecretError(
-                    "ONESTEP_CP_CONNECTOR_SECRET_KEY is not configured"
+                    "ONESTEP_CP_CONNECTOR_SECRET is not configured"
                 )
-            self._fernet = Fernet(key.encode("ascii"))
+            self._fernet = Fernet(_derive_fernet_key(secret))
         return self._fernet
 
     def encrypt(self, data: dict[str, object]) -> str:

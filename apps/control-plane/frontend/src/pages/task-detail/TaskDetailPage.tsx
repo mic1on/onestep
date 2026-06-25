@@ -40,7 +40,6 @@ import { parseEnvironment, parseLookback } from "../../lib/params";
 import { instancePath, servicePath, taskPath } from "../../lib/routes";
 import type { AgentSessionSummary, InstanceSummary, TaskDashboardSummary } from "../../lib/api/types";
 
-type ServiceView = "overview" | "instances" | "tasks" | "commands";
 type TaskActivityTab = "events" | "instances" | "commands" | "sessions";
 type OperationIssue = {
   message: string;
@@ -128,11 +127,11 @@ export function TaskDetailPage() {
     { label: t("taskDetail.sessionsTitle"), value: "sessions" },
   ];
 
-  function buildServiceViewHref(view: ServiceView) {
+  function buildServiceTasksHref() {
     return servicePath(resolvedServiceName, {
       environment,
       lookback_minutes: lookbackMinutes,
-      tab: view === "overview" ? undefined : view,
+      tab: "tasks",
     });
   }
 
@@ -140,7 +139,7 @@ export function TaskDetailPage() {
     <div className="ref-console-page ref-detail-page signal-console-detail-page signal-console-task-detail">
       <section className="ref-detail-topbar">
         <div className="ref-detail-topbar-rail">
-          <Link className="ref-back-button" to={buildServiceViewHref("tasks")}>
+          <Link className="ref-back-button" to={buildServiceTasksHref()}>
             <span aria-hidden="true" className="ref-back-button-icon">
               ←
             </span>
@@ -188,21 +187,6 @@ export function TaskDetailPage() {
 
       {summary ? (
         <div className="ref-detail-layout">
-          <aside className="ref-side-nav">
-            <Link className="ref-side-nav-item" to={buildServiceViewHref("overview")}>
-              <span>{isZh ? "概览" : "Overview"}</span>
-            </Link>
-            <Link className="ref-side-nav-item" to={buildServiceViewHref("instances")}>
-              <span>{isZh ? "实例" : "Instances"}</span>
-            </Link>
-            <Link className="ref-side-nav-item is-active" to={buildServiceViewHref("tasks")}>
-              <span>{isZh ? "任务" : "Tasks"}</span>
-            </Link>
-            <Link className="ref-side-nav-item" to={buildServiceViewHref("commands")}>
-              <span>{isZh ? "命令" : "Commands"}</span>
-            </Link>
-          </aside>
-
           <div className="ref-detail-content">
             <div className="ref-task-workbench">
               <section className="ref-task-browser">
