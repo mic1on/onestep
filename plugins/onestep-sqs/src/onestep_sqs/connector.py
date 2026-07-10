@@ -20,7 +20,19 @@ except ImportError:  # pragma: no cover - optional dependency
 
 class SQSDelivery(Delivery):
     def __init__(self, queue: "SQSQueue", message: dict[str, Any]) -> None:
-        super().__init__(decode_envelope(message["Body"]))
+        envelope = decode_envelope(message["Body"])
+        existing_sqs_meta = envelope.meta.get("sqs")
+        sqs_meta = (
+            dict(existing_sqs_meta) if isinstance(existing_sqs_meta, dict) else {}
+        )
+        sqs_meta.pop("message_id", None)
+        sqs_meta.pop("attributes", None)
+        if "MessageId" in message:
+            sqs_meta["message_id"] = message["MessageId"]
+        if "Attributes" in message:
+            sqs_meta["attributes"] = dict(message["Attributes"])
+        envelope.meta["sqs"] = sqs_meta
+        super().__init__(envelope)
         self._queue = queue
         self._message = message
         self._heartbeat_task: asyncio.Task[None] | None = None
