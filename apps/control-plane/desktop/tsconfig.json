@@ -10,9 +10,8 @@
     "jsx": "react-jsx",
     "types": ["node", "electron", "vitest/globals"],
     "moduleResolution": "Bundler",
-    "baseUrl": ".",
     "paths": {
-      "@renderer/*": ["src/renderer/src/*"]
+      "@renderer/*": ["./src/renderer/src/*"]
     }
   }
 }

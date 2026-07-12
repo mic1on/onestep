@@ -1,0 +1,99 @@
+.button,
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.button {
+  height: 30px;
+  gap: 7px;
+  padding: 0 10px;
+  font-weight: 560;
+}
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.button:hover,
+.icon-button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-subtle);
+}
+
+.button.primary {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: var(--accent);
+  color: white;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-faint);
+}
+
+.status-dot.success {
+  background: var(--success);
+}
+
+.status-dot.warning {
+  background: var(--warning);
+}
+
+.status-dot.danger {
+  background: var(--danger);
+}
+
+.status-dot.info {
+  background: var(--info);
+}
+
+.badge {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  height: 34px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.table th {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
