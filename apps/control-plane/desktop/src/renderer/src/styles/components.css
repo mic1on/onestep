@@ -83,6 +83,17 @@
   background: var(--surface);
 }
 
+.empty-state {
+  padding: 18px;
+  color: var(--text-muted);
+}
+
+.empty-state strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;

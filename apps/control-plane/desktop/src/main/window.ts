@@ -14,7 +14,7 @@ export function createMainWindow(apiBaseUrl: string): BrowserWindow {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     backgroundColor: "#0b0c0f",
     webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
+      preload: join(__dirname, "../preload/index.mjs"),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,

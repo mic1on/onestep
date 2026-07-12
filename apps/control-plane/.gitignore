@@ -217,3 +217,5 @@ desktop/out/
 desktop/release/
 desktop/backend-build/
 desktop/backend-dist/
+desktop/test-results/
+desktop/playwright-report/
