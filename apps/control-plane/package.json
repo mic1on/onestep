@@ -6,6 +6,10 @@
     "dev": "pnpm --filter onestep-control-plane-ui dev",
     "ui:dev": "pnpm --filter onestep-control-plane-ui dev",
     "ui:build": "pnpm --filter onestep-control-plane-ui build",
-    "ui:preview": "pnpm --filter onestep-control-plane-ui preview"
+    "ui:preview": "pnpm --filter onestep-control-plane-ui preview",
+    "desktop:dev": "pnpm --filter onestep-control-plane-desktop dev",
+    "desktop:build": "pnpm --filter onestep-control-plane-desktop build",
+    "desktop:test": "pnpm --filter onestep-control-plane-desktop test",
+    "desktop:dist:mac": "pnpm --filter onestep-control-plane-desktop dist:mac"
   }
 }
