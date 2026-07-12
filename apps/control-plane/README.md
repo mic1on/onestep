@@ -5,6 +5,12 @@ Monorepo for the OneStep control plane. This repository will host:
 - `backend`: agent WS ingress and query API for the monitoring console
 - `frontend`: web console
 
+## macOS Desktop Rewrite
+
+The macOS desktop app is a new Electron workbench UI that reuses the FastAPI
+control plane backend but does not reuse the old web console frontend. See
+[`docs/macos-desktop-rewrite.md`](docs/macos-desktop-rewrite.md).
+
 ## API skeleton
 
 Current scope:
