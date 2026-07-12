@@ -1,29 +1,27 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./query-client";
+import { ActiveRoute } from "./routes";
+import { useWorkbenchStore } from "./workbench-store";
+import { Inspector } from "../components/chrome/Inspector";
+import { LeftRail } from "../components/chrome/LeftRail";
+import { Sidebar } from "../components/chrome/Sidebar";
+import { Titlebar } from "../components/chrome/Titlebar";
 
 export function App() {
+  const inspectorOpen = useWorkbenchStore((state) => state.inspectorOpen);
+
   return (
     <QueryClientProvider client={queryClient}>
       <div className="app-shell">
-        <div className="titlebar">
-          <div />
-          <strong>OneStep</strong>
-          <div />
-        </div>
+        <Titlebar />
         <div className="workbench">
-          <nav className="left-rail" />
-          <aside className="sidebar" />
-          <main className="workspace">
+          <LeftRail />
+          <Sidebar />
+          <main className={inspectorOpen ? "workspace with-inspector" : "workspace"}>
             <section className="workspace-main">
-              <div className="page">
-                <header className="page-header">
-                  <h1 className="page-title">Command Center</h1>
-                </header>
-                <div className="panel" style={{ padding: 14 }}>
-                  Desktop renderer ready.
-                </div>
-              </div>
+              <ActiveRoute />
             </section>
+            {inspectorOpen ? <Inspector /> : null}
           </main>
         </div>
       </div>

@@ -34,6 +34,12 @@
   color: white;
 }
 
+.icon-button.primary {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
