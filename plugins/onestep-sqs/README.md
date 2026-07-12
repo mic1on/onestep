@@ -43,5 +43,13 @@ envelope already contains a `meta["sqs"]` dictionary, its other keys are kept.
 The reserved `message_id` and `attributes` keys are populated only from the
 current SQS response, so missing fields do not inherit stale transport values.
 
-`ReceiptHandle` remains internal to acknowledgement and retry operations.
-Custom SQS `MessageAttributes` are not exposed in the envelope.
+`ReceiptHandle` remains internal to acknowledgement, retry, and release
+operations. Custom SQS `MessageAttributes` are not exposed in the envelope.
+
+## Shutdown and pause behavior
+
+SQS receives use a blocking long poll, so shutdown, drain, and pause wait for
+the current poll to finish instead of cancelling it. Any deliveries returned
+after fetching has stopped are released immediately with a visibility timeout
+of zero when processing has not started, making them available to SQS consumers
+again without waiting for the configured visibility timeout.
