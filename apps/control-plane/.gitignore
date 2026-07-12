@@ -212,3 +212,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .gstack/
+
+desktop/out/
+desktop/release/
+desktop/backend-build/
+desktop/backend-dist/

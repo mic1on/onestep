@@ -8,7 +8,7 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
     "test": "vitest run",
-    "dist:mac": "pnpm build && electron-builder --config electron-builder.config.cjs --mac"
+    "dist:mac": "pnpm build && ELECTRON_MIRROR=${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/} electron-builder --config electron-builder.config.cjs --mac"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

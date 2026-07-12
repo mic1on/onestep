@@ -8,8 +8,9 @@
     "ui:build": "pnpm --filter onestep-control-plane-ui build",
     "ui:preview": "pnpm --filter onestep-control-plane-ui preview",
     "desktop:dev": "pnpm --filter onestep-control-plane-desktop dev",
+    "desktop:backend:build": "uv run pyinstaller --clean --distpath desktop/backend-dist --workpath desktop/backend-build desktop/pyinstaller/onestep-control-plane-api.spec",
     "desktop:build": "pnpm --filter onestep-control-plane-desktop build",
     "desktop:test": "pnpm --filter onestep-control-plane-desktop test",
-    "desktop:dist:mac": "pnpm --filter onestep-control-plane-desktop dist:mac"
+    "desktop:dist:mac": "pnpm desktop:backend:build && pnpm --filter onestep-control-plane-desktop dist:mac"
   }
 }
