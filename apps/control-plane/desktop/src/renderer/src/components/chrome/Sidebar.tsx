@@ -12,6 +12,7 @@ const titles = {
 
 export function Sidebar() {
   const section = useWorkbenchStore((state) => state.section);
+  const selectedServiceName = useWorkbenchStore((state) => state.selectedServiceName);
 
   return (
     <aside className="sidebar">
@@ -20,7 +21,11 @@ export function Sidebar() {
         <h2 style={{ margin: 0, fontSize: 16 }}>{titles[section]}</h2>
       </div>
       <div style={{ padding: 12, color: "var(--text-muted)" }}>
-        Context navigation will populate from the active section.
+        {section === "services"
+          ? selectedServiceName
+            ? `Inspecting ${selectedServiceName}`
+            : "Select a service to populate the inspector."
+          : "Context navigation will populate from the active section."}
       </div>
     </aside>
   );
