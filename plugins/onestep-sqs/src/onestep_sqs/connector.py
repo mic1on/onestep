@@ -60,6 +60,7 @@ class SQSDelivery(Delivery):
             await self._change_visibility(0)
 
     async def release_unstarted(self) -> None:
+        await self._stop_heartbeat()
         await self._change_visibility(0)
 
     async def _heartbeat_loop(self) -> None:
