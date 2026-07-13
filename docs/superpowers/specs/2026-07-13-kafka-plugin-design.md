@@ -79,17 +79,28 @@ The plugin package sets:
 requires-python = ">=3.10"
 ```
 
-The root workspace should add `plugins/onestep-kafka` as a member and add workspace source metadata for `onestep-kafka`.
+The plugin should live in the repo, but it should not be added to the root uv
+workspace while onestep core still supports Python 3.9. A workspace member with
+`requires-python = ">=3.10"` makes Python 3.9 `uv sync --all-packages` fail
+before tests start. Keep `plugins/onestep-kafka` as a repo-local package with a
+plugin-local `tool.uv.sources` entry pointing `onestep` at the repo root.
+
+The root project may add source metadata for local optional-extra resolution:
+
+```toml
+[tool.uv.sources]
+onestep-kafka = { path = "plugins/onestep-kafka" }
+```
 
 The core optional extras should add:
 
 ```toml
 kafka = [
-    "onestep-kafka>=0.1.0",
+    "onestep-kafka>=0.1.0; python_version >= '3.10'",
 ]
 ```
 
-The `all`, `dev`, and `integration` extras should include the Kafka plugin so repo-level validation can run the plugin tests without manual installation. This changes package metadata only; it does not require a core runtime behavior change.
+The `all`, `dev`, and `integration` extras may include the same Python-version-marked Kafka dependency. Core 3.9 CI must not install or test the Kafka plugin. Kafka gets its own 3.10+ plugin workflow and can be included in integration/reliability checks only when the active Python is 3.10 or newer.
 
 ## YAML Resource Types
 
@@ -313,7 +324,7 @@ The onestep skill connector reference should add a short Kafka section after imp
 
 The new plugin starts at version `0.1.0`.
 
-Adding the workspace member, optional extras, and dependency metadata requires updating `uv.lock`.
+Adding optional extras and dependency metadata requires updating `uv.lock`. The Kafka plugin should not be added as a root workspace member while core Python 3.9 support remains active.
 
 Publishing `onestep-kafka` is independent from core unless the release also changes core package behavior. If root package metadata changes to add the `kafka` extra, follow the onestep release rules for core version, changelog, lockfile, and tag.
 
