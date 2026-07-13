@@ -34,6 +34,20 @@ pytest tests/test_control_plane_ws.py
 
 Choose tests that match the changed module. Do not run integration tests unless required infrastructure is available.
 
+## Core Reliability Checks
+
+When changing onestep core runtime behavior, stable exports, connector plugin
+contracts, delivery/retry/dead-letter semantics, or release compatibility
+policy, run:
+
+```bash
+uv run pytest -q -m "not integration"
+./scripts/run-reliability-checks.sh
+```
+
+The reliability script runs core tests and each plugin test suite in isolated
+pytest processes, avoiding plugin test module-name collisions.
+
 ## Integration Tests
 
 Live connector tests usually require external services or credentials:
