@@ -1,0 +1,32 @@
+[project]
+name = "onestep-kafka"
+version = "0.1.0"
+description = "Kafka connector plugin for onestep."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "onestep>=1.4.4",
+    "aiokafka>=0.14.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.entry-points."onestep.resources"]
+kafka = "onestep_kafka:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onestep_kafka"]
+
+[tool.uv.sources]
+onestep = { path = "../..", editable = true }
