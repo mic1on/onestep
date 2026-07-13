@@ -500,7 +500,12 @@ Plugin resource types:
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-kafka`: `kafka`, `kafka_topic`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+
+`kafka_topic` can be used as a source, sink, or both. When used as a source,
+set `group_id`; the plugin disables Kafka auto commit and commits offsets only
+after onestep reaches `ack()` or terminal `fail()`.
 
 `feishu_bitable_incremental` accepts `fallback_scan_page_limit` to bound the
 fallback scan used when Feishu rejects cursor sorting. The default is `100`

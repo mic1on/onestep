@@ -16,7 +16,7 @@ Webhook 场景。你只需用 `source` 和可选的 `sink` 声明一个任务，
 处理拉取、并发、重试、死信和遥测上报。
 
 - **一个装饰器**，把任意 async 函数变成被托管的任务
-- **可插拔连接器**：内存、MySQL、RabbitMQ、Redis、SQS、飞书多维表格
+- **可插拔连接器**：内存、MySQL、RabbitMQ、Redis、SQS、Kafka、飞书多维表格
 - **多种调度方式**：间隔、Cron、Webhook、基于数据库的队列
 - **生产可用**：重试、死信、超时、状态存储、指标、控制面 Reporter
 - **两种配置方式**：纯 Python，或声明式 YAML
@@ -31,6 +31,7 @@ pip install onestep
 # 可选扩展：
 pip install 'onestep[yaml]'          # YAML 任务定义
 pip install 'onestep[control-plane]' # 向 onestep-control-plane 上报遥测
+pip install 'onestep[kafka]'         # Kafka topic source/sink，Python 3.10+
 ```
 
 定义一个 app，然后用 `onestep` CLI 运行：
@@ -55,8 +56,8 @@ onestep check your_package.tasks:app   # 启动前校验目标
 
 | 能力 | 入口 |
 | --- | --- |
-| **拉取任务**：队列、调度、Webhook、DB 游标 | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、MySQL `table_queue` / `incremental` / binlog、RabbitMQ `queue`、Redis `stream`、SQS `queue` |
-| **输出结果**：写入下游 sink | 任意 source 也可作 sink；MySQL `table_sink`；HTTP `http_sink`；飞书多维表格 sink |
+| **拉取任务**：队列、调度、Webhook、DB 游标 | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、MySQL `table_queue` / `incremental` / binlog、RabbitMQ `queue`、Redis `stream`、SQS `queue`、Kafka `kafka_topic` |
+| **输出结果**：写入下游 sink | 任意 source 也可作 sink；MySQL `table_sink`；Kafka `kafka_topic`；HTTP `http_sink`；飞书多维表格 sink |
 | **定时调度**：周期任务 | `IntervalSource.every(...)`、`CronSource(...)`，支持重叠控制（`allow` / `skip` / `queue`） |
 | **接收外部事件** | `WebhookSource`，支持 Bearer 鉴权、共享监听、多种 body 解析 |
 | **容错**：重试、死信、超时 | 重试策略、`dead_letter` sink、单任务 `timeout_s`、失败分类（`error` / `timeout` / `cancelled`） |
@@ -103,6 +104,7 @@ async def main():
 | **RabbitMQ** | `queue`，支持 exchange/routing-key 绑定与 prefetch | `pip install onestep-mq` |
 | **Redis** | `stream`，支持消费组、`XACK`、`XCLAIM`、`maxlen` | `pip install onestep-redis` |
 | **SQS** | `queue`，支持批量删除与心跳可见性续期 | `pip install onestep-sqs` |
+| **Kafka** | `kafka_topic` source/sink，使用手动 offset commit | `pip install onestep-kafka` |
 | **飞书多维表格** | 增量 source 与 upsert sink | `pip install onestep-feishu-bitable` |
 
 或一次性安装全部：
@@ -172,7 +174,7 @@ onestep init billing-sync            # 脚手架生成最小 YAML 工程
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.2.7
+    ghcr.io/mic1on/onestep-worker:1.4.5
   ```
   详见 [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md)。
 - **嵌入 Web 应用** —— FastAPI/Django 的推荐形态，见

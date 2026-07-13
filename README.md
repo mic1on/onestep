@@ -17,7 +17,7 @@ the runtime takes care of fetching, concurrency, retries, dead-lettering, and
 telemetry.
 
 - **One decorator** turns any async function into a managed task
-- **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Feishu
+- **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Kafka, Feishu
 - **Scheduling** via interval, cron, webhook, or DB-backed queues
 - **Production-ready**: retries, dead-letter, timeouts, state stores, metrics,
   and a control-plane reporter
@@ -33,6 +33,7 @@ pip install onestep
 # optional extras:
 pip install 'onestep[yaml]'          # YAML task definitions
 pip install 'onestep[control-plane]' # push telemetry to onestep-control-plane
+pip install 'onestep[kafka]'         # Kafka topic source/sink, Python 3.10+
 ```
 
 Define an app, then run it with the `onestep` CLI:
@@ -57,8 +58,8 @@ onestep check your_package.tasks:app   # validate the target before starting
 
 | Capability | Where |
 | --- | --- |
-| **Fetch work** from a queue, schedule, webhook, or DB cursor | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, MySQL `table_queue` / `incremental` / binlog, RabbitMQ `queue`, Redis `stream`, SQS `queue` |
-| **Emit results** to a downstream sink | any source doubles as a sink; MySQL `table_sink`; HTTP `http_sink`; Feishu Bitable sink |
+| **Fetch work** from a queue, schedule, webhook, or DB cursor | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, MySQL `table_queue` / `incremental` / binlog, RabbitMQ `queue`, Redis `stream`, SQS `queue`, Kafka `kafka_topic` |
+| **Emit results** to a downstream sink | any source doubles as a sink; MySQL `table_sink`; Kafka `kafka_topic`; HTTP `http_sink`; Feishu Bitable sink |
 | **Schedule** recurring work | `IntervalSource.every(...)`, `CronSource(...)` with overlap control (`allow` / `skip` / `queue`) |
 | **Ingest external events** | `WebhookSource` with bearer auth, shared listeners, body parsing |
 | **Survive failures** | retry policies, `dead_letter` sink, per-task `timeout_s`, failure classification (`error` / `timeout` / `cancelled`) |
@@ -105,6 +106,7 @@ Each backend ships as its own package so you only install what you use:
 | **RabbitMQ** | `queue` with exchange/routing-key binding and prefetch | `pip install onestep-mq` |
 | **Redis** | `stream` with consumer groups, `XACK`, `XCLAIM`, `maxlen` | `pip install onestep-redis` |
 | **SQS** | `queue` with batched deletes and heartbeat visibility | `pip install onestep-sqs` |
+| **Kafka** | `kafka_topic` source/sink with manual offset commits | `pip install onestep-kafka` |
 | **Feishu Bitable** | incremental source and upsert sink | `pip install onestep-feishu-bitable` |
 
 Or install everything at once:
@@ -174,7 +176,7 @@ are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.2.7
+    ghcr.io/mic1on/onestep-worker:1.4.5
   ```
   See [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md).
 - **Embed in a web app** — recommended shape for FastAPI/Django in
