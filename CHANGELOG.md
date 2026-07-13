@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+## 1.4.5
+
+- Adds the `onestep[kafka]` extra for installing the Kafka connector plugin on Python 3.10 and newer.
 - Documents the core reliability contract, including stable API tiers, at-least-once delivery semantics, plugin compatibility checks, and core release governance.
 - Adds a local reliability check command for core and plugin compatibility verification.
+
+## onestep-kafka 0.1.0
+
+- Adds the `onestep-kafka` plugin package with Kafka topic source and sink support backed by `aiokafka`.
+- Registers YAML resource types for `kafka` and `kafka_topic`.
+- Uses manual Kafka offset commits with per-partition contiguous ack tracking to preserve onestep at-least-once semantics.
+- Adds focused unit tests, runtime shutdown contract tests, package validation, and live Redpanda integration coverage.
 
 ## 1.4.4
 
