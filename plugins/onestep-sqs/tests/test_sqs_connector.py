@@ -57,6 +57,80 @@ class FakeSQSClient:
             self.inflight.pop(ReceiptHandle, None)
 
 
+def test_sqs_queue_fetch_is_not_cancel_safe():
+    connector = SQSConnector(region_name="ap-southeast-1", client=FakeSQSClient())
+    queue = connector.queue(
+        "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs",
+        wait_time_s=20,
+    )
+
+    assert queue.fetch_is_cancel_safe is False
+
+
+def test_sqs_delivery_releases_unstarted_message_immediately():
+    async def scenario():
+        client = FakeSQSClient()
+        client.available.append(
+            {
+                "MessageId": "msg-unstarted",
+                "ReceiptHandle": "rh-unstarted",
+                "Body": '{"value": 1}',
+            }
+        )
+        connector = SQSConnector(region_name="ap-southeast-1", client=client)
+        queue = connector.queue(
+            "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs",
+            wait_time_s=0,
+            delete_flush_interval_s=0,
+        )
+
+        delivery = (await queue.fetch(1))[0]
+        await delivery.release_unstarted()
+
+        assert client.visibility_changes == [(queue.url, "rh-unstarted", 0)]
+
+    asyncio.run(scenario())
+
+
+def test_sqs_delivery_release_unstarted_stops_heartbeat():
+    async def scenario():
+        client = FakeSQSClient()
+        client.available.append(
+            {
+                "MessageId": "msg-heartbeat",
+                "ReceiptHandle": "rh-heartbeat",
+                "Body": '{"value": 1}',
+            }
+        )
+        connector = SQSConnector(region_name="ap-southeast-1", client=client)
+        queue = connector.queue(
+            "https://sqs.ap-southeast-1.amazonaws.com/123456789/jobs",
+            wait_time_s=0,
+            heartbeat_interval_s=0.01,
+            heartbeat_visibility_timeout=30,
+            delete_flush_interval_s=0,
+        )
+        delivery = (await queue.fetch(1))[0]
+        receipt = delivery._message["ReceiptHandle"]
+
+        await delivery.start_processing()
+        for _ in range(20):
+            if client.visibility_changes:
+                break
+            await asyncio.sleep(0.005)
+        assert client.visibility_changes[0] == (queue.url, receipt, 30)
+        client.visibility_changes.clear()
+
+        try:
+            await delivery.release_unstarted()
+            await asyncio.sleep(0.03)
+            assert client.visibility_changes == [(queue.url, receipt, 0)]
+        finally:
+            await delivery.retry()
+
+    asyncio.run(scenario())
+
+
 def test_sqs_delivery_exposes_system_message_metadata():
     async def scenario():
         client = FakeSQSClient()
