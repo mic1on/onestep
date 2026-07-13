@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Documents the core reliability contract, including stable API tiers, at-least-once delivery semantics, plugin compatibility checks, and core release governance.
+- Adds a local reliability check command for core and plugin compatibility verification.
+
 ## 1.4.4
 
 - Adds `HttpSink` variable replacement for configured URLs, headers, params, and request bodies.

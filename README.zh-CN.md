@@ -217,10 +217,11 @@ PYTHONPATH=src python3 example/runtime_showcase.py
 ## 更多
 
 - [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md) —— YAML schema
+- [`docs/core-reliability.md`](docs/core-reliability.md) —— 稳定 API、
+  交付语义、插件兼容性与发布检查清单
 - [`docs/stable-instance-identity.md`](docs/stable-instance-identity.md) ——
   Reporter 身份解析
 - [`docs/agent-ws-protocol.md`](docs/agent-ws-protocol.md) —— Agent WS 协议
-- [`deploy/`](deploy/README.md) —— 部署模板
 - [`deploy/`](deploy/README.md) —— 部署模板
 
 ## License

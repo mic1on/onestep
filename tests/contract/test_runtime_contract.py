@@ -105,6 +105,101 @@ class _ManagedSource(Source):
         self.closed = True
 
 
+class _AckFailsOnceDelivery(Delivery):
+    def __init__(self, source: "_AckFailsOnceSource", envelope: Envelope) -> None:
+        super().__init__(envelope)
+        self._source = source
+
+    async def ack(self) -> None:
+        self._source.ack_calls += 1
+        if self.envelope.attempts == 0:
+            raise RuntimeError("ack failed after sink send")
+        self._source.acked_attempts.append(self.envelope.attempts)
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self._source.retry_calls += 1
+        if delay_s:
+            await asyncio.sleep(delay_s)
+        await self._source.put(
+            Envelope(
+                body=self.envelope.body,
+                meta=dict(self.envelope.meta),
+                attempts=self.envelope.attempts + 1,
+            )
+        )
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self._source.fail_calls += 1
+
+
+class _AckFailsOnceSource(Source):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.poll_interval_s = 0.01
+        self._queue: asyncio.Queue[Envelope] = asyncio.Queue()
+        self.ack_calls = 0
+        self.retry_calls = 0
+        self.fail_calls = 0
+        self.acked_attempts: list[int] = []
+
+    async def put(self, envelope: Envelope) -> None:
+        await self._queue.put(envelope)
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        try:
+            envelope = await asyncio.wait_for(self._queue.get(), timeout=self.poll_interval_s)
+        except asyncio.TimeoutError:
+            return []
+        return [_AckFailsOnceDelivery(self, envelope)]
+
+
+class _AlwaysFailSink(Sink):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.calls = 0
+
+    async def send(self, envelope: Envelope) -> None:
+        self.calls += 1
+        raise RuntimeError("sink failed after previous sink succeeded")
+
+
+class _ReleaseTrackingDelivery(Delivery):
+    def __init__(self, envelope: Envelope) -> None:
+        super().__init__(envelope)
+        self.released = False
+        self.acked = False
+        self.retried = False
+        self.failed = False
+
+    async def release_unstarted(self) -> None:
+        self.released = True
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self.retried = True
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self.failed = True
+
+
+class _NonCancelSafeSource(Source):
+    fetch_is_cancel_safe = False
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.poll_interval_s = 0.01
+        self.fetch_started = asyncio.Event()
+        self.release_fetch = asyncio.Event()
+        self.delivery = _ReleaseTrackingDelivery(Envelope(body={"value": 1}))
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        self.fetch_started.set()
+        await self.release_fetch.wait()
+        return [self.delivery]
+
+
 def test_return_value_publishes_to_default_sink_contract() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming")
@@ -180,6 +275,39 @@ def test_retryable_sink_send_error_retries_and_succeeds_contract() -> None:
 
         assert sink.calls == 2
         assert sink.items == [{"value": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_ack_failure_after_sink_send_retries_and_may_duplicate_output_contract() -> None:
+    async def scenario() -> None:
+        source = _AckFailsOnceSource("ack-fails")
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("ack-failure-contract")
+        attempts: list[int] = []
+
+        @app.task(source=source, emit=sink, retry=MaxAttempts(2, delay_s=0))
+        async def consume(ctx, item):
+            attempts.append(ctx.current.attempts)
+            if ctx.current.attempts == 1:
+                ctx.app.request_shutdown()
+            return {"value": item["value"], "attempt": ctx.current.attempts}
+
+        await source.put(Envelope(body={"value": 3}))
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        first = await sink.fetch(1)
+        second = await sink.fetch(1)
+
+        assert attempts == [0, 1]
+        assert source.ack_calls == 2
+        assert source.retry_calls == 1
+        assert source.fail_calls == 0
+        assert source.acked_attempts == [1]
+        assert [delivery.payload for delivery in [*first, *second]] == [
+            {"value": 3, "attempt": 0},
+            {"value": 3, "attempt": 1},
+        ]
 
     asyncio.run(scenario())
 
@@ -358,6 +486,36 @@ def test_drain_stops_new_fetch_and_waits_for_inflight_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_non_cancel_safe_fetch_releases_unstarted_deliveries_on_drain_contract() -> None:
+    async def scenario() -> None:
+        source = _NonCancelSafeSource("non-cancel-safe")
+        app = OneStepApp("non-cancel-safe-contract")
+        seen: list[dict[str, int]] = []
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            seen.append(item)
+
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(source.fetch_started.wait(), timeout=1.0)
+
+        app.request_drain()
+        source.release_fetch.set()
+        drain_status = await asyncio.wait_for(app.wait_for_drain(), timeout=1.0)
+
+        assert drain_status["drained"] is True
+        assert seen == []
+        assert source.delivery.released is True
+        assert source.delivery.acked is False
+        assert source.delivery.retried is False
+        assert source.delivery.failed is False
+
+        app.request_shutdown()
+        await asyncio.wait_for(serve_task, timeout=1.0)
+
+    asyncio.run(scenario())
+
+
 def test_task_pause_and_resume_control_intake_contract() -> None:
     async def scenario() -> None:
         source = MemoryQueue("task-control.incoming", batch_size=1, poll_interval_s=0.01)
@@ -450,6 +608,28 @@ def test_ctx_emit_and_return_follow_separate_contracts() -> None:
         assert len(explicit_batch) == 1
         assert default_batch[0].payload == {"kind": "main", "value": 6}
         assert explicit_batch[0].payload == {"kind": "side", "value": 3}
+
+    asyncio.run(scenario())
+
+
+def test_multi_sink_send_is_not_transactional_when_later_sink_fails_contract() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        first_sink = MemoryQueue("first", poll_interval_s=0.01)
+        failing_sink = _AlwaysFailSink("second")
+        app = OneStepApp("multi-sink-contract")
+
+        @app.task(source=source, emit=[first_sink, failing_sink], retry=NoRetry())
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        await source.publish({"value": 1})
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        first_batch = await first_sink.fetch(1)
+        assert failing_sink.calls == 1
+        assert [delivery.payload for delivery in first_batch] == [{"value": 2}]
 
     asyncio.run(scenario())
 
