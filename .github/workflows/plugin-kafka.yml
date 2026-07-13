@@ -1,0 +1,63 @@
+name: Kafka Plugin
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/plugin-kafka.yml"
+      - "plugins/onestep-kafka/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-kafka.yml"
+      - "plugins/onestep-kafka/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kafka-plugin-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLUGIN_PATH: plugins/onestep-kafka
+
+jobs:
+  test:
+    name: Test plugin (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install plugin test dependencies
+        run: uv sync --frozen --extra test --extra kafka
+
+      - name: Run plugin tests
+        run: uv run python -m pytest -q "$PLUGIN_PATH/tests" -m "not integration"
+
+      - name: Build plugin distribution
+        run: uv build "$PLUGIN_PATH" --out-dir dist/plugin --sdist --wheel --clear
+
+      - name: Check plugin metadata
+        run: uvx twine check dist/plugin/*

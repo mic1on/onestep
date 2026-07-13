@@ -7,6 +7,8 @@ LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://127.0.0.1:4566}"
 RABBITMQ_URL="${ONESTEP_RABBITMQ_URL:-amqp://guest:guest@127.0.0.1:5672/}"
 RABBITMQ_QUEUE="${ONESTEP_RABBITMQ_QUEUE:-onestep.integration}"
 REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}"
+KAFKA_BOOTSTRAP_SERVERS="${ONESTEP_KAFKA_BOOTSTRAP_SERVERS:-127.0.0.1:9092}"
+KAFKA_TOPIC_PREFIX="${ONESTEP_KAFKA_TOPIC_PREFIX:-onestep.integration}"
 AWS_REGION_VALUE="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 SQS_QUEUE_NAME="${ONESTEP_SQS_QUEUE_NAME:-onestep-integration.fifo}"
 SQS_GROUP_ID_VALUE="${ONESTEP_SQS_GROUP_ID:-workers}"
@@ -112,6 +114,35 @@ raise SystemExit(f"Timed out waiting for Redis: {last_error}")
 PY
 }
 
+wait_for_kafka() {
+  KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" "$PYTHON_BIN" - <<'PY'
+import asyncio
+import os
+import time
+
+from aiokafka import AIOKafkaProducer
+
+bootstrap_servers = os.environ["KAFKA_BOOTSTRAP_SERVERS"]
+last_error = None
+
+
+async def check():
+    producer = AIOKafkaProducer(bootstrap_servers=bootstrap_servers)
+    await producer.start()
+    await producer.stop()
+
+
+for _ in range(60):
+    try:
+        asyncio.run(check())
+        raise SystemExit(0)
+    except Exception as exc:  # pragma: no cover - shell retry path
+        last_error = exc
+        time.sleep(2)
+raise SystemExit(f"Timed out waiting for Kafka: {last_error}")
+PY
+}
+
 ensure_sqs_queue() {
   "$PYTHON_BIN" - <<'PY'
 import boto3
@@ -145,6 +176,7 @@ wait_for_url "$LOCALSTACK_ENDPOINT/_localstack/health" "LocalStack"
 wait_for_rabbitmq
 wait_for_mysql
 wait_for_redis
+wait_for_kafka
 
 SQS_QUEUE_JSON="$(LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" AWS_REGION_VALUE="$AWS_REGION_VALUE" SQS_QUEUE_NAME="$SQS_QUEUE_NAME" ensure_sqs_queue)"
 SQS_QUEUE_URL="$(printf '%s' "$SQS_QUEUE_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["QueueUrl"])')"
@@ -160,6 +192,8 @@ export AWS_ENDPOINT_URL="$LOCALSTACK_ENDPOINT"
 export ONESTEP_RABBITMQ_URL="$RABBITMQ_URL"
 export ONESTEP_RABBITMQ_QUEUE="$RABBITMQ_QUEUE"
 export REDIS_URL="$REDIS_URL"
+export ONESTEP_KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS"
+export ONESTEP_KAFKA_TOPIC_PREFIX="$KAFKA_TOPIC_PREFIX"
 export ONESTEP_SQS_QUEUE_URL="$SQS_QUEUE_URL"
 export ONESTEP_SQS_GROUP_ID="$SQS_GROUP_ID_VALUE"
 export ONESTEP_MYSQL_DSN="$MYSQL_DSN"

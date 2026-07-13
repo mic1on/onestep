@@ -31,3 +31,19 @@ for path in "${plugin_paths[@]}"; do
     echo "==> $path (no tests found, skipped)"
   fi
 done
+
+if "$PYTHON_BIN" - <<'PY'
+import sys
+
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+then
+  if command -v uv >/dev/null 2>&1; then
+    echo "==> plugins/onestep-kafka/tests"
+    uv run --extra test --extra kafka python -m pytest -q -m "not integration" "$ROOT_DIR/plugins/onestep-kafka/tests" "$@"
+  else
+    echo "==> plugins/onestep-kafka/tests (uv not found, skipped)"
+  fi
+else
+  echo "==> plugins/onestep-kafka/tests (requires Python >=3.10, skipped)"
+fi

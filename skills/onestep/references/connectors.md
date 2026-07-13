@@ -4,7 +4,7 @@ Use this reference when wiring onestep resources to queues, polling backends, sc
 
 ## General Rules
 
-- Install only the needed package: `onestep-mysql`, `onestep-mq`, `onestep-redis`, `onestep-sqs`, or `onestep[yaml]`.
+- Install only the needed package: `onestep-mysql`, `onestep-postgres`, `onestep-mq`, `onestep-redis`, `onestep-sqs`, `onestep-kafka`, or `onestep[yaml]`.
 - Prefer environment variables for DSNs, tokens, and queue URLs in YAML.
 - In YAML, define shared connection resources first, then sources/sinks that reference them by name.
 - Keep connector options minimal until the deployment requires tuning.
@@ -175,6 +175,31 @@ resources:
 ```
 
 For FIFO queues, configure message group and deduplication behavior deliberately.
+
+## Kafka
+
+```yaml
+resources:
+  kafka_main:
+    type: kafka
+    bootstrap_servers: "${KAFKA_BOOTSTRAP_SERVERS}"
+
+  orders:
+    type: kafka_topic
+    connector: kafka_main
+    topic: orders.events
+    group_id: onestep-orders
+    batch_size: 100
+    poll_timeout_ms: 1000
+```
+
+Kafka uses consumer groups with auto commit disabled. Offsets are committed
+only after processing reaches `ack()` or terminal `fail()`. Treat it as
+at-least-once: output sinks may receive duplicates if the worker exits after
+output send and before the Kafka commit succeeds.
+
+`group_id` is required when a `kafka_topic` is used as a source. Sink-only
+topics may omit it.
 
 ## Webhook
 

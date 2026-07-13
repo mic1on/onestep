@@ -23,7 +23,7 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
    - New app or basic usage: `references/quickstart.md`
    - YAML worker definitions: `references/yaml-task-definition.md`
    - Python API usage: `references/python-api.md`
-   - MySQL/RabbitMQ/Redis/SQS/webhook/HTTP sink/schedule wiring: `references/connectors.md`
+   - MySQL/PostgreSQL/RabbitMQ/Redis/SQS/Kafka/webhook/HTTP sink/schedule wiring: `references/connectors.md`
    - Control-plane reporter or WebSocket telemetry: `references/control-plane.md`
    - Core runtime, plugin API, delivery semantics, compatibility gates, or releases: `references/core-reliability.md`
    - Tests and validation commands: `references/testing.md`
