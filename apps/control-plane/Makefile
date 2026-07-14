@@ -86,7 +86,7 @@ release-migrate:
 	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) run --rm migrate
 
 release-up:
-	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) up -d --build api frontend
+	docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE) up -d --build plane
 
 release-smoke:
 	SMOKE_BUILD=$(SMOKE_BUILD) SMOKE_MANAGE_STACK=$(SMOKE_MANAGE_STACK) SMOKE_CLEANUP=$(SMOKE_CLEANUP) \
