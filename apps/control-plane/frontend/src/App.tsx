@@ -25,7 +25,13 @@ import ConfigEditor from './components/ConfigEditor';
 import ResourceChart from './components/ResourceChart';
 import LoginPage from './components/LoginPage';
 import NotificationSettingsPage from './components/NotificationSettingsPage';
-import type { ControlPlaneView } from './components/Sidebar';
+import {
+  createAppRoutePath,
+  parseAppRoute,
+  type AppRouteState,
+  type ControlPlaneView,
+  type ServiceTab,
+} from './appRoute';
 import { useI18n } from './i18n';
 import {
   Play,
@@ -49,6 +55,7 @@ import {
 
 export default function App() {
   const { t: tr } = useI18n();
+  const initialRouteState = useMemo(() => parseAppRoute(`${window.location.pathname}${window.location.search}`), []);
 
   // --- API-backed state with local demo defaults ---
   const [services, setServices] = useState<Service[]>(INITIAL_SERVICES);
@@ -61,10 +68,10 @@ export default function App() {
 
   // --- UI Navigation State ---
   const [routePath, setRoutePath] = useState(() => `${window.location.pathname}${window.location.search}`);
-  const [currentView, setCurrentView] = useState<ControlPlaneView>('services');
+  const [currentView, setCurrentView] = useState<ControlPlaneView>(initialRouteState.currentView);
   const [selectedServiceId, setSelectedServiceId] = useState<string>('user-auth-service');
-  const [activeTab, setActiveTab] = useState<'Tasks' | 'Instances' | 'Configuration' | 'Logs'>('Tasks');
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<ServiceTab>(initialRouteState.activeTab);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialRouteState.selectedTaskId);
 
   // --- Trace Viewer State ---
   const [showTraces, setShowTraces] = useState(false);
@@ -87,6 +94,49 @@ export default function App() {
     window.history.replaceState(null, '', nextPath);
     setRoutePath(`${window.location.pathname}${window.location.search}`);
   }, []);
+
+  const pushRoute = useCallback((nextPath: string) => {
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== nextPath) {
+      window.history.pushState(null, '', nextPath);
+    }
+    setRoutePath(`${window.location.pathname}${window.location.search}`);
+  }, []);
+
+  const applyRouteState = useCallback((nextRoute: AppRouteState) => {
+    setCurrentView(nextRoute.currentView);
+    setActiveTab(nextRoute.activeTab);
+    setSelectedTaskId(nextRoute.selectedTaskId);
+  }, []);
+
+  const navigateToRoute = useCallback(
+    (nextRoute: AppRouteState) => {
+      applyRouteState(nextRoute);
+      pushRoute(createAppRoutePath(nextRoute));
+    },
+    [applyRouteState, pushRoute],
+  );
+
+  const navigateToView = useCallback(
+    (view: ControlPlaneView) => {
+      navigateToRoute({ currentView: view, activeTab: 'Tasks', selectedTaskId: null });
+    },
+    [navigateToRoute],
+  );
+
+  const navigateToServiceTab = useCallback(
+    (tab: ServiceTab) => {
+      navigateToRoute({ currentView: 'services', activeTab: tab, selectedTaskId: null });
+    },
+    [navigateToRoute],
+  );
+
+  const navigateToTask = useCallback(
+    (taskId: string) => {
+      navigateToRoute({ currentView: 'services', activeTab: 'Tasks', selectedTaskId: taskId });
+    },
+    [navigateToRoute],
+  );
 
   const redirectToLogin = useCallback(() => {
     const currentPath = `${window.location.pathname}${window.location.search}`;
@@ -143,6 +193,11 @@ export default function App() {
     }
     addToast(tr('toast.withError', { action: fallbackMessage, message: getApiErrorMessage(error) }), 'warn');
   };
+
+  useEffect(() => {
+    if (routePath.startsWith('/login')) return;
+    applyRouteState(parseAppRoute(routePath));
+  }, [applyRouteState, routePath]);
 
   useEffect(() => {
     if (routePath.startsWith('/login')) return;
@@ -547,10 +602,7 @@ export default function App() {
       {/* --- Sidebar Navigator panel --- */}
       <Sidebar
         currentView={currentView}
-        onViewChange={(view) => {
-          setCurrentView(view);
-          setSelectedTaskId(null);
-        }}
+        onViewChange={navigateToView}
         onSettingsClick={() => addToast(tr('toast.settingsReadOnly'), 'info')}
         onSupportClick={() => addToast(tr('toast.connectedSupport'), 'success')}
       />
@@ -563,16 +615,13 @@ export default function App() {
           selectedService={selectedService}
           onServiceChange={(svc) => {
             setSelectedServiceId(svc.id);
-            setActiveTab('Tasks');
+            navigateToServiceTab('Tasks');
           }}
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={navigateToServiceTab}
           isTaskView={!!selectedTaskId}
-          onBackToService={() => setSelectedTaskId(null)}
-          onNotificationsClick={() => {
-            setCurrentView('notifications');
-            setSelectedTaskId(null);
-          }}
+          onBackToService={() => navigateToServiceTab('Tasks')}
+          onNotificationsClick={() => navigateToView('notifications')}
         />
 
         {/* --- Core Content Stage Canvas --- */}
@@ -655,8 +704,7 @@ export default function App() {
                       key={svc.id}
                       onClick={() => {
                         setSelectedServiceId(svc.id);
-                        setCurrentView('services');
-                        setActiveTab('Tasks');
+                        navigateToServiceTab('Tasks');
                       }}
                       className="flex items-center justify-between p-3.5 hover:bg-slate-50 rounded-lg cursor-pointer border border-transparent hover:border-slate-200 transition-all"
                     >
@@ -706,7 +754,7 @@ export default function App() {
                 <div>
                   <nav aria-label="Breadcrumb" className="flex items-center text-slate-400 font-medium text-xs mb-1">
                     <button
-                      onClick={() => setSelectedTaskId(null)}
+                      onClick={() => navigateToServiceTab(activeTab)}
                       className="hover:text-indigo-600 transition-colors"
                     >
                       {tr('nav.services')}
@@ -767,8 +815,7 @@ export default function App() {
                       </button>
                       <button
                         onClick={() => {
-                          setSelectedTaskId(null);
-                          setActiveTab('Configuration');
+                          navigateToServiceTab('Configuration');
                         }}
                         className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-800 transition-colors text-xs font-bold shadow-xs"
                       >
@@ -954,7 +1001,7 @@ export default function App() {
                       </div>
                       <TasksList
                         tasks={activeServiceTasks}
-                        onTaskSelect={(task) => setSelectedTaskId(task.id)}
+                        onTaskSelect={(task) => navigateToTask(task.id)}
                         onRestartTask={handleRestartTask}
                         onToggleTaskStatus={handleToggleTaskStatus}
                       />

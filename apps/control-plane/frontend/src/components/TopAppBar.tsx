@@ -105,9 +105,6 @@ export default function TopAppBar({
                   <button
                     onClick={() => {
                       setActiveTab(tab);
-                      if (isTaskView) {
-                        onBackToService();
-                      }
                     }}
                     className={`pb-4 px-1 text-sm font-semibold transition-colors border-b-2 relative ${
                       isActive
