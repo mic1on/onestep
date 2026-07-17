@@ -862,6 +862,12 @@ async def create_service_command_fanout(
         kind=request.kind,
         target_mode=request.target_mode,
         offline_behavior=request.offline_behavior,
+        noop_reason_code="no_online_instances" if request.target_mode == "all_online" and not instances else None,
+        noop_reason_message=(
+            "service has no online instances eligible for all_online command fanout"
+            if request.target_mode == "all_online" and not instances
+            else None
+        ),
         counts=counts,
         dispatched=groups["dispatched"],
         queued=groups["queued"],

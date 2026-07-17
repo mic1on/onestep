@@ -6,6 +6,11 @@ import {
   getApiErrorMessage,
   isAuthRequiredError,
   loadControlPlaneData,
+  loadTaskMetricWindows,
+  type Environment,
+  type ServiceCommandFanoutResponse,
+  type ServiceSummaryStats,
+  type TaskMetricWindowSummary,
 } from './api';
 import {
   INITIAL_SERVICES,
@@ -16,7 +21,8 @@ import {
 } from './initialData';
 import { Service, Task, Instance, LogEntry } from './types';
 import Sidebar from './components/Sidebar';
-import TopAppBar from './components/TopAppBar';
+import ServicesList from './components/ServicesList';
+import OverviewPage from './components/OverviewPage';
 import TelemetryStats from './components/TelemetryStats';
 import TasksList from './components/TasksList';
 import InstancesTable from './components/InstancesTable';
@@ -38,40 +44,74 @@ import {
   Square,
   RotateCcw,
   RefreshCw,
-  Plus,
-  Send,
-  AlertCircle,
   FileCode,
-  Network,
-  Activity,
   Workflow,
-  Sparkles,
   ChevronRight,
-  Database,
   History,
-  CheckCircle,
   Terminal,
+  ArrowLeft,
+  Globe,
+  Check,
 } from 'lucide-react';
+
+const EMPTY_SERVICE: Service = {
+  id: '',
+  name: '',
+  status: 'stopped',
+  uptime: 'never',
+  throughput: '0/min',
+  throughputValue: 0,
+  successRate: 0,
+  errorCount24h: 0,
+  totalInstances: 0,
+  activeInstances: 0,
+  standbyInstances: 0,
+  taskHealth: 0,
+  taskHealthTrend: '+0',
+  totalTaskCount: 0,
+  failingTaskCount: 0,
+  onlineTaskCount: 0,
+};
+
+const EMPTY_SERVICE_SUMMARY: ServiceSummaryStats = {
+  total_services: 0,
+  online_services: 0,
+  attention_services: 0,
+  offline_services: 0,
+  total_instances: 0,
+  online_instances: 0,
+  total_tasks: 0,
+  failing_tasks: 0,
+};
 
 export default function App() {
   const { t: tr } = useI18n();
   const initialRouteState = useMemo(() => parseAppRoute(`${window.location.pathname}${window.location.search}`), []);
 
-  // --- API-backed state with local demo defaults ---
-  const [services, setServices] = useState<Service[]>(INITIAL_SERVICES);
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
-  const [instances, setInstances] = useState<Instance[]>(INITIAL_INSTANCES);
-  const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS);
+  // --- API-backed state. Demo data is only used as a dev fallback after API failure. ---
+  const [services, setServices] = useState<Service[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [serviceSummary, setServiceSummary] = useState<ServiceSummaryStats>(EMPTY_SERVICE_SUMMARY);
+  const [sourceKindCounts, setSourceKindCounts] = useState<Record<string, number>>({});
   const [apiConnected, setApiConnected] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [isLoadingApi, setIsLoadingApi] = useState(false);
+  const [isLoadingApi, setIsLoadingApi] = useState(true);
+  const [taskMetricWindows, setTaskMetricWindows] = useState<TaskMetricWindowSummary[]>([]);
+  const [taskMetricsError, setTaskMetricsError] = useState<string | null>(null);
+  const [isLoadingTaskMetrics, setIsLoadingTaskMetrics] = useState(false);
 
   // --- UI Navigation State ---
   const [routePath, setRoutePath] = useState(() => `${window.location.pathname}${window.location.search}`);
   const [currentView, setCurrentView] = useState<ControlPlaneView>(initialRouteState.currentView);
-  const [selectedServiceId, setSelectedServiceId] = useState<string>('user-auth-service');
+  const [selectedServiceId, setSelectedServiceId] = useState<string>('');
   const [activeTab, setActiveTab] = useState<ServiceTab>(initialRouteState.activeTab);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialRouteState.selectedTaskId);
+
+  // --- Global Environment Filter ---
+  const [environmentFilter, setEnvironmentFilter] = useState<EnvironmentFilter>(() => readEnvironmentFilter());
+  const [isEnvMenuOpen, setIsEnvMenuOpen] = useState(false);
 
   // --- Trace Viewer State ---
   const [showTraces, setShowTraces] = useState(false);
@@ -107,6 +147,9 @@ export default function App() {
     setCurrentView(nextRoute.currentView);
     setActiveTab(nextRoute.activeTab);
     setSelectedTaskId(nextRoute.selectedTaskId);
+    if (nextRoute.selectedServiceId) {
+      setSelectedServiceId(nextRoute.selectedServiceId);
+    }
   }, []);
 
   const navigateToRoute = useCallback(
@@ -119,23 +162,54 @@ export default function App() {
 
   const navigateToView = useCallback(
     (view: ControlPlaneView) => {
-      navigateToRoute({ currentView: view, activeTab: 'Tasks', selectedTaskId: null });
+      navigateToRoute({ currentView: view, selectedServiceId: null, activeTab: 'Tasks', selectedTaskId: null });
+    },
+    [navigateToRoute],
+  );
+
+  const navigateToServicesList = useCallback(() => {
+    navigateToRoute({
+      currentView: 'servicesList',
+      selectedServiceId: null,
+      activeTab: 'Tasks',
+      selectedTaskId: null,
+    });
+  }, [navigateToRoute]);
+
+  const navigateToService = useCallback(
+    (serviceId: string) => {
+      navigateToRoute({
+        currentView: 'services',
+        selectedServiceId: serviceId,
+        activeTab: 'Tasks',
+        selectedTaskId: null,
+      });
     },
     [navigateToRoute],
   );
 
   const navigateToServiceTab = useCallback(
     (tab: ServiceTab) => {
-      navigateToRoute({ currentView: 'services', activeTab: tab, selectedTaskId: null });
+      navigateToRoute({
+        currentView: 'services',
+        selectedServiceId: selectedServiceId,
+        activeTab: tab,
+        selectedTaskId: null,
+      });
     },
-    [navigateToRoute],
+    [navigateToRoute, selectedServiceId],
   );
 
   const navigateToTask = useCallback(
     (taskId: string) => {
-      navigateToRoute({ currentView: 'services', activeTab: 'Tasks', selectedTaskId: taskId });
+      navigateToRoute({
+        currentView: 'services',
+        selectedServiceId: selectedServiceId,
+        activeTab: 'Tasks',
+        selectedTaskId: taskId,
+      });
     },
-    [navigateToRoute],
+    [navigateToRoute, selectedServiceId],
   );
 
   const redirectToLogin = useCallback(() => {
@@ -152,14 +226,20 @@ export default function App() {
     }, 4000);
   };
 
-  const refreshControlPlaneData = async (targetServiceId = selectedServiceId, silent = false) => {
+  const refreshControlPlaneData = async (
+    targetServiceId = selectedServiceId,
+    silent = false,
+    targetEnvironment: EnvironmentFilter = environmentFilter,
+  ) => {
     setIsLoadingApi(true);
     try {
-      const data = await loadControlPlaneData(targetServiceId);
+      const data = await loadControlPlaneData(targetServiceId, apiEnvironment(targetEnvironment));
       setServices(data.services);
       setTasks(data.tasks);
       setInstances(data.instances);
       setLogs(data.logs.length > 0 ? data.logs : []);
+      setServiceSummary(data.serviceSummary);
+      setSourceKindCounts(data.sourceKindCounts);
       setApiConnected(true);
       setApiError(null);
       if (data.selectedServiceId !== targetServiceId) {
@@ -178,6 +258,13 @@ export default function App() {
       const message = getApiErrorMessage(error);
       setApiConnected(false);
       setApiError(message);
+      if (import.meta.env.DEV && services.length === 0) {
+        setServices(INITIAL_SERVICES);
+        setTasks(INITIAL_TASKS);
+        setInstances(INITIAL_INSTANCES);
+        setLogs(INITIAL_LOGS);
+        setSelectedServiceId(INITIAL_SERVICES[0]?.id ?? '');
+      }
       if (!silent) {
         addToast(tr('toast.apiFailed', { message }), 'warn');
       }
@@ -194,6 +281,21 @@ export default function App() {
     addToast(tr('toast.withError', { action: fallbackMessage, message: getApiErrorMessage(error) }), 'warn');
   };
 
+  const handleFanoutResponse = (response: ServiceCommandFanoutResponse, targetName: string, acceptedMessage: string) => {
+    const acceptedCount = (response.counts.dispatched ?? 0) + (response.counts.queued ?? 0);
+    if (acceptedCount > 0) {
+      addToast(acceptedMessage, 'success');
+      return true;
+    }
+
+    const toastKey =
+      response.noop_reason_code === 'no_online_instances' || response.counts.total === 0
+        ? 'toast.serviceNoOnlineInstances'
+        : 'toast.serviceCommandNoTargets';
+    addToast(tr(toastKey, { name: targetName }), 'warn');
+    return false;
+  };
+
   useEffect(() => {
     if (routePath.startsWith('/login')) return;
     applyRouteState(parseAppRoute(routePath));
@@ -205,14 +307,25 @@ export default function App() {
   }, [routePath]);
 
   useEffect(() => {
-    if (apiConnected) {
+    if (apiConnected && selectedServiceId) {
       void refreshControlPlaneData(selectedServiceId, true);
     }
   }, [selectedServiceId]);
 
+  useEffect(() => {
+    if (routePath.startsWith('/login')) return;
+    // Changing the environment filter invalidates the current service/task context.
+    // Return to the services list so the user sees the filtered set.
+    if (currentView === 'services') {
+      navigateToServicesList();
+    }
+    void refreshControlPlaneData(undefined, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [environmentFilter]);
+
   // --- Active Objects Selectors ---
   const selectedService = useMemo(() => {
-    return services.find((s) => s.id === selectedServiceId) || services[0] || INITIAL_SERVICES[0];
+    return services.find((s) => s.id === selectedServiceId) || services[0] || EMPTY_SERVICE;
   }, [services, selectedServiceId]);
 
   const activeServiceTasks = useMemo(() => {
@@ -227,6 +340,9 @@ export default function App() {
     if (!selectedTaskId) return null;
     return tasks.find((t) => t.id === selectedTaskId) || null;
   }, [tasks, selectedTaskId]);
+  const serviceHasOnlineInstances = selectedService.activeInstances > 0;
+  const selectedTaskIsOffline = selectedTask?.status === 'Offline' || !serviceHasOnlineInstances;
+  const headerStatus = getHeaderStatus(selectedService.status, selectedTask?.status, tr);
 
   // --- Live Terminal Logs Simulator ---
   const logTerminalRef = useRef<HTMLDivElement>(null);
@@ -236,6 +352,45 @@ export default function App() {
       logTerminalRef.current.scrollTop = logTerminalRef.current.scrollHeight;
     }
   }, [logs]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedTask) {
+      setTaskMetricWindows([]);
+      setTaskMetricsError(null);
+      setIsLoadingTaskMetrics(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoadingTaskMetrics(true);
+    setTaskMetricsError(null);
+    void loadTaskMetricWindows(selectedTask)
+      .then((windows) => {
+        if (cancelled) return;
+        setTaskMetricWindows(windows);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (isAuthRequiredError(error)) {
+          redirectToLogin();
+          return;
+        }
+        setTaskMetricWindows([]);
+        setTaskMetricsError(getApiErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingTaskMetrics(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [redirectToLogin, selectedTask]);
 
   useEffect(() => {
     if (apiConnected) return;
@@ -279,11 +434,15 @@ export default function App() {
   // Restart All Service Components
   const handleRestartAll = async () => {
     if (selectedService.apiName && selectedService.environment) {
+      if (!serviceHasOnlineInstances) {
+        addToast(tr('toast.serviceNoOnlineInstances', { name: selectedService.name }), 'warn');
+        return;
+      }
       setIsRestartingAll(true);
       addToast(tr('toast.restartAllDispatch', { name: selectedService.name }), 'info');
       try {
-        await dispatchServiceCommand(selectedService, 'restart');
-        addToast(tr('toast.restartAccepted', { name: selectedService.name }), 'success');
+        const response = await dispatchServiceCommand(selectedService, 'restart');
+        handleFanoutResponse(response, selectedService.name, tr('toast.restartAccepted', { name: selectedService.name }));
         await refreshControlPlaneData(selectedService.id, true);
       } catch (error) {
         handleApiActionError(error, tr('error.restartFailed'));
@@ -341,13 +500,17 @@ export default function App() {
   // Deploy Config / Code Update Simulation
   const handleDeployUpdate = async () => {
     if (selectedService.apiName && selectedService.environment) {
+      if (!serviceHasOnlineInstances) {
+        addToast(tr('toast.serviceNoOnlineInstances', { name: selectedService.name }), 'warn');
+        return;
+      }
       setIsDeploying(true);
       setDeploymentProgress(30);
       addToast(tr('toast.deployDispatch', { name: selectedService.name }), 'info');
       try {
-        await dispatchServiceCommand(selectedService, 'sync_now');
+        const response = await dispatchServiceCommand(selectedService, 'sync_now');
         setDeploymentProgress(100);
-        addToast(tr('toast.deployAccepted', { name: selectedService.name }), 'success');
+        handleFanoutResponse(response, selectedService.name, tr('toast.deployAccepted', { name: selectedService.name }));
         await refreshControlPlaneData(selectedService.id, true);
       } catch (error) {
         handleApiActionError(error, tr('error.syncFailed'));
@@ -410,11 +573,16 @@ export default function App() {
   const handleToggleTaskStatus = async (taskId: string) => {
     const task = tasks.find((item) => item.id === taskId);
     if (task?.apiName) {
+      const taskService = services.find((service) => service.id === task.serviceId);
+      if (task.status === 'Offline' || taskService?.activeInstances === 0) {
+        addToast(tr('toast.serviceNoOnlineInstances', { name: taskService?.name ?? task.name }), 'warn');
+        return;
+      }
       const kind = task.status === 'Running' ? 'pause_task' : 'resume_task';
       addToast(tr('toast.taskDispatch', { kind: kind.replace('_', ' '), name: task.name }), 'info');
       try {
-        await dispatchTaskCommand(task, kind);
-        addToast(tr('toast.commandAccepted', { name: task.name }), 'success');
+        const response = await dispatchTaskCommand(task, kind);
+        handleFanoutResponse(response, task.name, tr('toast.commandAccepted', { name: task.name }));
         await refreshControlPlaneData(task.serviceId, true);
       } catch (error) {
         handleApiActionError(error, tr('error.taskCommandFailed'));
@@ -438,11 +606,26 @@ export default function App() {
   const handleRestartTask = async (taskId: string) => {
     const task = tasks.find((item) => item.id === taskId);
     if (task?.apiName) {
+      const taskService = services.find((service) => service.id === task.serviceId);
+      if (task.status === 'Offline' || taskService?.activeInstances === 0) {
+        addToast(tr('toast.serviceNoOnlineInstances', { name: taskService?.name ?? task.name }), 'warn');
+        return;
+      }
       addToast(tr('toast.taskRestartDispatch', { name: task.name }), 'info');
       try {
-        await dispatchTaskCommand(task, 'pause_task');
-        await dispatchTaskCommand(task, 'resume_task');
-        addToast(tr('toast.taskRestartAccepted', { name: task.name }), 'success');
+        const pauseResponse = await dispatchTaskCommand(task, 'pause_task');
+        const resumeResponse = await dispatchTaskCommand(task, 'resume_task');
+        if (
+          (pauseResponse.counts.dispatched ?? 0) +
+            (pauseResponse.counts.queued ?? 0) +
+            (resumeResponse.counts.dispatched ?? 0) +
+            (resumeResponse.counts.queued ?? 0) >
+          0
+        ) {
+          addToast(tr('toast.taskRestartAccepted', { name: task.name }), 'success');
+        } else {
+          handleFanoutResponse(resumeResponse, task.name, tr('toast.taskRestartAccepted', { name: task.name }));
+        }
         await refreshControlPlaneData(task.serviceId, true);
       } catch (error) {
         handleApiActionError(error, tr('error.taskRestartFailed'));
@@ -609,37 +792,80 @@ export default function App() {
 
       {/* --- Main Content Panel --- */}
       <div className="flex-1 flex flex-col ml-[240px] h-screen overflow-hidden">
-        {/* --- Top Global Command Bar --- */}
-        <TopAppBar
-          services={services}
-          selectedService={selectedService}
-          onServiceChange={(svc) => {
-            setSelectedServiceId(svc.id);
-            navigateToServiceTab('Tasks');
-          }}
-          activeTab={activeTab}
-          setActiveTab={navigateToServiceTab}
-          isTaskView={!!selectedTaskId}
-          onBackToService={() => navigateToServiceTab('Tasks')}
-          onNotificationsClick={() => navigateToView('notifications')}
-        />
-
         {/* --- Core Content Stage Canvas --- */}
         <main className="flex-1 overflow-y-auto p-6 bg-slate-50">
           <div className="max-w-7xl mx-auto mb-4 flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-xs">
-            <div className="flex items-center gap-2">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  apiConnected ? 'bg-emerald-500' : apiError ? 'bg-amber-500' : 'bg-slate-300'
-                }`}
-              />
-              <span>
-                {apiConnected
-                  ? tr('api.connected')
-                  : apiError
-                  ? tr('api.usingDemoData', { error: apiError })
-                  : tr('api.connecting')}
-              </span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    apiConnected ? 'bg-emerald-500' : apiError ? 'bg-amber-500' : 'bg-slate-300'
+                  }`}
+                />
+                <span>
+                  {apiConnected
+                    ? tr('api.connected')
+                    : apiError
+                    ? tr('api.usingDemoData', { error: apiError })
+                    : tr('api.connecting')}
+                </span>
+              </div>
+
+              <div className="h-3.5 w-px bg-slate-200" />
+
+              {/* Global Environment Filter */}
+              <div className="relative">
+                <button
+                  onClick={() => setIsEnvMenuOpen((open) => !open)}
+                  className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-700 transition-colors hover:bg-slate-100"
+                  aria-haspopup="listbox"
+                  aria-expanded={isEnvMenuOpen}
+                >
+                  <Globe className="h-3 w-3 text-indigo-600" />
+                  <span>{tr('top.environment')}</span>
+                  <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                    {environmentFilterLabel(environmentFilter, tr)}
+                  </span>
+                </button>
+                {isEnvMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-30"
+                      onClick={() => setIsEnvMenuOpen(false)}
+                      aria-hidden="true"
+                    />
+                    <ul
+                      role="listbox"
+                      className="absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg font-medium text-xs"
+                    >
+                      {ENVIRONMENT_FILTER_ORDER.map((value) => {
+                        const active = value === environmentFilter;
+                        return (
+                          <li key={value}>
+                            <button
+                              role="option"
+                              aria-selected={active}
+                              onClick={() => {
+                                setEnvironmentFilter(value);
+                                writeEnvironmentFilter(value);
+                                setIsEnvMenuOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors ${
+                                active
+                                  ? 'bg-indigo-50 font-bold text-indigo-700'
+                                  : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span>{environmentFilterLabel(value, tr)}</span>
+                              {active && <Check className="h-3 w-3 text-indigo-600" />}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                )}
+              </div>
             </div>
             <button
               onClick={() => void refreshControlPlaneData(selectedServiceId)}
@@ -651,92 +877,27 @@ export default function App() {
             </button>
           </div>
 
+          {services.length === 0 ? (
+            <div className="max-w-7xl mx-auto rounded-xl border border-slate-200 bg-white p-8 text-center shadow-xs">
+              <RefreshCw className={`mx-auto mb-3 h-5 w-5 text-slate-400 ${isLoadingApi ? 'animate-spin' : ''}`} />
+              <h2 className="text-sm font-bold text-slate-800">
+                {isLoadingApi ? tr('api.connecting') : tr('api.noServices')}
+              </h2>
+              <p className="mt-1 text-xs font-medium text-slate-500">
+                {apiError ? tr('api.noServicesHint', { error: apiError }) : tr('api.waitingForServices')}
+              </p>
+            </div>
+          ) : (
+            <>
           {/* --- VIEW: Global Overview (if selected) --- */}
           {currentView === 'overview' && (
-            <div className="max-w-7xl mx-auto space-y-6 animate-fadeIn">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-3xl font-bold text-slate-900 tracking-tight font-sans">
-                    {tr('nav.globalOverview')}
-                  </h2>
-                  <p className="text-sm text-slate-500 font-medium">
-                    {tr('overview.subtitle')}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>{tr('overview.clusterSync')}</span>
-                </div>
-              </div>
-
-              {/* Grid map cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {[
-                  { name: 'US-East-01 (Primary AWS)', health: '100%', delay: '4ms', location: 'Virginia, USA', code: 'aws' },
-                  { name: 'GCP-West-02 (Secondary GCP)', health: '99.98%', delay: '12ms', location: 'Oregon, USA', code: 'gcp' },
-                  { name: 'Azure-South-01 (Local Edge)', health: '98.5%', delay: '24ms', location: 'Frankfurt, GER', code: 'azure' },
-                ].map((cluster, i) => (
-                  <div key={i} className="bg-white border border-slate-200 rounded-xl p-5 hover:shadow-md transition-all">
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="text-xs font-bold uppercase tracking-wide text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                        {cluster.code}
-                      </span>
-                      <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" /> {tr('common.healthy')}
-                      </span>
-                    </div>
-                    <h3 className="font-bold text-slate-800 text-sm mb-1">{cluster.name}</h3>
-                    <p className="text-xs text-slate-500 font-medium mb-3">{cluster.location}</p>
-                    <div className="flex justify-between text-xs font-semibold text-slate-600 border-t border-slate-100 pt-3">
-                      <span>{tr('common.uptimeValue', { value: cluster.health })}</span>
-                      <span>{tr('common.ping', { delay: cluster.delay })}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Services health metrics block */}
-              <div className="bg-white border border-slate-200 rounded-xl p-6">
-                <h3 className="font-bold text-slate-900 text-sm mb-4">{tr('overview.registry')}</h3>
-                <div className="space-y-4">
-                  {services.map((svc) => (
-                    <div
-                      key={svc.id}
-                      onClick={() => {
-                        setSelectedServiceId(svc.id);
-                        navigateToServiceTab('Tasks');
-                      }}
-                      className="flex items-center justify-between p-3.5 hover:bg-slate-50 rounded-lg cursor-pointer border border-transparent hover:border-slate-200 transition-all"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded bg-indigo-50 flex items-center justify-center text-indigo-600">
-                          <Database className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-slate-800 text-sm">{svc.name}</h4>
-                          <span className="text-xs text-slate-500 font-medium">{tr('common.uptimeValue', { value: svc.uptime })}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-8 items-center text-xs font-bold text-slate-600">
-                        <div>
-                          <span className="text-[10px] text-slate-400 block mb-0.5">{tr('common.throughput')}</span>
-                          <span>{svc.throughput}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 block mb-0.5">{tr('common.instances')}</span>
-                          <span>{svc.activeInstances}/{svc.totalInstances} {tr('common.active')}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400 block mb-0.5">{tr('common.health')}</span>
-                          <span className="text-emerald-600">{svc.taskHealth}%</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <OverviewPage
+              services={services}
+              serviceSummary={serviceSummary}
+              sourceKindCounts={sourceKindCounts}
+              environment={apiEnvironment(environmentFilter)}
+              onSelectService={navigateToService}
+            />
           )}
 
           {currentView === 'notifications' && (
@@ -746,7 +907,12 @@ export default function App() {
             />
           )}
 
-          {/* --- VIEW: Services Detail (Default) --- */}
+          {/* --- VIEW: Services List --- */}
+          {currentView === 'servicesList' && (
+            <ServicesList services={services} onSelectService={navigateToService} />
+          )}
+
+          {/* --- VIEW: Service Detail --- */}
           {currentView === 'services' && (
             <div className="max-w-7xl mx-auto space-y-6">
               {/* Breadcrumb navigator under Command Bar */}
@@ -754,7 +920,7 @@ export default function App() {
                 <div>
                   <nav aria-label="Breadcrumb" className="flex items-center text-slate-400 font-medium text-xs mb-1">
                     <button
-                      onClick={() => navigateToServiceTab(activeTab)}
+                      onClick={navigateToServicesList}
                       className="hover:text-indigo-600 transition-colors"
                     >
                       {tr('nav.services')}
@@ -772,12 +938,22 @@ export default function App() {
                   </nav>
 
                   <div className="flex items-center gap-3 mt-1.5">
+                    <button
+                      onClick={navigateToServicesList}
+                      className="p-1.5 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-slate-100 transition-colors"
+                      title={tr('nav.services')}
+                      aria-label={tr('nav.services')}
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
                     <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight font-sans">
                       {selectedTask ? selectedTask.name : tr('service.detail')}
                     </h2>
-                    <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md font-bold tracking-wide text-[10px] flex items-center gap-1 border border-emerald-200">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      {tr('common.running')}
+                    <span
+                      className={`${headerStatus.className} px-2 py-0.5 rounded-md font-bold tracking-wide text-[10px] flex items-center gap-1 border`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${headerStatus.dotClassName}`} />
+                      {headerStatus.label}
                     </span>
                   </div>
                 </div>
@@ -788,18 +964,20 @@ export default function App() {
                     <>
                       <button
                         onClick={() => handleRestartTask(selectedTask.id)}
-                        className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-indigo-600 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs"
+                        disabled={selectedTaskIsOffline}
+                        className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-indigo-600 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <RotateCcw className="w-4 h-4" />
                         <span>{tr('button.restart')}</span>
                       </button>
                       <button
                         onClick={() => handleToggleTaskStatus(selectedTask.id)}
+                        disabled={selectedTaskIsOffline}
                         className={`flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg transition-colors text-xs font-bold bg-white shadow-xs ${
                           selectedTask.status === 'Running'
                             ? 'text-rose-600 hover:bg-rose-50 border-rose-200'
                             : 'text-emerald-600 hover:bg-emerald-50 border-emerald-200'
-                        }`}
+                        } disabled:cursor-not-allowed disabled:opacity-50`}
                       >
                         {selectedTask.status === 'Running' ? (
                           <>
@@ -827,16 +1005,16 @@ export default function App() {
                     <>
                       <button
                         onClick={handleRestartAll}
-                        disabled={isRestartingAll}
-                        className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:opacity-50"
+                        disabled={isRestartingAll || !serviceHasOnlineInstances}
+                        className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <RefreshCw className={`w-4 h-4 ${isRestartingAll ? 'animate-spin' : ''}`} />
                         <span>{isRestartingAll ? tr('button.restarting') : tr('button.restartAll')}</span>
                       </button>
                       <button
                         onClick={handleDeployUpdate}
-                        disabled={isDeploying}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-800 transition-colors text-xs font-bold shadow-xs disabled:opacity-50"
+                        disabled={isDeploying || !serviceHasOnlineInstances}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-800 transition-colors text-xs font-bold shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Workflow className="w-4 h-4" />
                         <span>{isDeploying ? tr('button.deploying') : tr('button.deployUpdate')}</span>
@@ -977,7 +1155,11 @@ export default function App() {
                     {/* Left 2/3 column: Topology + Resource chart */}
                     <div className="lg:col-span-2 space-y-6">
                       <TopologyFlow task={selectedTask} />
-                      <ResourceChart />
+                      <ResourceChart
+                        windows={taskMetricWindows}
+                        isLoading={isLoadingTaskMetrics}
+                        error={taskMetricsError}
+                      />
                     </div>
 
                     {/* Right 1/3 column: Config editor */}
@@ -1119,6 +1301,8 @@ export default function App() {
               )}
             </div>
           )}
+            </>
+          )}
         </main>
       </div>
 
@@ -1155,4 +1339,73 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+function getHeaderStatus(
+  serviceStatus: Service['status'],
+  taskStatus: Task['status'] | undefined,
+  t: ReturnType<typeof useI18n>['t'],
+) {
+  const resolvedStatus = taskStatus ?? serviceStatus;
+  if (resolvedStatus === 'Running' || resolvedStatus === 'running') {
+    return {
+      label: t('common.running'),
+      className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      dotClassName: 'bg-emerald-500',
+    };
+  }
+  if (resolvedStatus === 'Failed' || resolvedStatus === 'degraded') {
+    return {
+      label: t('common.degraded'),
+      className: 'bg-amber-50 text-amber-700 border-amber-200',
+      dotClassName: 'bg-amber-500',
+    };
+  }
+  return {
+    label: t('common.offline'),
+    className: 'bg-slate-100 text-slate-600 border-slate-200',
+    dotClassName: 'bg-slate-400',
+  };
+}
+
+export type EnvironmentFilter = 'all' | Environment;
+
+const ENVIRONMENT_FILTER_STORAGE_KEY = 'onestep.controlPlane.environmentFilter';
+
+const ENVIRONMENT_FILTER_ORDER: EnvironmentFilter[] = ['all', 'prod', 'staging', 'dev'];
+
+function readEnvironmentFilter(): EnvironmentFilter {
+  if (typeof window === 'undefined') return 'all';
+  try {
+    const stored = window.localStorage.getItem(ENVIRONMENT_FILTER_STORAGE_KEY);
+    if (stored && (ENVIRONMENT_FILTER_ORDER as string[]).includes(stored)) {
+      return stored as EnvironmentFilter;
+    }
+  } catch {
+    // localStorage may be unavailable (private mode); fall back to default.
+  }
+  return 'all';
+}
+
+function writeEnvironmentFilter(value: EnvironmentFilter) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ENVIRONMENT_FILTER_STORAGE_KEY, value);
+  } catch {
+    // Ignore persistence failures.
+  }
+}
+
+function apiEnvironment(filter: EnvironmentFilter): Environment | undefined {
+  return filter === 'all' ? undefined : filter;
+}
+
+function environmentFilterLabel(
+  filter: EnvironmentFilter,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (filter === 'all') return t('environment.all');
+  if (filter === 'prod') return t('environment.prod');
+  if (filter === 'staging') return t('environment.staging');
+  return t('environment.dev');
 }

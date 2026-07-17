@@ -23,6 +23,7 @@ export default function TasksList({
     if (status === 'Running') return t('status.running');
     if (status === 'Idle') return t('status.idle');
     if (status === 'Stopped') return t('status.stopped');
+    if (status === 'Offline') return t('status.offline');
     return t('status.failed');
   };
 
@@ -35,6 +36,7 @@ export default function TasksList({
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {tasks.map((task) => {
         const isRunning = task.status === 'Running';
+        const isOffline = task.status === 'Offline';
         const isMenuOpen = openMenuId === task.id;
 
         return (
@@ -61,10 +63,10 @@ export default function TasksList({
                       <span className="flex items-center gap-1 text-[11px] font-semibold">
                         <span
                           className={`w-1.5 h-1.5 rounded-full ${
-                            isRunning ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                            isRunning ? 'bg-emerald-500 animate-pulse' : isOffline ? 'bg-slate-400' : 'bg-amber-400'
                           }`}
                         />
-                        <span className={isRunning ? 'text-emerald-600' : 'text-slate-500'}>
+                        <span className={isRunning ? 'text-emerald-600' : isOffline ? 'text-slate-500' : 'text-amber-600'}>
                           {getTaskStatusLabel(task.status)}
                         </span>
                       </span>

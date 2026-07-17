@@ -1,7 +1,8 @@
 import { Bell, LayoutDashboard, Server, Settings, HelpCircle } from 'lucide-react';
 import { useI18n } from '../i18n';
+import type { ControlPlaneView } from '../appRoute';
 
-export type ControlPlaneView = 'overview' | 'services' | 'notifications';
+export type { ControlPlaneView };
 
 interface SidebarProps {
   currentView: ControlPlaneView;
@@ -17,6 +18,8 @@ export default function Sidebar({
   onSupportClick,
 }: SidebarProps) {
   const { t } = useI18n();
+
+  const isServicesActive = currentView === 'servicesList' || currentView === 'services';
 
   return (
     <nav className="bg-white border-r border-slate-200 fixed left-0 top-0 h-full w-[240px] flex flex-col p-4 z-20 shadow-xs">
@@ -48,14 +51,14 @@ export default function Sidebar({
         </li>
         <li>
           <button
-            onClick={() => onViewChange('services')}
+            onClick={() => onViewChange('servicesList')}
             className={`w-full flex items-center gap-3 p-2.5 text-sm transition-colors rounded-lg font-medium ${
-              currentView === 'services'
+              isServicesActive
                 ? 'bg-indigo-50 text-indigo-700 font-bold'
                 : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
             }`}
           >
-            <Server className={`w-4 h-4 ${currentView === 'services' ? 'text-indigo-600' : 'text-slate-500'}`} />
+            <Server className={`w-4 h-4 ${isServicesActive ? 'text-indigo-600' : 'text-slate-500'}`} />
             <span>{t('nav.services')}</span>
           </button>
         </li>

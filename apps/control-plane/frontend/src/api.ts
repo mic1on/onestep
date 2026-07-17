@@ -52,6 +52,7 @@ interface ServiceSummary {
   last_seen_at: string | null;
   source_kinds: string[];
   task_count: number;
+  failing_task_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -62,6 +63,19 @@ interface ServiceListResponse {
   limit: number;
   offset: number;
   source_kind_counts: Record<string, number>;
+  summary: ServiceListSummary;
+}
+
+interface ServiceListSummary {
+  total_services: number;
+  online_services: number;
+  attention_services: number;
+  offline_services: number;
+  ready_services: number;
+  total_instances: number;
+  online_instances: number;
+  total_tasks: number;
+  failing_tasks: number;
 }
 
 interface TaskEventCounts {
@@ -126,6 +140,37 @@ interface TaskDashboardListResponse {
   offset: number;
 }
 
+export interface TaskMetricWindowSummary {
+  instance_id: string;
+  task_name: string;
+  window_id: string;
+  window_started_at: string;
+  window_ended_at: string;
+  fetched: number;
+  started: number;
+  succeeded: number;
+  retried: number;
+  failed: number;
+  dead_lettered: number;
+  cancelled: number;
+  timeouts: number;
+  inflight: number;
+  avg_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  received_at: string;
+  created_at: string;
+}
+
+interface TaskDetailResponse {
+  service: ServiceSummary;
+  task_name: string;
+  lookback_minutes: number;
+  lookback_started_at: string;
+  summary: TaskDashboardSummary;
+  recent_metric_windows: TaskMetricWindowSummary[];
+  recent_events: TaskEventSummary[];
+}
+
 interface InstanceSummary {
   instance_id: string;
   node_name: string;
@@ -163,12 +208,61 @@ interface ServiceDashboardResponse {
   recent_events: TaskEventSummary[];
 }
 
+interface ServiceCommandFanoutCounts {
+  dispatched: number;
+  queued: number;
+  skipped: number;
+  rejected: number;
+  total: number;
+}
+
+export interface ServiceCommandFanoutResponse {
+  kind: AgentCommandKind;
+  target_mode: 'all_online' | 'selected_instances';
+  offline_behavior: 'skip' | 'queue';
+  noop_reason_code: string | null;
+  noop_reason_message: string | null;
+  counts: ServiceCommandFanoutCounts;
+}
+
 export interface ControlPlaneData {
   services: Service[];
   tasks: Task[];
   instances: Instance[];
   logs: LogEntry[];
   selectedServiceId: string;
+  serviceSummary: ServiceListSummary;
+  sourceKindCounts: Record<string, number>;
+}
+
+export interface ServiceSummaryStats {
+  total_services: number;
+  online_services: number;
+  attention_services: number;
+  offline_services: number;
+  total_instances: number;
+  online_instances: number;
+  total_tasks: number;
+  failing_tasks: number;
+}
+
+export interface RecentEvent {
+  event_id: string;
+  instance_id: string;
+  task_name: string;
+  kind: string;
+  occurred_at: string;
+  attempts: number | null;
+  duration_ms: number | null;
+  failure_kind: string | null;
+  exception_type: string | null;
+  message: string | null;
+  traceback: string | null;
+  meta: Record<string, unknown>;
+  received_at: string;
+  created_at: string;
+  service_name: string;
+  environment: Environment;
 }
 
 const DEFAULT_LOOKBACK_MINUTES = 60;
@@ -387,7 +481,9 @@ function mapService(
   tasks: TaskDashboardSummary[] = [],
 ): Service {
   const status =
-    service.service_status === 'online'
+    service.online_instance_count === 0
+      ? 'stopped'
+      : service.service_status === 'online'
       ? 'running'
       : service.service_status === 'attention'
       ? 'degraded'
@@ -395,7 +491,12 @@ function mapService(
   const failedEvents = dashboard?.recent_events.filter((event) => event.kind === 'failed' || event.kind === 'dead_lettered').length ?? 0;
   const fetched = tasks.reduce((sum, task) => sum + task.fetched, 0);
   const taskCount = dashboard?.task_count ?? service.task_count;
-  const failingTaskCount = dashboard?.failing_task_count ?? 0;
+  const failingTaskCount = dashboard?.failing_task_count ?? service.failing_task_count ?? 0;
+  // A task is "online" only when the service has at least one online instance
+  // (matches the Offline status derived in mapTask). Tasks on offline services
+  // are not running, so onlineTaskCount is 0 regardless of failing events.
+  const serviceHasOnlineInstances = service.online_instance_count > 0;
+  const onlineTaskCount = serviceHasOnlineInstances ? Math.max(taskCount - failingTaskCount, 0) : 0;
   const taskHealth = taskCount === 0 ? 100 : Number((((taskCount - failingTaskCount) / taskCount) * 100).toFixed(1));
   const throughputValue = Math.round(fetched / Math.max(dashboard?.lookback_minutes ?? DEFAULT_LOOKBACK_MINUTES, 1));
 
@@ -415,6 +516,9 @@ function mapService(
     standbyInstances: Math.max(service.instance_count - service.online_instance_count, 0),
     taskHealth,
     taskHealthTrend: failingTaskCount > 0 ? `-${failingTaskCount}` : '+0',
+    totalTaskCount: taskCount,
+    failingTaskCount,
+    onlineTaskCount,
   };
 }
 
@@ -430,7 +534,14 @@ function mapTask(service: ServiceSummary, task: TaskDashboardSummary, lookbackMi
     'handler';
   const throughputNum = Math.round(task.fetched / Math.max(lookbackMinutes, 1));
   const errorCount = task.failed + task.dead_lettered + task.timeouts;
-  const status = errorCount > 0 ? 'Failed' : task.started > 0 || task.succeeded > 0 ? 'Running' : 'Idle';
+  const status =
+    service.online_instance_count === 0
+      ? 'Offline'
+      : errorCount > 0
+      ? 'Failed'
+      : task.started > 0 || task.succeeded > 0
+      ? 'Running'
+      : 'Idle';
 
   return {
     id: `${serviceId(service)}:${task.task_name}`,
@@ -510,11 +621,12 @@ function buildTaskConfigYaml(task: TaskDashboardSummary) {
     name: "${emit?.name ?? 'default'}"`;
 }
 
-async function listServices() {
+async function listServices(environment?: Environment) {
   return request<ServiceListResponse>('/api/v1/services', {
     query: {
       limit: PAGE_SIZE,
       offset: 0,
+      environment,
     },
   });
 }
@@ -600,8 +712,38 @@ async function listServiceInstances(service: ServiceSummary) {
   });
 }
 
-export async function loadControlPlaneData(selectedServiceId?: string): Promise<ControlPlaneData> {
-  const servicesResponse = await listServices();
+export async function loadTaskMetricWindows(task: Task) {
+  if (!task.apiServiceName || !task.apiName || !task.environment) {
+    return [];
+  }
+
+  const response = await request<TaskDetailResponse>(
+    `/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}`,
+    {
+      query: {
+        environment: task.environment,
+        lookback_minutes: DEFAULT_LOOKBACK_MINUTES,
+        metric_window_limit: 24,
+        event_limit: 1,
+      },
+    },
+  );
+  return response.recent_metric_windows;
+}
+
+export async function loadRecentEvents(environment?: Environment, limit = 20): Promise<RecentEvent[]> {
+  const response = await request<{ items: RecentEvent[]; total: number }>('/api/v1/events', {
+    query: {
+      environment,
+      limit,
+      offset: 0,
+    },
+  });
+  return response.items;
+}
+
+export async function loadControlPlaneData(selectedServiceId?: string, environment?: Environment): Promise<ControlPlaneData> {
+  const servicesResponse = await listServices(environment);
   if (servicesResponse.items.length === 0) {
     throw new ApiError('No services reported by the control plane yet', 404);
   }
@@ -615,19 +757,22 @@ export async function loadControlPlaneData(selectedServiceId?: string): Promise<
     listServiceTasks(selectedSummary),
     listServiceInstances(selectedSummary),
   ]);
+  const selectedDashboardSummary = dashboard.service;
 
   const services = servicesResponse.items.map((service) =>
     serviceId(service) === serviceId(selectedSummary)
-      ? mapService(service, dashboard, taskResponse.items)
+      ? mapService(selectedDashboardSummary, dashboard, taskResponse.items)
       : mapService(service),
   );
 
   return {
     services,
-    selectedServiceId: serviceId(selectedSummary),
-    tasks: taskResponse.items.map((task) => mapTask(selectedSummary, task, taskResponse.lookback_minutes)),
-    instances: instanceResponse.items.map((instance) => mapInstance(selectedSummary, instance)),
+    selectedServiceId: serviceId(selectedDashboardSummary),
+    tasks: taskResponse.items.map((task) => mapTask(selectedDashboardSummary, task, taskResponse.lookback_minutes)),
+    instances: instanceResponse.items.map((instance) => mapInstance(selectedDashboardSummary, instance)),
     logs: dashboard.recent_events.map(mapLog),
+    serviceSummary: servicesResponse.summary,
+    sourceKindCounts: servicesResponse.source_kind_counts,
   };
 }
 
@@ -639,7 +784,7 @@ export async function dispatchServiceCommand(
     throw new ApiError('Selected service is not backed by an API record', 400);
   }
 
-  return request(`/api/v1/services/${encodeURIComponent(service.apiName)}/commands`, {
+  return request<ServiceCommandFanoutResponse>(`/api/v1/services/${encodeURIComponent(service.apiName)}/commands`, {
     method: 'POST',
     query: {
       environment: service.environment,
@@ -661,7 +806,7 @@ export async function dispatchTaskCommand(task: Task, kind: TaskCommandKind) {
     throw new ApiError('Selected task is not backed by an API record', 400);
   }
 
-  return request(`/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}/commands`, {
+  return request<ServiceCommandFanoutResponse>(`/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}/commands`, {
     method: 'POST',
     query: {
       environment: task.environment,

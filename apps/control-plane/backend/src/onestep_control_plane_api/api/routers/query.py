@@ -24,6 +24,7 @@ from onestep_control_plane_api.api.constants import (
 )
 from onestep_control_plane_api.api.query_support import (
     build_agent_session_summary,
+    build_failing_task_counts_map,
     build_instance_status_counts,
     build_instance_summary,
     build_metric_window_summary,
@@ -35,6 +36,7 @@ from onestep_control_plane_api.api.query_support import (
     build_task_control_summary,
     build_task_counts_map,
     build_task_event_summary,
+    build_recent_event_summary,
     build_task_summary_map,
     get_active_sessions_by_instance_id,
     get_latest_session_for_instance,
@@ -60,6 +62,7 @@ from onestep_control_plane_api.api.schemas import (
     InstanceConnectivity,
     InstanceDetailResponse,
     InstanceListResponse,
+    RecentEventListResponse,
     ServiceDashboardResponse,
     ServiceListResponse,
     ServiceListSummary,
@@ -112,6 +115,10 @@ def list_services(
     source_kinds_map = build_source_kinds_map(db)
     source_kind_counts = build_source_kind_counts_map(db, environment=environment)
     task_counts_map = build_task_counts_map(db)
+    failing_task_counts_map = build_failing_task_counts_map(
+        db,
+        lookback_started_at=now - timedelta(minutes=DEFAULT_LOOKBACK_MINUTES),
+    )
 
     # If filtering by source_kind, only include services that have it
     if source_kind is not None:
@@ -225,6 +232,7 @@ def list_services(
             last_seen_at=last_seen_at,
             source_kinds=source_kinds_map.get(service.id, []),
             task_count=task_counts_map.get(service.id, 0),
+            failing_task_count=failing_task_counts_map.get(service.id, 0),
         )
         for service, instance_count, online_instance_count, last_seen_at in rows
     ]
@@ -242,6 +250,8 @@ def list_services(
             ready_services=summary_online_services,
             total_instances=summary_total_instances,
             online_instances=summary_online_instances,
+            total_tasks=sum(task_counts_map.values()),
+            failing_tasks=sum(failing_task_counts_map.values()),
         ),
     )
 
@@ -713,6 +723,57 @@ def list_service_events(
 
     items = [build_task_event_summary(event) for event in events]
     return TaskEventListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/events", response_model=RecentEventListResponse)
+def list_recent_events(
+    environment: Environment | None = Query(default=None),
+    kind: TaskEventKind | None = Query(default=None),
+    service_name: str | None = Query(default=None),
+    occurred_after: datetime | None = Query(default=None),
+    occurred_before: datetime | None = Query(default=None),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> RecentEventListResponse:
+    """Cross-service activity stream of recent task events."""
+    filters: list = []
+    if environment is not None:
+        filters.append(Service.environment == environment)
+    if service_name is not None:
+        filters.append(Service.name == service_name)
+    if kind is not None:
+        filters.append(TaskEvent.kind == kind)
+    if occurred_after is not None:
+        filters.append(TaskEvent.occurred_at >= as_utc(occurred_after))
+    if occurred_before is not None:
+        filters.append(TaskEvent.occurred_at <= as_utc(occurred_before))
+
+    # Join Service when we filter on it; otherwise outerjoin to still enrich each row.
+    needs_join = environment is not None or service_name is not None
+    if needs_join:
+        base = select(TaskEvent, Service).join(Service, TaskEvent.service_id == Service.id)
+        count_stmt = select(func.count()).select_from(TaskEvent).join(
+            Service, TaskEvent.service_id == Service.id
+        )
+    else:
+        base = select(TaskEvent, Service).outerjoin(Service, TaskEvent.service_id == Service.id)
+        count_stmt = select(func.count()).select_from(TaskEvent)
+
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = db.scalar(count_stmt) or 0
+
+    rows = db.execute(
+        base.where(*filters).order_by(TaskEvent.occurred_at.desc(), TaskEvent.event_id).offset(offset).limit(limit)
+    ).all()
+
+    items = [
+        build_recent_event_summary(event, service=service)
+        for event, service in rows
+        if service is not None
+    ]
+    return RecentEventListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/services/{service_name}/commands", response_model=AgentCommandListResponse)

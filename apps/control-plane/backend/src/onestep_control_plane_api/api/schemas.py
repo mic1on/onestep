@@ -920,6 +920,8 @@ class ServiceCommandFanoutResponse(APIModel):
     kind: ServiceCommandFanoutKind
     target_mode: ServiceCommandTargetMode
     offline_behavior: ServiceCommandOfflineBehavior
+    noop_reason_code: str | None = None
+    noop_reason_message: str | None = None
     counts: ServiceCommandFanoutCounts
     dispatched: list[ServiceCommandFanoutTargetSummary] = Field(default_factory=list)
     queued: list[ServiceCommandFanoutTargetSummary] = Field(default_factory=list)
@@ -982,6 +984,7 @@ class ServiceSummary(APIModel):
     last_seen_at: datetime | None = None
     source_kinds: list[str] = Field(default_factory=list)
     task_count: int = Field(default=0, ge=0)
+    failing_task_count: int = Field(default=0, ge=0)
     created_at: datetime
     updated_at: datetime
 
@@ -994,6 +997,8 @@ class ServiceListSummary(APIModel):
     ready_services: int = Field(ge=0)
     total_instances: int = Field(ge=0)
     online_instances: int = Field(ge=0)
+    total_tasks: int = Field(default=0, ge=0)
+    failing_tasks: int = Field(default=0, ge=0)
 
 
 class ServiceListResponse(PaginatedResponse):
@@ -1261,6 +1266,15 @@ class TaskEventSummary(APIModel):
 
 class TaskEventListResponse(PaginatedResponse):
     items: list[TaskEventSummary]
+
+
+class RecentEventSummary(TaskEventSummary):
+    service_name: str
+    environment: Environment
+
+
+class RecentEventListResponse(PaginatedResponse):
+    items: list[RecentEventSummary]
 
 
 class TaskDashboardSummary(APIModel):

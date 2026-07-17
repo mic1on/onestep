@@ -14,6 +14,9 @@ export interface Service {
   standbyInstances: number;
   taskHealth: number;
   taskHealthTrend: string;
+  totalTaskCount: number;
+  failingTaskCount: number;
+  onlineTaskCount: number;
 }
 
 export interface Task {
@@ -23,7 +26,7 @@ export interface Task {
   environment?: 'dev' | 'staging' | 'prod';
   serviceId: string;
   name: string;
-  status: 'Running' | 'Idle' | 'Stopped' | 'Failed';
+  status: 'Running' | 'Idle' | 'Stopped' | 'Failed' | 'Offline';
   pipelineSource: string;
   pipelineSourceLabel: string;
   pipelineSink: string;

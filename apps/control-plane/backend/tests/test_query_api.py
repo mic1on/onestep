@@ -344,6 +344,8 @@ def test_list_services_and_get_service_summary(client, db_session) -> None:
         "ready_services": 0,
         "total_instances": 2,
         "online_instances": 1,
+        "total_tasks": 0,
+        "failing_tasks": 0,
     }
 
     detail = client.get("/api/v1/services/billing-sync", params={"environment": "prod"})
@@ -430,6 +432,8 @@ def test_list_services_marks_fully_online_service_as_online_even_when_sync_is_st
         "ready_services": 1,
         "total_instances": 1,
         "online_instances": 1,
+        "total_tasks": 0,
+        "failing_tasks": 0,
     }
 
 
@@ -466,6 +470,8 @@ def test_list_services_marks_service_without_online_instances_as_offline(
         "ready_services": 0,
         "total_instances": 1,
         "online_instances": 0,
+        "total_tasks": 0,
+        "failing_tasks": 0,
     }
 
 
@@ -674,6 +680,78 @@ def test_list_service_events_filters_by_kind_and_time_order(client, db_session) 
         "evt_01JNXSUCCEEDED",
         "evt_01JNXFAILED",
     ]
+
+
+def test_list_recent_events_returns_cross_service_feed(client, db_session) -> None:
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    other_service = seed_service(db_session, name="audit-sync", environment="dev")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-prod-1",
+        status="ok",
+        last_seen_at=datetime.now(UTC),
+    )
+    other_instance = seed_instance(
+        db_session,
+        other_service,
+        node_name="vm-audit-1",
+        status="ok",
+        last_seen_at=datetime.now(UTC),
+    )
+
+    seed_task_event(
+        db_session,
+        service,
+        instance,
+        event_id="evt_global_failed",
+        task_name="sync_users",
+        kind="failed",
+        occurred_at=datetime(2026, 3, 8, 17, 30, 58, tzinfo=UTC),
+    )
+    seed_task_event(
+        db_session,
+        other_service,
+        other_instance,
+        event_id="evt_global_other",
+        task_name="sync_users",
+        kind="succeeded",
+        occurred_at=datetime(2026, 3, 8, 17, 31, 0, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/events")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    # Newest first
+    assert [item["event_id"] for item in payload["items"]] == [
+        "evt_global_other",
+        "evt_global_failed",
+    ]
+    # Each row is enriched with the owning service name + environment
+    by_id = {item["event_id"]: item for item in payload["items"]}
+    assert by_id["evt_global_failed"]["service_name"] == "billing-sync"
+    assert by_id["evt_global_failed"]["environment"] == "prod"
+    assert by_id["evt_global_other"]["service_name"] == "audit-sync"
+    assert by_id["evt_global_other"]["environment"] == "dev"
+
+    # Filter by environment narrows to a single service's events
+    prod_only = client.get("/api/v1/events", params={"environment": "prod"})
+    assert prod_only.status_code == 200
+    assert prod_only.json()["total"] == 1
+    assert prod_only.json()["items"][0]["event_id"] == "evt_global_failed"
+
+    # Filter by kind
+    failed_only = client.get("/api/v1/events", params={"kind": "failed"})
+    assert failed_only.status_code == 200
+    assert failed_only.json()["total"] == 1
+
+    # Pagination
+    first_page = client.get("/api/v1/events", params={"limit": 1, "offset": 0})
+    assert first_page.status_code == 200
+    assert len(first_page.json()["items"]) == 1
+    assert first_page.json()["items"][0]["event_id"] == "evt_global_other"
 
 
 def test_service_dashboard_returns_instance_and_task_overview(client, db_session) -> None:
@@ -1424,6 +1502,51 @@ def test_service_command_fanout_queues_supported_offline_targets_and_rejects_cap
     assert commands[0].kind == "sync_now"
     assert commands[0].reason == "Reconcile queue consumers after incident review"
     assert commands[0].source_surface == "service_detail_fanout"
+
+
+def test_service_command_fanout_reports_noop_when_no_instances_are_online(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-offline",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=30),
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/services/billing-sync/commands",
+        params={"environment": "prod"},
+        json={
+            "kind": "restart",
+            "reason": "Restart online replicas from service detail",
+            "target_mode": "all_online",
+            "offline_behavior": "skip",
+            "timeout_s": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["counts"] == {
+        "dispatched": 0,
+        "queued": 0,
+        "skipped": 0,
+        "rejected": 0,
+        "total": 0,
+    }
+    assert payload["noop_reason_code"] == "no_online_instances"
+    assert payload["noop_reason_message"] == (
+        "service has no online instances eligible for all_online command fanout"
+    )
+    assert db_session.scalars(
+        select(AgentCommand).where(AgentCommand.service_id == service.id)
+    ).all() == []
 
 
 def test_service_command_fanout_rejects_queue_mode_for_maintenance_commands(

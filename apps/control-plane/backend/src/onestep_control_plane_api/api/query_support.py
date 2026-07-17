@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
 from onestep_control_plane_api.api.constants import (
+    DEFAULT_LOOKBACK_MINUTES,
     HEALTH_STATUS_VALUES,
     TASK_EVENT_KIND_VALUES,
 )
@@ -22,6 +23,7 @@ from onestep_control_plane_api.api.schemas import (
     InstanceConnectivityCounts,
     InstanceStatusCounts,
     InstanceSummary,
+    RecentEventSummary,
     RetryDescriptor,
     ServiceListStatus,
     ServiceListSummary,
@@ -210,6 +212,7 @@ def build_service_summary(
     last_seen_at: datetime | None,
     source_kinds: list[str] | None = None,
     task_count: int = 0,
+    failing_task_count: int = 0,
 ) -> ServiceSummary:
     return ServiceSummary(
         name=service.name,
@@ -226,6 +229,7 @@ def build_service_summary(
         last_seen_at=last_seen_at,
         source_kinds=source_kinds or [],
         task_count=task_count,
+        failing_task_count=failing_task_count,
         created_at=service.created_at,
         updated_at=service.updated_at,
     )
@@ -257,6 +261,8 @@ def build_service_list_summary(items: list[ServiceSummary]) -> ServiceListSummar
         ready_services=online_services,
         total_instances=total_instances,
         online_instances=online_instances,
+        total_tasks=sum(item.task_count for item in items),
+        failing_tasks=sum(item.failing_task_count for item in items),
     )
 
 
@@ -306,6 +312,27 @@ def build_task_counts_map(db: Session) -> dict[UUID, int]:
             TaskDefinition.service_id,
             func.count(func.distinct(TaskDefinition.task_name)),
         ).group_by(TaskDefinition.service_id)
+    ).all()
+    return {service_id: count for service_id, count in rows}
+
+
+def build_failing_task_counts_map(
+    db: Session,
+    *,
+    lookback_started_at: datetime,
+) -> dict[UUID, int]:
+    """Return a mapping of service_id -> count of distinct tasks with failed/dead_lettered events in the lookback window."""
+    failing_kinds = ("failed", "dead_lettered")
+    rows = db.execute(
+        select(
+            TaskEvent.service_id,
+            func.count(func.distinct(TaskEvent.task_name)),
+        )
+        .where(
+            TaskEvent.kind.in_(failing_kinds),
+            TaskEvent.occurred_at >= lookback_started_at,
+        )
+        .group_by(TaskEvent.service_id)
     ).all()
     return {service_id: count for service_id, count in rows}
 
@@ -582,6 +609,14 @@ def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
         meta=event.meta_json,
         received_at=event.received_at,
         created_at=event.created_at,
+    )
+
+
+def build_recent_event_summary(event: TaskEvent, *, service: Service) -> RecentEventSummary:
+    return RecentEventSummary(
+        **build_task_event_summary(event).model_dump(),
+        service_name=service.name,
+        environment=service.environment,
     )
 
 

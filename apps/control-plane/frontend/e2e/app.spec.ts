@@ -93,6 +93,30 @@ function taskSummary(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function metricWindow(overrides: Record<string, unknown> = {}) {
+  return {
+    instance_id: "11111111-1111-1111-1111-111111111111",
+    task_name: "orders_to_ledger",
+    window_id: "orders_to_ledger:0800",
+    window_started_at: "2026-07-16T07:59:00Z",
+    window_ended_at: ISO_NOW,
+    fetched: 600,
+    started: 600,
+    succeeded: 590,
+    retried: 5,
+    failed: 0,
+    dead_lettered: 0,
+    cancelled: 0,
+    timeouts: 0,
+    inflight: 3,
+    avg_duration_ms: 42,
+    p95_duration_ms: 120,
+    received_at: ISO_NOW,
+    created_at: ISO_NOW,
+    ...overrides,
+  };
+}
+
 function instanceSummary(overrides: Record<string, unknown> = {}) {
   return {
     instance_id: "11111111-1111-1111-1111-111111111111",
@@ -222,7 +246,9 @@ async function installApiMocks(page: Page) {
         body: JSON.stringify({
           command_id: "99999999-9999-9999-9999-999999999999",
           status: "queued",
-          counts: { total: 1, queued: 1, skipped: 0 },
+          counts: { dispatched: 0, queued: 1, skipped: 0, rejected: 0, total: 1 },
+          noop_reason_code: null,
+          noop_reason_message: null,
         }),
       });
       return;
@@ -239,6 +265,46 @@ async function installApiMocks(page: Page) {
           limit: 100,
           offset: 0,
           source_kind_counts: { redis_stream: 1, schedule: 1 },
+        }),
+      });
+      return;
+    }
+
+    const taskDetailMatch = path.match(/^\/api\/v1\/services\/([^/]+)\/tasks\/([^/]+)$/);
+    if (taskDetailMatch) {
+      const serviceName = decodeURIComponent(taskDetailMatch[1]);
+      const taskName = decodeURIComponent(taskDetailMatch[2]);
+      const data = serviceData[serviceName as keyof typeof serviceData];
+      const task = data?.tasks.find((item) => item.task_name === taskName);
+      if (!data || !task) {
+        await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "missing" }) });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          service: data.service,
+          task_name: taskName,
+          lookback_minutes: 60,
+          lookback_started_at: ISO_NOW,
+          summary: task,
+          task_control: { task_name: taskName, instances: [] },
+          recent_metric_windows: [
+            metricWindow({
+              task_name: taskName,
+              window_id: `${taskName}:0750`,
+              window_started_at: "2026-07-16T07:49:00Z",
+              window_ended_at: "2026-07-16T07:50:00Z",
+              fetched: 420,
+              succeeded: 418,
+              failed: 1,
+              p95_duration_ms: 96,
+            }),
+            metricWindow({ task_name: taskName, window_id: `${taskName}:0800` }),
+          ],
+          recent_events: [],
         }),
       });
       return;
@@ -289,12 +355,37 @@ async function installApiMocks(page: Page) {
 }
 
 test("renders the control plane dashboard", async ({ page }) => {
+  await installApiMocks(page);
   await page.goto("/");
 
   await expect(page.getByText("Service Detail")).toBeVisible();
   await expect(page.getByRole("button", { name: "Production" }).first()).toBeVisible();
-  await expect(page.getByText("user-auth-service").first()).toBeVisible();
+  await expect(page.getByText("billing-sync").first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Deploy Update" })).toBeVisible();
+});
+
+test("does not render demo services while the initial API load is pending", async ({ page }) => {
+  let releaseApi: () => void = () => {};
+  const apiPending = new Promise<void>((resolve) => {
+    releaseApi = resolve;
+  });
+
+  await page.route("**/api/v1/**", async (route) => {
+    await apiPending;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "test intentionally released pending API" }),
+    });
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Connecting to API" })).toBeVisible();
+  await expect(page.getByText("user-auth-service")).toHaveCount(0);
+  await expect(page.getByText("Ingest-Logs")).toHaveCount(0);
+
+  releaseApi();
 });
 
 test("loads API-backed service, task, instance, topology, config, and log views", async ({ page }) => {
@@ -310,6 +401,9 @@ test("loads API-backed service, task, instance, topology, config, and log views"
 
   await page.getByText("orders_to_ledger").first().click();
   await expect(page.getByRole("heading", { name: "orders_to_ledger" })).toBeVisible();
+  await expect(page.getByText("Task Metrics (Last 1h)")).toBeVisible();
+  await expect(page.getByText("1020")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Failures" })).toBeVisible();
 
   await page.getByText("View traces ->").click();
   await expect(page.getByText("Active Latency Traces")).toBeVisible();

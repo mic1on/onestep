@@ -112,12 +112,12 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
                   : 'border-indigo-600/80 group-hover:border-indigo-600 group-hover:shadow-md'
               }`}
             >
-              <Cpu className="w-8 h-8 text-indigo-600 animate-pulse" />
+              <Cpu className={`w-8 h-8 text-indigo-600 ${isRunning ? 'animate-pulse' : ''}`} />
               {/* Pulsing status dot */}
               <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
                 <span
                   className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                    isRunning ? 'bg-emerald-400' : 'bg-slate-300'
+                    isRunning ? 'bg-emerald-400' : 'bg-slate-300 animate-none'
                   }`}
                 />
                 <span

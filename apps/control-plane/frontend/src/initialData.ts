@@ -15,6 +15,9 @@ export const INITIAL_SERVICES: Service[] = [
     standbyInstances: 6,
     taskHealth: 99.9,
     taskHealthTrend: '+0.1%',
+    totalTaskCount: 8,
+    failingTaskCount: 0,
+    onlineTaskCount: 8,
   },
   {
     id: 'payment-gateway',
@@ -30,6 +33,9 @@ export const INITIAL_SERVICES: Service[] = [
     standbyInstances: 4,
     taskHealth: 99.5,
     taskHealthTrend: '+0.05%',
+    totalTaskCount: 12,
+    failingTaskCount: 1,
+    onlineTaskCount: 11,
   },
   {
     id: 'notification-service',
@@ -45,6 +51,9 @@ export const INITIAL_SERVICES: Service[] = [
     standbyInstances: 3,
     taskHealth: 96.2,
     taskHealthTrend: '-1.2%',
+    totalTaskCount: 6,
+    failingTaskCount: 2,
+    onlineTaskCount: 4,
   }
 ];
 

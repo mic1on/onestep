@@ -8,9 +8,12 @@ interface TelemetryStatsProps {
 
 export default function TelemetryStats({ service }: TelemetryStatsProps) {
   const { t } = useI18n();
-  const activePercent = (service.activeInstances / service.totalInstances) * 100;
-  const isHealthy = service.taskHealth >= 99;
+  const activePercent = service.totalInstances > 0 ? (service.activeInstances / service.totalInstances) * 100 : 0;
+  const isOffline = service.status === 'stopped' || service.activeInstances === 0;
+  const isHealthy = !isOffline && service.taskHealth >= 99;
   const isDeclined = service.taskHealthTrend.startsWith('-');
+  const inactiveInstances = Math.max(service.totalInstances - service.activeInstances, 0);
+  const hasTraffic = !isOffline && service.throughputValue > 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -38,7 +41,7 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
           </div>
           <div className="flex justify-between items-center text-[11px] text-slate-500 font-semibold mt-2">
             <span>{service.activeInstances} {t('common.active')}</span>
-            <span>{service.standbyInstances} {t('telemetry.standby')}</span>
+            <span>{inactiveInstances} {t('telemetry.inactive')}</span>
           </div>
         </div>
       </div>
@@ -70,7 +73,12 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
         </div>
 
         <div className="text-xs text-slate-500 font-medium">
-          {service.status === 'running' ? (
+          {isOffline ? (
+            <span className="text-slate-500 flex items-center gap-1.5 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+              {service.totalInstances === 0 ? t('telemetry.noInstances') : t('telemetry.serviceOffline')}
+            </span>
+          ) : service.status === 'running' ? (
             <span className="text-slate-600 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               {t('telemetry.allTasksHealthy')}
@@ -123,8 +131,12 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
           </div>
         </div>
 
-        <div className="text-[11px] text-indigo-600 font-semibold z-10 flex items-center gap-1 hover:underline cursor-pointer">
-          {t('telemetry.realtimeRunning')}
+        <div
+          className={`text-[11px] font-semibold z-10 flex items-center gap-1 ${
+            hasTraffic ? 'text-indigo-600 hover:underline cursor-pointer' : 'text-slate-500'
+          }`}
+        >
+          {hasTraffic ? t('telemetry.realtimeRunning') : t('telemetry.noLiveTraffic')}
         </div>
       </div>
     </div>
