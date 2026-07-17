@@ -475,6 +475,63 @@ def test_list_services_marks_service_without_online_instances_as_offline(
     }
 
 
+def test_list_services_sorts_online_first_then_attention_then_offline(
+    client, db_session
+) -> None:
+    now = datetime.now(UTC)
+
+    # Offline: no online instances (seeded first so insertion order would otherwise win).
+    offline_service = seed_service(db_session, name="aaa-offline", environment="prod")
+    seed_instance(
+        db_session,
+        offline_service,
+        node_name="aaa-offline-1",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=10),
+    )
+
+    # Attention: some online, some not.
+    attention_service = seed_service(db_session, name="bbb-attention", environment="prod")
+    seed_instance(
+        db_session,
+        attention_service,
+        node_name="bbb-attention-1",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=15),
+    )
+    seed_instance(
+        db_session,
+        attention_service,
+        node_name="bbb-attention-2",
+        status="degraded",
+        last_seen_at=now - timedelta(minutes=10),
+    )
+
+    # Online: all instances online.
+    online_service = seed_service(db_session, name="ccc-online", environment="prod")
+    seed_instance(
+        db_session,
+        online_service,
+        node_name="ccc-online-1",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=15),
+    )
+
+    # Offline with zero instances; name "aaa..." sorts first, confirming status drives order.
+    seed_service(db_session, name="aaa-empty", environment="prod")
+    db_session.commit()
+
+    response = client.get("/api/v1/services", params={"environment": "prod"})
+    assert response.status_code == 200
+
+    items = response.json()["items"]
+    names = [item["name"] for item in items]
+    statuses = [item["service_status"] for item in items]
+    # Online > attention > offline, stable within a tier by name.
+    assert names == ["ccc-online", "bbb-attention", "aaa-empty", "aaa-offline"]
+    assert statuses == ["online", "attention", "offline", "offline"]
+
+
 def test_list_service_instances_returns_connectivity_and_filters(client, db_session) -> None:
     now = datetime.now(UTC)
     service = seed_service(db_session)

@@ -208,15 +208,31 @@ def list_services(
         summary_attention_services,
         summary_offline_services,
     ) = db.execute(summary_stmt).one()
+    # Sort so that running services surface first: online > attention > offline,
+    # mirroring derive_service_list_status. Stable within each tier by
+    # environment, name. Done at the SQL level so pagination stays correct.
+    list_instance_count = func.coalesce(stats.c.instance_count, 0)
+    list_online_count = func.coalesce(stats.c.online_instance_count, 0)
+    service_status_priority = case(
+        (
+            and_(
+                list_online_count > 0,
+                list_online_count == list_instance_count,
+            ),
+            0,  # online
+        ),
+        (list_online_count > 0, 1),  # attention
+        else_=2,  # offline
+    )
     services_stmt = (
         select(
             Service,
-            func.coalesce(stats.c.instance_count, 0),
-            func.coalesce(stats.c.online_instance_count, 0),
+            list_instance_count,
+            list_online_count,
             stats.c.last_seen_at,
         )
         .outerjoin(stats, Service.id == stats.c.service_id)
-        .order_by(Service.environment, Service.name)
+        .order_by(service_status_priority, Service.environment, Service.name)
         .offset(offset)
         .limit(limit)
     )

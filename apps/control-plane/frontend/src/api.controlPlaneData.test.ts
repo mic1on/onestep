@@ -113,6 +113,100 @@ describe('loadControlPlaneData', () => {
     expect(data.tasks[0]).toEqual(expect.objectContaining({ name: 'inspect_dead_letter', status: 'Offline' }));
   });
 
+  it('passes raw source_kind / source_config / source_name through to the Task', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [serviceSummary],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          source_kind_counts: { memory_queue: 1 },
+          summary: {
+            total_services: 1,
+            online_services: 0,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 0,
+            total_instances: 0,
+            online_instances: 0,
+            total_tasks: 1,
+            failing_tasks: 0,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          service: serviceSummary,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+          task_count: 1,
+          failing_task_count: 0,
+          recent_events: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              task_name: 'sync_orders',
+              description: null,
+              source_name: 'mysql.orders',
+              source_kind: 'mysql_incremental',
+              source_config: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
+              emit: [{ kind: 'mysql_table_sink', name: 'mysql.audit', config: { table: 'orders_audit', mode: 'upsert', keys: 'id' } }],
+              concurrency: 2,
+              timeout_s: null,
+              retry_policy: { kind: 'fixed', config: { attempts: 1 } },
+              topology_hash: 'topology-task',
+              metric_window_count: 0,
+              latest_window_started_at: null,
+              latest_window_ended_at: null,
+              fetched: 0,
+              started: 0,
+              succeeded: 0,
+              retried: 0,
+              failed: 0,
+              dead_lettered: 0,
+              cancelled: 0,
+              timeouts: 0,
+              weighted_avg_duration_ms: null,
+              max_p95_duration_ms: null,
+              last_event_at: null,
+              event_counts: {
+                failed: 0,
+                retried: 0,
+                dead_lettered: 0,
+                cancelled: 0,
+                succeeded: 0,
+              },
+            },
+          ],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }));
+
+    const data = await loadControlPlaneData();
+
+    // The full source_config must survive mapTask() so the topology panel can
+    // render per-kind fields instead of hardcoded Kafka metadata.
+    expect(data.tasks[0]).toEqual(
+      expect.objectContaining({
+        sourceKind: 'mysql_incremental',
+        sourceName: 'mysql.orders',
+        sourceConfig: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
+        sinkKind: 'mysql_table_sink',
+        sinkName: 'mysql.audit',
+        sinkConfig: { table: 'orders_audit', mode: 'upsert', keys: 'id' },
+      }),
+    );
+  });
+
   it('loads recent metric windows from task detail telemetry', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
       jsonResponse({
@@ -190,8 +284,14 @@ describe('loadControlPlaneData', () => {
       status: 'Running',
       pipelineSource: 'memory_queue',
       pipelineSourceLabel: 'memory_queue',
+      sourceKind: 'memory_queue',
+      sourceConfig: null,
+      sourceName: 'memory_queue',
       pipelineSink: 'handler',
       pipelineSinkLabel: 'Handler',
+      sinkKind: 'handler',
+      sinkConfig: null,
+      sinkName: 'Handler',
       concurrency: 2,
       retryAttempts: 1,
       uptime: '1m ago',

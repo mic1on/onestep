@@ -106,6 +106,16 @@ export default function ResourceChart({ windows, isLoading = false, error = null
   const hasData = data.length > 0;
   const visibleMaxLabel = maxValue >= 10 ? Math.ceil(maxValue / 10) * 10 : maxValue;
 
+  // Thin X-axis labels so they don't overlap when there are many windows.
+  // Aim for at most ~6 evenly spaced labels across the chart width.
+  const maxLabels = 6;
+  const labelStride = data.length > maxLabels ? Math.ceil(data.length / maxLabels) : 1;
+  const shouldShowLabel = (index: number) => {
+    if (data.length <= maxLabels) return true;
+    // Always show the last label; otherwise only on stride boundaries.
+    return index === data.length - 1 || index % labelStride === 0;
+  };
+
   return (
     <div className="bg-white border border-slate-200 rounded-xl flex flex-col h-[340px] shadow-xs relative overflow-hidden">
       <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl shrink-0">
@@ -236,6 +246,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
           })}
 
           {data.map((point, index) => {
+            if (!shouldShowLabel(index)) return null;
             const { x } = getCoordinates(index, 0);
             return (
               <text

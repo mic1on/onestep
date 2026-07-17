@@ -19,6 +19,12 @@ export interface Service {
   onlineTaskCount: number;
 }
 
+/**
+ * Free-form JSON object, mirroring the control-plane source/sink config dict.
+ * Kept local to avoid coupling types.ts to api.ts internals.
+ */
+export type SourceConfig = Record<string, unknown>;
+
 export interface Task {
   id: string;
   apiName?: string;
@@ -29,8 +35,22 @@ export interface Task {
   status: 'Running' | 'Idle' | 'Stopped' | 'Failed' | 'Offline';
   pipelineSource: string;
   pipelineSourceLabel: string;
+  /**
+   * Raw connector kind reported by the worker (e.g. "mysql_incremental",
+   * "kafka_topic", "interval"). Used to drive per-kind detail rendering.
+   * Falls back to pipelineSource when the backend did not provide it.
+   */
+  sourceKind: string | null;
+  /** Raw source config dict as reported by the worker agent. */
+  sourceConfig: SourceConfig | null;
+  sourceName: string | null;
   pipelineSink: string;
   pipelineSinkLabel: string;
+  /** Raw sink (emit[0]) kind reported by the worker. */
+  sinkKind: string | null;
+  /** Raw sink config dict as reported by the worker agent. */
+  sinkConfig: SourceConfig | null;
+  sinkName: string | null;
   concurrency: number;
   retryAttempts: number;
   uptime: string;

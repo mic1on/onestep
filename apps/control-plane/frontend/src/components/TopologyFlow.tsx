@@ -2,6 +2,7 @@ import { ArrowRight, Database, ArrowRightLeft, Server, Cpu, HardDrive, Info } fr
 import { Task } from '../types';
 import { useState } from 'react';
 import { useI18n } from '../i18n';
+import { buildSourceDetails, buildSinkDetails, resolveRowValue } from './sourceFields';
 
 interface TopologyFlowProps {
   task: Task;
@@ -13,18 +14,38 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
 
   const isRunning = task.status === 'Running';
 
-  // Node details generator
+  // The source panel is driven by the real connector config reported by the
+  // worker (see sourceFields.ts). MySQL/Kafka/etc. each render their own field
+  // set instead of a hardcoded Kafka block.
+  const kind = task.sourceKind ?? task.pipelineSource;
+  const sourceDetails = buildSourceDetails(kind, task.sourceConfig, task.sourceName);
+  const sourceRows = sourceDetails.rows
+    .map((row) => {
+      const resolved = resolveRowValue(row, kind, task.sourceConfig, task.sourceName, t);
+      return resolved ? { labelKey: row.labelKey, ...resolved } : null;
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+
+  // The sink panel is driven by the real emit[0] connector config, mirroring
+  // the source panel. Removes the previously hardcoded database/cluster/
+  // latency/batch-size placeholders.
+  const sinkKind = task.sinkKind ?? task.pipelineSink;
+  const sinkDetails = buildSinkDetails(sinkKind, task.sinkConfig, task.sinkName);
+  const sinkRows = sinkDetails.rows
+    .map((row) => {
+      const resolved = resolveRowValue(row, sinkKind, task.sinkConfig, task.sinkName, t, true);
+      return resolved ? { labelKey: row.labelKey, ...resolved } : null;
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+
+  // Node details generator for the task and sink panels (the source panel is
+  // rendered separately via sourceRows above).
   const getNodeDetails = () => {
     switch (selectedNode) {
       case 'source':
         return {
-          title: t('topology.sourceTitle', { source: task.pipelineSource }),
-          type: t('topology.eventIngestion'),
-          partitionCount: t('topology.partitions'),
-          cluster: `${task.pipelineSource.toLowerCase()}-prod-cluster-01`,
-          topic: task.pipelineSourceLabel,
-          retention: t('topology.retention'),
-          lag: t('topology.messages'),
+          title: t(sourceDetails.titleKey, { source: task.pipelineSource }),
+          type: t(sourceDetails.typeKey),
         };
       case 'task':
         return {
@@ -38,13 +59,8 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
         };
       case 'sink':
         return {
-          title: t('topology.sinkTitle', { sink: task.pipelineSink }),
-          type: t('topology.sinkType'),
-          database: 'telemetry',
-          table: task.pipelineSinkLabel,
-          batchSize: t('topology.batchSize'),
-          cluster: `${task.pipelineSink.toLowerCase()}-replica-set-01`,
-          writeLatency: '14ms',
+          title: t(sinkDetails.titleKey, { sink: task.pipelineSink }),
+          type: t(sinkDetails.typeKey),
         };
       default:
         return null;
@@ -176,26 +192,19 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-medium text-slate-600">
-              {selectedNode === 'source' && (
-                <>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.partitioning')}</span>
-                    <span className="text-slate-800 font-semibold">{activeDetails.partitionCount}</span>
+              {selectedNode === 'source' &&
+                sourceRows.map((row) => (
+                  <div key={row.labelKey}>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t(row.labelKey)}</span>
+                    <span
+                      className={`${
+                        row.mono ? 'font-mono' : 'font-semibold'
+                      } ${row.placeholder ? 'text-slate-400 italic' : 'text-slate-800'}`}
+                    >
+                      {row.value}
+                    </span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.kafkaCluster')}</span>
-                    <span className="font-mono text-slate-800">{activeDetails.cluster}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.streamLag')}</span>
-                    <span className="text-emerald-600 font-bold">{activeDetails.lag}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.retentionLimit')}</span>
-                    <span className="text-slate-800">{activeDetails.retention}</span>
-                  </div>
-                </>
-              )}
+                ))}
 
               {selectedNode === 'task' && (
                 <>
@@ -218,26 +227,19 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
                 </>
               )}
 
-              {selectedNode === 'sink' && (
-                <>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.relationalDb')}</span>
-                    <span className="text-slate-800 font-semibold">{activeDetails.database}</span>
+              {selectedNode === 'sink' &&
+                sinkRows.map((row) => (
+                  <div key={row.labelKey}>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t(row.labelKey)}</span>
+                    <span
+                      className={`${
+                        row.mono ? 'font-mono' : 'font-semibold'
+                      } ${row.placeholder ? 'text-slate-400 italic' : 'text-slate-800'}`}
+                    >
+                      {row.value}
+                    </span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.table')}</span>
-                    <span className="font-mono text-slate-800">{activeDetails.table}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.sinkBatchSize')}</span>
-                    <span className="text-slate-800 font-semibold">{activeDetails.batchSize}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.avgWriteLatency')}</span>
-                    <span className="text-emerald-600 font-bold">{activeDetails.writeLatency}</span>
-                  </div>
-                </>
-              )}
+                ))}
             </div>
           </div>
         )}
