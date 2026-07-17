@@ -28,6 +28,7 @@ from onestep_control_plane_api.api.query_support import (
     build_instance_status_counts,
     build_instance_summary,
     build_metric_window_summary,
+    build_recent_event_summary,
     build_service_list_summary,
     build_service_stats_subquery,
     build_service_summary,
@@ -36,7 +37,6 @@ from onestep_control_plane_api.api.query_support import (
     build_task_control_summary,
     build_task_counts_map,
     build_task_event_summary,
-    build_recent_event_summary,
     build_task_summary_map,
     get_active_sessions_by_instance_id,
     get_latest_session_for_instance,
@@ -765,7 +765,10 @@ def list_recent_events(
     total = db.scalar(count_stmt) or 0
 
     rows = db.execute(
-        base.where(*filters).order_by(TaskEvent.occurred_at.desc(), TaskEvent.event_id).offset(offset).limit(limit)
+        base.where(*filters)
+        .order_by(TaskEvent.occurred_at.desc(), TaskEvent.event_id)
+        .offset(offset)
+        .limit(limit)
     ).all()
 
     items = [

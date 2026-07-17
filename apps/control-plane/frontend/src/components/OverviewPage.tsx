@@ -268,7 +268,12 @@ export default function OverviewPage({
                     <div className="flex items-center gap-3 min-w-0">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${status.dotClassName}`} />
                       <div className="min-w-0">
-                        <h4 className="font-bold text-slate-800 text-sm truncate">{svc.name}</h4>
+                        <div className="flex items-center gap-1.5">
+                          <h4 className="font-bold text-slate-800 text-sm truncate">{svc.name}</h4>
+                          <span className="text-[11px] text-slate-400 font-mono shrink-0">
+                            / {svc.environment}
+                          </span>
+                        </div>
                         <span className="text-[11px] text-slate-400 font-mono">{svc.id}</span>
                       </div>
                     </div>

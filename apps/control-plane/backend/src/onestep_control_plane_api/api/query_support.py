@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
 from onestep_control_plane_api.api.constants import (
-    DEFAULT_LOOKBACK_MINUTES,
     HEALTH_STATUS_VALUES,
     TASK_EVENT_KIND_VALUES,
 )
@@ -321,7 +320,7 @@ def build_failing_task_counts_map(
     *,
     lookback_started_at: datetime,
 ) -> dict[UUID, int]:
-    """Return a mapping of service_id -> count of distinct tasks with failed/dead_lettered events in the lookback window."""
+    """Count distinct tasks with failed/dead_lettered events per service in the lookback window."""
     failing_kinds = ("failed", "dead_lettered")
     rows = db.execute(
         select(
