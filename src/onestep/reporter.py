@@ -871,7 +871,7 @@ class ControlPlaneReporter:
         await self._send_sync(force=True, wait_for_delivery=True)
 
     async def send_heartbeat_now(self) -> None:
-        await self._send_heartbeat()
+        await self._send_heartbeat(wait_for_delivery=True)
 
     async def flush_metrics_now(self) -> None:
         self._rotate_metrics_window(_utcnow())
@@ -946,7 +946,7 @@ class ControlPlaneReporter:
         except Exception:
             self._logger.exception("control plane heartbeat failed")
 
-    async def _send_heartbeat(self) -> None:
+    async def _send_heartbeat(self, *, wait_for_delivery: bool = False) -> None:
         payload = {
             "service": self._service_descriptor(),
             "runtime": self._build_runtime_descriptor(),
@@ -954,38 +954,49 @@ class ControlPlaneReporter:
             "sent_at": _utcnow(),
             "sequence": self._next_heartbeat_sequence(),
         }
-        await self._sender("heartbeat", payload)
+        await self._send_via_sender("heartbeat", payload, wait_for_delivery=wait_for_delivery)
         self._degraded_since_last_heartbeat = False
 
     def _rotate_metrics_window(self, ended_at: datetime) -> None:
         tasks: list[dict[str, Any]] = []
-        for task_name, bucket in self._metrics_by_task.items():
-            if not bucket.has_activity():
+        include_custom_metrics = self._custom_metrics_supported()
+        task_names = set(self._metrics_by_task)
+        if include_custom_metrics and self._app is not None:
+            task_names.update(self._app.custom_metrics.task_names())
+        for task_name in sorted(task_names):
+            bucket = self._metrics_by_task.setdefault(task_name, _TaskMetricsState())
+            custom_metrics = (
+                self._app.custom_metrics.rotate_task(task_name)
+                if include_custom_metrics and self._app is not None
+                else []
+            )
+            if not bucket.has_activity() and not custom_metrics:
                 continue
             snapshot = bucket.rotate()
             duration_values = snapshot.durations_ms
             avg_duration_ms = (
                 sum(duration_values) / len(duration_values) if duration_values else None
             )
-            tasks.append(
-                {
-                    "task_name": task_name,
-                    "window_id": (
-                        f"{task_name}:{self._metrics_window_started_at.isoformat()}:{ended_at.isoformat()}"
-                    ),
-                    "fetched": snapshot.fetched,
-                    "started": snapshot.started,
-                    "succeeded": snapshot.succeeded,
-                    "retried": snapshot.retried,
-                    "failed": snapshot.failed,
-                    "dead_lettered": snapshot.dead_lettered,
-                    "cancelled": snapshot.cancelled,
-                    "timeouts": snapshot.timeouts,
-                    "inflight": snapshot.inflight,
-                    "avg_duration_ms": avg_duration_ms,
-                    "p95_duration_ms": _percentile(duration_values, 0.95),
-                }
-            )
+            task_payload = {
+                "task_name": task_name,
+                "window_id": (
+                    f"{task_name}:{self._metrics_window_started_at.isoformat()}:{ended_at.isoformat()}"
+                ),
+                "fetched": snapshot.fetched,
+                "started": snapshot.started,
+                "succeeded": snapshot.succeeded,
+                "retried": snapshot.retried,
+                "failed": snapshot.failed,
+                "dead_lettered": snapshot.dead_lettered,
+                "cancelled": snapshot.cancelled,
+                "timeouts": snapshot.timeouts,
+                "inflight": snapshot.inflight,
+                "avg_duration_ms": avg_duration_ms,
+                "p95_duration_ms": _percentile(duration_values, 0.95),
+            }
+            if custom_metrics:
+                task_payload["custom_metrics"] = custom_metrics
+            tasks.append(task_payload)
         if tasks:
             self._pending_metric_batches.append(
                 _PreparedMetricsBatch(
@@ -996,6 +1007,12 @@ class ControlPlaneReporter:
             )
             self._apply_metric_backpressure()
         self._metrics_window_started_at = ended_at
+
+    def _custom_metrics_supported(self) -> bool:
+        supports_custom_metrics = getattr(self._sender, "supports_custom_metrics", None)
+        if callable(supports_custom_metrics):
+            return bool(supports_custom_metrics())
+        return True
 
     async def _flush_metric_batches(
         self,

@@ -24,6 +24,7 @@ DEFAULT_AGENT_CAPABILITIES = [
     "telemetry.sync",
     "telemetry.heartbeat",
     "telemetry.metrics",
+    "telemetry.custom_metrics",
     "telemetry.events",
     "command.ping",
     "command.shutdown",
@@ -670,6 +671,13 @@ class ControlPlaneWsSender:
         session_id = getattr(self._transport, "session_id", None)
         return session_id if isinstance(session_id, str) else None
 
+    def supports_custom_metrics(self) -> bool:
+        hello_ack = getattr(self._transport, "hello_ack", None)
+        if hello_ack is None:
+            return False
+        accepted_capabilities = getattr(hello_ack, "accepted_capabilities", [])
+        return "telemetry.custom_metrics" in accepted_capabilities
+
     async def start(self) -> None:
         task = self._worker_task
         if task is not None and not task.done():
@@ -808,13 +816,17 @@ class ControlPlaneWsSender:
                 raise RuntimeError("app is not bound")
             task_name = _require_task_name_arg(command)
             self._app.request_task_pause(task_name)
-            return await self._app.wait_for_task_pause(task_name)
+            result = await self._app.wait_for_task_pause(task_name)
+            await self._send_task_control_heartbeat_now()
+            return result
         if command.kind == "resume_task":
             if self._app is None:
                 raise RuntimeError("app is not bound")
             task_name = _require_task_name_arg(command)
             self._app.request_task_resume(task_name)
-            return await self._app.wait_for_task_resume(task_name)
+            result = await self._app.wait_for_task_resume(task_name)
+            await self._send_task_control_heartbeat_now()
+            return result
         if command.kind == "restart_task":
             if self._app is None:
                 raise RuntimeError("app is not bound")
@@ -850,6 +862,11 @@ class ControlPlaneWsSender:
             await self._reporter.flush_events_now()
             return {"flushed_events": True}
         raise RuntimeError(f"unsupported command kind: {command.kind}")
+
+    async def _send_task_control_heartbeat_now(self) -> None:
+        if self._reporter is None:
+            return
+        await self._reporter.send_heartbeat_now()
 
     def _capture_identity(self, payload: dict[str, Any]) -> None:
         service = payload.get("service")

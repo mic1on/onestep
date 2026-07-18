@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import importlib
 import inspect
 import logging
 import signal
-import copy
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -14,6 +14,7 @@ from .connectors.base import Sink, Source
 from .envelope import Envelope
 from .events import TaskEvent
 from .invoke import invoke_callback
+from .metrics import CustomMetricsRegistry
 from .retry import RetryPolicy
 from .runtime.runner import TaskRunner
 from .state import InMemoryStateStore, StateStore
@@ -66,6 +67,7 @@ class OneStepApp:
         self.config = dict(config or {})
         self.state = state or InMemoryStateStore()
         self.shutdown_timeout_s = shutdown_timeout_s
+        self.custom_metrics = CustomMetricsRegistry()
         self._tasks: list[TaskSpec] = []
         self._named_resources: dict[str, Any] = {}
         self._shutdown: asyncio.Event | None = None

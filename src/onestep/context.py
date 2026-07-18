@@ -21,6 +21,7 @@ class TaskContext:
         self.logger = logging.getLogger(f"onestep.{app.name}.{task.name}")
         self.config = app.config
         self.state = ScopedState(app.state, f"{app.name}:{task.name}")
+        self.metrics = app.custom_metrics.for_task(task.name)
 
     @property
     def current(self) -> Envelope:

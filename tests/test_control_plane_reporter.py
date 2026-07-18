@@ -363,6 +363,97 @@ def test_reporter_flushes_metrics_and_events() -> None:
     assert heartbeat_calls[-1]["health"]["status"] == "degraded"
 
 
+def test_reporter_includes_custom_metrics_when_sender_supports_them() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        task_metrics = app.custom_metrics.for_task("sync_users")
+        task_metrics.counter("rows_success").inc(7)
+        task_metrics.counter("rows_failed", labels={"reason": "validation"}).inc(2)
+        task_metrics.gauge("batch_size").set(10)
+        task_metrics.gauge("batch_size").set(12)
+        reporter._rotate_metrics_window(datetime(2026, 3, 8, 17, 31, 0, tzinfo=timezone.utc))
+        await reporter._flush_metric_batches()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    metrics_payload = next(payload for channel, payload in recorder.calls if channel == "metrics")
+    assert metrics_payload["tasks"] == [
+        {
+            "task_name": "sync_users",
+            "window_id": metrics_payload["tasks"][0]["window_id"],
+            "fetched": 0,
+            "started": 0,
+            "succeeded": 0,
+            "retried": 0,
+            "failed": 0,
+            "dead_lettered": 0,
+            "cancelled": 0,
+            "timeouts": 0,
+            "inflight": 0,
+            "avg_duration_ms": None,
+            "p95_duration_ms": None,
+            "custom_metrics": [
+                {
+                    "name": "batch_size",
+                    "kind": "gauge",
+                    "value": 12,
+                    "labels": {},
+                },
+                {
+                    "name": "rows_failed",
+                    "kind": "counter",
+                    "value": 2,
+                    "labels": {"reason": "validation"},
+                },
+                {
+                    "name": "rows_success",
+                    "kind": "counter",
+                    "value": 7,
+                    "labels": {},
+                },
+            ],
+        }
+    ]
+
+
+def test_reporter_omits_custom_metrics_when_sender_does_not_support_them() -> None:
+    class UnsupportedCustomMetricSender(SenderRecorder):
+        def supports_custom_metrics(self) -> bool:
+            return False
+
+    recorder = UnsupportedCustomMetricSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        app.custom_metrics.for_task("sync_users").counter("rows_success").inc(7)
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.FETCHED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=0,
+            )
+        )
+        reporter._rotate_metrics_window(datetime(2026, 3, 8, 17, 31, 0, tzinfo=timezone.utc))
+        await reporter._flush_metric_batches()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    metrics_payload = next(payload for channel, payload in recorder.calls if channel == "metrics")
+    assert "custom_metrics" not in metrics_payload["tasks"][0]
+
+
 def test_reporter_drops_oldest_events_when_pending_buffer_overflows() -> None:
     recorder = SenderRecorder()
     config = _make_config()
@@ -555,6 +646,44 @@ def test_reporter_send_sync_now_waits_for_sender_delivery() -> None:
     asyncio.run(scenario())
 
     assert any(kind == "wait" and channel == "sync" for kind, channel, _ in sender.calls)
+
+
+def test_reporter_send_heartbeat_now_waits_for_sender_delivery() -> None:
+    class WaitableSender:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict]] = []
+            self.started: asyncio.Event | None = None
+            self.release: asyncio.Event | None = None
+
+        async def __call__(self, channel: str, payload: dict) -> None:
+            self.calls.append(("enqueue", channel, payload))
+
+        async def send_and_wait(self, channel: str, payload: dict) -> None:
+            self.calls.append(("wait", channel, payload))
+            assert self.started is not None
+            assert self.release is not None
+            self.started.set()
+            await self.release.wait()
+
+    sender = WaitableSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        sender.started = asyncio.Event()
+        sender.release = asyncio.Event()
+        await app.startup()
+        wait_task = asyncio.create_task(reporter.send_heartbeat_now())
+        await asyncio.wait_for(sender.started.wait(), timeout=0.1)
+        assert wait_task.done() is False
+        sender.release.set()
+        await asyncio.wait_for(wait_task, timeout=0.1)
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    assert any(kind == "wait" and channel == "heartbeat" for kind, channel, _ in sender.calls)
 
 
 def test_reporter_flush_metrics_now_waits_for_sender_delivery() -> None:

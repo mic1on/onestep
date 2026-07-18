@@ -20,6 +20,34 @@ def _load_demo_module(monkeypatch):
     return module
 
 
+def _load_mysql_demo_module(monkeypatch):
+    monkeypatch.setenv("CP_MYSQL_DEMO_START_MYSQL", "0")
+    monkeypatch.setenv("CP_MYSQL_DEMO_INTERVAL_S", "5")
+    monkeypatch.setenv("CP_MYSQL_DEMO_TABLE", "cp_demo_events")
+    monkeypatch.setenv("MYSQL_DSN", "mysql+pymysql://root:root@127.0.0.1:3306/app")
+    monkeypatch.delenv("ONESTEP_CONTROL_PLANE_URL", raising=False)
+    monkeypatch.delenv("ONESTEP_CONTROL_PLANE_TOKEN", raising=False)
+
+    module_name = "_test_control_plane_mysql_demo"
+    module_path = Path(__file__).resolve().parents[1] / "example" / "control_plane_mysql_demo.py"
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _read_workspace_version() -> str:
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    for line in pyproject_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("version = "):
+            return line.split('"', 2)[1]
+    raise AssertionError("did not find project version in pyproject.toml")
+
+
 def test_demo_job_cycle_is_predictable(monkeypatch) -> None:
     module = _load_demo_module(monkeypatch)
 
@@ -46,3 +74,20 @@ def test_demo_control_plane_urls_are_console_friendly(monkeypatch) -> None:
         "http://127.0.0.1:8080/services/demo%20service/instances/1234"
         "?environment=dev&lookback_minutes=60"
     )
+
+
+def test_mysql_demo_app_target_uses_workspace_onestep_version(monkeypatch) -> None:
+    module = _load_mysql_demo_module(monkeypatch)
+
+    assert module.ONESTEP_VERSION == _read_workspace_version()
+
+    summary = module.app.describe()
+    assert summary["name"] == "cp-mysql-demo"
+    assert summary["hooks"] == {"startup": 2, "shutdown": 0, "events": 0}
+    assert len(summary["tasks"]) == 1
+
+    task = summary["tasks"][0]
+    assert task["name"] == "produce_and_store"
+    assert task["source"] == {"name": "interval:5s", "type": "IntervalSource"}
+    assert task["emit"] == [{"name": "mysql.table_sink:cp_demo_events", "type": "TableSink"}]
+    assert task["retry"] == "MaxAttempts"

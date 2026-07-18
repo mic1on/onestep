@@ -29,6 +29,22 @@ reporter:
 
 Do not add reporter config to local examples unless the user asks for control-plane integration.
 
+## Custom Handler Metrics
+
+Handlers can report low-cardinality counters and gauges through `ctx.metrics`.
+The runtime batches them into control-plane `metrics` telemetry when the plane
+accepts the `telemetry.custom_metrics` capability.
+
+```python
+async def handle_batch(ctx, payload):
+    ctx.metrics.counter("rows_success").inc(42)
+    ctx.metrics.counter("rows_failed", labels={"reason": "validation"}).inc(3)
+    ctx.metrics.gauge("batch_size").set(45)
+```
+
+Keep names and labels stable. Do not use IDs, emails, order numbers, trace IDs,
+or other high-cardinality values as labels.
+
 ## Topology Descriptors
 
 Reporter sync payloads include task source/sink descriptors. Built-in connector kinds include `redis_stream` and `http_sink`.

@@ -20,6 +20,10 @@ Files:
 - `mysql_incremental.py`: incremental sync using a durable cursor store
 - `mysql_binlog.py`: MySQL binlog CDC source -> table sink usage
 - `mysql_binlog.yaml`: YAML version of the MySQL binlog CDC example
+- `control_plane_mysql_demo.py`: interval -> handler -> MySQL table sink demo with optional
+  control-plane reporting; run it from the repo root with
+  `uv run onestep run example.control_plane_mysql_demo:app` so it uses this workspace's
+  onestep 1.4.7 package and MySQL plugin
 - `feishu_bitable_sync/`: live Feishu Bitable incremental source -> upsert sink debugging project
 - `rabbitmq_queue.py`: RabbitMQ source/sink usage
 - `sqs_queue.py`: SQS source/sink usage

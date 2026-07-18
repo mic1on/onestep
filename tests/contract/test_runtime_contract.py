@@ -4,6 +4,8 @@ import asyncio
 import logging
 import signal
 
+import pytest
+
 from onestep import (
     ConnectorErrorKind,
     ConnectorOperation,
@@ -1235,6 +1237,62 @@ def test_succeeded_event_includes_notification_metadata_when_task_returns_it() -
         }
 
     asyncio.run(scenario())
+
+
+def test_task_context_records_custom_metrics_from_handler() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        app = OneStepApp("custom-metrics-app")
+
+        @app.on_startup
+        async def seed(app):
+            await source.publish({"rows": [1, 2, 3, 4, 5]})
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            rows = item["rows"]
+            ctx.metrics.counter("rows_success").inc(3)
+            ctx.metrics.counter("rows_failed", labels={"reason": "validation"}).inc(2)
+            ctx.metrics.gauge("batch_size").set(len(rows))
+            ctx.metrics.gauge("batch_size").set(len(rows) + 1)
+            ctx.app.request_shutdown()
+
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+        return app.custom_metrics.rotate_task("consume")
+
+    samples = asyncio.run(scenario())
+
+    assert samples == [
+        {"name": "batch_size", "kind": "gauge", "value": 6, "labels": {}},
+        {
+            "name": "rows_failed",
+            "kind": "counter",
+            "value": 2,
+            "labels": {"reason": "validation"},
+        },
+        {"name": "rows_success", "kind": "counter", "value": 3, "labels": {}},
+    ]
+
+
+def test_custom_metrics_reject_invalid_series() -> None:
+    app = OneStepApp("custom-metrics-validation")
+    metrics = app.custom_metrics.for_task("consume")
+
+    with pytest.raises(ValueError, match="invalid custom metric name"):
+        metrics.counter("bad metric").inc()
+
+    with pytest.raises(ValueError, match="reserved"):
+        metrics.counter("rows_success", labels={"service": "billing"}).inc()
+
+    with pytest.raises(ValueError, match="counter increment must be >= 0"):
+        metrics.counter("rows_success").inc(-1)
+
+    with pytest.raises(ValueError, match="finite"):
+        metrics.gauge("batch_size").set(float("nan"))
+
+    metrics.counter("same_name").inc()
+    with pytest.raises(ValueError, match="already exists as counter"):
+        metrics.gauge("same_name").set(1)
 
 
 def test_succeeded_event_ignores_or_sanitizes_invalid_notification_payload() -> None:

@@ -176,7 +176,7 @@ are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.4.6
+    ghcr.io/mic1on/onestep-worker:1.4.7
   ```
   See [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md).
 - **Embed in a web app** — recommended shape for FastAPI/Django in
@@ -196,6 +196,20 @@ reporter: true
 ```
 
 Required env: `ONESTEP_CONTROL_PLANE_URL`, `ONESTEP_CONTROL_PLANE_TOKEN`.
+
+Handlers can report low-cardinality custom counters and gauges through the same
+reporter. The plane stores them and can expose them from its Prometheus
+`/metrics` endpoint:
+
+```python
+async def sync_users(ctx, payload):
+    success_count = 0
+    failed_count = 0
+    ...
+    ctx.metrics.counter("rows_success").inc(success_count)
+    ctx.metrics.counter("rows_failed").inc(failed_count)
+    ctx.metrics.gauge("batch_size").set(success_count + failed_count)
+```
 
 For identity, multi-replica guidance, env vars, and a local demo, see
 [`docs/stable-instance-identity.md`](docs/stable-instance-identity.md).

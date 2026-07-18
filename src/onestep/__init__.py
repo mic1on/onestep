@@ -20,6 +20,7 @@ from .identity_store import (
     build_default_state_dir,
     derive_replica_instance_id,
 )
+from .metrics import CounterMetric, CustomMetricsRegistry, GaugeMetric, TaskMetrics
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
 from .resource_registry import (
     ResourceBuildContext,
@@ -69,10 +70,13 @@ __all__ = [
     "ConnectorErrorKind",
     "ConnectorOperation",
     "ConnectorOperationError",
+    "CounterMetric",
+    "CustomMetricsRegistry",
     "Delivery",
     "Envelope",
     "FailureInfo",
     "FailureKind",
+    "GaugeMetric",
     "HttpSink",
     "HttpSinkStatusError",
     "IdentityLockError",
@@ -101,6 +105,7 @@ __all__ = [
     "TaskEvent",
     "TaskEventKind",
     "TaskContext",
+    "TaskMetrics",
     "WebhookResponse",
     "WebhookSource",
     "__version__",

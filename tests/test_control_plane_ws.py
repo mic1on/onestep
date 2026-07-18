@@ -186,6 +186,7 @@ def test_ws_transport_connect_sends_hello_and_parses_hello_ack() -> None:
     assert connection.sent_messages[0]["type"] == "hello"
     assert connection.sent_messages[0]["payload"]["protocol_version"] == "1"
     assert connection.sent_messages[0]["payload"]["service"]["name"] == "billing-sync"
+    assert "telemetry.custom_metrics" in connection.sent_messages[0]["payload"]["capabilities"]
     assert hello_ack.session_id == "sess_server_1"
     assert hello_ack.protocol_version == "1"
     assert hello_ack.heartbeat_interval_s == 30
@@ -207,6 +208,27 @@ class FakeTransport:
     async def close(self) -> None:
         self.connected = False
         self.calls.append(("close", None, None))
+
+
+def test_ws_sender_supports_custom_metrics_only_when_server_accepts_capability() -> None:
+    fake_transport = FakeTransport()
+    sender = ControlPlaneWsSender(_make_config(), transport=fake_transport)
+
+    assert sender.supports_custom_metrics() is False
+
+    fake_transport.hello_ack = type(
+        "Ack",
+        (),
+        {"accepted_capabilities": ["telemetry.metrics"]},
+    )()
+    assert sender.supports_custom_metrics() is False
+
+    fake_transport.hello_ack = type(
+        "Ack",
+        (),
+        {"accepted_capabilities": ["telemetry.metrics", "telemetry.custom_metrics"]},
+    )()
+    assert sender.supports_custom_metrics() is True
 
 
 def test_ws_sender_buffers_initial_heartbeat_until_sync() -> None:
@@ -762,6 +784,28 @@ def test_ws_sender_executes_pause_task_and_resume_task_commands() -> None:
     assert resume_result["payload"]["result"]["accepting_new_work"] is True
     assert resume_result["payload"]["result"]["runner_count"] == 1
     assert resume_result["payload"]["result"]["parked_runner_count"] == 0
+
+    pause_result_index = connection.sent_messages.index(pause_result)
+    resume_result_index = connection.sent_messages.index(resume_result)
+    heartbeat_messages = [
+        (index, message)
+        for index, message in enumerate(connection.sent_messages)
+        if message["type"] == "telemetry"
+        and message["payload"]["channel"] == "heartbeat"
+    ]
+
+    assert any(
+        index < pause_result_index
+        and message["payload"]["body"]["health"]["task_controls"][0]["paused"] is True
+        and message["payload"]["body"]["health"]["task_controls"][0]["accepting_new_work"] is False
+        for index, message in heartbeat_messages
+    )
+    assert any(
+        pause_result_index < index < resume_result_index
+        and message["payload"]["body"]["health"]["task_controls"][0]["paused"] is False
+        and message["payload"]["body"]["health"]["task_controls"][0]["accepting_new_work"] is True
+        for index, message in heartbeat_messages
+    )
 
 
 def test_ws_sender_executes_restart_task_command() -> None:

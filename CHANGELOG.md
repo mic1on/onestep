@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.4.7
+
+- Adds task-scoped custom metrics via `ctx.metrics.counter(...).inc()` and `ctx.metrics.gauge(...).set()`, with top-level exports for the custom metric helpers.
+- Includes custom metrics in control-plane metrics telemetry when the worker and plane negotiate `telemetry.custom_metrics`.
+- Sends an immediate control-plane heartbeat after `pause_task` and `resume_task` commands truly complete, so dashboards can observe task-control state without waiting for the scheduled heartbeat interval.
+- Adds a MySQL-backed control-plane demo app target for exercising interval -> handler -> MySQL sink telemetry locally.
+
 ## 1.4.6
 
 - Adds true task-level restart for controllable source tasks via `OneStepApp.restart_task_runner()`, cancelling and respawning a single task runner without restarting the whole process.
