@@ -746,14 +746,14 @@ class OneStepApp:
                 return
             # Spawn each runner as its own asyncio.Task and keep the handles in
             # _runner_tasks so they can be cancelled individually (per-task
-            # restart via stop_task_runner). We wait with FIRST_EXCEPTION and
-            # loop, re-reading _runner_tasks each iteration so runners spawned by
-            # a per-task restart are picked up. A runner that ends with
-            # CancelledError because it was individually cancelled for a restart
-            # must NOT bring down the whole process — drop it and keep waiting.
-            # Any other exception is a real runner error: cancel the remaining
-            # runners and propagate (matching the previous asyncio.gather
-            # semantics).
+            # restart via stop_task_runner). We wait with FIRST_COMPLETED and
+            # loop, re-reading _runner_tasks each iteration so cancellations
+            # and runners spawned by a per-task restart are picked up promptly.
+            # A runner that ends with CancelledError because it was individually
+            # cancelled for a restart must NOT bring down the whole process:
+            # drop it and keep waiting. Any other exception is a real runner
+            # error: cancel the remaining runners and propagate (matching the
+            # previous asyncio.gather semantics).
             runner_tasks = [
                 asyncio.create_task(runner.run(), name=f"onestep-runner-{runner.task.name}")
                 for runner in runners
@@ -778,7 +778,7 @@ class OneStepApp:
                         pass
                     inspected = {task for task in inspected if task in self._runner_tasks.values()}
                     continue
-                done, _pending = await asyncio.wait(live, return_when=asyncio.FIRST_EXCEPTION)
+                done, _pending = await asyncio.wait(live, return_when=asyncio.FIRST_COMPLETED)
                 inspected |= done
                 first_exc: BaseException | None = None
                 for task in done:

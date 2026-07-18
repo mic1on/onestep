@@ -805,16 +805,19 @@ def test_ws_sender_executes_restart_task_command() -> None:
     sender = ControlPlaneWsSender(_make_config(), transport=transport)
     reporter = ControlPlaneReporter(_make_config(), sender=sender)
     reporter.attach(app)
-    started = asyncio.Event()
+    started: asyncio.Event | None = None
 
     @app.task(name="sync_users", source=source, emit=sink, concurrency=1)
     async def sync_users(ctx, item):
+        assert started is not None
         started.set()
         if item["value"] == 99:
             ctx.app.request_shutdown()
         return {"value": item["value"]}
 
     async def scenario() -> None:
+        nonlocal started
+        started = asyncio.Event()
         await source.publish({"value": 1})
         serve_task = asyncio.create_task(app.serve())
         await asyncio.wait_for(started.wait(), timeout=1.0)
