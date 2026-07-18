@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.4.6
+
+- Adds true task-level restart for controllable source tasks via `OneStepApp.restart_task_runner()`, cancelling and respawning a single task runner without restarting the whole process.
+- Advertises and handles the control-plane `restart_task` WebSocket command, returning the restarted task's fresh control snapshot.
+- Keeps per-task restart from closing resources shared by other tasks and adds contract coverage for private and shared task resources.
+- Coordinates the new remote command through capability and task-support checks so older runtimes and planes remain forward-compatible.
+
 ## 1.4.5
 
 - Adds the `onestep[kafka]` extra for installing the Kafka connector plugin on Python 3.10 and newer.

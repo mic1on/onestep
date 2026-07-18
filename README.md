@@ -176,7 +176,7 @@ are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.4.5
+    ghcr.io/mic1on/onestep-worker:1.4.6
   ```
   See [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md).
 - **Embed in a web app** — recommended shape for FastAPI/Django in
