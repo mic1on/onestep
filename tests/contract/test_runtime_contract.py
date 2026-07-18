@@ -586,6 +586,150 @@ def test_task_pause_and_resume_control_intake_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_task_restart_runner_resets_one_task_without_disturbing_others_contract() -> None:
+    """restart_task_runner tears down and respawns a single task's runner
+    (cancel coroutine, close+reopen private source, spawn fresh coroutine) while
+    another task on the same app keeps running. Pause+resume never actually
+    restarts; this is the real primitive."""
+
+    async def scenario() -> None:
+        # Private sources per task so close/reopen is observable and safe.
+        restart_source = MemoryQueue("restart.incoming", batch_size=1, poll_interval_s=0.01)
+        restart_sink = MemoryQueue("restart.processed", batch_size=1, poll_interval_s=0.01)
+        other_source = MemoryQueue("other.incoming", batch_size=1, poll_interval_s=0.01)
+        other_sink = MemoryQueue("other.processed", batch_size=1, poll_interval_s=0.01)
+        app = OneStepApp("task-restart-contract")
+
+        other_seen: list[int] = []
+        restart_seen: list[int] = []
+
+        @app.task(name="other", source=other_source, emit=other_sink, concurrency=1)
+        async def other(ctx, item):
+            other_seen.append(item["value"])
+            if item["value"] == 99:
+                ctx.app.request_shutdown()
+            return {"value": item["value"]}
+
+        @app.task(name="restartable", source=restart_source, emit=restart_sink, concurrency=1)
+        async def restartable(ctx, item):
+            restart_seen.append(item["value"])
+            return {"value": item["value"]}
+
+        await other_source.publish({"value": 1})
+        serve_task = asyncio.create_task(app.serve())
+        # Let the other task process its first item so we know runners are live.
+        for _ in range(100):
+            if other_seen:
+                break
+            await asyncio.sleep(0.005)
+        assert other_seen == [1]
+
+        # Sanity: both runners are registered and have task handles.
+        assert len(app._runners) == 2
+        assert set(app._runner_tasks) == {"other", "restartable"}
+        original_handle = app._runner_tasks["restartable"]
+        other_handle_before = app._runner_tasks["other"]
+
+        # Restart the "restartable" task. (Closing/reopening the private source
+        # discards any in-queue deliveries, so publish AFTER restart to verify
+        # the fresh runner consumes from the reopened source.)
+        status = await asyncio.wait_for(app.restart_task_runner("restartable"), timeout=2.0)
+
+        # restart_task_runner returns the task_control_snapshot of the fresh runner.
+        assert status["task_name"] == "restartable"
+        assert status["runner_count"] == 1
+        assert status["pause_requested"] is False
+        # Fresh runner: a new asyncio.Task handle, the old one cancelled.
+        assert original_handle.done()
+        assert app._runner_tasks["restartable"] is not original_handle
+        assert not app._runner_tasks["restartable"].done()
+        # The other task's handle was untouched.
+        assert app._runner_tasks["other"] is other_handle_before
+        assert not other_handle_before.done()
+        # Both runners still present.
+        assert len(app._runners) == 2
+
+        # The restarted runner consumes from its reopened private source.
+        await restart_source.publish({"value": 7})
+        for _ in range(200):
+            if restart_seen:
+                break
+            await asyncio.sleep(0.005)
+        assert restart_seen == [7]
+
+        # Shut down cleanly.
+        await other_source.publish({"value": 99})
+        await asyncio.wait_for(serve_task, timeout=2.0)
+
+    asyncio.run(scenario())
+
+
+def test_task_restart_runner_does_not_close_shared_source_contract() -> None:
+    """When two tasks share one source instance, restarting one must NOT close
+    the source out from under the other (shared-resource safety). MemoryQueue is
+    a competing-consumer source, so the two tasks race for messages; we assert
+    safety by checking the non-restarted runner's handle stays alive and keeps
+    consuming after the restart, and that the shared source object is the same
+    instance on both tasks before and after."""
+
+    async def scenario() -> None:
+        shared_source = MemoryQueue("shared.incoming", batch_size=1, poll_interval_s=0.01)
+        sink_a = MemoryQueue("a.processed", batch_size=1, poll_interval_s=0.01)
+        sink_b = MemoryQueue("b.processed", batch_size=1, poll_interval_s=0.01)
+        app = OneStepApp("shared-restart-contract")
+
+        b_seen: list[int] = []
+
+        @app.task(name="task_a", source=shared_source, emit=sink_a, concurrency=1)
+        async def task_a(ctx, item):
+            return {"value": item["value"]}
+
+        @app.task(name="task_b", source=shared_source, emit=sink_b, concurrency=1)
+        async def task_b(ctx, item):
+            b_seen.append(item["value"])
+            if item["value"] == 99:
+                ctx.app.request_shutdown()
+            return {"value": item["value"]}
+
+        serve_task = asyncio.create_task(app.serve())
+        # Let runners spawn.
+        for _ in range(100):
+            if len(app._runners) == 2:
+                break
+            await asyncio.sleep(0.005)
+        assert len(app._runner_tasks) == 2
+        task_b_handle_before = app._runner_tasks["task_b"]
+        assert not task_b_handle_before.done()
+
+        # Restart task_a. The shared source must NOT be closed (task_b still
+        # references it), and task_b's runner must keep running.
+        await asyncio.wait_for(app.restart_task_runner("task_a"), timeout=2.0)
+        assert len(app._runners) == 2
+        # task_b's handle survived the restart of task_a.
+        assert app._runner_tasks["task_b"] is task_b_handle_before
+        assert not task_b_handle_before.done()
+        # The shared source object identity is unchanged on both tasks.
+        task_a_spec = next(t for t in app._tasks if t.name == "task_a")
+        task_b_spec = next(t for t in app._tasks if t.name == "task_b")
+        assert task_a_spec.source is shared_source
+        assert task_b_spec.source is shared_source
+
+        # task_b can still consume a freshly published item from the (still-open)
+        # shared source. Publish several since task_a also competes for them.
+        for value in (1, 2, 3, 4, 5, 6, 7, 8):
+            await shared_source.publish({"value": value})
+        for _ in range(300):
+            if b_seen:
+                break
+            await asyncio.sleep(0.005)
+        assert b_seen, "task_b could not consume after task_a was restarted; shared source likely closed"
+
+        await shared_source.publish({"value": 99})
+        await asyncio.wait_for(serve_task, timeout=2.0)
+
+    asyncio.run(scenario())
+
+
 def test_ctx_emit_and_return_follow_separate_contracts() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming")

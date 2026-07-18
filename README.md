@@ -65,7 +65,7 @@ onestep check your_package.tasks:app   # validate the target before starting
 | **Survive failures** | retry policies, `dead_letter` sink, per-task `timeout_s`, failure classification (`error` / `timeout` / `cancelled`) |
 | **Track state** | `InMemoryStateStore`, MySQL state/cursor stores; `ctx.state` namespace per task |
 | **Observe** | `@app.on_event` hooks, `InMemoryMetrics`, `StructuredEventLogger`, execution events |
-| **Operate** | control-plane reporter with remote commands: `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `sync_now` |
+| **Operate** | control-plane reporter with remote commands: `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `restart_task`, `sync_now` |
 
 ## Core concepts
 

@@ -76,6 +76,11 @@ class OneStepApp:
         self._paused_tasks: set[str] = set()
         self._runner_state: asyncio.Event | None = None
         self._runners: list[TaskRunner] = []
+        # Per-task asyncio.Task handles for each runner coroutine, keyed by task
+        # name. Captured so a single task's runner can be cancelled and respawned
+        # (see stop_task_runner / start_task_runner / restart_task_runner)
+        # without restarting the whole process. Cleared together with _runners.
+        self._runner_tasks: dict[str, asyncio.Task[None]] = {}
         self._resources: list[Any] = []
         self._startup_hooks: list[Callable[..., Any]] = []
         self._shutdown_hooks: list[Callable[..., Any]] = []
@@ -393,6 +398,95 @@ class OneStepApp:
         self._runners = list(runners)
         self.notify_runner_state_changed()
 
+    def _task_resources(self, task: TaskSpec) -> list[Any]:
+        """All resources owned by a task: its source, sinks, dead-letter sinks."""
+        resources: list[Any] = []
+        if task.source is not None:
+            resources.append(task.source)
+        resources.extend(task.sinks)
+        resources.extend(task.dead_letter_sinks)
+        return resources
+
+    def _referenced_resource_ids(self, *, exclude_task_name: str | None) -> set[int]:
+        """ids() of resources still referenced by other live tasks and named
+        resources. Used to decide which resources are safe to close when
+        restarting a single task: a resource shared with another task or a named
+        resource must not be closed (mirrors startup()'s dedupe-by-id policy)."""
+        referenced: set[int] = set()
+        for name, resource in self._named_resources.items():
+            if resource is not None:
+                referenced.add(id(resource))
+        if id(self.state) is not None:
+            referenced.add(id(self.state))
+        for task in self._tasks:
+            if task.name == exclude_task_name:
+                continue
+            for resource in self._task_resources(task):
+                referenced.add(id(resource))
+        return referenced
+
+    async def stop_task_runner(self, task_name: str) -> dict[str, Any]:
+        """Tear down a single task's runner: cancel its coroutine (letting the
+        runner's finally block drain inflight work and release fetch state),
+        remove it from the registries, and close the task's *private* resources
+        (source/sinks not referenced by any other live task or named resource).
+        Other tasks and the process as a whole are not affected."""
+        task = self._require_controllable_task(task_name)
+        runner_handle = self._runner_tasks.pop(task_name, None)
+        if runner_handle is not None and not runner_handle.done():
+            runner_handle.cancel()
+            await asyncio.gather(runner_handle, return_exceptions=True)
+        self._runners = [runner for runner in self._runners if runner.task.name != task_name]
+        self._paused_tasks.discard(task_name)
+
+        # Close only resources private to this task; shared ones stay open.
+        still_referenced = self._referenced_resource_ids(exclude_task_name=task_name)
+        for resource in self._task_resources(task):
+            if resource is None or id(resource) in still_referenced:
+                continue
+            with contextlib.suppress(Exception):
+                self._events_logger.debug(
+                    "closing private resource on task restart",
+                    extra={"task_name": task_name, "resource": getattr(resource, "name", resource.__class__.__name__)},
+                )
+                await _close_resource(resource)
+
+        self.notify_runner_state_changed()
+        return self.task_control_snapshot(task_name)
+
+    async def start_task_runner(self, task_name: str) -> dict[str, Any]:
+        """Re-open the task's private source and spawn a fresh runner for it.
+        Counterpart to stop_task_runner. Resources shared with other tasks are
+        expected to already be open (they were never closed)."""
+        task = self._require_controllable_task(task_name)
+        assert task.source is not None
+        # Re-open the task's resources. Shared resources already open are
+        # idempotent to re-open for connectors whose open() is a no-op when
+        # already connected; for safety, only open resources not currently
+        # referenced by another live task (i.e. private ones we just closed).
+        already_open_ids = self._referenced_resource_ids(exclude_task_name=task_name)
+        for resource in self._task_resources(task):
+            if resource is None or id(resource) in already_open_ids:
+                continue
+            await _open_resource(resource)
+
+        runner = TaskRunner(self, task)
+        self._runners.append(runner)
+        runner_handle = asyncio.create_task(
+            runner.run(), name=f"onestep-runner-{task_name}"
+        )
+        self._runner_tasks[task_name] = runner_handle
+        self.notify_runner_state_changed()
+        return self.task_control_snapshot(task_name)
+
+    async def restart_task_runner(self, task_name: str) -> dict[str, Any]:
+        """True per-task restart: cancel the existing runner, close and reopen
+        its private source/sinks, and spawn a fresh runner coroutine. Other
+        tasks keep running and the process is not restarted. Returns the task
+        control snapshot for the restarted task."""
+        await self.stop_task_runner(task_name)
+        return await self.start_task_runner(task_name)
+
     def notify_runner_state_changed(self) -> None:
         try:
             current_loop = asyncio.get_running_loop()
@@ -488,7 +582,7 @@ class OneStepApp:
 
     def task_supported_commands(self, task_name: str) -> list[str]:
         task = self._require_controllable_task(task_name)
-        supported_commands = ["pause_task", "resume_task"]
+        supported_commands = ["pause_task", "resume_task", "restart_task"]
         if self._task_supports_dead_letter_discard(task):
             supported_commands.append("discard_dead_letters")
         if self._task_supports_dead_letter_replay(task):
@@ -581,6 +675,7 @@ class OneStepApp:
         self._drain = asyncio.Event()
         self._runner_state = asyncio.Event()
         self._runners = []
+        self._runner_tasks = {}
         resources: list[Any] = []
         seen: set[int] = set()
 
@@ -625,6 +720,15 @@ class OneStepApp:
         finally:
             close_error = await self._close_resources(self._resources, suppress_exceptions=False)
             self._resources = []
+            # Cancel any runner task handles that somehow outlived serve()'s own
+            # gather/wait (e.g. a per-task restart spawned a new runner right as
+            # shutdown began). Swallow CancelledError — we are tearing down.
+            for runner_task in self._runner_tasks.values():
+                if not runner_task.done():
+                    runner_task.cancel()
+            if self._runner_tasks:
+                await asyncio.gather(*self._runner_tasks.values(), return_exceptions=True)
+            self._runner_tasks = {}
             self._runners = []
             self._paused_tasks = set()
             self.notify_runner_state_changed()
@@ -640,7 +744,66 @@ class OneStepApp:
         try:
             if not runners:
                 return
-            await asyncio.gather(*(runner.run() for runner in runners))
+            # Spawn each runner as its own asyncio.Task and keep the handles in
+            # _runner_tasks so they can be cancelled individually (per-task
+            # restart via stop_task_runner). We wait with FIRST_EXCEPTION and
+            # loop, re-reading _runner_tasks each iteration so runners spawned by
+            # a per-task restart are picked up. A runner that ends with
+            # CancelledError because it was individually cancelled for a restart
+            # must NOT bring down the whole process — drop it and keep waiting.
+            # Any other exception is a real runner error: cancel the remaining
+            # runners and propagate (matching the previous asyncio.gather
+            # semantics).
+            runner_tasks = [
+                asyncio.create_task(runner.run(), name=f"onestep-runner-{runner.task.name}")
+                for runner in runners
+            ]
+            self._runner_tasks = {runner.task.name: task for runner, task in zip(runners, runner_tasks)}
+            # Tasks we have already inspected; do not re-await them.
+            inspected: set[asyncio.Task[None]] = set()
+            while True:
+                live = {task for task in self._runner_tasks.values() if task not in inspected}
+                if not live:
+                    # No runner currently tracked. This is expected *transiently*
+                    # during a per-task restart (stop_task_runner removes the old
+                    # handle before start_task_runner adds the new one). Only exit
+                    # when the app is actually shutting down; otherwise briefly
+                    # yield and re-check the registry so a freshly spawned runner
+                    # is picked up.
+                    if self.is_stopping:
+                        break
+                    try:
+                        await asyncio.wait_for(self.wait_for_shutdown(), timeout=0.05)
+                    except asyncio.TimeoutError:
+                        pass
+                    inspected = {task for task in inspected if task in self._runner_tasks.values()}
+                    continue
+                done, _pending = await asyncio.wait(live, return_when=asyncio.FIRST_EXCEPTION)
+                inspected |= done
+                first_exc: BaseException | None = None
+                for task in done:
+                    # A cancelled runner task raises CancelledError from
+                    # .exception(); skip via .cancelled() first. Per-task restart
+                    # (or shutdown) cancels individual runners and must not bring
+                    # down the whole process.
+                    if task.cancelled():
+                        continue
+                    exc = task.exception()
+                    if exc is None:
+                        continue
+                    if isinstance(exc, asyncio.CancelledError):
+                        continue
+                    if first_exc is None:
+                        first_exc = exc
+                if first_exc is not None:
+                    remaining = {task for task in self._runner_tasks.values() if task not in inspected}
+                    for task in remaining:
+                        task.cancel()
+                    if remaining:
+                        await asyncio.gather(*remaining, return_exceptions=True)
+                    raise first_exc
+            # All currently-tracked runners exited cleanly (normally via
+            # request_shutdown or a per-task stop). Nothing left to await.
         finally:
             await self.shutdown()
 

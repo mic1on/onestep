@@ -38,6 +38,7 @@ DEFAULT_COMMAND_CAPABILITIES = [
     "command.drain",
     "command.pause_task",
     "command.resume_task",
+    "command.restart_task",
     "command.discard_dead_letters",
     "command.replay_dead_letters",
     "command.run_task_once",
@@ -766,7 +767,7 @@ class ControlPlaneWsSender:
                 self._app is not None
                 and self._app.supports_manual_run_commands()
             )
-        if kind in {"shutdown", "restart", "drain", "pause_task", "resume_task"}:
+        if kind in {"shutdown", "restart", "drain", "pause_task", "resume_task", "restart_task"}:
             return self._app is not None
         if kind in {"sync_now", "flush_metrics", "flush_events"}:
             return self._reporter is not None
@@ -814,6 +815,11 @@ class ControlPlaneWsSender:
             task_name = _require_task_name_arg(command)
             self._app.request_task_resume(task_name)
             return await self._app.wait_for_task_resume(task_name)
+        if command.kind == "restart_task":
+            if self._app is None:
+                raise RuntimeError("app is not bound")
+            task_name = _require_task_name_arg(command)
+            return await self._app.restart_task_runner(task_name)
         if command.kind == "discard_dead_letters":
             if self._app is None:
                 raise RuntimeError("app is not bound")
