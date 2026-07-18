@@ -16,7 +16,7 @@ The smallest YAML reporter config is:
 reporter: true
 ```
 
-This enables the built-in `ControlPlaneReporter` and resolves connection details from environment variables.
+This loads the `onestep-control-plane` reporter plugin and resolves connection details from environment variables.
 
 Use explicit config when the deployment should pin service metadata:
 
@@ -71,7 +71,10 @@ Relevant areas in the onestep source tree:
 
 - `src/onestep/reporter.py`
 - `src/onestep/control_plane_ws.py`
+- `src/onestep/reporter_registry.py`
+- `plugins/onestep-control-plane/src/onestep_control_plane/reporter.py`
+- `plugins/onestep-control-plane/src/onestep_control_plane/ws.py`
 - `src/onestep/identity_store.py`
-- `tests/test_control_plane_reporter.py`
-- `tests/test_control_plane_ws.py`
-- `tests/test_runtime_identity.py`
+- `plugins/onestep-control-plane/tests/test_control_plane_reporter.py`
+- `plugins/onestep-control-plane/tests/test_control_plane_ws.py`
+- `plugins/onestep-control-plane/tests/test_runtime_identity.py`

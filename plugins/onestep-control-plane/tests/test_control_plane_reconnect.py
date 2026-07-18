@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from onestep import ControlPlaneReporter, ControlPlaneWsSender, OneStepApp
+from onestep import OneStepApp
+from onestep_control_plane import ControlPlaneReporter, ControlPlaneWsSender
 
 from control_plane_testkit import RecordingTransport, make_config
 

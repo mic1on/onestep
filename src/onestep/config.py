@@ -12,7 +12,14 @@ from typing import Any
 
 from .app import OneStepApp
 from .connectors.base import Sink, Source
-from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .reporter_registry import (
+    ReporterRegistry,
+    ReporterSpecHandler,
+    build_reporter,
+    default_reporter_registry,
+    load_reporter_plugins,
+    validate_reporter_spec,
+)
 from .resource_registry import (
     ResourceBuildContext,
     ResourceRegistry,
@@ -86,7 +93,6 @@ _STRICT_TASK_FIELDS = frozenset(
         "timeout_s",
     }
 )
-_STRICT_REPORTER_FIELDS = frozenset({"base_url", "token", "service_name"})
 _STRICT_RETRY_FIELDS: dict[str, frozenset[str]] = {
     "no_retry": frozenset({"type"}),
     "none": frozenset({"type"}),
@@ -378,6 +384,12 @@ def _ensure_resource_registry_loaded() -> ResourceRegistry:
     registry = default_resource_registry()
     register_builtin_resources(registry)
     load_resource_plugins(registry)
+    return registry
+
+
+def _ensure_reporter_registry_loaded() -> ReporterRegistry:
+    registry = default_reporter_registry()
+    load_reporter_plugins(registry)
     return registry
 
 
@@ -688,11 +700,15 @@ def _validate_tasks(raw_tasks: Any) -> None:
 
 
 def _validate_reporter_config(raw_reporter: Any) -> None:
-    if raw_reporter is None or raw_reporter is False or raw_reporter is True:
+    if raw_reporter is None or raw_reporter is False:
         return
+    if raw_reporter is True:
+        raw_reporter = {"type": "control_plane"}
     if not isinstance(raw_reporter, Mapping):
         raise TypeError("'reporter' must be a boolean or mapping")
-    _validate_unknown_fields(raw_reporter, _STRICT_REPORTER_FIELDS, field="reporter")
+    reporter_registry = _ensure_reporter_registry_loaded()
+    spec = {"type": "control_plane", **dict(raw_reporter)}
+    validate_reporter_spec(spec, registry=reporter_registry)
 
 
 def _validate_app_logging(raw_logging: Any) -> None:
@@ -856,26 +872,19 @@ def _attach_reporter(app: OneStepApp, raw_reporter: Any) -> None:
     if raw_reporter is None or raw_reporter is False:
         return
     if raw_reporter is True:
-        reporter_config = ControlPlaneReporterConfig.from_env(app_name=app.name)
+        spec = {"type": "control_plane"}
     elif isinstance(raw_reporter, Mapping):
-        _validate_unknown_fields(raw_reporter, _STRICT_REPORTER_FIELDS, field="reporter")
-        reporter_config = ControlPlaneReporterConfig.from_env(
-            app_name=app.name,
-            base_url=_optional_string(raw_reporter, "base_url"),
-            token=_optional_string(raw_reporter, "token"),
-            service_name=_optional_string(raw_reporter, "service_name"),
-        )
+        spec = {"type": "control_plane", **dict(raw_reporter)}
     else:
         raise TypeError("'reporter' must be a boolean or mapping")
 
-    app.set_reporter_summary(
-        {
-            "type": "control_plane",
-            "base_url": reporter_config.base_url,
-            "service_name": reporter_config.service_name or app.name,
-        }
-    )
-    ControlPlaneReporter(reporter_config).attach(app)
+    reporter_registry = _ensure_reporter_registry_loaded()
+    validate_reporter_spec(spec, registry=reporter_registry)
+    reporter = build_reporter(app, spec, registry=reporter_registry)
+    attach = getattr(reporter, "attach", None)
+    if not callable(attach):
+        raise TypeError(f"reporter type {spec['type']!r} did not build an attachable reporter")
+    attach(app)
 
 
 def _build_task_hooks(raw_hooks: Any, *, task_index: int) -> TaskHooks:

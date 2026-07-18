@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from onestep import (
-    ControlPlaneReporter,
-    ControlPlaneReporterConfig,
     FailureInfo,
     FailureKind,
     IntervalSource,
@@ -18,6 +16,7 @@ from onestep import (
     TaskEventKind,
 )
 from onestep.task import EmitRoute
+from onestep_control_plane import ControlPlaneReporter, ControlPlaneReporterConfig
 
 
 @dataclass

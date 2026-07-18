@@ -10,7 +10,7 @@
 YAML is responsible for:
 
 - `app`: name, global config, shutdown timeout, state store binding, framework log level
-- `reporter`: built-in control-plane telemetry wiring
+- `reporter`: optional control-plane telemetry wiring through `onestep[control-plane]`
 - `resources`: named runtime objects and their dependencies
 - `hooks`: app-level startup, shutdown, and event observers
 - `tasks`: source, emit, dead-letter, retry, timeout, concurrency, handler, task config, task hooks
@@ -266,9 +266,9 @@ tasks:
         - ref: worker.task_hooks:on_sync_users_failed
 ```
 
-### Level 5: Add Built-In Reporter
+### Level 5: Add Control-Plane Reporter
 
-Use the built-in reporter only when you need control-plane telemetry. Start with the smallest shape:
+Use the control-plane reporter plugin only when you need control-plane telemetry. Start with the smallest shape:
 
 ```bash
 pip install 'onestep[control-plane]'
@@ -280,7 +280,7 @@ reporter: true
 
 That means:
 
-- enable `ControlPlaneReporter`
+- load the `onestep-control-plane` reporter plugin
 - resolve `base_url` and `token` from env
 - default `service_name` to `app.name`
 

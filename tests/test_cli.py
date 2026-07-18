@@ -43,6 +43,57 @@ def clear_modules(monkeypatch, *names: str) -> None:
         monkeypatch.delitem(sys.modules, name, raising=False)
 
 
+def install_fake_control_plane_reporter(monkeypatch, created: list[object]) -> None:
+    registry = config_module.ReporterRegistry()
+
+    class FakeReporter:
+        def __init__(self, config):
+            self.config = config
+            self.app = None
+            created.append(self)
+
+        def attach(self, app):
+            self.app = app
+            app.set_reporter_summary(
+                {
+                    "type": "control_plane",
+                    "base_url": self.config.base_url,
+                    "service_name": self.config.service_name or app.name,
+                }
+            )
+            app.on_startup(lambda: None)
+            app.on_shutdown(lambda: None)
+            app.on_event(lambda event: None)
+            return self
+
+    def build(ctx, spec):
+        base_url = (
+            spec.get("base_url")
+            or os.environ.get("ONESTEP_CONTROL_PLANE_URL")
+            or os.environ.get("ONESTEP_CONTROL_URL")
+        )
+        token = (
+            spec.get("token")
+            or os.environ.get("ONESTEP_CONTROL_PLANE_TOKEN")
+            or os.environ.get("ONESTEP_CONTROL_TOKEN")
+        )
+        config = types.SimpleNamespace(
+            base_url=base_url,
+            token=token,
+            service_name=spec.get("service_name") or ctx.app.name,
+        )
+        return FakeReporter(config)
+
+    registry.register_reporter_type(
+        config_module.ReporterSpecHandler(
+            type="control_plane",
+            allowed_fields=frozenset({"type", "base_url", "token", "service_name"}),
+            build=build,
+        )
+    )
+    monkeypatch.setattr(config_module, "_ensure_reporter_registry_loaded", lambda: registry)
+
+
 def test_cli_check_prints_task_summary(capsys) -> None:
     source = MemoryQueue("incoming")
     sink = MemoryQueue("processed")
@@ -1193,21 +1244,7 @@ def test_yaml_target_attaches_reporter_from_env(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("ONESTEP_CONTROL_URL", "https://control-plane.example.com")
     monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "secret-token")
     created = []
-
-    class FakeReporter:
-        def __init__(self, config):
-            self.config = config
-            self.app = None
-            created.append(self)
-
-        def attach(self, app):
-            self.app = app
-            app.on_startup(lambda: None)
-            app.on_shutdown(lambda: None)
-            app.on_event(lambda event: None)
-            return self
-
-    monkeypatch.setattr(config_module, "ControlPlaneReporter", FakeReporter)
+    install_fake_control_plane_reporter(monkeypatch, created)
 
     with registered_yaml_module():
         app = OneStepApp.load(str(config_path))
@@ -1224,6 +1261,89 @@ def test_yaml_target_attaches_reporter_from_env(monkeypatch, tmp_path) -> None:
         "service_name": "yaml-reporter",
     }
     assert app.describe()["hooks"] == {"startup": 1, "shutdown": 1, "events": 1}
+
+
+def test_yaml_target_reporter_missing_plugin_has_install_hint(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "reporter-missing-plugin.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-reporter",
+                "reporter": True,
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        config_module,
+        "_ensure_reporter_registry_loaded",
+        lambda: config_module.ReporterRegistry(),
+    )
+
+    with registered_yaml_module(), pytest.raises(RuntimeError) as exc_info:
+        OneStepApp.load(str(config_path))
+
+    assert "pip install 'onestep[control-plane]'" in str(exc_info.value)
+
+
+def test_yaml_target_attaches_reporter_through_registry(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "reporter-registry.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-reporter",
+                "reporter": {
+                    "type": "audit",
+                    "endpoint": "https://audit.example.com",
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    created = []
+    registry = config_module.ReporterRegistry()
+
+    def build(ctx, spec):
+        created.append((ctx.app.name, dict(spec)))
+
+        class FakeReporter:
+            def attach(self, app):
+                app.set_reporter_summary(
+                    {
+                        "type": "audit",
+                        "endpoint": spec["endpoint"],
+                        "service_name": app.name,
+                    }
+                )
+                return self
+
+        return FakeReporter()
+
+    registry.register_reporter_type(
+        config_module.ReporterSpecHandler(
+            type="audit",
+            allowed_fields=frozenset({"type", "endpoint"}),
+            build=build,
+        )
+    )
+    monkeypatch.setattr(config_module, "_ensure_reporter_registry_loaded", lambda: registry)
+
+    with registered_yaml_module():
+        app = OneStepApp.load(str(config_path))
+
+    assert created == [
+        (
+            "yaml-reporter",
+            {"type": "audit", "endpoint": "https://audit.example.com"},
+        )
+    ]
+    assert app.describe()["reporter"] == {
+        "type": "audit",
+        "endpoint": "https://audit.example.com",
+        "service_name": "yaml-reporter",
+    }
 
 
 def test_yaml_target_reporter_mapping_overrides_env_defaults(monkeypatch, tmp_path) -> None:
@@ -1244,16 +1364,7 @@ def test_yaml_target_reporter_mapping_overrides_env_defaults(monkeypatch, tmp_pa
     monkeypatch.setenv("ONESTEP_CONTROL_URL", "https://env-control-plane.example.com")
     monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "env-token")
     created = []
-
-    class FakeReporter:
-        def __init__(self, config):
-            self.config = config
-            created.append(self)
-
-        def attach(self, app):
-            return self
-
-    monkeypatch.setattr(config_module, "ControlPlaneReporter", FakeReporter)
+    install_fake_control_plane_reporter(monkeypatch, created)
 
     with registered_yaml_module():
         OneStepApp.load(str(config_path))
@@ -1280,15 +1391,7 @@ def test_cli_check_prints_reporter_summary_for_yaml_target(monkeypatch, tmp_path
         encoding="utf-8",
     )
     monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "env-token")
-
-    class FakeReporter:
-        def __init__(self, config):
-            self.config = config
-
-        def attach(self, app):
-            return self
-
-    monkeypatch.setattr(config_module, "ControlPlaneReporter", FakeReporter)
+    install_fake_control_plane_reporter(monkeypatch, [])
 
     with registered_yaml_module():
         exit_code = main(["check", str(config_path)])

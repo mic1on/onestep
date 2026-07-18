@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "1.4.7"
+version = "1.5.0"
 description = "Async task runtime for queue, polling, schedule, and webhook workloads."
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -25,7 +25,7 @@ dependencies = []
 
 [project.optional-dependencies]
 control-plane = [
-    "websockets>=12.0",
+    "onestep-control-plane>=0.1.0",
 ]
 yaml = [
     "PyYAML>=6.0",
@@ -65,7 +65,7 @@ integration = [
     "onestep-kafka>=0.1.0; python_version >= '3.10'",
 ]
 all = [
-    "websockets>=12.0",
+    "onestep-control-plane>=0.1.0",
     "PyYAML>=6.0",
     "onestep-mq>=0.2.0",
     "onestep-redis>=0.2.0",
@@ -75,7 +75,7 @@ all = [
     "onestep-kafka>=0.1.0; python_version >= '3.10'",
 ]
 dev = [
-    "websockets>=12.0",
+    "onestep-control-plane>=0.1.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",
@@ -93,6 +93,7 @@ onestep = "onestep.cli:main"
 [tool.uv.workspace]
 members = [
     "plugins/onestep-feishu-bitable",
+    "plugins/onestep-control-plane",
     "plugins/onestep-rabbitmq",
     "plugins/onestep-redis",
     "plugins/onestep-mysql",
@@ -106,6 +107,7 @@ onestep-redis = { workspace = true }
 onestep-mysql = { workspace = true }
 onestep-postgres = { workspace = true }
 onestep-sqs = { workspace = true }
+onestep-control-plane = { workspace = true }
 onestep-kafka = { path = "plugins/onestep-kafka" }
 
 [build-system]

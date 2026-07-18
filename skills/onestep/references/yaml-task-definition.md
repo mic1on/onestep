@@ -206,7 +206,7 @@ tasks:
         - ref: worker.task_hooks:on_sync_users_failed
 ```
 
-## Built-In Reporter
+## Control-Plane Reporter
 
 Only add reporter config for control-plane telemetry. The smallest YAML form is:
 
@@ -214,7 +214,7 @@ Only add reporter config for control-plane telemetry. The smallest YAML form is:
 reporter: true
 ```
 
-This enables `ControlPlaneReporter` and resolves `base_url` and `token` from environment variables.
+This loads the `onestep-control-plane` reporter plugin and resolves `base_url` and `token` from environment variables.
 
 ## Supported Resource Types
 

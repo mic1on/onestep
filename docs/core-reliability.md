@@ -33,10 +33,10 @@ or normalizing backend failures.
 
 ## Operational API
 
-- `ControlPlaneReporter`
-- `ControlPlaneReporterConfig`
+- `ControlPlaneReporter` when `onestep[control-plane]` is installed
+- `ControlPlaneReporterConfig` when `onestep[control-plane]` is installed
 - identity helpers exported from `onestep`
-- low-level WebSocket transport classes exported from `onestep`
+- low-level WebSocket transport classes when `onestep[control-plane]` is installed
 
 These APIs are supported for operational integration, but changes may require
 coordination with `onestep-control-plane`.

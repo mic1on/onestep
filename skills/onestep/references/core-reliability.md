@@ -23,9 +23,9 @@ Stable plugin API:
 
 Operational API:
 
-- `ControlPlaneReporter`, `ControlPlaneReporterConfig`
+- `ControlPlaneReporter`, `ControlPlaneReporterConfig` when `onestep[control-plane]` is installed
 - exported identity helpers
-- exported low-level WebSocket transport classes
+- exported low-level WebSocket transport classes when `onestep[control-plane]` is installed
 
 Do not remove, rename, or change the meaning of stable exported names without
 treating it as a compatibility change.

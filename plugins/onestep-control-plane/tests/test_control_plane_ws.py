@@ -11,16 +11,18 @@ from uuid import UUID
 import pytest
 
 from onestep import (
+    MemoryQueue,
+    OneStepApp,
+)
+from onestep_control_plane import (
     ControlPlaneReporter,
     ControlPlaneReporterConfig,
     ControlPlaneWsSender,
     ControlPlaneWsTransport,
-    MemoryQueue,
-    OneStepApp,
     build_control_plane_http_base_url,
     build_control_plane_ws_url,
 )
-from onestep.control_plane_ws import _default_connect_factory
+from onestep_control_plane.ws import _default_connect_factory
 
 
 def _make_config() -> ControlPlaneReporterConfig:
@@ -1514,7 +1516,7 @@ def test_ws_sender_reconnect_backoff_saturates_for_large_attempt_counts(monkeypa
     sender = ControlPlaneWsSender(_make_config(), transport=transport)
     sender._reconnect_attempts = 10**6
 
-    monkeypatch.setattr("onestep.control_plane_ws.random.random", lambda: 1.0)
+    monkeypatch.setattr("onestep_control_plane.ws.random.random", lambda: 1.0)
 
     assert sender._next_reconnect_delay_s() == pytest.approx(
         sender._config.reconnect_max_delay_s

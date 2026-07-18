@@ -23,7 +23,7 @@ Files:
 - `control_plane_mysql_demo.py`: interval -> handler -> MySQL table sink demo with optional
   control-plane reporting; run it from the repo root with
   `uv run onestep run example.control_plane_mysql_demo:app` so it uses this workspace's
-  onestep 1.4.7 package and MySQL plugin
+  onestep 1.5.0 package and MySQL plugin
 - `feishu_bitable_sync/`: live Feishu Bitable incremental source -> upsert sink debugging project
 - `rabbitmq_queue.py`: RabbitMQ source/sink usage
 - `sqs_queue.py`: SQS source/sink usage
@@ -31,8 +31,9 @@ Files:
   cycles `ok -> retry_once -> fail -> slow` so you can observe success, retry, timeout, and
   dead-letter behavior from the control plane
 
-Control plane reporting is documented in the top-level `README.md`. For a quick local demo, start
-`onestep-control-plane` first and then run `control_plane_reporter_demo.py`.
+Control plane reporting is documented in the top-level `README.md`. For a quick local demo, install
+`onestep[control-plane]`, start `onestep-control-plane`, and then run
+`control_plane_reporter_demo.py`.
 
 When the control plane is unavailable, the demo agent now reconnects automatically with backoff.
 Its low-priority `metrics` and `events` buffers are capped so a long outage does not grow memory

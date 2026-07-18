@@ -6,9 +6,10 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 from uuid import UUID
 
-from onestep import ControlPlaneReporter, ControlPlaneReporterConfig, OneStepApp
+from onestep import OneStepApp
 from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
+from onestep_control_plane import ControlPlaneReporter, ControlPlaneReporterConfig
 from onestep_redis import RedisConnector, RedisStreamQueue
 from onestep_redis.resilience import as_redis_connector_operation_error, classify_redis_error
 

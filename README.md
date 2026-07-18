@@ -20,7 +20,7 @@ telemetry.
 - **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Kafka, Feishu
 - **Scheduling** via interval, cron, webhook, or DB-backed queues
 - **Production-ready**: retries, dead-letter, timeouts, state stores, metrics,
-  and a control-plane reporter
+  and an optional control-plane reporter
 - **Two config styles**: plain Python, or declarative YAML
 - Python 3.9+
 
@@ -65,7 +65,7 @@ onestep check your_package.tasks:app   # validate the target before starting
 | **Survive failures** | retry policies, `dead_letter` sink, per-task `timeout_s`, failure classification (`error` / `timeout` / `cancelled`) |
 | **Track state** | `InMemoryStateStore`, MySQL state/cursor stores; `ctx.state` namespace per task |
 | **Observe** | `@app.on_event` hooks, `InMemoryMetrics`, `StructuredEventLogger`, execution events |
-| **Operate** | control-plane reporter with remote commands: `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `restart_task`, `sync_now` |
+| **Operate** | optional control-plane reporter with remote commands: `ping`, `shutdown`, `restart`, `drain`, `pause_task`, `resume_task`, `restart_task`, `sync_now` |
 
 ## Core concepts
 
@@ -100,7 +100,8 @@ Each backend ships as its own package so you only install what you use:
 
 | Package | Provides | Install |
 | --- | --- | --- |
-| **core** | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, `http_sink`, runtime, reporter | `pip install onestep` |
+| **core** | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, `http_sink`, runtime | `pip install onestep` |
+| **Control plane** | reporter telemetry and remote commands | `pip install 'onestep[control-plane]'` |
 | **MySQL** | `table_queue`, `incremental`, binlog CDC, `table_sink`, state/cursor stores | `pip install onestep-mysql` |
 | **PostgreSQL** | same primitives as MySQL, backed by PostgreSQL | `pip install onestep-postgres` |
 | **RabbitMQ** | `queue` with exchange/routing-key binding and prefetch | `pip install onestep-mq` |
@@ -176,7 +177,7 @@ are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.4.7
+    ghcr.io/mic1on/onestep-worker:1.5.0
   ```
   See [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md).
 - **Embed in a web app** — recommended shape for FastAPI/Django in
@@ -187,6 +188,12 @@ are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
 `onestep` can push runtime telemetry (heartbeat, topology, metrics, events) to
 [`onestep-control-plane`](../onestep-control-plane) over a single WebSocket and
 accept remote commands — with no connector or task-code changes.
+
+Install the reporter plugin first:
+
+```bash
+pip install 'onestep[control-plane]'
+```
 
 ```yaml
 app:

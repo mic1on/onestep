@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "onestep",
+    "onestep-control-plane",
     "onestep-feishu-bitable",
     "onestep-mq",
     "onestep-mysql",
@@ -516,11 +517,12 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.4.7"
+version = "1.5.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
 all = [
+    { name = "onestep-control-plane" },
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
     { name = "onestep-mq" },
     { name = "onestep-mysql" },
@@ -528,14 +530,12 @@ all = [
     { name = "onestep-redis" },
     { name = "onestep-sqs" },
     { name = "pyyaml" },
-    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 control-plane = [
-    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "onestep-control-plane" },
 ]
 dev = [
+    { name = "onestep-control-plane" },
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
     { name = "onestep-mq" },
     { name = "onestep-mysql" },
@@ -547,8 +547,6 @@ dev = [
     { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyyaml" },
-    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 integration = [
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
@@ -594,6 +592,9 @@ yaml = [
 
 [package.metadata]
 requires-dist = [
+    { name = "onestep-control-plane", marker = "extra == 'all'", editable = "plugins/onestep-control-plane" },
+    { name = "onestep-control-plane", marker = "extra == 'control-plane'", editable = "plugins/onestep-control-plane" },
+    { name = "onestep-control-plane", marker = "extra == 'dev'", editable = "plugins/onestep-control-plane" },
     { name = "onestep-kafka", marker = "python_full_version >= '3.10' and extra == 'all'", directory = "plugins/onestep-kafka" },
     { name = "onestep-kafka", marker = "python_full_version >= '3.10' and extra == 'dev'", directory = "plugins/onestep-kafka" },
     { name = "onestep-kafka", marker = "python_full_version >= '3.10' and extra == 'integration'", directory = "plugins/onestep-kafka" },
@@ -629,11 +630,43 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'integration'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
-    { name = "websockets", marker = "extra == 'all'", specifier = ">=12.0" },
-    { name = "websockets", marker = "extra == 'control-plane'", specifier = ">=12.0" },
-    { name = "websockets", marker = "extra == 'dev'", specifier = ">=12.0" },
 ]
 provides-extras = ["control-plane", "yaml", "mysql", "postgres", "rabbitmq", "redis", "sqs", "kafka", "test", "integration", "all", "dev"]
+
+[[package]]
+name = "onestep-control-plane"
+version = "0.1.0"
+source = { editable = "plugins/onestep-control-plane" }
+dependencies = [
+    { name = "onestep" },
+    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "websockets", version = "16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "websockets", specifier = ">=12.0" },
+]
+provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-feishu-bitable"
@@ -783,12 +816,14 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "onestep-control-plane" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 test = [
+    { name = "onestep-control-plane" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -798,6 +833,8 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "onestep", editable = "." },
+    { name = "onestep-control-plane", marker = "extra == 'dev'", editable = "plugins/onestep-control-plane" },
+    { name = "onestep-control-plane", marker = "extra == 'test'", editable = "plugins/onestep-control-plane" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },

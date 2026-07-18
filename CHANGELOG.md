@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.5.0
+
+- Moves control-plane reporter and WebSocket command integration into the new `onestep-control-plane` 0.1.0 plugin package.
+- Keeps YAML `reporter: true` and legacy control-plane import paths working when `onestep[control-plane]` is installed, with a clear install hint when the plugin is missing.
+- Adds the `onestep.reporters` entry-point registry so future reporters can be installed without becoming core dependencies.
 
 ## 1.4.7
 

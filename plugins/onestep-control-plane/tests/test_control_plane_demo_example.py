@@ -9,7 +9,7 @@ def _load_demo_module(monkeypatch):
     monkeypatch.setenv("ONESTEP_CONTROL_PLANE_URL", "http://127.0.0.1:8080")
     monkeypatch.setenv("ONESTEP_CONTROL_PLANE_TOKEN", "dev-token")
     module_name = "_test_control_plane_reporter_demo"
-    module_path = Path(__file__).resolve().parents[1] / "example" / "control_plane_reporter_demo.py"
+    module_path = Path(__file__).resolve().parents[3] / "example" / "control_plane_reporter_demo.py"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     assert spec is not None
@@ -29,7 +29,7 @@ def _load_mysql_demo_module(monkeypatch):
     monkeypatch.delenv("ONESTEP_CONTROL_PLANE_TOKEN", raising=False)
 
     module_name = "_test_control_plane_mysql_demo"
-    module_path = Path(__file__).resolve().parents[1] / "example" / "control_plane_mysql_demo.py"
+    module_path = Path(__file__).resolve().parents[3] / "example" / "control_plane_mysql_demo.py"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     assert spec is not None
@@ -41,7 +41,7 @@ def _load_mysql_demo_module(monkeypatch):
 
 
 def _read_workspace_version() -> str:
-    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject_path = Path(__file__).resolve().parents[3] / "pyproject.toml"
     for line in pyproject_path.read_text(encoding="utf-8").splitlines():
         if line.startswith("version = "):
             return line.split('"', 2)[1]
