@@ -63,7 +63,8 @@ describe('topology flow motion', () => {
     expect(diagram.dataset.flowing).toBe('true');
     expect(diagram.style.getPropertyValue('--topology-flow-duration')).toBe('0.75s');
     expect(sourceConnectorFrame.className).toContain('sm:self-start');
-    expect(sourceConnectorFrame.className).toContain('sm:mt-7');
+    expect(sourceConnectorFrame.className).toContain('sm:h-20');
+    expect(sourceConnectorFrame.className).not.toContain('sm:mt-7');
     expect(screen.getByTestId('topology-source-connector').dataset.flowing).toBe('true');
     expect(screen.getByTestId('topology-sink-connector').dataset.flowing).toBe('true');
     expect(screen.getAllByTestId('topology-flow-packet')).toHaveLength(4);

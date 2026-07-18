@@ -195,7 +195,7 @@ function TopologyConnector({ isFlowing, testId }: { isFlowing: boolean; testId: 
   return (
     <div
       data-testid={`${testId}-frame`}
-      className="flex-1 flex flex-col sm:flex-row items-center justify-center relative w-1 sm:w-full min-h-[24px] sm:min-h-0 sm:self-start sm:mt-7"
+      className="flex-1 flex flex-col sm:flex-row items-center justify-center relative w-1 sm:w-full min-h-[24px] sm:min-h-0 sm:h-20 sm:self-start"
     >
       <div
         data-testid={testId}
