@@ -682,6 +682,8 @@ def test_task_restart_runner_does_not_close_shared_source_contract() -> None:
 
         @app.task(name="task_a", source=shared_source, emit=sink_a, concurrency=1)
         async def task_a(ctx, item):
+            if item["value"] == 99:
+                ctx.app.request_shutdown()
             return {"value": item["value"]}
 
         @app.task(name="task_b", source=shared_source, emit=sink_b, concurrency=1)
