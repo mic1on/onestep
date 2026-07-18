@@ -11,7 +11,13 @@ import {
   Circle,
 } from 'lucide-react';
 import { Service } from '../types';
-import { type ServiceSummaryStats, type RecentEvent, type Environment, loadRecentEvents } from '../api';
+import {
+  isAuthRequiredError,
+  type ServiceSummaryStats,
+  type RecentEvent,
+  type Environment,
+  loadRecentEvents,
+} from '../api';
 import { useI18n } from '../i18n';
 
 interface OverviewPageProps {
@@ -20,6 +26,7 @@ interface OverviewPageProps {
   sourceKindCounts: Record<string, number>;
   environment: Environment | undefined;
   onSelectService: (serviceId: string) => void;
+  onAuthRequired: () => void;
 }
 
 const EVENT_POLL_INTERVAL_MS = 10_000;
@@ -109,6 +116,7 @@ export default function OverviewPage({
   sourceKindCounts,
   environment,
   onSelectService,
+  onAuthRequired,
 }: OverviewPageProps) {
   const { t } = useI18n();
 
@@ -123,11 +131,15 @@ export default function OverviewPage({
       const items = await loadRecentEvents(environment, 20);
       setEvents(items);
     } catch (error) {
+      if (isAuthRequiredError(error)) {
+        onAuthRequired();
+        return;
+      }
       setEventsError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoadingEvents(false);
     }
-  }, [environment]);
+  }, [environment, onAuthRequired]);
 
   useEffect(() => {
     void refreshEvents();
@@ -407,10 +419,10 @@ interface ServiceStatusMeta {
 }
 
 function getServiceStatusMeta(service: Service): ServiceStatusMeta {
-  if (service.status === 'running' && service.activeInstances > 0) {
+  if (service.viewStatus === 'running' && service.activeInstances > 0) {
     return { dotClassName: 'bg-emerald-500' };
   }
-  if (service.status === 'degraded') {
+  if (service.viewStatus === 'degraded') {
     return { dotClassName: 'bg-amber-500' };
   }
   return { dotClassName: 'bg-slate-400' };

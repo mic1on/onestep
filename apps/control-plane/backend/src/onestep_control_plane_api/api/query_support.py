@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -8,9 +10,14 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
+from onestep_control_plane_api.api.common import utcnow
 from onestep_control_plane_api.api.constants import (
     HEALTH_STATUS_VALUES,
+    RETRY_ATTEMPTS_CONFIG_KEYS,
+    SINK_LABEL_CONFIG_KEYS,
+    SOURCE_LABEL_CONFIG_KEYS,
     TASK_EVENT_KIND_VALUES,
+    TASK_FAILING_EVENT_KINDS,
 )
 from onestep_control_plane_api.api.schemas import (
     AgentCommandOverview,
@@ -18,21 +25,26 @@ from onestep_control_plane_api.api.schemas import (
     AgentSessionSummary,
     ConnectorDescriptor,
     Environment,
+    EventLogLevel,
     InstanceConnectivity,
     InstanceConnectivityCounts,
     InstanceStatusCounts,
     InstanceSummary,
+    InstanceViewStatus,
     RecentEventSummary,
     RetryDescriptor,
     ServiceListStatus,
     ServiceListSummary,
     ServiceSummary,
+    ServiceViewStatus,
     TaskControlStateSummary,
     TaskDashboardSummary,
     TaskEventCounts,
+    TaskEventKind,
     TaskEventSummary,
     TaskInstanceControlState,
     TaskMetricWindowSummary,
+    TaskViewStatus,
 )
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
@@ -44,6 +56,18 @@ from onestep_control_plane_api.db.models import (
     TaskEvent,
     TaskMetricWindow,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceMetricAggregates:
+    """Per-service lookback metric totals used to derive service-list fields."""
+
+    fetched: int
+    succeeded: int
+    failed: int
+    dead_lettered: int
+    cancelled: int
+    timeouts: int
 
 
 def online_cutoff(now: datetime) -> datetime:
@@ -212,15 +236,23 @@ def build_service_summary(
     source_kinds: list[str] | None = None,
     task_count: int = 0,
     failing_task_count: int = 0,
+    success_rate: float = 100.0,
+    throughput_per_min: int = 0,
+    error_count: int = 0,
 ) -> ServiceSummary:
+    service_list_status = derive_service_list_status(
+        instance_count=instance_count,
+        online_instance_count=online_instance_count,
+    )
+    view_status = derive_service_view_status(
+        service_list_status=service_list_status,
+        online_instance_count=online_instance_count,
+    )
     return ServiceSummary(
         name=service.name,
         environment=service.environment,
         latest_deployment_version=service.latest_deployment_version,
-        service_status=derive_service_list_status(
-            instance_count=instance_count,
-            online_instance_count=online_instance_count,
-        ),
+        service_status=service_list_status,
         latest_topology_hash=service.latest_topology_hash,
         latest_sync_at=service.latest_sync_at,
         instance_count=instance_count,
@@ -229,6 +261,15 @@ def build_service_summary(
         source_kinds=source_kinds or [],
         task_count=task_count,
         failing_task_count=failing_task_count,
+        view_status=view_status,
+        success_rate=success_rate,
+        throughput_per_min=throughput_per_min,
+        error_count=error_count,
+        uptime_reference_at=last_seen_at,
+        online_task_count=max(task_count - failing_task_count, 0)
+        if online_instance_count > 0
+        else 0,
+        standby_instance_count=max(instance_count - online_instance_count, 0),
         created_at=service.created_at,
         updated_at=service.updated_at,
     )
@@ -244,6 +285,157 @@ def derive_service_list_status(
     if online_instance_count < instance_count:
         return "attention"
     return "online"
+
+
+# ---- View-facing derived status / metric helpers ----
+# These centralise the business rules that the frontend used to apply, so the
+# wire contract carries a single canonical view status and scalar metrics.
+
+def derive_service_view_status(
+    *,
+    service_list_status: ServiceListStatus,
+    online_instance_count: int,
+) -> ServiceViewStatus:
+    if online_instance_count == 0:
+        return "stopped"
+    if service_list_status == "online":
+        return "running"
+    if service_list_status == "attention":
+        return "degraded"
+    return "stopped"
+
+
+def derive_task_view_status(
+    *,
+    online_instance_count: int,
+    pause_requested: bool | None,
+    error_count: int,
+    started: int,
+    succeeded: int,
+) -> TaskViewStatus:
+    if online_instance_count == 0:
+        return "offline"
+    if pause_requested is True:
+        return "paused"
+    if error_count > 0:
+        return "failed"
+    if started > 0 or succeeded > 0:
+        return "running"
+    return "idle"
+
+
+def derive_instance_view_status(
+    *,
+    status: str,
+    connectivity: InstanceConnectivity,
+) -> InstanceViewStatus:
+    if connectivity != "online":
+        return "stopped"
+    if status == "ok":
+        return "running"
+    if status == "starting":
+        return "starting"
+    if status in ("error", "degraded"):
+        return "failed"
+    return "stopped"
+
+
+def derive_event_level(kind: TaskEventKind) -> EventLogLevel:
+    if kind in ("failed", "dead_lettered"):
+        return "error"
+    if kind == "retried":
+        return "warn"
+    return "info"
+
+
+def compute_success_rate(
+    *,
+    succeeded: int,
+    failed: int,
+    dead_lettered: int,
+    cancelled: int,
+) -> float:
+    total = succeeded + failed + dead_lettered + cancelled
+    if total == 0:
+        return 100.0
+    return round(succeeded / total * 100, 2)
+
+
+def compute_throughput_per_min(*, fetched: int, lookback_minutes: int) -> int:
+    if lookback_minutes <= 0:
+        return 0
+    return int(fetched // lookback_minutes)
+
+
+def compute_error_count(*, failed: int, dead_lettered: int, timeouts: int) -> int:
+    return failed + dead_lettered + timeouts
+
+
+def extract_retry_attempts(retry_policy: RetryDescriptor | None) -> int:
+    if retry_policy is None:
+        return 0
+    config = retry_policy.config or {}
+    for key in RETRY_ATTEMPTS_CONFIG_KEYS:
+        value = config.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+    # Retry policy present but no recognised attempts key: assume the default
+    # of one attempt (matches the previous frontend fallback).
+    return 1
+
+
+def _first_non_empty_str(config: dict[str, Any] | None, keys: tuple[str, ...]) -> str | None:
+    if not config:
+        return None
+    for key in keys:
+        value = config.get(key)
+        if isinstance(value, str) and value.strip() != "":
+            return value
+    return None
+
+
+def extract_source_label(
+    *,
+    source_name: str | None,
+    source_config: dict[str, Any] | None,
+) -> str | None:
+    if source_name:
+        return source_name
+    return _first_non_empty_str(source_config, SOURCE_LABEL_CONFIG_KEYS)
+
+
+def extract_sink_label(emit: list[ConnectorDescriptor]) -> str | None:
+    sink = emit[0] if emit else None
+    if sink is None:
+        return None
+    if sink.name:
+        return sink.name
+    return _first_non_empty_str(sink.config, SINK_LABEL_CONFIG_KEYS)
+
+
+def build_task_config_yaml(summary: TaskDashboardSummary) -> str:
+    emit = summary.emit[0] if summary.emit else None
+    retry_attempts = extract_retry_attempts(summary.retry_policy)
+    return (
+        "task_config:\n"
+        f'  id: "{summary.task_name}"\n'
+        f'  topology_hash: "{summary.topology_hash or "unknown"}"\n'
+        "\n"
+        "  execution:\n"
+        f"    concurrency: {summary.concurrency or 1}\n"
+        f"    timeout_s: {summary.timeout_s if summary.timeout_s is not None else 'null'}\n"
+        "    retry_policy:\n"
+        f'      kind: "{summary.retry_policy.kind if summary.retry_policy else "none"}"\n'
+        f"      attempts: {retry_attempts}\n"
+        "\n"
+        "  source:\n"
+        f'    type: "{summary.source_kind or "unknown"}"\n'
+        f'    name: "{summary.source_name or "default"}"\n'
+        "\n"
+        "  sink:\n"
+        f'    type: "{emit.kind if emit else "handler"}"\n'
+        f'    name: "{emit.name if emit else "default"}"'
+    )
 
 
 def build_service_list_summary(items: list[ServiceSummary]) -> ServiceListSummary:
@@ -321,7 +513,7 @@ def build_failing_task_counts_map(
     lookback_started_at: datetime,
 ) -> dict[UUID, int]:
     """Count distinct tasks with failed/dead_lettered events per service in the lookback window."""
-    failing_kinds = ("failed", "dead_lettered")
+    failing_kinds = TASK_FAILING_EVENT_KINDS
     rows = db.execute(
         select(
             TaskEvent.service_id,
@@ -334,6 +526,164 @@ def build_failing_task_counts_map(
         .group_by(TaskEvent.service_id)
     ).all()
     return {service_id: count for service_id, count in rows}
+
+
+def build_service_metric_aggregates_map(
+    db: Session,
+    *,
+    lookback_started_at: datetime,
+) -> dict[UUID, ServiceMetricAggregates]:
+    """Aggregate TaskMetricWindow counts per service for the service-list view.
+
+    Returns summed fetched/succeeded/failed/dead_lettered/cancelled/timeouts per
+    service, used to derive the service-level success_rate / throughput_per_min /
+    error_count. Lookback scope matches the per-task summary path.
+    """
+    rows = db.execute(
+        select(
+            TaskMetricWindow.service_id,
+            func.coalesce(func.sum(TaskMetricWindow.fetched), 0),
+            func.coalesce(func.sum(TaskMetricWindow.succeeded), 0),
+            func.coalesce(func.sum(TaskMetricWindow.failed), 0),
+            func.coalesce(func.sum(TaskMetricWindow.dead_lettered), 0),
+            func.coalesce(func.sum(TaskMetricWindow.cancelled), 0),
+            func.coalesce(func.sum(TaskMetricWindow.timeouts), 0),
+        )
+        .where(TaskMetricWindow.window_ended_at >= lookback_started_at)
+        .group_by(TaskMetricWindow.service_id)
+    ).all()
+    result: dict[UUID, ServiceMetricAggregates] = {}
+    for (
+        service_id,
+        fetched,
+        succeeded,
+        failed,
+        dead_lettered,
+        cancelled,
+        timeouts,
+    ) in rows:
+        result[service_id] = ServiceMetricAggregates(
+            fetched=int(fetched or 0),
+            succeeded=int(succeeded or 0),
+            failed=int(failed or 0),
+            dead_lettered=int(dead_lettered or 0),
+            cancelled=int(cancelled or 0),
+            timeouts=int(timeouts or 0),
+        )
+    return result
+
+
+def build_service_failing_task_counts_map(
+    db: Session,
+    *,
+    lookback_started_at: datetime,
+) -> dict[UUID, int]:
+    """Count distinct tasks per service with failed/dead_lettered events.
+
+    Event-sourced (TaskEvent) so a task that failed but never recorded a failed
+    metric window still counts as failing — matches the dashboard path.
+    Timeouts are folded into the per-task error_count only (no TaskEvent kind).
+    """
+    rows = db.execute(
+        select(
+            TaskEvent.service_id,
+            func.count(func.distinct(TaskEvent.task_name)),
+        )
+        .where(
+            TaskEvent.kind.in_(TASK_FAILING_EVENT_KINDS),
+            TaskEvent.occurred_at >= lookback_started_at,
+        )
+        .group_by(TaskEvent.service_id)
+    ).all()
+    return {service_id: int(count or 0) for service_id, count in rows}
+
+
+def build_service_error_counts_map(
+    db: Session,
+    *,
+    lookback_started_at: datetime,
+) -> dict[UUID, int]:
+    """Per-service error_count for the service list.
+
+    error_count = event-sourced failed + dead_lettered TaskEvents + metric-sourced
+    timeouts, matching the per-task error_count definition. Used so the list and
+    dashboard present the same error totals.
+    """
+    event_rows = db.execute(
+        select(
+            TaskEvent.service_id,
+            func.count(TaskEvent.id),
+        )
+        .where(
+            TaskEvent.kind.in_(TASK_FAILING_EVENT_KINDS),
+            TaskEvent.occurred_at >= lookback_started_at,
+        )
+        .group_by(TaskEvent.service_id)
+    ).all()
+    event_counts: dict[UUID, int] = {
+        service_id: int(count or 0) for service_id, count in event_rows
+    }
+    timeout_rows = db.execute(
+        select(
+            TaskMetricWindow.service_id,
+            func.coalesce(func.sum(TaskMetricWindow.timeouts), 0),
+        )
+        .where(
+            TaskMetricWindow.window_ended_at >= lookback_started_at,
+        )
+        .group_by(TaskMetricWindow.service_id)
+    ).all()
+    service_ids = set(event_counts) | {sid for sid, _ in timeout_rows}
+    result: dict[UUID, int] = {}
+    timeout_by_service = {service_id: int(total or 0) for service_id, total in timeout_rows}
+    for service_id in service_ids:
+        result[service_id] = event_counts.get(service_id, 0) + timeout_by_service.get(service_id, 0)
+    return result
+
+
+def augment_service_summary_from_tasks(
+    service_summary: ServiceSummary,
+    *,
+    task_summaries: list[TaskDashboardSummary],
+    lookback_minutes: int,
+) -> None:
+    """Fill the service-level derived fields on a ServiceSummary in place.
+
+    Used by endpoints that already load per-task summaries (dashboard,
+    task list, task detail) so the embedded ServiceSummary carries the same
+    success_rate / throughput_per_min / error_count / failing_task_count as the
+    service list endpoint, without a second metric aggregation query.
+    """
+    fetched = sum(task.fetched for task in task_summaries)
+    succeeded = sum(task.succeeded for task in task_summaries)
+    failed = sum(task.failed for task in task_summaries)
+    dead_lettered = sum(task.dead_lettered for task in task_summaries)
+    cancelled = sum(task.cancelled for task in task_summaries)
+    service_summary.success_rate = compute_success_rate(
+        succeeded=succeeded,
+        failed=failed,
+        dead_lettered=dead_lettered,
+        cancelled=cancelled,
+    )
+    # error_count reuses the per-task error_count (already finalised in
+    # build_task_summary_map), which blends event-sourced failures with
+    # metric-sourced timeouts — keeping list and dashboard totals consistent.
+    service_summary.error_count = sum(task.error_count for task in task_summaries)
+    failing_task_count = sum(1 for task in task_summaries if task.error_count > 0)
+    service_summary.failing_task_count = failing_task_count
+    task_count = len(task_summaries)
+    # Keep service_summary.task_count in sync with the loaded task set so the
+    # online_task_count derivation (and any client reading task_count) matches.
+    service_summary.task_count = task_count
+    service_summary.online_task_count = (
+        max(task_count - failing_task_count, 0)
+        if service_summary.online_instance_count > 0
+        else 0
+    )
+    service_summary.throughput_per_min = compute_throughput_per_min(
+        fetched=fetched,
+        lookback_minutes=lookback_minutes,
+    )
 
 
 def build_agent_session_summary(
@@ -410,6 +760,7 @@ def build_instance_summary(
     cutoff: datetime,
     active_session: AgentSessionSummary | None = None,
 ) -> InstanceSummary:
+    connectivity = get_instance_connectivity(instance, cutoff=cutoff)
     return InstanceSummary(
         instance_id=instance.instance_id,
         node_name=instance.node_name,
@@ -425,8 +776,9 @@ def build_instance_summary(
         last_heartbeat_sequence=instance.last_heartbeat_sequence,
         last_seen_at=instance.last_seen_at,
         status=instance.status,
-        connectivity=get_instance_connectivity(instance, cutoff=cutoff),
+        connectivity=connectivity,
         active_session=active_session,
+        view_status=derive_instance_view_status(status=instance.status, connectivity=connectivity),
         created_at=instance.created_at,
         updated_at=instance.updated_at,
     )
@@ -515,6 +867,8 @@ def _task_control_supported_commands(
         capability_commands.append("pause_task")
     if "command.resume_task" in accepted_capabilities:
         capability_commands.append("resume_task")
+    if "command.restart_task" in accepted_capabilities:
+        capability_commands.append("restart_task")
     if "command.discard_dead_letters" in accepted_capabilities:
         capability_commands.append("discard_dead_letters")
     if "command.replay_dead_letters" in accepted_capabilities:
@@ -566,6 +920,7 @@ def _extract_task_supported_commands(
         if command_kind in {
             "pause_task",
             "resume_task",
+            "restart_task",
             "discard_dead_letters",
             "replay_dead_letters",
             "run_task_once",
@@ -592,6 +947,100 @@ def _coerce_non_negative_int(payload: dict[str, object] | None, key: str) -> int
     return None
 
 
+def build_task_pause_requested_map(
+    db: Session,
+    *,
+    service_id: UUID,
+) -> dict[str, bool]:
+    """Aggregate per-task ``pause_requested`` across a service's instances.
+
+    For each task_name, returns True when any instance reported
+    ``pause_requested=true``; False when at least one instance reported a known
+    boolean state and none reported True. Tasks with no instance reporting a
+    known state are absent from the map (caller leaves the summary field as
+    None). Loads only the ``app_snapshot_json`` column and parses the same
+    ``task_control_states`` shape used by the per-instance detail path, so the
+    semantics match ``_coerce_bool``.
+    """
+    snapshot_rows = db.execute(
+        select(Instance.app_snapshot_json).where(Instance.service_id == service_id)
+    ).all()
+
+    result: dict[str, bool] = {}
+    for (app_snapshot_json,) in snapshot_rows:
+        if not isinstance(app_snapshot_json, dict):
+            continue
+        task_control_states = app_snapshot_json.get("task_control_states")
+        if not isinstance(task_control_states, list):
+            continue
+        for value in task_control_states:
+            if not isinstance(value, dict):
+                continue
+            task_name = value.get("task_name")
+            if not isinstance(task_name, str):
+                continue
+            pause_requested = _coerce_bool(value, "pause_requested")
+            if pause_requested is None:
+                # Unknown state: do not flip a known True/False to unknown.
+                result.setdefault(task_name, False)
+            elif pause_requested:
+                result[task_name] = True
+            else:
+                result.setdefault(task_name, False)
+    return result
+
+
+def build_task_supported_commands_map(
+    db: Session,
+    *,
+    service_id: UUID,
+    as_of: datetime | None = None,
+) -> dict[str, list[str]]:
+    as_of = as_of or utcnow()
+    cutoff = online_cutoff(as_of)
+    instances = db.scalars(select(Instance).where(Instance.service_id == service_id)).all()
+    online_instances = [
+        instance
+        for instance in instances
+        if get_instance_connectivity(instance, cutoff=cutoff) == "online"
+    ]
+    active_sessions_by_instance_id = get_active_sessions_by_instance_id(
+        db,
+        service_id=service_id,
+    )
+
+    supported_by_task: dict[str, set[str]] = {}
+    for instance in online_instances:
+        active_session = active_sessions_by_instance_id.get(instance.instance_id)
+        if active_session is None or not isinstance(instance.app_snapshot_json, dict):
+            continue
+        task_control_states = instance.app_snapshot_json.get("task_control_states")
+        if not isinstance(task_control_states, list):
+            continue
+        for value in task_control_states:
+            if not isinstance(value, dict):
+                continue
+            task_name = value.get("task_name")
+            if not isinstance(task_name, str):
+                continue
+            supported_by_task.setdefault(task_name, set()).update(
+                _task_control_supported_commands(active_session, dict(value))
+            )
+
+    command_order = [
+        "pause_task",
+        "resume_task",
+        "restart_task",
+        "discard_dead_letters",
+        "replay_dead_letters",
+        "run_task_once",
+    ]
+    return {
+        task_name: [command for command in command_order if command in supported_commands]
+        for task_name, supported_commands in supported_by_task.items()
+    }
+
+
 def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
     return TaskEventSummary(
         event_id=event.event_id,
@@ -608,6 +1057,7 @@ def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
         meta=event.meta_json,
         received_at=event.received_at,
         created_at=event.created_at,
+        level=derive_event_level(event.kind),
     )
 
 
@@ -814,6 +1264,8 @@ def build_task_summary_map(
     *,
     service_id: UUID,
     lookback_started_at: datetime,
+    lookback_minutes: int = 1,
+    online_instance_count: int = 0,
 ) -> dict[str, TaskDashboardSummary]:
     task_definitions = db.scalars(
         select(TaskDefinition)
@@ -931,7 +1383,86 @@ def build_task_summary_map(
         summary.last_event_at = row[1]
         summary.event_counts = build_task_event_counts(counts_by_kind=counts_by_kind)
 
+    # Aggregate pause_requested across this service's instances so the dashboard
+    # list can surface a "paused" status without hitting the per-instance detail
+    # path. Tasks absent from the map keep summary.pause_requested=None (unknown).
+    pause_requested_map = build_task_pause_requested_map(db, service_id=service_id)
+    for task_name, pause_requested in pause_requested_map.items():
+        summary = summaries.get(task_name)
+        if summary is None:
+            summary = TaskDashboardSummary(task_name=task_name, event_counts=TaskEventCounts())
+            summaries[task_name] = summary
+        summary.pause_requested = pause_requested
+
+    supported_commands_map = build_task_supported_commands_map(db, service_id=service_id)
+    for task_name, supported_commands in supported_commands_map.items():
+        summary = summaries.get(task_name)
+        if summary is None:
+            summary = TaskDashboardSummary(task_name=task_name, event_counts=TaskEventCounts())
+            summaries[task_name] = summary
+        summary.supported_commands = supported_commands
+
+    # Finalise view-facing derived fields on every summary so clients never have
+    # to recompute business state.
+    for summary in summaries.values():
+        finalize_task_summary(
+            summary,
+            lookback_minutes=lookback_minutes,
+            online_instance_count=online_instance_count,
+        )
+
     return summaries
+
+
+def finalize_task_summary(
+    summary: TaskDashboardSummary,
+    *,
+    lookback_minutes: int,
+    online_instance_count: int,
+) -> None:
+    """Populate view-facing derived fields on a TaskDashboardSummary in place."""
+    # error_count blends the authoritative event-sourced failure counts
+    # (event_counts.failed / dead_lettered) with metric-sourced timeouts,
+    # which have no corresponding TaskEvent kind. This keeps the failing-task
+    # signal consistent with the historical event-based service aggregate.
+    error_count = compute_error_count(
+        failed=summary.event_counts.failed,
+        dead_lettered=summary.event_counts.dead_lettered,
+        timeouts=summary.timeouts,
+    )
+    summary.error_count = error_count
+    summary.success_rate = compute_success_rate(
+        succeeded=summary.succeeded,
+        failed=summary.failed,
+        dead_lettered=summary.dead_lettered,
+        cancelled=summary.cancelled,
+    )
+    summary.throughput_per_min = compute_throughput_per_min(
+        fetched=summary.fetched,
+        lookback_minutes=lookback_minutes,
+    )
+    summary.retry_attempts = extract_retry_attempts(summary.retry_policy)
+    summary.source_label = extract_source_label(
+        source_name=summary.source_name,
+        source_config=summary.source_config,
+    )
+    summary.sink_label = extract_sink_label(summary.emit)
+    summary.config_yaml = build_task_config_yaml(summary)
+    uptime_reference_candidates = [
+        candidate
+        for candidate in (summary.latest_window_started_at, summary.last_event_at)
+        if candidate is not None
+    ]
+    summary.uptime_reference_at = (
+        max(uptime_reference_candidates) if uptime_reference_candidates else None
+    )
+    summary.view_status = derive_task_view_status(
+        online_instance_count=online_instance_count,
+        pause_requested=summary.pause_requested,
+        error_count=error_count,
+        started=summary.started,
+        succeeded=summary.succeeded,
+    )
 
 
 def get_service_topology_hashes(

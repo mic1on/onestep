@@ -14,10 +14,7 @@ const en = {
   'button.clearStream': 'Clear stream',
   'button.deployUpdate': 'Deploy Update',
   'button.deploying': 'Deploying...',
-  'button.editConfig': 'Edit Config',
-  'button.export': 'Export',
-  'button.modify': 'Modify',
-  'button.modifyGlobalConfig': 'Modify Global Config',
+  'button.editConfig': 'View Config',
   'button.refresh': 'Refresh',
   'button.refreshing': 'Refreshing',
   'button.restart': 'Restart',
@@ -28,9 +25,11 @@ const en = {
   'button.save': 'Save',
   'button.signIn': 'Sign in',
   'button.signingIn': 'Signing in...',
-  'button.startTask': 'Start Task',
+  'button.processing': 'Processing...',
+  'button.resumeTask': 'Resume',
   'button.stopSelected': 'Stop Selected',
   'button.stopTask': 'Stop Task',
+  'button.unavailable': 'Unavailable',
   'button.viewTaskDetails': 'View Task Details',
   'chart.all': 'All',
   'chart.failures': 'Failures',
@@ -43,7 +42,7 @@ const en = {
   'chart.p95Duration': 'P95 duration',
   'chart.reported': 'Reported',
   'chart.succeeded': 'Succeeded',
-  'chart.taskMetrics': 'Task Metrics (Last 1h)',
+  'chart.taskMetrics': 'Task Metrics (Last 15m)',
   'chart.time': 'Time: {time}',
   'common.active': 'Active',
   'common.attempts': '{count} attempts',
@@ -64,9 +63,11 @@ const en = {
   'config.activeConfiguration': 'Active Configuration',
   'config.copyTitle': 'Copy Config',
   'config.format': 'Format: YAML (Task Specification v2)',
-  'config.globalSpec': 'Global Service Spec',
-  'config.globalSpecDescription': 'Config files defining environment ingress targets',
-  'config.help': 'Press Modify to adjust parameters',
+  'config.globalSpec': 'Service Configuration',
+  'config.globalSpecDescription': 'Runtime-reported service-level settings',
+  'config.help': 'Reported by runtime - console is read-only',
+  'config.noServiceConfig': 'No service-level configuration reported',
+  'config.noServiceConfigHint': 'Task configuration is available from each task detail view when the runtime reports it.',
   'error.instanceRestartFailed': 'Instance restart failed',
   'error.instanceShutdownFailed': 'Instance shutdown failed',
   'error.restartFailed': 'Restart failed',
@@ -86,7 +87,7 @@ const en = {
   'instances.pid': 'PID',
   'instances.restartTitle': 'Restart Instance',
   'instances.selected': '{count} instances selected',
-  'instances.startTitle': 'Start Instance',
+  'instances.startUnavailable': 'Runtime does not support starting an offline instance remotely',
   'instances.statusFilter': 'Status: {status}',
   'instances.stopTitle': 'Stop Instance',
   'instances.uuid': 'Instance UUID',
@@ -99,8 +100,8 @@ const en = {
   'login.username': 'Username',
   'login.useAccount': 'Use your configured local console account.',
   'logs.liveStream': 'Live Console Standard Output stream',
-  'logs.socketConnected': 'Status: Connected to console output socket',
-  'logs.streamingAlive': 'Streaming alive Partitions',
+  'logs.socketConnected': 'Status: HTTP-polling console logs',
+  'logs.notConnected': 'Status: Not connected - showing existing logs only',
   'nav.globalOverview': 'Global Overview',
   'nav.notifications': 'Notifications',
   'nav.services': 'Services',
@@ -201,6 +202,7 @@ const en = {
   'status.failed': 'Failed',
   'status.idle': 'Idle',
   'status.offline': 'Offline',
+  'status.paused': 'Paused',
   'status.running': 'Running',
   'status.starting': 'Starting',
   'status.stopped': 'Stopped',
@@ -209,12 +211,8 @@ const en = {
   'tabs.logs': 'Logs',
   'tabs.tasks': 'Tasks',
   'task.activeStreamStatus': 'Active stream status',
-  'task.errorCount24h': 'Error Count (24h)',
+  'task.errorCount15m': 'Errors (15m)',
   'task.successRate': 'Success Rate',
-  'task.traceCloseHint': 'Click "View traces" again to close',
-  'task.traces': 'Active Latency Traces (Last 120 Transactions)',
-  'task.viewTraces': 'View traces ->',
-  'task.closeTraceView': 'Close Trace View',
   'task.withinSla': 'Within target SLA threshold',
   'tasks.concurrency': 'Concurrency',
   'tasks.pipeline': 'Pipeline',
@@ -231,13 +229,9 @@ const en = {
   'telemetry.totalInstances': 'Total Instances',
   'toast.apiFailed': 'API request failed: {message}',
   'toast.commandAccepted': '{name} command accepted.',
-  'toast.configSaved': 'Configuration update saved for {name}. Restarting task to apply...',
-  'toast.connectedSupport': 'Connected to premium OneStep corporate support line!',
   'toast.controlPlaneRefreshed': 'Control plane data refreshed from API.',
   'toast.deployAccepted': 'Sync command accepted for {name}.',
   'toast.deployDispatch': 'Dispatching sync command for {name}...',
-  'toast.exportStarted': 'Compiling telemetry nodes. Spreadsheet download initiated successfully!',
-  'toast.globalConfigReadOnly': 'Global Service Spec is read-only at current layer.',
   'toast.instanceBackHealthy': 'Instance [{id}] is back to healthy state!',
   'toast.instanceRestartAccepted': 'Restart command accepted for [{id}].',
   'toast.instanceRestartDispatch': 'Dispatching restart for instance [{id}]...',
@@ -255,10 +249,14 @@ const en = {
   'toast.serviceNoOnlineInstances': '{name} has no online instances. Command was not dispatched.',
   'toast.rollingDeployComplete': 'Rolling update successfully deployed! All instances running v1.2.2',
   'toast.rollingDeployStart': 'Triggering rolling deployment of v1.2.2 for {name}...',
-  'toast.settingsReadOnly': 'Global Settings are configured in read-only environment limits.',
   'toast.taskDispatch': 'Dispatching {kind} for {name}...',
+  'toast.taskPauseTimeout': '{name} command dispatched; waiting for the worker to report back.',
+  'toast.taskCommandUnsupported': '{name} does not support this command on any online instance.',
+  'toast.taskToggleUnavailable': '{name} cannot be started remotely from the current task state.',
   'toast.taskRestartAccepted': '{name} restart sequence accepted.',
-  'toast.taskRestartDispatch': 'Dispatching pause/resume for {name}...',
+  'toast.taskRestartDispatch': 'Dispatching restart command for {name}...',
+  'toast.taskRestartFailed': '{name} restart command finished with an error.',
+  'toast.taskRestartTimeout': '{name} restart command dispatched; waiting for the worker to report back.',
   'toast.taskRestartLocal': 'Rebooting pipeline worker threads for {id}...',
   'toast.taskRestartedLocal': 'Pipeline worker threads back ONLINE!',
   'toast.taskStatusChanged': 'Task {name} has been {status}',
@@ -272,23 +270,26 @@ const en = {
   'top.systemAlerts': 'System Alerts',
   'top.systemNormal': 'System Normal',
   'topology.activeWorkers': 'Active Workers',
-  'topology.bufferSize': '5,000 batches',
   'topology.clickHint': 'Click any node to view real-time pipeline metadata',
   'topology.eventIngestion': 'Event Ingestion / Queue',
   'topology.eventTransform': 'Event Transform & Sink Handler',
   'topology.exponentialRetries': '{count} exponential retries',
+  'topology.intervalTrigger': 'Interval Trigger',
   'topology.kafkaCluster': 'Kafka Cluster',
   'topology.maxBuffer': 'Max Buffer',
   'topology.relationalDb': 'Relational DB',
-  'topology.sinkType': 'Columnar OLAP Storage / Cache',
-  'topology.sourceTitle': '{source} Source Protocol',
+  'topology.cronTrigger': 'Cron Schedule',
+  'topology.webhookTrigger': 'Webhook Trigger',
+  'topology.memoryQueue': 'In-Memory Queue',
+  'topology.sinkType': 'Sink / Queue',
+  'topology.sourceTitle': '{source} Source',
   'topology.taskProcessing': 'Task Processing',
-  'topology.taskTitle': '{task} Stream Thread',
+  'topology.taskTitle': '{task} Task',
   'topology.throughputTarget': 'Throughput Target',
   'topology.title': 'Topology Flow',
   'topology.uptimeStatus': 'Uptime Status',
   'topology.workerThreads': '{count} worker threads',
-  'topology.sinkTitle': '{sink} Analytics Engine',
+  'topology.sinkTitle': '{sink} Sink',
   'topology.sourceKind': 'Source Type',
   'topology.notReported': 'Not reported',
   'topology.connectorName': 'Connector Name',
@@ -323,10 +324,7 @@ const zhCN: Record<MessageKey, string> = {
   'button.clearStream': '清空流',
   'button.deployUpdate': '部署更新',
   'button.deploying': '部署中...',
-  'button.editConfig': '编辑配置',
-  'button.export': '导出',
-  'button.modify': '修改',
-  'button.modifyGlobalConfig': '修改全局配置',
+  'button.editConfig': '查看配置',
   'button.refresh': '刷新',
   'button.refreshing': '刷新中',
   'button.restart': '重启',
@@ -337,9 +335,11 @@ const zhCN: Record<MessageKey, string> = {
   'button.save': '保存',
   'button.signIn': '登录',
   'button.signingIn': '登录中...',
-  'button.startTask': '启动任务',
+  'button.processing': '处理中...',
+  'button.resumeTask': '恢复',
   'button.stopSelected': '停止所选',
   'button.stopTask': '停止任务',
+  'button.unavailable': '不可用',
   'button.viewTaskDetails': '查看任务详情',
   'chart.all': '全部',
   'chart.failures': '失败',
@@ -352,7 +352,7 @@ const zhCN: Record<MessageKey, string> = {
   'chart.p95Duration': 'P95 耗时',
   'chart.reported': '已上报',
   'chart.succeeded': '成功',
-  'chart.taskMetrics': '任务运行指标（最近 1 小时）',
+  'chart.taskMetrics': '任务运行指标（最近 15 分钟）',
   'chart.time': '时间：{time}',
   'common.active': '活跃',
   'common.attempts': '{count} 次尝试',
@@ -373,9 +373,11 @@ const zhCN: Record<MessageKey, string> = {
   'config.activeConfiguration': '当前配置',
   'config.copyTitle': '复制配置',
   'config.format': '格式：YAML（任务规范 v2）',
-  'config.globalSpec': '全局服务规范',
-  'config.globalSpecDescription': '定义环境入口目标的配置文件',
-  'config.help': '点击“修改”调整参数',
+  'config.globalSpec': '服务配置',
+  'config.globalSpecDescription': 'Runtime 上报的服务级配置',
+  'config.help': '由 runtime 上报 - 控制台为只读展示',
+  'config.noServiceConfig': '未上报服务级配置',
+  'config.noServiceConfigHint': 'Runtime 上报任务配置后，可在对应任务详情中查看。',
   'error.instanceRestartFailed': '实例重启失败',
   'error.instanceShutdownFailed': '实例关闭失败',
   'error.restartFailed': '重启失败',
@@ -395,7 +397,7 @@ const zhCN: Record<MessageKey, string> = {
   'instances.pid': 'PID',
   'instances.restartTitle': '重启实例',
   'instances.selected': '已选择 {count} 个实例',
-  'instances.startTitle': '启动实例',
+  'instances.startUnavailable': 'Runtime 不支持远程启动离线实例',
   'instances.statusFilter': '状态：{status}',
   'instances.stopTitle': '停止实例',
   'instances.uuid': '实例 UUID',
@@ -408,8 +410,8 @@ const zhCN: Record<MessageKey, string> = {
   'login.username': '用户名',
   'login.useAccount': '使用已配置的本地控制台账号。',
   'logs.liveStream': '实时控制台标准输出流',
-  'logs.socketConnected': '状态：已连接到控制台输出 socket',
-  'logs.streamingAlive': '分区流保持在线',
+  'logs.socketConnected': '状态：HTTP 轮询控制台日志',
+  'logs.notConnected': '状态：未连接 - 仅显示已有日志',
   'nav.globalOverview': '全局概览',
   'nav.notifications': '通知',
   'nav.services': '服务',
@@ -510,6 +512,7 @@ const zhCN: Record<MessageKey, string> = {
   'status.failed': '失败',
   'status.idle': '空闲',
   'status.offline': '离线',
+  'status.paused': '暂停中',
   'status.running': '运行中',
   'status.starting': '启动中',
   'status.stopped': '已停止',
@@ -518,12 +521,8 @@ const zhCN: Record<MessageKey, string> = {
   'tabs.logs': '日志',
   'tabs.tasks': '任务',
   'task.activeStreamStatus': '活跃流状态',
-  'task.errorCount24h': '错误数（24 小时）',
+  'task.errorCount15m': '错误数（15 分钟）',
   'task.successRate': '成功率',
-  'task.traceCloseHint': '再次点击“查看追踪”可关闭',
-  'task.traces': '活跃延迟追踪（最近 120 笔事务）',
-  'task.viewTraces': '查看追踪 ->',
-  'task.closeTraceView': '关闭追踪视图',
   'task.withinSla': '处于目标 SLA 阈值内',
   'tasks.concurrency': '并发',
   'tasks.pipeline': '流水线',
@@ -540,13 +539,9 @@ const zhCN: Record<MessageKey, string> = {
   'telemetry.totalInstances': '实例总数',
   'toast.apiFailed': 'API 请求失败：{message}',
   'toast.commandAccepted': '{name} 命令已接受。',
-  'toast.configSaved': '{name} 的配置更新已保存。正在重启任务以应用...',
-  'toast.connectedSupport': '已连接到 OneStep 企业支持通道！',
   'toast.controlPlaneRefreshed': '已从 API 刷新控制平面数据。',
   'toast.deployAccepted': '{name} 的同步命令已接受。',
   'toast.deployDispatch': '正在为 {name} 下发同步命令...',
-  'toast.exportStarted': '正在汇总遥测节点。表格下载已成功启动！',
-  'toast.globalConfigReadOnly': '当前层级下全局服务规范为只读。',
   'toast.instanceBackHealthy': '实例 [{id}] 已恢复健康状态！',
   'toast.instanceRestartAccepted': '实例 [{id}] 的重启命令已接受。',
   'toast.instanceRestartDispatch': '正在为实例 [{id}] 下发重启命令...',
@@ -564,10 +559,14 @@ const zhCN: Record<MessageKey, string> = {
   'toast.serviceNoOnlineInstances': '{name} 没有在线实例，命令未下发。',
   'toast.rollingDeployComplete': '滚动更新已成功部署！所有实例正在运行 v1.2.2',
   'toast.rollingDeployStart': '正在触发 {name} 的 v1.2.2 滚动部署...',
-  'toast.settingsReadOnly': '全局设置受只读环境限制。',
   'toast.taskDispatch': '正在为 {name} 下发 {kind}...',
+  'toast.taskPauseTimeout': '{name} 命令已下发，正在等待 worker 上报状态。',
+  'toast.taskCommandUnsupported': '{name} 的在线实例不支持这个命令。',
+  'toast.taskToggleUnavailable': '{name} 当前状态不支持从控制台远程启动。',
   'toast.taskRestartAccepted': '{name} 的重启序列已接受。',
-  'toast.taskRestartDispatch': '正在为 {name} 下发暂停/恢复命令...',
+  'toast.taskRestartDispatch': '正在为 {name} 下发重启命令...',
+  'toast.taskRestartFailed': '{name} 的重启命令执行失败。',
+  'toast.taskRestartTimeout': '{name} 的重启命令已下发，正在等待 worker 上报结果。',
   'toast.taskRestartLocal': '正在重启 {id} 的流水线 worker 线程...',
   'toast.taskRestartedLocal': '流水线 worker 线程已恢复在线！',
   'toast.taskStatusChanged': '任务 {name} 已变为 {status}',
@@ -581,23 +580,26 @@ const zhCN: Record<MessageKey, string> = {
   'top.systemAlerts': '系统告警',
   'top.systemNormal': '系统正常',
   'topology.activeWorkers': '活跃 Worker',
-  'topology.bufferSize': '5,000 批',
   'topology.clickHint': '点击任意节点查看实时流水线元数据',
   'topology.eventIngestion': '事件摄入 / 队列',
   'topology.eventTransform': '事件转换与 Sink 处理器',
   'topology.exponentialRetries': '{count} 次指数退避重试',
+  'topology.intervalTrigger': '间隔触发',
   'topology.kafkaCluster': 'Kafka 集群',
   'topology.maxBuffer': '最大缓冲',
   'topology.relationalDb': '关系数据库',
-  'topology.sinkType': '列式 OLAP 存储 / 缓存',
-  'topology.sourceTitle': '{source} Source 协议',
+  'topology.cronTrigger': '定时调度',
+  'topology.webhookTrigger': 'Webhook 触发',
+  'topology.memoryQueue': '内存队列',
+  'topology.sinkType': 'Sink / 队列',
+  'topology.sourceTitle': '{source} Source',
   'topology.taskProcessing': '任务处理',
-  'topology.taskTitle': '{task} 流线程',
+  'topology.taskTitle': '{task} 任务处理',
   'topology.throughputTarget': '吞吐目标',
-  'topology.title': '拓扑流',
+  'topology.title': '拓扑图',
   'topology.uptimeStatus': '运行时长状态',
   'topology.workerThreads': '{count} 个 worker 线程',
-  'topology.sinkTitle': '{sink} 分析引擎',
+  'topology.sinkTitle': '{sink} Sink',
   'topology.sourceKind': 'Source 类型',
   'topology.notReported': '未上报',
   'topology.connectorName': '连接器名称',
@@ -627,9 +629,44 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
 
 type Values = Record<string, string | number>;
 
+const LOCALE_STORAGE_KEY = 'onestep.controlPlane.locale';
+const SUPPORTED_LOCALES: Locale[] = ['en', 'zh-CN'];
+
+/**
+ * Read the locale the user previously chose. Returns null when nothing is
+ * stored or the stored value is no longer a supported locale, so the caller
+ * can fall back to browser detection. Mirrors readEnvironmentFilter in App.tsx.
+ */
+export function readStoredLocale(): Locale | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    if (stored && (SUPPORTED_LOCALES as string[]).includes(stored)) {
+      return stored as Locale;
+    }
+  } catch {
+    // localStorage may be unavailable (private mode); fall back to default.
+  }
+  return null;
+}
+
+/**
+ * Persist the user's locale choice. Silently ignores failures (private mode,
+ * quota, SSR) so switching the language never throws.
+ */
+export function writeStoredLocale(locale: Locale): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+  } catch {
+    // Ignore persistence failures.
+  }
+}
+
 interface I18nContextValue {
   locale: Locale;
   t: (key: MessageKey, values?: Values) => string;
+  setLocale: (locale: Locale) => void;
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null);
@@ -665,14 +702,23 @@ export function I18nProvider({
   children: ReactNode;
   initialLocale?: Locale;
 }) {
-  const [locale] = useState<Locale>(() => initialLocale ?? getBrowserLocale());
+  // Priority: user's persisted choice > explicit prop > browser detection.
+  const [locale, setLocaleState] = useState<Locale>(
+    () => readStoredLocale() ?? initialLocale ?? getBrowserLocale(),
+  );
 
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
 
+  // Update both the React state and localStorage so the choice survives reload.
+  const setLocale = useCallback((next: Locale) => {
+    setLocaleState(next);
+    writeStoredLocale(next);
+  }, []);
+
   const t = useCallback((key: MessageKey, values?: Values) => translate(locale, key, values), [locale]);
-  const value = useMemo(() => ({ locale, t }), [locale, t]);
+  const value = useMemo(() => ({ locale, t, setLocale }), [locale, t, setLocale]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

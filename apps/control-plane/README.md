@@ -50,6 +50,11 @@ export ONESTEP_CP_INGEST_TOKENS='token-a,token-b'
 export ONESTEP_CP_INGEST_TOKENS='["token-a","token-b"]'
 ```
 
+Prometheus can scrape `GET /metrics` with the same bearer token. Workers do not
+need to expose scrape ports; they push telemetry outbound to the plane, and the
+plane exports retained runtime and custom handler metrics in Prometheus text
+format.
+
 In `dev`, the monitoring console can optionally use a single shared username/password pair
 via `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. In
 production-style environments, prefer database-backed local users instead of the shared
@@ -367,6 +372,9 @@ Agent telemetry and control now enter only through `GET /api/v1/agents/ws`.
 The WS handshake uses the same ingest token configured by `ONESTEP_CP_INGEST_TOKENS`.
 Telemetry payloads still reuse the historical heartbeat/sync/metrics/events body shapes
 inside the WS `telemetry` envelope.
+When agents and the plane both support `telemetry.custom_metrics`, handler
+counter/gauge samples are included in metrics telemetry and later exported from
+`/metrics`.
 On API startup, previously persisted `agent_sessions.status=active` rows are reconciled
 to `disconnected` before new agents reconnect, so stale sessions from an earlier process
 do not stay eligible for dashboards or command dispatch.

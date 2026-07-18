@@ -2,6 +2,7 @@ import { ArrowRight, Database, ArrowRightLeft, Server, Cpu, HardDrive, Info } fr
 import { Task } from '../types';
 import { useState } from 'react';
 import { useI18n } from '../i18n';
+import { formatUptime } from '../api';
 import { buildSourceDetails, buildSinkDetails, resolveRowValue } from './sourceFields';
 
 interface TopologyFlowProps {
@@ -12,7 +13,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState<'source' | 'task' | 'sink' | null>(null);
 
-  const isRunning = task.status === 'Running';
+  const isRunning = task.viewStatus === 'running';
 
   // The source panel is driven by the real connector config reported by the
   // worker (see sourceFields.ts). MySQL/Kafka/etc. each render their own field
@@ -52,10 +53,9 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
           title: t('topology.taskTitle', { task: task.name }),
           type: t('topology.eventTransform'),
           concurrency: t('topology.workerThreads', { count: task.concurrency }),
-          uptime: task.uptime,
-          throughput: task.throughputValue,
+          uptime: formatUptime(task.uptimeReferenceAt),
+          throughput: `${task.throughputPerMin}/min`,
           retryPolicy: t('topology.exponentialRetries', { count: task.retryAttempts }),
-          bufferSize: t('topology.bufferSize'),
         };
       case 'sink':
         return {
@@ -194,10 +194,10 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-medium text-slate-600">
               {selectedNode === 'source' &&
                 sourceRows.map((row) => (
-                  <div key={row.labelKey}>
+                  <div key={row.labelKey} className="min-w-0">
                     <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t(row.labelKey)}</span>
                     <span
-                      className={`${
+                      className={`block break-all ${
                         row.mono ? 'font-mono' : 'font-semibold'
                       } ${row.placeholder ? 'text-slate-400 italic' : 'text-slate-800'}`}
                     >
@@ -220,19 +220,15 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
                     <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.throughputTarget')}</span>
                     <span className="text-indigo-600 font-bold">{activeDetails.throughput}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.maxBuffer')}</span>
-                    <span className="text-slate-800">{activeDetails.bufferSize}</span>
-                  </div>
                 </>
               )}
 
               {selectedNode === 'sink' &&
                 sinkRows.map((row) => (
-                  <div key={row.labelKey}>
+                  <div key={row.labelKey} className="min-w-0">
                     <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t(row.labelKey)}</span>
                     <span
-                      className={`${
+                      className={`block break-all ${
                         row.mono ? 'font-mono' : 'font-semibold'
                       } ${row.placeholder ? 'text-slate-400 italic' : 'text-slate-800'}`}
                     >

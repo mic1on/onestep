@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
@@ -13,6 +16,11 @@ from onestep_control_plane_api.api.schemas import (
     TaskTopologyIngest,
 )
 from onestep_control_plane_api.db.models import Service, TaskDefinition
+
+
+def _labels_hash(labels: dict[str, str]) -> str:
+    encoded = json.dumps(labels, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def build_metric_window_payload(
@@ -42,6 +50,32 @@ def build_metric_window_payload(
         "p95_duration_ms": task.p95_duration_ms,
         "received_at": received_at,
     }
+
+
+def build_custom_metric_window_payloads(
+    service: Service,
+    identity: ServiceDescriptor,
+    task: TaskMetricWindowIngest,
+    request: MetricsIngestRequest,
+    received_at,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "service_id": service.id,
+            "instance_id": identity.instance_id,
+            "task_name": task.task_name,
+            "window_id": task.window_id,
+            "window_started_at": as_utc(request.window.started_at),
+            "window_ended_at": as_utc(request.window.ended_at),
+            "metric_name": metric.name,
+            "metric_kind": metric.kind,
+            "metric_value": metric.value,
+            "labels_hash": _labels_hash(metric.labels),
+            "labels_json": metric.labels,
+            "received_at": received_at,
+        }
+        for metric in task.custom_metrics
+    ]
 
 
 def build_task_event_payload(

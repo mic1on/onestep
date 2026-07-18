@@ -23,13 +23,16 @@ from onestep_control_plane_api.api.constants import (
     MAX_TASK_ACTIVITY_LIMIT,
 )
 from onestep_control_plane_api.api.query_support import (
+    augment_service_summary_from_tasks,
     build_agent_session_summary,
-    build_failing_task_counts_map,
     build_instance_status_counts,
     build_instance_summary,
     build_metric_window_summary,
     build_recent_event_summary,
+    build_service_error_counts_map,
+    build_service_failing_task_counts_map,
     build_service_list_summary,
+    build_service_metric_aggregates_map,
     build_service_stats_subquery,
     build_service_summary,
     build_source_kind_counts_map,
@@ -38,6 +41,9 @@ from onestep_control_plane_api.api.query_support import (
     build_task_counts_map,
     build_task_event_summary,
     build_task_summary_map,
+    compute_success_rate,
+    compute_throughput_per_min,
+    finalize_task_summary,
     get_active_sessions_by_instance_id,
     get_latest_session_for_instance,
     get_service_command_overview,
@@ -115,9 +121,18 @@ def list_services(
     source_kinds_map = build_source_kinds_map(db)
     source_kind_counts = build_source_kind_counts_map(db, environment=environment)
     task_counts_map = build_task_counts_map(db)
-    failing_task_counts_map = build_failing_task_counts_map(
+    list_lookback_started_at = now - timedelta(minutes=DEFAULT_LOOKBACK_MINUTES)
+    failing_task_counts_map = build_service_failing_task_counts_map(
         db,
-        lookback_started_at=now - timedelta(minutes=DEFAULT_LOOKBACK_MINUTES),
+        lookback_started_at=list_lookback_started_at,
+    )
+    service_metric_aggregates_map = build_service_metric_aggregates_map(
+        db,
+        lookback_started_at=list_lookback_started_at,
+    )
+    service_error_counts_map = build_service_error_counts_map(
+        db,
+        lookback_started_at=list_lookback_started_at,
     )
 
     # If filtering by source_kind, only include services that have it
@@ -240,18 +255,42 @@ def list_services(
         services_stmt = services_stmt.where(*filters)
 
     rows = db.execute(services_stmt).all()
-    items = [
-        build_service_summary(
-            service,
-            instance_count=instance_count,
-            online_instance_count=online_instance_count,
-            last_seen_at=last_seen_at,
-            source_kinds=source_kinds_map.get(service.id, []),
-            task_count=task_counts_map.get(service.id, 0),
-            failing_task_count=failing_task_counts_map.get(service.id, 0),
+    items: list[ServiceSummary] = []
+    for service, instance_count, online_instance_count, last_seen_at in rows:
+        aggregates = service_metric_aggregates_map.get(service.id)
+        success_rate = (
+            compute_success_rate(
+                succeeded=aggregates.succeeded,
+                failed=aggregates.failed,
+                dead_lettered=aggregates.dead_lettered,
+                cancelled=aggregates.cancelled,
+            )
+            if aggregates is not None
+            else 100.0
         )
-        for service, instance_count, online_instance_count, last_seen_at in rows
-    ]
+        throughput_per_min = (
+            compute_throughput_per_min(
+                fetched=aggregates.fetched,
+                lookback_minutes=DEFAULT_LOOKBACK_MINUTES,
+            )
+            if aggregates is not None
+            else 0
+        )
+        error_count = service_error_counts_map.get(service.id, 0)
+        items.append(
+            build_service_summary(
+                service,
+                instance_count=instance_count,
+                online_instance_count=online_instance_count,
+                last_seen_at=last_seen_at,
+                source_kinds=source_kinds_map.get(service.id, []),
+                task_count=task_counts_map.get(service.id, 0),
+                failing_task_count=failing_task_counts_map.get(service.id, 0),
+                success_rate=success_rate,
+                throughput_per_min=throughput_per_min,
+                error_count=error_count,
+            )
+        )
     return ServiceListResponse(
         items=items,
         total=total,
@@ -327,8 +366,15 @@ def get_service_dashboard(
                 db,
                 service_id=service.id,
                 lookback_started_at=lookback_started_at,
+                lookback_minutes=lookback_minutes,
+                online_instance_count=service_summary.online_instance_count,
             ).values()
         )
+    )
+    augment_service_summary_from_tasks(
+        service_summary,
+        task_summaries=task_summaries,
+        lookback_minutes=lookback_minutes,
     )
     recent_events = db.scalars(
         select(TaskEvent)
@@ -356,9 +402,7 @@ def get_service_dashboard(
         ),
         task_count=len(task_summaries),
         failing_task_count=sum(
-            1
-            for task_summary in task_summaries
-            if task_summary.event_counts.failed > 0 or task_summary.event_counts.dead_lettered > 0
+            1 for task_summary in task_summaries if task_summary.error_count > 0
         ),
         command_overview=command_overview,
         topology_hashes=topology_hashes,
@@ -379,12 +423,23 @@ def list_service_tasks(
 ) -> TaskDashboardListResponse:
     service = get_service_or_404(db, service_name=service_name, environment=environment)
     lookback_started_at = utcnow() - timedelta(minutes=lookback_minutes)
+    now = utcnow()
+    online_scope_cutoff = online_cutoff(now)
+    online_instance_count = db.scalar(
+        select(func.count(Instance.id)).where(
+            Instance.service_id == service.id,
+            Instance.last_seen_at.is_not(None),
+            Instance.last_seen_at >= online_scope_cutoff,
+        )
+    ) or 0
     task_summaries = sort_task_summaries(
         list(
             build_task_summary_map(
                 db,
                 service_id=service.id,
                 lookback_started_at=lookback_started_at,
+                lookback_minutes=lookback_minutes,
+                online_instance_count=int(online_instance_count),
             ).values()
         )
     )
@@ -441,13 +496,26 @@ def get_service_task_detail(
         health_cutoff=health_scope_cutoff,
     )
 
-    summary = build_task_summary_map(
+    all_task_summaries = build_task_summary_map(
         db,
         service_id=service.id,
         lookback_started_at=lookback_started_at,
-    ).get(task_name)
+        lookback_minutes=lookback_minutes,
+        online_instance_count=service_summary.online_instance_count,
+    )
+    summary = all_task_summaries.get(task_name)
     if summary is None:
         summary = TaskDashboardSummary(task_name=task_name, event_counts=TaskEventCounts())
+        finalize_task_summary(
+            summary,
+            lookback_minutes=lookback_minutes,
+            online_instance_count=service_summary.online_instance_count,
+        )
+    augment_service_summary_from_tasks(
+        service_summary,
+        task_summaries=list(all_task_summaries.values()),
+        lookback_minutes=lookback_minutes,
+    )
     active_sessions_by_instance_id = get_active_sessions_by_instance_id(db, service_id=service.id)
     task_control_instances = db.scalars(
         select(Instance)

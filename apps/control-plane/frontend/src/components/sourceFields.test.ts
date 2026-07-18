@@ -28,9 +28,38 @@ describe('buildSourceDetails', () => {
     expect(keys).toContain('brokers');
   });
 
-  it('falls back to the generic event-ingestion type for other kinds', () => {
+  it('falls back to the generic event-ingestion type for unknown queue kinds', () => {
     const details = buildSourceDetails('rabbitmq_queue', { queue: 'work' }, null);
     expect(details.typeKey).toBe('topology.eventIngestion');
+  });
+
+  it('classifies interval as an interval trigger (not event ingestion)', () => {
+    // Regression: interval sources reported seconds=5 but the type badge
+    // showed "Event Ingestion / Queue" because the classifier only knew
+    // mysql/kafka and fell through for everything else.
+    const details = buildSourceDetails('interval', { seconds: 5 }, 'interval:5s');
+    expect(details.typeKey).toBe('topology.intervalTrigger');
+    // The seconds field row must still render so the interval value is visible.
+    const secondsRow = details.rows.find((r) => r.configKey === 'seconds')!;
+    expect(secondsRow).toBeDefined();
+    expect(
+      resolveRowValue(secondsRow, 'interval', { seconds: 5 }, null, t),
+    ).toEqual({ value: '5', mono: false, placeholder: false });
+  });
+
+  it('classifies cron as a cron schedule', () => {
+    const details = buildSourceDetails('cron', { expression: '*/5 * * * *' }, null);
+    expect(details.typeKey).toBe('topology.cronTrigger');
+  });
+
+  it('classifies webhook as a webhook trigger', () => {
+    const details = buildSourceDetails('webhook', { path: '/hook' }, null);
+    expect(details.typeKey).toBe('topology.webhookTrigger');
+  });
+
+  it('classifies memory_queue as an in-memory queue (not event ingestion)', () => {
+    const details = buildSourceDetails('memory_queue', { maxsize: 0 }, null);
+    expect(details.typeKey).toBe('topology.memoryQueue');
   });
 });
 
@@ -180,5 +209,23 @@ describe('buildSinkDetails / sink resolution', () => {
       placeholder: false,
     });
     expect(resolveRowValue(streamRow, 'clickhouse', { table: 'logs' }, null, t, true)).toBeNull();
+  });
+
+  it('classifies memory_queue sink as a generic sink/queue (not OLAP storage)', () => {
+    // Regression: memory_queue used to fall through to a fallback i18n key
+    // that was hard-coded to "Columnar OLAP Storage / Cache", which is
+    // wrong for an in-memory queue sink. The fallback key must be neutral.
+    // Reporter emits maxsize/batch_size/poll_interval_s for MemoryQueue.
+    const config = { maxsize: 0, batch_size: 100, poll_interval_s: 0.5 };
+    const details = buildSinkDetails('memory_queue', config, 'control-plane-demo.results');
+    expect(details.typeKey).toBe('topology.sinkType');
+    expect(details.titleKey).toBe('topology.sinkTitle');
+    // batch_size / poll_interval_s are in the generic field set and should render.
+    const batchRow = details.rows.find((r) => r.configKey === 'batch_size')!;
+    expect(resolveRowValue(batchRow, 'memory_queue', config, null, t, true)).toEqual({
+      value: '100',
+      mono: false,
+      placeholder: false,
+    });
   });
 });

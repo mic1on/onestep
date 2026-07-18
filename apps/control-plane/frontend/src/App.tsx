@@ -3,10 +3,14 @@ import {
   dispatchInstanceCommand,
   dispatchServiceCommand,
   dispatchTaskCommand,
+  formatUptime,
+  getFanoutCommandIds,
   getApiErrorMessage,
   isAuthRequiredError,
   loadControlPlaneData,
   loadTaskMetricWindows,
+  pollTaskCommandCompletion,
+  pollTaskPauseRequested,
   type Environment,
   type ServiceCommandFanoutResponse,
   type ServiceSummaryStats,
@@ -17,9 +21,8 @@ import {
   INITIAL_TASKS,
   INITIAL_INSTANCES,
   INITIAL_LOGS,
-  MOCK_TRACES,
 } from './initialData';
-import { Service, Task, Instance, LogEntry } from './types';
+import { Service, Task, Instance, LogEntry, type TaskCommandKind } from './types';
 import Sidebar from './components/Sidebar';
 import ServicesList from './components/ServicesList';
 import OverviewPage from './components/OverviewPage';
@@ -31,6 +34,7 @@ import ConfigEditor from './components/ConfigEditor';
 import ResourceChart from './components/ResourceChart';
 import LoginPage from './components/LoginPage';
 import NotificationSettingsPage from './components/NotificationSettingsPage';
+import LocaleSwitcher from './components/LocaleSwitcher';
 import {
   createAppRoutePath,
   parseAppRoute,
@@ -47,7 +51,6 @@ import {
   FileCode,
   Workflow,
   ChevronRight,
-  History,
   Terminal,
   ArrowLeft,
   Globe,
@@ -57,17 +60,14 @@ import {
 const EMPTY_SERVICE: Service = {
   id: '',
   name: '',
-  status: 'stopped',
-  uptime: 'never',
-  throughput: '0/min',
-  throughputValue: 0,
+  viewStatus: 'stopped',
+  uptimeReferenceAt: null,
+  throughputPerMin: 0,
   successRate: 0,
-  errorCount24h: 0,
+  errorCount: 0,
   totalInstances: 0,
   activeInstances: 0,
   standbyInstances: 0,
-  taskHealth: 0,
-  taskHealthTrend: '+0',
   totalTaskCount: 0,
   failingTaskCount: 0,
   onlineTaskCount: 0,
@@ -83,6 +83,23 @@ const EMPTY_SERVICE_SUMMARY: ServiceSummaryStats = {
   total_tasks: 0,
   failing_tasks: 0,
 };
+
+function taskSupportsCommand(task: Task | null | undefined, command: TaskCommandKind): boolean {
+  return task?.supportedCommands.includes(command) ?? false;
+}
+
+function getTaskToggleCommand(task: Task | null | undefined): 'pause_task' | 'resume_task' | null {
+  if (task?.viewStatus === 'running') return 'pause_task';
+  if (task?.viewStatus === 'paused') return 'resume_task';
+  return null;
+}
+
+function isTaskToggleSupported(task: Task | null | undefined): boolean {
+  const command = getTaskToggleCommand(task);
+  return command !== null && taskSupportsCommand(task, command);
+}
+
+const SERVICE_TABS: ServiceTab[] = ['Tasks', 'Instances', 'Configuration', 'Logs'];
 
 export default function App() {
   const { t: tr } = useI18n();
@@ -105,21 +122,28 @@ export default function App() {
   // --- UI Navigation State ---
   const [routePath, setRoutePath] = useState(() => `${window.location.pathname}${window.location.search}`);
   const [currentView, setCurrentView] = useState<ControlPlaneView>(initialRouteState.currentView);
-  const [selectedServiceId, setSelectedServiceId] = useState<string>('');
+  const [selectedServiceId, setSelectedServiceId] = useState<string>(initialRouteState.selectedServiceId ?? '');
   const [activeTab, setActiveTab] = useState<ServiceTab>(initialRouteState.activeTab);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialRouteState.selectedTaskId);
 
   // --- Global Environment Filter ---
   const [environmentFilter, setEnvironmentFilter] = useState<EnvironmentFilter>(() => readEnvironmentFilter());
   const [isEnvMenuOpen, setIsEnvMenuOpen] = useState(false);
-
-  // --- Trace Viewer State ---
-  const [showTraces, setShowTraces] = useState(false);
+  // Tracks the previously seen environment filter so the reset effect below only
+  // fires when the user *changes* the filter — not on initial mount. Without this
+  // guard, refreshing a deep-linked service/task detail page (where
+  // currentView === 'services') would redirect back to /services.
+  const prevEnvironmentFilterRef = useRef<EnvironmentFilter>(environmentFilter);
+  const refreshRequestSeqRef = useRef(0);
 
   // --- Loading / Overlay State ---
   const [isRestartingAll, setIsRestartingAll] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [deploymentProgress, setDeploymentProgress] = useState(0);
+  // Task id currently awaiting a pause/resume outcome from the worker (command
+  // dispatched, polling pause_requested until it reflects the new state or times
+  // out). Drives the Loading state on the toggle button for that task.
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
 
   // --- Toast Notifications ---
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'info' | 'warn' }[]>([]);
@@ -231,9 +255,16 @@ export default function App() {
     silent = false,
     targetEnvironment: EnvironmentFilter = environmentFilter,
   ) => {
+    const requestSeq = refreshRequestSeqRef.current + 1;
+    refreshRequestSeqRef.current = requestSeq;
+    const isLatestRequest = () => refreshRequestSeqRef.current === requestSeq;
+
     setIsLoadingApi(true);
     try {
       const data = await loadControlPlaneData(targetServiceId, apiEnvironment(targetEnvironment));
+      if (!isLatestRequest()) {
+        return;
+      }
       setServices(data.services);
       setTasks(data.tasks);
       setInstances(data.instances);
@@ -249,6 +280,9 @@ export default function App() {
         addToast(tr('toast.controlPlaneRefreshed'), 'success');
       }
     } catch (error) {
+      if (!isLatestRequest()) {
+        return;
+      }
       if (isAuthRequiredError(error)) {
         setApiConnected(false);
         setApiError(null);
@@ -269,7 +303,9 @@ export default function App() {
         addToast(tr('toast.apiFailed', { message }), 'warn');
       }
     } finally {
-      setIsLoadingApi(false);
+      if (isLatestRequest()) {
+        setIsLoadingApi(false);
+      }
     }
   };
 
@@ -314,10 +350,21 @@ export default function App() {
 
   useEffect(() => {
     if (routePath.startsWith('/login')) return;
+    // Only react to *user-initiated* environment changes, not the initial mount.
+    // On mount `prevEnvironmentFilterRef.current` equals `environmentFilter`.
+    // The route effect above already loaded data for the parsed service id, so
+    // doing another unscoped refresh here would overwrite deep-linked details
+    // with the first service in the list.
+    const hasChanged = prevEnvironmentFilterRef.current !== environmentFilter;
+    prevEnvironmentFilterRef.current = environmentFilter;
+    if (!hasChanged) {
+      return;
+    }
     // Changing the environment filter invalidates the current service/task context.
     // Return to the services list so the user sees the filtered set.
     if (currentView === 'services') {
       navigateToServicesList();
+      return;
     }
     void refreshControlPlaneData(undefined, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -341,8 +388,11 @@ export default function App() {
     return tasks.find((t) => t.id === selectedTaskId) || null;
   }, [tasks, selectedTaskId]);
   const serviceHasOnlineInstances = selectedService.activeInstances > 0;
-  const selectedTaskIsOffline = selectedTask?.status === 'Offline' || !serviceHasOnlineInstances;
-  const headerStatus = getHeaderStatus(selectedService.status, selectedTask?.status, tr);
+  const selectedTaskIsOffline = selectedTask?.viewStatus === 'offline' || !serviceHasOnlineInstances;
+  const selectedTaskCanToggle = isTaskToggleSupported(selectedTask);
+  const selectedTaskCanRestart = taskSupportsCommand(selectedTask, 'restart_task');
+  const isPendingTaskToggle = !!selectedTask && pendingTaskId === selectedTask.id;
+  const headerStatus = getHeaderStatus(selectedService.viewStatus, selectedTask?.viewStatus, tr);
 
   // --- Live Terminal Logs Simulator ---
   const logTerminalRef = useRef<HTMLDivElement>(null);
@@ -392,43 +442,6 @@ export default function App() {
     };
   }, [redirectToLogin, selectedTask]);
 
-  useEffect(() => {
-    if (apiConnected) return;
-    // Append a simulated log entry every 4 seconds to make the O&M plane active and alive!
-    const logInterval = setInterval(() => {
-      const activeTasks = tasks.filter((t) => t.status === 'Running' && t.serviceId === selectedServiceId);
-      if (activeTasks.length === 0) return;
-
-      const randomTask = activeTasks[Math.floor(Math.random() * activeTasks.length)];
-      const templates = [
-        `Processed ${Math.floor(1000 + Math.random() * 4000)} events. Sink commit complete.`,
-        `Partition offsets committed back to broker coordinator. Lag is 0.`,
-        `Healthy signal received from heartbeat telemetry agent.`,
-        `Optimistic locking threshold normal (latency = ${Math.floor(10 + Math.random() * 30)}ms).`,
-        `Buffer flush committed to storage engine replica set.`,
-      ];
-
-      const levels: ('info' | 'warn')[] = ['info', 'info', 'info', 'info', 'warn'];
-      const randomLvl = levels[Math.floor(Math.random() * levels.length)];
-      const randomMessage = templates[Math.floor(Math.random() * templates.length)];
-
-      const now = new Date();
-      const timeStr = now.toTimeString().split(' ')[0];
-
-      setLogs((prev) => [
-        ...prev,
-        {
-          timestamp: timeStr,
-          level: randomLvl,
-          message: randomMessage,
-          source: randomTask.name,
-        },
-      ]);
-    }, 4000);
-
-    return () => clearInterval(logInterval);
-  }, [apiConnected, tasks, selectedServiceId]);
-
   // --- Interactive Control plane Handlers ---
 
   // Restart All Service Components
@@ -452,49 +465,11 @@ export default function App() {
       return;
     }
 
-    setIsRestartingAll(true);
-    addToast(tr('toast.restartAllLocal', { name: selectedService.name }), 'info');
-
-    // Simulate task status cycles
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.serviceId === selectedServiceId) {
-          return { ...t, status: 'Idle' };
-        }
-        return t;
-      })
-    );
-
-    setTimeout(() => {
-      setIsRestartingAll(false);
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.serviceId === selectedServiceId) {
-            return { ...t, status: 'Running' };
-          }
-          return t;
-        })
-      );
-      addToast(tr('toast.restartAllComplete', { name: selectedService.name }), 'success');
-
-      // Append logs
-      const timeStr = new Date().toTimeString().split(' ')[0];
-      setLogs((prev) => [
-        ...prev,
-        {
-          timestamp: timeStr,
-          level: 'info',
-          message: `Control Plane initiated manual service-wide reboot of ${selectedService.name}.`,
-          source: 'System',
-        },
-        {
-          timestamp: timeStr,
-          level: 'info',
-          message: `All pipeline targets successfully re-synchronized. Health is 100%.`,
-          source: 'System',
-        },
-      ]);
-    }, 1800);
+    // No connected control plane: do not simulate. The button is disabled in
+    // this state (see the action trigger markup), so reaching here means the
+    // service has no API identity yet — surface that honestly instead of
+    // faking a restart via setState.
+    addToast(tr('toast.serviceCommandNoTargets', { name: selectedService.name }), 'warn');
   };
 
   // Deploy Config / Code Update Simulation
@@ -523,173 +498,119 @@ export default function App() {
       return;
     }
 
-    setIsDeploying(true);
-    setDeploymentProgress(0);
-    addToast(tr('toast.rollingDeployStart', { name: selectedService.name }), 'info');
-
-    const interval = setInterval(() => {
-      setDeploymentProgress((p) => {
-        if (p >= 100) {
-          clearInterval(interval);
-          setIsDeploying(false);
-          addToast(tr('toast.rollingDeployComplete'), 'success');
-
-          // Bump versions of all instances
-          setInstances((prev) =>
-            prev.map((inst) => {
-              if (inst.serviceId === selectedServiceId) {
-                return { ...inst, version: 'v1.2.2', status: 'Running' };
-              }
-              return inst;
-            })
-          );
-
-          // Append audit logs
-          const timeStr = new Date().toTimeString().split(' ')[0];
-          setLogs((prev) => [
-            ...prev,
-            {
-              timestamp: timeStr,
-              level: 'info',
-              message: `Rolling deployment for version v1.2.2 finished successfully.`,
-              source: 'Deployment',
-            },
-            {
-              timestamp: timeStr,
-              level: 'info',
-              message: `Healthy ingress validation complete across all active container partitions.`,
-              source: 'Deployment',
-            },
-          ]);
-
-          return 100;
-        }
-        return p + 10;
-      });
-    }, 250);
+    // No connected control plane: do not simulate a rolling deploy. The button
+    // is disabled in this state; reaching here means no API identity, so
+    // surface that honestly instead of faking deploy progress + version bumps.
+    addToast(tr('toast.serviceCommandNoTargets', { name: selectedService.name }), 'warn');
   };
 
-  // Toggle Task (Running <-> Stopped)
+  // Toggle Task (Running <-> Paused/Stopped). Dispatches pause/resume, then
+  // polls pause_requested until the worker reflects the new state (or times out)
+  // before updating the UI, so the button flips only once the action is
+  // confirmed. The worker reports pause_requested via heartbeat (up to ~30s
+  // latency), not the command ack, hence the explicit poll.
   const handleToggleTaskStatus = async (taskId: string) => {
     const task = tasks.find((item) => item.id === taskId);
     if (task?.apiName) {
       const taskService = services.find((service) => service.id === task.serviceId);
-      if (task.status === 'Offline' || taskService?.activeInstances === 0) {
+      if (task.viewStatus === 'offline' || taskService?.activeInstances === 0) {
         addToast(tr('toast.serviceNoOnlineInstances', { name: taskService?.name ?? task.name }), 'warn');
         return;
       }
-      const kind = task.status === 'Running' ? 'pause_task' : 'resume_task';
+      const kind = getTaskToggleCommand(task);
+      if (kind === null) {
+        addToast(tr('toast.taskToggleUnavailable', { name: task.name }), 'warn');
+        return;
+      }
+      if (!taskSupportsCommand(task, kind)) {
+        addToast(tr('toast.taskCommandUnsupported', { name: task.name }), 'warn');
+        return;
+      }
+      const expectedPause = kind === 'pause_task'; // pause_task -> wait for pause_requested=true
       addToast(tr('toast.taskDispatch', { kind: kind.replace('_', ' '), name: task.name }), 'info');
+      setPendingTaskId(taskId);
       try {
         const response = await dispatchTaskCommand(task, kind);
-        handleFanoutResponse(response, task.name, tr('toast.commandAccepted', { name: task.name }));
+        const accepted = handleFanoutResponse(response, task.name, tr('toast.commandAccepted', { name: task.name }));
+        if (!accepted) {
+          // No eligible targets (skipped/rejected); nothing to wait for.
+          return;
+        }
+        // Synchronously wait for the worker to report the new pause state.
+        const confirmed = await pollTaskPauseRequested(task, expectedPause);
+        // Refresh regardless so the list/detail reflect whatever state landed.
         await refreshControlPlaneData(task.serviceId, true);
+        if (!confirmed) {
+          // Command was dispatched but the worker heartbeat hasn't reflected it
+          // within the timeout. Do not roll back — the action is still in effect.
+          addToast(tr('toast.taskPauseTimeout', { name: task.name }), 'warn');
+        }
       } catch (error) {
         handleApiActionError(error, tr('error.taskCommandFailed'));
+      } finally {
+        setPendingTaskId((current) => (current === taskId ? null : current));
       }
       return;
     }
 
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId) {
-          const newStatus = t.status === 'Running' ? 'Stopped' : 'Running';
-          addToast(tr('toast.taskStatusChanged', { name: t.name, status: newStatus.toUpperCase() }), newStatus === 'Running' ? 'success' : 'warn');
-          return { ...t, status: newStatus };
-        }
-        return t;
-      })
-    );
+    // No connected control plane: button is disabled in this state. Do not
+    // fake a status flip via setState.
+    addToast(tr('toast.serviceCommandNoTargets', { name: task?.name ?? taskId }), 'warn');
   };
 
-  // Restart Specific Task
+  // Restart Specific Task. Dispatches the single `restart_task` command, which
+  // the worker handles by cancelling the task's runner, closing/reopening its
+  // private source, and spawning a fresh runner (true per-task restart without
+  // restarting the whole process). This replaces the old pause_task + resume_task
+  // sequence, which raced on the worker (resume cleared the pause flag before
+  // the runner ever parked) and never actually restarted anything.
   const handleRestartTask = async (taskId: string) => {
     const task = tasks.find((item) => item.id === taskId);
     if (task?.apiName) {
       const taskService = services.find((service) => service.id === task.serviceId);
-      if (task.status === 'Offline' || taskService?.activeInstances === 0) {
+      if (task.viewStatus === 'offline' || taskService?.activeInstances === 0) {
         addToast(tr('toast.serviceNoOnlineInstances', { name: taskService?.name ?? task.name }), 'warn');
         return;
       }
+      if (!taskSupportsCommand(task, 'restart_task')) {
+        addToast(tr('toast.taskCommandUnsupported', { name: task.name }), 'warn');
+        return;
+      }
       addToast(tr('toast.taskRestartDispatch', { name: task.name }), 'info');
+      setPendingTaskId(taskId);
       try {
-        const pauseResponse = await dispatchTaskCommand(task, 'pause_task');
-        const resumeResponse = await dispatchTaskCommand(task, 'resume_task');
-        if (
-          (pauseResponse.counts.dispatched ?? 0) +
-            (pauseResponse.counts.queued ?? 0) +
-            (resumeResponse.counts.dispatched ?? 0) +
-            (resumeResponse.counts.queued ?? 0) >
-          0
-        ) {
-          addToast(tr('toast.taskRestartAccepted', { name: task.name }), 'success');
-        } else {
-          handleFanoutResponse(resumeResponse, task.name, tr('toast.taskRestartAccepted', { name: task.name }));
+        const response = await dispatchTaskCommand(task, 'restart_task');
+        const accepted = handleFanoutResponse(
+          response,
+          task.name,
+          tr('toast.taskRestartAccepted', { name: task.name }),
+        );
+        if (!accepted) {
+          // No eligible targets (older worker without command.restart_task, or
+          // no online instances); handleFanoutResponse already toasted.
+          await refreshControlPlaneData(task.serviceId, true);
+          return;
         }
+        const completion = await pollTaskCommandCompletion(task, getFanoutCommandIds(response));
+        // Refresh regardless so the detail/list reflect whatever landed. The
+        // fresh runner reports a new metric window via the next heartbeat.
         await refreshControlPlaneData(task.serviceId, true);
+        if (completion.failed) {
+          addToast(tr('toast.taskRestartFailed', { name: task.name }), 'warn');
+        } else if (!completion.completed) {
+          addToast(tr('toast.taskRestartTimeout', { name: task.name }), 'warn');
+        }
       } catch (error) {
         handleApiActionError(error, tr('error.taskRestartFailed'));
+      } finally {
+        setPendingTaskId((current) => (current === taskId ? null : current));
       }
       return;
     }
 
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId) {
-          return { ...t, status: 'Idle' };
-        }
-        return t;
-      })
-    );
-    addToast(tr('toast.taskRestartLocal', { id: taskId }), 'info');
-
-    setTimeout(() => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id === taskId) {
-            return { ...t, status: 'Running' };
-          }
-          return t;
-        })
-      );
-      addToast(tr('toast.taskRestartedLocal'), 'success');
-    }, 1000);
-  };
-
-  // Save/Update Task Configuration
-  const handleSaveConfig = (taskId: string, newConfigYaml: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId) {
-          // Parse concurrency if modified
-          let updatedConcurrency = t.concurrency;
-          const match = newConfigYaml.match(/concurrency:\s*(\d+)/);
-          if (match && match[1]) {
-            updatedConcurrency = parseInt(match[1]);
-          }
-
-          addToast(tr('toast.configSaved', { name: t.name }), 'success');
-          return {
-            ...t,
-            configYaml: newConfigYaml,
-            concurrency: updatedConcurrency,
-            status: 'Idle',
-          };
-        }
-        return t;
-      })
-    );
-
-    setTimeout(() => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id === taskId) {
-            return { ...t, status: 'Running' };
-          }
-          return t;
-        })
-      );
-    }, 1000);
+    // No connected control plane: button is disabled in this state. Do not
+    // fake a restart via setState.
+    addToast(tr('toast.serviceCommandNoTargets', { name: task?.name ?? taskId }), 'warn');
   };
 
   // Restart Instance
@@ -697,7 +618,7 @@ export default function App() {
     const instance = instances.find((item) => item.uuid === uuid);
     if (instance?.apiServiceName) {
       setInstances((prev) =>
-        prev.map((item) => (item.uuid === uuid ? { ...item, status: 'Starting' } : item))
+        prev.map((item) => (item.uuid === uuid ? { ...item, viewStatus: 'starting' } : item))
       );
       addToast(tr('toast.instanceRestartDispatch', { id: uuid.slice(0, 6) }), 'info');
       try {
@@ -710,34 +631,16 @@ export default function App() {
       return;
     }
 
-    setInstances((prev) =>
-      prev.map((inst) => {
-        if (inst.uuid === uuid) {
-          return { ...inst, status: 'Starting' };
-        }
-        return inst;
-      })
-    );
-    addToast(tr('toast.instanceRebooting', { id: uuid.slice(0, 6) }), 'info');
-
-    setTimeout(() => {
-      setInstances((prev) =>
-        prev.map((inst) => {
-          if (inst.uuid === uuid) {
-            return { ...inst, status: 'Running' };
-          }
-          return inst;
-        })
-      );
-      addToast(tr('toast.instanceBackHealthy', { id: uuid.slice(0, 6) }), 'success');
-    }, 1500);
+    // No connected control plane: button is disabled in this state. Do not
+    // fake a restart via setState.
+    addToast(tr('toast.serviceCommandNoTargets', { name: uuid.slice(0, 8) }), 'warn');
   };
 
   // Toggle Instance (Stop / Start)
   const handleToggleInstance = async (uuid: string) => {
     const instance = instances.find((item) => item.uuid === uuid);
     if (instance?.apiServiceName) {
-      if (instance.status !== 'Running') {
+      if (instance.viewStatus !== 'running') {
         addToast(tr('toast.instanceStartUnavailable'), 'warn');
         return;
       }
@@ -752,22 +655,10 @@ export default function App() {
       return;
     }
 
-    setInstances((prev) =>
-      prev.map((inst) => {
-        if (inst.uuid === uuid) {
-          const isRunning = inst.status === 'Running';
-          const nextStatus = isRunning ? 'Stopped' : 'Running';
-          addToast(tr('toast.instanceStatusChanged', { id: uuid.slice(0, 6), status: nextStatus.toUpperCase() }), isRunning ? 'warn' : 'success');
-          return { ...inst, status: nextStatus };
-        }
-        return inst;
-      })
-    );
-  };
-
-  // Export spreadsheet triggers toast
-  const handleExport = () => {
-    addToast(tr('toast.exportStarted'), 'success');
+    // No connected control plane: button is disabled in this state. Do not
+    // fake a stop/start flip via setState (and do not fake starting an
+    // offline instance, which the runtime cannot do remotely).
+    addToast(tr('toast.serviceCommandNoTargets', { name: uuid.slice(0, 8) }), 'warn');
   };
 
   if (routePath.startsWith('/login')) {
@@ -786,8 +677,6 @@ export default function App() {
       <Sidebar
         currentView={currentView}
         onViewChange={navigateToView}
-        onSettingsClick={() => addToast(tr('toast.settingsReadOnly'), 'info')}
-        onSupportClick={() => addToast(tr('toast.connectedSupport'), 'success')}
       />
 
       {/* --- Main Content Panel --- */}
@@ -867,14 +756,17 @@ export default function App() {
                 )}
               </div>
             </div>
-            <button
-              onClick={() => void refreshControlPlaneData(selectedServiceId)}
-              disabled={isLoadingApi}
-              className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3 w-3 ${isLoadingApi ? 'animate-spin' : ''}`} />
-              <span>{isLoadingApi ? tr('button.refreshing') : tr('button.refresh')}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <LocaleSwitcher />
+              <button
+                onClick={() => void refreshControlPlaneData(selectedServiceId)}
+                disabled={isLoadingApi}
+                className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3 w-3 ${isLoadingApi ? 'animate-spin' : ''}`} />
+                <span>{isLoadingApi ? tr('button.refreshing') : tr('button.refresh')}</span>
+              </button>
+            </div>
           </div>
 
           {services.length === 0 ? (
@@ -897,6 +789,7 @@ export default function App() {
               sourceKindCounts={sourceKindCounts}
               environment={apiEnvironment(environmentFilter)}
               onSelectService={navigateToService}
+              onAuthRequired={redirectToLogin}
             />
           )}
 
@@ -964,22 +857,37 @@ export default function App() {
                     <>
                       <button
                         onClick={() => handleRestartTask(selectedTask.id)}
-                        disabled={selectedTaskIsOffline}
+                        disabled={selectedTaskIsOffline || !selectedTaskCanRestart || !apiConnected || isPendingTaskToggle}
                         className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-indigo-600 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <RotateCcw className="w-4 h-4" />
-                        <span>{tr('button.restart')}</span>
+                        {isPendingTaskToggle ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-4 h-4" />
+                        )}
+                        <span>
+                          {isPendingTaskToggle
+                            ? tr('button.processing')
+                            : selectedTaskCanRestart
+                            ? tr('button.restart')
+                            : tr('button.unavailable')}
+                        </span>
                       </button>
                       <button
                         onClick={() => handleToggleTaskStatus(selectedTask.id)}
-                        disabled={selectedTaskIsOffline}
+                        disabled={selectedTaskIsOffline || !selectedTaskCanToggle || !apiConnected || isPendingTaskToggle}
                         className={`flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg transition-colors text-xs font-bold bg-white shadow-xs ${
-                          selectedTask.status === 'Running'
+                          selectedTask.viewStatus === 'running'
                             ? 'text-rose-600 hover:bg-rose-50 border-rose-200'
                             : 'text-emerald-600 hover:bg-emerald-50 border-emerald-200'
                         } disabled:cursor-not-allowed disabled:opacity-50`}
                       >
-                        {selectedTask.status === 'Running' ? (
+                        {isPendingTaskToggle ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            <span>{tr('button.processing')}</span>
+                          </>
+                        ) : selectedTask.viewStatus === 'running' ? (
                           <>
                             <Square className="w-4 h-4" />
                             <span>{tr('button.stopTask')}</span>
@@ -987,7 +895,11 @@ export default function App() {
                         ) : (
                           <>
                             <Play className="w-4 h-4" />
-                            <span>{tr('button.startTask')}</span>
+                            <span>
+                              {selectedTask.viewStatus === 'paused'
+                                ? tr('button.resumeTask')
+                                : tr('button.unavailable')}
+                            </span>
                           </>
                         )}
                       </button>
@@ -1005,7 +917,7 @@ export default function App() {
                     <>
                       <button
                         onClick={handleRestartAll}
-                        disabled={isRestartingAll || !serviceHasOnlineInstances}
+                        disabled={isRestartingAll || !serviceHasOnlineInstances || !apiConnected}
                         className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <RefreshCw className={`w-4 h-4 ${isRestartingAll ? 'animate-spin' : ''}`} />
@@ -1013,7 +925,7 @@ export default function App() {
                       </button>
                       <button
                         onClick={handleDeployUpdate}
-                        disabled={isDeploying || !serviceHasOnlineInstances}
+                        disabled={isDeploying || !serviceHasOnlineInstances || !apiConnected}
                         className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-800 transition-colors text-xs font-bold shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Workflow className="w-4 h-4" />
@@ -1061,7 +973,7 @@ export default function App() {
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
                         {tr('common.uptime')}
                       </span>
-                      <div className="text-2xl font-bold text-slate-900 mt-2">{selectedTask.uptime}</div>
+                      <div className="text-2xl font-bold text-slate-900 mt-2">{formatUptime(selectedTask.uptimeReferenceAt)}</div>
                       <span className="text-[10px] text-slate-500 font-medium">{tr('task.activeStreamStatus')}</span>
                     </div>
 
@@ -1071,10 +983,8 @@ export default function App() {
                         {tr('common.throughput')}
                       </span>
                       <div className="text-2xl font-bold text-slate-900 mt-2">
-                        {selectedTask.throughputValue.split(' ')[0]}{' '}
-                        <span className="text-xs text-slate-500 font-normal">
-                          {selectedTask.throughputValue.substring(selectedTask.throughputValue.indexOf(' ') + 1)}
-                        </span>
+                        {selectedTask.throughputPerMin}{' '}
+                        <span className="text-xs text-slate-500 font-normal">/min</span>
                       </div>
                       <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                         <div
@@ -1099,56 +1009,11 @@ export default function App() {
                     <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-28 shadow-xs group relative overflow-hidden">
                       <div className="absolute inset-0 bg-rose-50/20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
-                        {tr('task.errorCount24h')}
+                        {tr('task.errorCount15m')}
                       </span>
                       <div className="text-2xl font-bold text-rose-600 mt-2">{selectedTask.errorCount}</div>
-                      <button
-                        onClick={() => setShowTraces(!showTraces)}
-                        className="text-[10px] text-indigo-600 hover:underline font-bold text-left block"
-                      >
-                        {showTraces ? tr('task.closeTraceView') : tr('task.viewTraces')}
-                      </button>
                     </div>
                   </div>
-
-                  {/* Traces Slider Tray */}
-                  {showTraces && (
-                    <div className="bg-[#1e2230] text-slate-200 border border-slate-700 p-5 rounded-xl animate-slideDown font-sans">
-                      <div className="flex justify-between items-center border-b border-slate-700/60 pb-3 mb-3">
-                        <div className="flex items-center gap-2">
-                          <History className="text-indigo-600 w-4 h-4 animate-spin" />
-                          <h4 className="font-bold text-xs text-white">{tr('task.traces')}</h4>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-medium">{tr('task.traceCloseHint')}</span>
-                      </div>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {MOCK_TRACES.map((trace) => (
-                          <div
-                            key={trace.id}
-                            className="p-2.5 bg-[#161a25]/60 hover:bg-[#161a25] rounded-md border border-slate-700/50 flex justify-between items-center text-xs font-mono"
-                          >
-                            <div className="flex items-center gap-4">
-                              <span className="text-[#e5c07b] font-bold">{trace.id}</span>
-                              <span className="text-slate-400 font-semibold">{trace.path}</span>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              <span className="text-slate-400">{trace.timestamp.slice(11, 19)}</span>
-                              <span className="text-slate-400">{trace.duration}</span>
-                              <span
-                                className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
-                                  trace.status === 200
-                                    ? 'bg-emerald-500/10 text-emerald-400'
-                                    : 'bg-rose-500/10 text-rose-400'
-                                }`}
-                              >
-                                {trace.status} {trace.error ? `(${trace.error})` : ''}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
                   {/* Main dual column for Task Details */}
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1164,13 +1029,29 @@ export default function App() {
 
                     {/* Right 1/3 column: Config editor */}
                     <div className="lg:col-span-1">
-                      <ConfigEditor task={selectedTask} onSaveConfig={handleSaveConfig} />
+                      <ConfigEditor task={selectedTask} />
                     </div>
                   </div>
                 </div>
               ) : (
                 /* --- STAGE: Service tabs (Instances / Tasks / Config / Logs) --- */
                 <div className="space-y-6">
+                  <div className="flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
+                    {SERVICE_TABS.map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => navigateToServiceTab(tab)}
+                        className={`rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${
+                          activeTab === tab
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                        }`}
+                      >
+                        {serviceTabLabel(tab, tr)}
+                      </button>
+                    ))}
+                  </div>
+
                   {/* Telemetry Stats cards block */}
                   <TelemetryStats service={selectedService} />
 
@@ -1186,6 +1067,7 @@ export default function App() {
                         onTaskSelect={(task) => navigateToTask(task.id)}
                         onRestartTask={handleRestartTask}
                         onToggleTaskStatus={handleToggleTaskStatus}
+                        pendingTaskId={pendingTaskId}
                       />
                     </div>
                   )}
@@ -1200,7 +1082,6 @@ export default function App() {
                         instances={activeServiceInstances}
                         onRestartInstance={handleRestartInstance}
                         onToggleInstance={handleToggleInstance}
-                        onExport={handleExport}
                       />
                     </div>
                   )}
@@ -1217,33 +1098,10 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="bg-[#1a1b26] p-4 rounded-lg font-mono text-xs text-slate-300 space-y-1">
-                        <div>
-                          <span className="text-rose-400">service_name</span>:{' '}
-                          <span className="text-emerald-400">"{selectedService.id}"</span>
-                        </div>
-                        <div>
-                          <span className="text-rose-400">env</span>: <span className="text-emerald-400">"production"</span>
-                        </div>
-                        <div>
-                          <span className="text-rose-400">replication_factor</span>:{' '}
-                          <span className="text-amber-400">3</span>
-                        </div>
-                        <div>
-                          <span className="text-rose-400">failover_threshold</span>:{' '}
-                          <span className="text-amber-400">0.95</span>
-                        </div>
-                        <div>
-                          <span className="text-rose-400">tls_encryption</span>: <span className="text-amber-400">true</span>
-                        </div>
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4">
+                        <p className="text-sm font-bold text-slate-700">{tr('config.noServiceConfig')}</p>
+                        <p className="mt-1 text-xs font-medium text-slate-500">{tr('config.noServiceConfigHint')}</p>
                       </div>
-
-                      <button
-                        onClick={() => addToast(tr('toast.globalConfigReadOnly'), 'warn')}
-                        className="px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-800 text-xs font-bold rounded-lg transition-colors"
-                      >
-                        {tr('button.modifyGlobalConfig')}
-                      </button>
                     </div>
                   )}
 
@@ -1256,7 +1114,7 @@ export default function App() {
                           <span className="text-xs font-bold text-slate-700">{tr('logs.liveStream')}</span>
                         </div>
                         <button
-                          onClick={() => setLogs(INITIAL_LOGS)}
+                          onClick={() => setLogs([])}
                           className="text-xs font-bold text-indigo-600 hover:underline"
                         >
                           {tr('button.clearStream')}
@@ -1292,8 +1150,7 @@ export default function App() {
 
                       {/* Log bottom meta bar */}
                       <div className="px-4 py-2 border-t border-slate-200 bg-slate-50 text-[10px] font-semibold text-slate-500 flex justify-between">
-                        <span>{tr('logs.socketConnected')}</span>
-                        <span>{tr('logs.streamingAlive')}</span>
+                        <span>{apiConnected ? tr('logs.socketConnected') : tr('logs.notConnected')}</span>
                       </div>
                     </div>
                   )}
@@ -1342,19 +1199,28 @@ export default function App() {
 }
 
 function getHeaderStatus(
-  serviceStatus: Service['status'],
-  taskStatus: Task['status'] | undefined,
+  serviceViewStatus: Service['viewStatus'],
+  taskViewStatus: Task['viewStatus'] | undefined,
   t: ReturnType<typeof useI18n>['t'],
 ) {
-  const resolvedStatus = taskStatus ?? serviceStatus;
-  if (resolvedStatus === 'Running' || resolvedStatus === 'running') {
+  // Both enums are lowercase and plane-derived. Task view status (when present)
+  // takes precedence since it is the more specific signal.
+  const resolvedStatus = taskViewStatus ?? serviceViewStatus;
+  if (resolvedStatus === 'running') {
     return {
       label: t('common.running'),
       className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
       dotClassName: 'bg-emerald-500',
     };
   }
-  if (resolvedStatus === 'Failed' || resolvedStatus === 'degraded') {
+  if (resolvedStatus === 'paused') {
+    return {
+      label: t('status.paused'),
+      className: 'bg-sky-50 text-sky-700 border-sky-200',
+      dotClassName: 'bg-sky-500',
+    };
+  }
+  if (resolvedStatus === 'failed' || resolvedStatus === 'degraded') {
     return {
       label: t('common.degraded'),
       className: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -1366,6 +1232,13 @@ function getHeaderStatus(
     className: 'bg-slate-100 text-slate-600 border-slate-200',
     dotClassName: 'bg-slate-400',
   };
+}
+
+function serviceTabLabel(tab: ServiceTab, t: ReturnType<typeof useI18n>['t']): string {
+  if (tab === 'Tasks') return t('tabs.tasks');
+  if (tab === 'Instances') return t('tabs.instances');
+  if (tab === 'Configuration') return t('tabs.configuration');
+  return t('tabs.logs');
 }
 
 export type EnvironmentFilter = 'all' | Environment;

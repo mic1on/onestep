@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202606190001"
+HEAD_REVISION = "202607180002"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -41,6 +41,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "notification_deliveries",
         "notification_instance_states",
         "task_definitions",
+        "task_custom_metric_windows",
         "task_events",
         "task_metric_windows",
         "worker_agent_commands",
@@ -412,6 +413,22 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "received_at",
         "created_at",
     }
+    assert {column["name"] for column in inspector.get_columns("task_custom_metric_windows")} == {
+        "id",
+        "service_id",
+        "instance_id",
+        "task_name",
+        "window_id",
+        "window_started_at",
+        "window_ended_at",
+        "metric_name",
+        "metric_kind",
+        "metric_value",
+        "labels_hash",
+        "labels_json",
+        "received_at",
+        "created_at",
+    }
     assert {column["name"] for column in inspector.get_columns("task_events")} == {
         "id",
         "event_id",
@@ -479,6 +496,22 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "ix_task_metric_windows_service_id_task_name_window_ended_at",
         "ix_task_metric_windows_window_ended_at",
     }
+    assert {index["name"] for index in inspector.get_indexes("task_custom_metric_windows")} == {
+        "ix_task_custom_metric_windows_metric_kind",
+        "ix_task_custom_metric_windows_service_window",
+    }
+    custom_metric_unique_constraints = {
+        constraint["name"]: constraint["column_names"]
+        for constraint in inspector.get_unique_constraints("task_custom_metric_windows")
+    }
+    assert custom_metric_unique_constraints["uq_task_custom_metric_windows_series_window"] == [
+        "instance_id",
+        "task_name",
+        "window_id",
+        "metric_name",
+        "metric_kind",
+        "labels_hash",
+    ]
     assert {index["name"] for index in inspector.get_indexes("task_events")} == {
         "ix_task_events_service_id_task_name_occurred_at",
         "ix_task_events_occurred_at",

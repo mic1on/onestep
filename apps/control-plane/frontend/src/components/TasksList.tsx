@@ -1,6 +1,6 @@
 import { useState, MouseEvent } from 'react';
-import { Play, Square, RotateCcw, Edit3, Eye, MoreVertical, Database, ArrowRight, Layers, HelpCircle, CheckCircle } from 'lucide-react';
-import { Task } from '../types';
+import { Play, Square, RotateCcw, Edit3, Eye, MoreVertical, Database, ArrowRight, Layers, HelpCircle, CheckCircle, RefreshCw } from 'lucide-react';
+import { Task, type TaskCommandKind } from '../types';
 import { useI18n } from '../i18n';
 
 interface TasksListProps {
@@ -8,6 +8,11 @@ interface TasksListProps {
   onTaskSelect: (task: Task) => void;
   onRestartTask: (taskId: string) => void;
   onToggleTaskStatus: (taskId: string) => void;
+  pendingTaskId?: string | null;
+}
+
+function taskSupportsCommand(task: Task, command: TaskCommandKind): boolean {
+  return task.supportedCommands.includes(command);
 }
 
 export default function TasksList({
@@ -15,16 +20,18 @@ export default function TasksList({
   onTaskSelect,
   onRestartTask,
   onToggleTaskStatus,
+  pendingTaskId,
 }: TasksListProps) {
   const { t } = useI18n();
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  const getTaskStatusLabel = (status: Task['status']) => {
-    if (status === 'Running') return t('status.running');
-    if (status === 'Idle') return t('status.idle');
-    if (status === 'Stopped') return t('status.stopped');
-    if (status === 'Offline') return t('status.offline');
-    return t('status.failed');
+  const getTaskStatusLabel = (status: Task['viewStatus']) => {
+    if (status === 'running') return t('status.running');
+    if (status === 'paused') return t('status.paused');
+    if (status === 'idle') return t('status.idle');
+    if (status === 'offline') return t('status.offline');
+    if (status === 'failed') return t('status.failed');
+    return t('status.stopped');
   };
 
   const toggleMenu = (id: string, e: MouseEvent) => {
@@ -35,8 +42,14 @@ export default function TasksList({
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       {tasks.map((task) => {
-        const isRunning = task.status === 'Running';
-        const isOffline = task.status === 'Offline';
+        const isRunning = task.viewStatus === 'running';
+        const isPaused = task.viewStatus === 'paused';
+        const isOffline = task.viewStatus === 'offline';
+        const isToggleSupported =
+          (isRunning && taskSupportsCommand(task, 'pause_task')) ||
+          (isPaused && taskSupportsCommand(task, 'resume_task'));
+        const isRestartSupported = taskSupportsCommand(task, 'restart_task');
+        const isPending = pendingTaskId === task.id;
         const isMenuOpen = openMenuId === task.id;
 
         return (
@@ -63,11 +76,27 @@ export default function TasksList({
                       <span className="flex items-center gap-1 text-[11px] font-semibold">
                         <span
                           className={`w-1.5 h-1.5 rounded-full ${
-                            isRunning ? 'bg-emerald-500 animate-pulse' : isOffline ? 'bg-slate-400' : 'bg-amber-400'
+                            isRunning
+                              ? 'bg-emerald-500 animate-pulse'
+                              : isPaused
+                              ? 'bg-sky-500'
+                              : isOffline
+                              ? 'bg-slate-400'
+                              : 'bg-amber-400'
                           }`}
                         />
-                        <span className={isRunning ? 'text-emerald-600' : isOffline ? 'text-slate-500' : 'text-amber-600'}>
-                          {getTaskStatusLabel(task.status)}
+                        <span
+                          className={
+                            isRunning
+                              ? 'text-emerald-600'
+                              : isPaused
+                              ? 'text-sky-600'
+                              : isOffline
+                              ? 'text-slate-500'
+                              : 'text-amber-600'
+                          }
+                        >
+                          {getTaskStatusLabel(task.viewStatus)}
                         </span>
                       </span>
                     </div>
@@ -101,17 +130,25 @@ export default function TasksList({
                           onToggleTaskStatus(task.id);
                           setOpenMenuId(null);
                         }}
-                        className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 flex items-center gap-2"
+                        disabled={isPending || !isToggleSupported}
+                        className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {isRunning ? (
+                        {isPending ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />
+                            <span>{t('button.processing')}</span>
+                          </>
+                        ) : isRunning ? (
                           <>
                             <Square className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{t('button.stopTask')}</span>
+                            <span>{isToggleSupported ? t('button.stopTask') : t('button.unavailable')}</span>
                           </>
                         ) : (
                           <>
                             <Play className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{t('button.startTask')}</span>
+                            <span>
+                              {isPaused && isToggleSupported ? t('button.resumeTask') : t('button.unavailable')}
+                            </span>
                           </>
                         )}
                       </button>
@@ -121,10 +158,21 @@ export default function TasksList({
                           onRestartTask(task.id);
                           setOpenMenuId(null);
                         }}
-                        className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 flex items-center gap-2"
+                        disabled={isPending || !isRestartSupported}
+                        className="w-full text-left px-3 py-2 hover:bg-slate-50 text-slate-700 flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{t('button.restartTask')}</span>
+                        {isPending ? (
+                          <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                        )}
+                        <span>
+                          {isPending
+                            ? t('button.processing')
+                            : isRestartSupported
+                            ? t('button.restartTask')
+                            : t('button.unavailable')}
+                        </span>
                       </button>
                     </div>
                   )}

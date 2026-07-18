@@ -546,14 +546,14 @@ def test_list_service_instances_returns_connectivity_and_filters(client, db_sess
         db_session,
         service,
         node_name="vm-offline",
-        status="degraded",
+        status="ok",
         last_seen_at=now - timedelta(minutes=5),
     )
     seed_instance(
         db_session,
         service,
         node_name="vm-stub",
-        status="unknown",
+        status="ok",
         last_seen_at=None,
     )
     db_session.commit()
@@ -567,6 +567,9 @@ def test_list_service_instances_returns_connectivity_and_filters(client, db_sess
     assert by_node_name["vm-online"]["connectivity"] == "online"
     assert by_node_name["vm-offline"]["connectivity"] == "offline"
     assert by_node_name["vm-stub"]["connectivity"] == "never_reported"
+    assert by_node_name["vm-online"]["view_status"] == "running"
+    assert by_node_name["vm-offline"]["view_status"] == "stopped"
+    assert by_node_name["vm-stub"]["view_status"] == "stopped"
 
     filtered = client.get(
         "/api/v1/services/billing-sync/instances",
@@ -925,6 +928,197 @@ def test_service_dashboard_returns_instance_and_task_overview(client, db_session
         "evt_dashboard_succeeded",
         "evt_dashboard_failed",
     ]
+
+
+def test_query_endpoints_expose_derived_view_fields(client, db_session) -> None:
+    """The plane must compute all view-facing derived fields so the frontend
+    does no business logic: view_status, success_rate, throughput_per_min,
+    error_count (incl. timeouts), retry_attempts, source/sink labels,
+    config_yaml, event level, uptime_reference_at, online_task_count,
+    standby_instance_count.
+    """
+    from onestep_control_plane_api.db.models import TaskMetricWindow
+
+    now = datetime.now(UTC)
+    service = seed_service(
+        db_session,
+        name="billing-sync",
+        environment="prod",
+        latest_topology_hash="sha256:topology-a",
+        latest_sync_at=now - timedelta(minutes=1),
+    )
+    online_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-online",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=15),
+        last_sync_at=now - timedelta(minutes=1),
+        last_topology_hash="sha256:topology-a",
+    )
+    seed_instance(
+        db_session,
+        service,
+        node_name="vm-standby",
+        status="starting",
+        last_seen_at=now - timedelta(minutes=5),  # offline (past cutoff)
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_users",
+        source_name="cron:hourly",
+        source_kind="cron",
+        source_config_json={"schedule": "0 * * * *"},
+        emit_json=[
+            {
+                "kind": "mysql_table_sink",
+                "name": "mysql:dw_users",
+                "config": {"table": "dw_users"},
+            }
+        ],
+        concurrency=4,
+        timeout_s=30.0,
+        retry_policy={"kind": "constant", "config": {"attempts": 3}},
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="failing_task",
+        source_name=None,
+        source_kind="queue",
+        source_config_json={"queue": "jobs"},
+    )
+    # Metric window for sync_users: 10 fetched/succeeded, no failures -> running.
+    db_session.add(
+        TaskMetricWindow(
+            service=service,
+            instance_id=online_instance.instance_id,
+            task_name="sync_users",
+            window_id="sync_users:w1",
+            window_started_at=now - timedelta(minutes=2),
+            window_ended_at=now - timedelta(minutes=1),
+            fetched=10,
+            started=10,
+            succeeded=10,
+            retried=0,
+            failed=0,
+            dead_lettered=0,
+            cancelled=0,
+            timeouts=0,
+            inflight=0,
+            avg_duration_ms=100.0,
+            p95_duration_ms=200.0,
+            received_at=now - timedelta(minutes=1),
+        )
+    )
+    # Metric window for failing_task: 1 timeout -> error_count>0 -> failed.
+    db_session.add(
+        TaskMetricWindow(
+            service=service,
+            instance_id=online_instance.instance_id,
+            task_name="failing_task",
+            window_id="failing_task:w1",
+            window_started_at=now - timedelta(minutes=2),
+            window_ended_at=now - timedelta(minutes=1),
+            fetched=5,
+            started=5,
+            succeeded=4,
+            retried=0,
+            failed=0,
+            dead_lettered=0,
+            cancelled=0,
+            timeouts=1,
+            inflight=0,
+            avg_duration_ms=50.0,
+            p95_duration_ms=80.0,
+            received_at=now - timedelta(minutes=1),
+        )
+    )
+    seed_task_event(
+        db_session,
+        service,
+        online_instance,
+        event_id="evt_failed",
+        task_name="failing_task",
+        kind="failed",
+        occurred_at=now - timedelta(seconds=30),
+    )
+    db_session.commit()
+
+    # ---- /services list: service-level derived fields ----
+    list_payload = client.get("/api/v1/services", params={"environment": "prod"}).json()
+    svc = list_payload["items"][0]
+    # 1 online / 2 total (1 online + 1 offline standby) -> attention -> degraded
+    assert svc["view_status"] == "degraded"
+    assert svc["service_status"] == "attention"
+    assert svc["instance_count"] == 2
+    assert svc["online_instance_count"] == 1
+    assert svc["standby_instance_count"] == 1
+    # 2 tasks, failing_task fails -> failing_task_count=1 -> online_task_count=1
+    assert svc["task_count"] == 2
+    assert svc["failing_task_count"] == 1
+    assert svc["online_task_count"] == 1
+    # error_count = event failed (1) + metric timeouts (1) = 2
+    assert svc["error_count"] == 2
+    # throughput = (10+5) fetched / 15 min default lookback = 1/min
+    assert svc["throughput_per_min"] == 1
+    assert svc["uptime_reference_at"] is not None
+
+    # ---- /services/{name}/dashboard: service + task derived fields ----
+    dashboard = client.get(
+        "/api/v1/services/billing-sync/dashboard",
+        params={"environment": "prod", "lookback_minutes": 5},
+    ).json()
+    dash_svc = dashboard["service"]
+    assert dash_svc["view_status"] == "degraded"
+    assert dash_svc["error_count"] == 2
+    assert dash_svc["failing_task_count"] == 1
+    assert dash_svc["online_task_count"] == 1
+    # throughput over 5 min lookback = 15 fetched / 5 = 3/min
+    assert dash_svc["throughput_per_min"] == 3
+    assert dashboard["failing_task_count"] == 1
+
+    tasks_list = client.get(
+        "/api/v1/services/billing-sync/tasks",
+        params={"environment": "prod", "lookback_minutes": 5},
+    ).json()
+    tasks_by_name = {t["task_name"]: t for t in tasks_list["items"]}
+
+    sync_users = tasks_by_name["sync_users"]
+    assert sync_users["view_status"] == "running"
+    assert sync_users["success_rate"] == 100.0
+    assert sync_users["error_count"] == 0
+    assert sync_users["retry_attempts"] == 3
+    assert sync_users["source_label"] == "cron:hourly"
+    assert sync_users["sink_label"] == "mysql:dw_users"
+    assert sync_users["throughput_per_min"] == 2  # 10 fetched / 5 min
+    assert "task_config:" in sync_users["config_yaml"]
+    assert sync_users["uptime_reference_at"] is not None
+
+    failing = tasks_by_name["failing_task"]
+    assert failing["view_status"] == "failed"
+    # timeouts(1) + event failed(1) -> error_count 2
+    assert failing["error_count"] == 2
+    # success_rate denominator = succeeded(4)+failed(0)+dead_lettered(0)+cancelled(0) = 4 -> 100
+    assert failing["success_rate"] == 100.0
+    assert failing["source_label"] == "jobs"  # from config queue key
+    assert failing["retry_attempts"] == 0  # no retry policy
+
+    # ---- /services/{name}/instances: instance view_status ----
+    instances = client.get(
+        "/api/v1/services/billing-sync/instances",
+        params={"environment": "prod"},
+    ).json()
+    by_node = {i["node_name"]: i for i in instances["items"]}
+    assert by_node["vm-online"]["view_status"] == "running"
+    assert by_node["vm-standby"]["view_status"] == "stopped"
+
+    # ---- /events: event level derivation ----
+    events = client.get("/api/v1/services/billing-sync/events",
+                        params={"environment": "prod"}).json()
+    failed_event = next(e for e in events["items"] if e["kind"] == "failed")
+    assert failed_event["level"] == "error"
 
 
 def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(
@@ -1739,6 +1933,191 @@ def test_task_command_fanout_dispatches_and_records_task_detail_source_surface(
         assert command.kind == "pause_task"
         assert command.reason == "Pause this task during upstream reconciliation"
         assert command.source_surface == "task_detail"
+    finally:
+        asyncio.run(
+            agent_connection_registry.unregister(
+                instance_id=instance.instance_id,
+                session_id=session.session_id,
+            )
+        )
+
+
+def test_task_command_fanout_dispatches_restart_task_when_advertised(
+    client,
+    db_session,
+) -> None:
+    """restart_task is a task-scoped command: when the active session advertises
+    command.restart_task AND the task's supported_commands include it, the fanout
+    dispatches it like pause/resume. A session that does NOT advertise the
+    capability gets the command rejected (older worker)."""
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-restart-task",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": [
+                        "pause_task",
+                        "resume_task",
+                        "restart_task",
+                    ],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    session = seed_agent_session(
+        db_session,
+        service,
+        instance,
+        status="active",
+        connected_at=now - timedelta(minutes=1),
+        session_id="sess_restart_task",
+        accepted_capabilities_json=[
+            "telemetry.sync",
+            "command.pause_task",
+            "command.resume_task",
+            "command.restart_task",
+        ],
+    )
+    db_session.commit()
+
+    send_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    asyncio.run(
+        agent_connection_registry.register(
+            instance_id=instance.instance_id,
+            session_id=session.session_id,
+            send_queue=send_queue,
+        )
+    )
+    try:
+        response = client.post(
+            "/api/v1/services/billing-sync/tasks/sync_users/commands",
+            params={"environment": "prod"},
+            json={
+                "kind": "restart_task",
+                "reason": "Restart this task to pick up new connector config",
+                "target_mode": "all_online",
+                "offline_behavior": "skip",
+                "timeout_s": 120,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["kind"] == "restart_task"
+        assert payload["counts"] == {
+            "dispatched": 1,
+            "queued": 0,
+            "skipped": 0,
+            "rejected": 0,
+            "total": 1,
+        }
+        command_message = send_queue.get_nowait()
+        assert command_message["payload"]["kind"] == "restart_task"
+        assert command_message["payload"]["args"] == {"task_name": "sync_users"}
+
+        command = db_session.scalar(
+            select(AgentCommand).where(
+                AgentCommand.command_id == payload["dispatched"][0]["command_id"]
+            )
+        )
+        assert command is not None
+        assert command.kind == "restart_task"
+    finally:
+        asyncio.run(
+            agent_connection_registry.unregister(
+                instance_id=instance.instance_id,
+                session_id=session.session_id,
+            )
+        )
+
+
+def test_task_command_fanout_rejects_restart_task_for_unadvertised_capability(
+    client,
+    db_session,
+) -> None:
+    """An older worker that does not advertise command.restart_task must get the
+    command rejected (forward-compatible: new command, old runtime)."""
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-old-worker",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    # Old worker never advertises restart_task in supported_commands.
+                    "task_name": "sync_users",
+                    "supported_commands": ["pause_task", "resume_task"],
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    session = seed_agent_session(
+        db_session,
+        service,
+        instance,
+        status="active",
+        connected_at=now - timedelta(minutes=1),
+        session_id="sess_old_worker",
+        accepted_capabilities_json=[
+            "telemetry.sync",
+            "command.pause_task",
+            "command.resume_task",
+        ],
+    )
+    db_session.commit()
+
+    send_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    asyncio.run(
+        agent_connection_registry.register(
+            instance_id=instance.instance_id,
+            session_id=session.session_id,
+            send_queue=send_queue,
+        )
+    )
+    try:
+        response = client.post(
+            "/api/v1/services/billing-sync/tasks/sync_users/commands",
+            params={"environment": "prod"},
+            json={
+                "kind": "restart_task",
+                "reason": "Attempt restart on old worker",
+                "target_mode": "all_online",
+                "offline_behavior": "skip",
+                "timeout_s": 120,
+            },
+        )
+        # Fanout returns 200 with rejected count; the per-target rejection
+        # reason records that the task does not advertise restart_task.
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["counts"]["dispatched"] == 0
+        assert payload["counts"]["rejected"] == 1
     finally:
         asyncio.run(
             agent_connection_registry.unregister(
@@ -2885,6 +3264,99 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
     assert filtered.json()["items"][0]["task_name"] == "cleanup_orphans"
 
 
+def test_list_service_tasks_exposes_online_supported_commands(client, db_session) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    restartable_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-restartable",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "supported_commands": ["pause_task", "resume_task", "restart_task"],
+                    "pause_requested": False,
+                }
+            ],
+        },
+    )
+    legacy_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-legacy",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "legacy_sync",
+                    "supported_commands": ["pause_task", "resume_task", "restart_task"],
+                    "pause_requested": False,
+                }
+            ],
+        },
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        restartable_instance,
+        status="active",
+        connected_at=now - timedelta(minutes=1),
+        session_id="sess_restartable",
+        accepted_capabilities_json=[
+            "command.pause_task",
+            "command.resume_task",
+            "command.restart_task",
+        ],
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        legacy_instance,
+        status="active",
+        connected_at=now - timedelta(minutes=1),
+        session_id="sess_legacy",
+        accepted_capabilities_json=["command.pause_task", "command.resume_task"],
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_users",
+        source_name="interval:5s",
+        source_kind="interval",
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="legacy_sync",
+        source_name="interval:5s",
+        source_kind="interval",
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/billing-sync/tasks",
+        params={"environment": "prod", "lookback_minutes": 15},
+    )
+
+    assert response.status_code == 200
+    by_task_name = {item["task_name"]: item for item in response.json()["items"]}
+    assert by_task_name["sync_users"]["supported_commands"] == [
+        "pause_task",
+        "resume_task",
+        "restart_task",
+    ]
+    assert by_task_name["legacy_sync"]["supported_commands"] == [
+        "pause_task",
+        "resume_task",
+    ]
+
+
 def test_get_service_task_detail_returns_summary_windows_and_events(client, db_session) -> None:
     now = datetime.now(UTC)
     service = seed_service(db_session, name="billing-sync", environment="prod")
@@ -3075,6 +3547,7 @@ def test_get_service_task_detail_includes_task_control_state(client, db_session)
                     "supported_commands": [
                         "pause_task",
                         "resume_task",
+                        "restart_task",
                         "discard_dead_letters",
                         "replay_dead_letters",
                         "run_task_once",
@@ -3131,6 +3604,7 @@ def test_get_service_task_detail_includes_task_control_state(client, db_session)
         accepted_capabilities_json=[
             "command.pause_task",
             "command.resume_task",
+            "command.restart_task",
             "command.discard_dead_letters",
             "command.replay_dead_letters",
             "command.run_task_once",
@@ -3176,6 +3650,7 @@ def test_get_service_task_detail_includes_task_control_state(client, db_session)
             "supported_commands": [
                 "pause_task",
                 "resume_task",
+                "restart_task",
                 "discard_dead_letters",
                 "replay_dead_letters",
                 "run_task_once",

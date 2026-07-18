@@ -1,27 +1,31 @@
 import { useState, useEffect } from 'react';
-import { Terminal, Save, X, Edit, Copy, Check, FileJson } from 'lucide-react';
+import { Terminal, Copy, Check } from 'lucide-react';
 import { Task } from '../types';
 import { useI18n } from '../i18n';
 
 interface ConfigEditorProps {
   task: Task;
-  onSaveConfig: (taskId: string, newConfigYaml: string) => void;
 }
 
-export default function ConfigEditor({ task, onSaveConfig }: ConfigEditorProps) {
+/**
+ * Read-only view of the task's reported YAML configuration.
+ *
+ * The control plane only mirrors whatever the runtime worker reports (see
+ * `reporter._build_connector_config`); there is no backend endpoint that
+ * accepts config edits, and the runtime has no command to hot-reload a task
+ * definition. Editing here would only mutate browser memory and silently
+ * revert on refresh, so this component renders the config strictly read-only
+ * with a copy button as the only affordance.
+ */
+export default function ConfigEditor({ task }: ConfigEditorProps) {
   const { t } = useI18n();
-  const [isEditing, setIsEditing] = useState(false);
-  const [yamlContent, setYamlContent] = useState(task.configYaml);
   const [isCopied, setIsCopied] = useState(false);
 
-  useEffect(() => {
-    setYamlContent(task.configYaml);
-  }, [task.configYaml]);
+  const yamlContent = task.configYaml;
 
-  const handleSave = () => {
-    onSaveConfig(task.id, yamlContent);
-    setIsEditing(false);
-  };
+  useEffect(() => {
+    setIsCopied(false);
+  }, [task.configYaml]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(yamlContent);
@@ -104,50 +108,12 @@ export default function ConfigEditor({ task, onSaveConfig }: ConfigEditorProps) 
           >
             {isCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
           </button>
-
-          {!isEditing ? (
-            <button
-              onClick={() => setIsEditing(true)}
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-indigo-600 hover:bg-indigo-50 border border-indigo-200 rounded-md transition-colors"
-            >
-              <Edit className="w-3.5 h-3.5" />
-              <span>{t('button.modify')}</span>
-            </button>
-          ) : (
-            <div className="flex gap-1">
-              <button
-                onClick={handleSave}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-800 rounded-md transition-colors shadow-xs"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>{t('button.save')}</span>
-              </button>
-              <button
-                onClick={() => {
-                  setYamlContent(task.configYaml);
-                  setIsEditing(false);
-                }}
-                className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Editor Workarea */}
+      {/* Read-only YAML view */}
       <div className="flex-1 overflow-auto bg-[#1a1b26] p-4 font-mono text-sm leading-relaxed rounded-b-xl select-text min-h-[300px]">
-        {isEditing ? (
-          <textarea
-            value={yamlContent}
-            onChange={(e) => setYamlContent(e.target.value)}
-            className="w-full h-full min-h-[320px] bg-transparent text-[#abb2bf] font-mono text-xs border-0 outline-hidden focus:ring-0 p-0 resize-none leading-relaxed"
-            style={{ tabSize: 2 }}
-          />
-        ) : (
-          <div className="space-y-0.5">{renderHighlightedYaml(yamlContent)}</div>
-        )}
+        <div className="space-y-0.5">{renderHighlightedYaml(yamlContent)}</div>
       </div>
 
       {/* Help Bar */}

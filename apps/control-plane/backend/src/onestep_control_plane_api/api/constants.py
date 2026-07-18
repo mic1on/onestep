@@ -15,3 +15,13 @@ TASK_EVENT_KIND_VALUES = (
     "cancelled",
     "succeeded",
 )
+# Event kinds (TaskEvent.kind) that mark a task as failing. Used by the service
+# level failing_task_count. Note: timeouts live on TaskMetricWindow, not
+# TaskEvent, so they are folded into error_count at the task summary level.
+TASK_FAILING_EVENT_KINDS = ("failed", "dead_lettered")
+# Config keys inspected (in order) to derive a human-readable source/sink label
+# from connector config dicts.
+SOURCE_LABEL_CONFIG_KEYS = ("topic", "queue", "stream", "url", "schedule", "cron")
+SINK_LABEL_CONFIG_KEYS = ("topic", "queue", "stream", "url", "table", "database")
+# Config keys inspected (in order) to derive retry attempts from retry policy.
+RETRY_ATTEMPTS_CONFIG_KEYS = ("attempts", "max_attempts", "retries")

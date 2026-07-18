@@ -1,5 +1,5 @@
 import { useState, useMemo, ChangeEvent } from 'react';
-import { Search, SlidersHorizontal, Download, Play, Square, RotateCcw, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { Search, SlidersHorizontal, Square, RotateCcw, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { Instance } from '../types';
 import { useI18n } from '../i18n';
 
@@ -7,14 +7,12 @@ interface InstancesTableProps {
   instances: Instance[];
   onRestartInstance: (uuid: string) => void;
   onToggleInstance: (uuid: string) => void;
-  onExport: () => void;
 }
 
 export default function InstancesTable({
   instances,
   onRestartInstance,
   onToggleInstance,
-  onExport,
 }: InstancesTableProps) {
   const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState('');
@@ -32,7 +30,7 @@ export default function InstancesTable({
         inst.nodeName.toLowerCase().includes(searchQuery.toLowerCase());
 
       const matchesStatus =
-        statusFilter === 'All' || inst.status.toLowerCase() === statusFilter.toLowerCase();
+        statusFilter === 'All' || inst.viewStatus === statusFilter;
 
       return matchesSearch && matchesStatus;
     });
@@ -65,10 +63,10 @@ export default function InstancesTable({
     paginatedInstances.every((inst) => selectedUuids.includes(inst.uuid));
 
   const getStatusLabel = (status: string) => {
-    if (status === 'Running') return t('status.running');
-    if (status === 'Starting') return t('status.starting');
-    if (status === 'Failed') return t('status.failed');
-    if (status === 'Stopped') return t('status.stopped');
+    if (status === 'running') return t('status.running');
+    if (status === 'starting') return t('status.starting');
+    if (status === 'failed') return t('status.failed');
+    if (status === 'stopped') return t('status.stopped');
     return t('status.all');
   };
 
@@ -103,7 +101,7 @@ export default function InstancesTable({
 
             {isFilterOpen && (
               <div className="absolute right-0 mt-1 w-40 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-30 font-medium text-xs">
-                {['All', 'Running', 'Starting', 'Failed', 'Stopped'].map((filter) => (
+                {['All', 'running', 'starting', 'failed', 'stopped'].map((filter) => (
                   <button
                     key={filter}
                     onClick={() => {
@@ -120,14 +118,6 @@ export default function InstancesTable({
               </div>
             )}
           </div>
-
-          <button
-            onClick={onExport}
-            className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors text-xs font-semibold bg-white"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{t('button.export')}</span>
-          </button>
         </div>
       </div>
 
@@ -190,9 +180,9 @@ export default function InstancesTable({
             ) : (
               paginatedInstances.map((inst) => {
                 const isSelected = selectedUuids.includes(inst.uuid);
-                const isRunning = inst.status === 'Running';
-                const isStarting = inst.status === 'Starting';
-                const isFailed = inst.status === 'Failed';
+                const isRunning = inst.viewStatus === 'running';
+                const isStarting = inst.viewStatus === 'starting';
+                const isFailed = inst.viewStatus === 'failed';
 
                 let badgeClass = 'bg-slate-50 text-slate-600 border-slate-100';
                 if (isRunning) badgeClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
@@ -232,7 +222,7 @@ export default function InstancesTable({
                               : 'bg-slate-400'
                           }`}
                         />
-                        {getStatusLabel(inst.status)}
+                        {getStatusLabel(inst.viewStatus)}
                       </span>
                     </td>
                     <td className="p-4 text-right">
@@ -244,15 +234,23 @@ export default function InstancesTable({
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          onClick={() => onToggleInstance(inst.uuid)}
-                          className={`p-1.5 rounded-md text-slate-400 hover:bg-slate-100 transition-colors ${
-                            isRunning ? 'hover:text-amber-600' : 'hover:text-emerald-600'
-                          }`}
-                          title={isRunning ? t('instances.stopTitle') : t('instances.startTitle')}
-                        >
-                          {isRunning ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                        </button>
+                        {isRunning ? (
+                          <button
+                            onClick={() => onToggleInstance(inst.uuid)}
+                            className="p-1.5 rounded-md text-slate-400 hover:bg-slate-100 hover:text-amber-600 transition-colors"
+                            title={t('instances.stopTitle')}
+                          >
+                            <Square className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <button
+                            disabled
+                            className="p-1.5 rounded-md text-slate-300 cursor-not-allowed transition-colors"
+                            title={t('instances.startUnavailable')}
+                          >
+                            <Square className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

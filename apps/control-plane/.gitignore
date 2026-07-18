@@ -219,3 +219,5 @@ desktop/backend-build/
 desktop/backend-dist/
 desktop/test-results/
 desktop/playwright-report/
+frontend/test-results/
+frontend/playwright-report/

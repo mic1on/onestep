@@ -1,11 +1,25 @@
-import type { Instance, LogEntry, Service, Task } from './types';
+import type { Instance, LogEntry, Service, Task, TaskCommandKind } from './types';
 
 export type Environment = 'dev' | 'staging' | 'prod';
 
 type HealthStatus = 'ok' | 'degraded' | 'error' | 'starting' | 'unknown';
 type InstanceConnectivity = 'online' | 'offline' | 'never_reported';
 type ServiceListStatus = 'online' | 'attention' | 'offline';
+type ServiceViewStatus = 'running' | 'degraded' | 'stopped';
+type TaskViewStatus = 'running' | 'idle' | 'failed' | 'paused' | 'offline';
+type InstanceViewStatus = 'running' | 'starting' | 'failed' | 'stopped';
+type EventLogLevel = 'error' | 'warn' | 'info';
 type TaskEventKind = 'started' | 'failed' | 'retried' | 'dead_lettered' | 'cancelled' | 'succeeded';
+type AgentCommandStatus =
+  | 'pending'
+  | 'dispatched'
+  | 'accepted'
+  | 'expired'
+  | 'rejected'
+  | 'succeeded'
+  | 'failed'
+  | 'timeout'
+  | 'cancelled';
 type AgentCommandKind =
   | 'ping'
   | 'shutdown'
@@ -13,18 +27,13 @@ type AgentCommandKind =
   | 'drain'
   | 'pause_task'
   | 'resume_task'
+  | 'restart_task'
   | 'discard_dead_letters'
   | 'replay_dead_letters'
   | 'run_task_once'
   | 'sync_now'
   | 'flush_metrics'
   | 'flush_events';
-type TaskCommandKind =
-  | 'pause_task'
-  | 'resume_task'
-  | 'discard_dead_letters'
-  | 'replay_dead_letters'
-  | 'run_task_once';
 
 type JsonObject = Record<string, unknown>;
 type QueryValue = string | number | undefined | null;
@@ -53,6 +62,13 @@ interface ServiceSummary {
   source_kinds: string[];
   task_count: number;
   failing_task_count: number;
+  view_status: ServiceViewStatus;
+  success_rate: number;
+  throughput_per_min: number;
+  error_count: number;
+  uptime_reference_at: string | null;
+  online_task_count: number;
+  standby_instance_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +95,7 @@ interface ServiceListSummary {
 }
 
 interface TaskEventCounts {
+  started: number;
   failed: number;
   retried: number;
   dead_lettered: number;
@@ -101,6 +118,7 @@ interface TaskEventSummary {
   meta: JsonObject;
   received_at: string;
   created_at: string;
+  level: EventLogLevel;
 }
 
 interface TaskDashboardSummary {
@@ -129,6 +147,20 @@ interface TaskDashboardSummary {
   max_p95_duration_ms: number | null;
   last_event_at: string | null;
   event_counts: TaskEventCounts;
+  // Aggregated across the service's online instances: true when any instance
+  // reported pause_requested=true. Null when no instance reported a known state.
+  pause_requested: boolean | null;
+  supported_commands: TaskCommandKind[];
+  // ---- Derived view-facing fields (computed by the plane) ----
+  view_status: TaskViewStatus;
+  success_rate: number;
+  throughput_per_min: number;
+  error_count: number;
+  retry_attempts: number;
+  source_label: string | null;
+  sink_label: string | null;
+  config_yaml: string | null;
+  uptime_reference_at: string | null;
 }
 
 interface TaskDashboardListResponse {
@@ -161,12 +193,24 @@ export interface TaskMetricWindowSummary {
   created_at: string;
 }
 
+interface TaskInstanceControlState {
+  instance_id: string;
+  pause_requested: boolean | null;
+  paused: boolean | null;
+}
+
+interface TaskControlStateSummary {
+  task_name: string;
+  instances: TaskInstanceControlState[];
+}
+
 interface TaskDetailResponse {
   service: ServiceSummary;
   task_name: string;
   lookback_minutes: number;
   lookback_started_at: string;
   summary: TaskDashboardSummary;
+  task_control: TaskControlStateSummary;
   recent_metric_windows: TaskMetricWindowSummary[];
   recent_events: TaskEventSummary[];
 }
@@ -188,6 +232,7 @@ interface InstanceSummary {
   status: HealthStatus;
   connectivity: InstanceConnectivity;
   active_session: unknown | null;
+  view_status: InstanceViewStatus;
   created_at: string;
   updated_at: string;
 }
@@ -199,12 +244,38 @@ interface InstanceListResponse {
   offset: number;
 }
 
+interface InstanceConnectivityCounts {
+  total: number;
+  online: number;
+  offline: number;
+  never_reported: number;
+}
+
+interface InstanceStatusCounts {
+  ok: number;
+  degraded: number;
+  error: number;
+  starting: number;
+  unknown: number;
+}
+
+interface AgentCommandOverview {
+  in_flight: number;
+  total: number;
+  statuses: Record<string, number>;
+}
+
 interface ServiceDashboardResponse {
   service: ServiceSummary;
   lookback_minutes: number;
   lookback_started_at: string;
+  instance_connectivity: InstanceConnectivityCounts;
+  instance_statuses: InstanceStatusCounts;
   task_count: number;
   failing_task_count: number;
+  command_overview: AgentCommandOverview;
+  topology_hashes: string[];
+  topology_consistent: boolean;
   recent_events: TaskEventSummary[];
 }
 
@@ -216,6 +287,17 @@ interface ServiceCommandFanoutCounts {
   total: number;
 }
 
+interface ServiceCommandFanoutTargetSummary {
+  instance_id: string;
+  node_name: string | null;
+  connectivity: InstanceConnectivity;
+  session_id: string | null;
+  command_id: string | null;
+  outcome: 'dispatched' | 'queued' | 'skipped' | 'rejected';
+  reason_code: string | null;
+  reason_message: string | null;
+}
+
 export interface ServiceCommandFanoutResponse {
   kind: AgentCommandKind;
   target_mode: 'all_online' | 'selected_instances';
@@ -223,7 +305,49 @@ export interface ServiceCommandFanoutResponse {
   noop_reason_code: string | null;
   noop_reason_message: string | null;
   counts: ServiceCommandFanoutCounts;
+  dispatched: ServiceCommandFanoutTargetSummary[];
+  queued: ServiceCommandFanoutTargetSummary[];
+  skipped: ServiceCommandFanoutTargetSummary[];
+  rejected: ServiceCommandFanoutTargetSummary[];
 }
+
+interface AgentCommandSummary {
+  command_id: string;
+  kind: AgentCommandKind;
+  status: AgentCommandStatus;
+  error_code: string | null;
+  error_message: string | null;
+  updated_at: string;
+}
+
+interface AgentCommandListResponse {
+  items: AgentCommandSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CommandCompletionResult {
+  completed: boolean;
+  failed: boolean;
+}
+
+const TERMINAL_COMMAND_STATUSES = new Set<AgentCommandStatus>([
+  'expired',
+  'rejected',
+  'succeeded',
+  'failed',
+  'timeout',
+  'cancelled',
+]);
+
+const FAILED_COMMAND_STATUSES = new Set<AgentCommandStatus>([
+  'expired',
+  'rejected',
+  'failed',
+  'timeout',
+  'cancelled',
+]);
 
 export interface ControlPlaneData {
   services: Service[];
@@ -265,7 +389,9 @@ export interface RecentEvent {
   environment: Environment;
 }
 
-const DEFAULT_LOOKBACK_MINUTES = 60;
+// Matches the control plane's DEFAULT_LOOKBACK_MINUTES so the client and server
+// always agree on the aggregation window for throughput / success metrics.
+const DEFAULT_LOOKBACK_MINUTES = 15;
 const PAGE_SIZE = 100;
 
 class ApiError extends Error {
@@ -414,11 +540,16 @@ function displayServiceName(service: Pick<ServiceSummary, 'name' | 'environment'
   return `${service.name} / ${service.environment}`;
 }
 
-function minutesSince(value: string | null) {
-  if (!value) {
+// ---- Presentation-only formatters ----
+// These turn plane-computed scalars into display strings. No business state is
+// derived here; that all lives in the backend.
+
+/** Render a live "time since <referenceAt>" label that ticks as time passes. */
+export function formatUptime(referenceAt: string | null): string {
+  if (!referenceAt) {
     return 'never';
   }
-  const elapsedMs = Date.now() - new Date(value).getTime();
+  const elapsedMs = Date.now() - new Date(referenceAt).getTime();
   if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
     return 'now';
   }
@@ -433,116 +564,33 @@ function minutesSince(value: string | null) {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function getNumericConfigValue(config: JsonObject | null, keys: string[]) {
-  if (!config) {
-    return null;
-  }
-  for (const key of keys) {
-    const value = config[key];
-    if (typeof value === 'number') {
-      return value;
-    }
-    if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) {
-      return Number(value);
-    }
-  }
-  return null;
+/** Render a per-minute throughput scalar with its unit, e.g. "12/min". */
+export function formatThroughput(perMin: number): string {
+  return `${perMin}/min`;
 }
 
-function getStringConfigValue(config: JsonObject | null, keys: string[]) {
-  if (!config) {
-    return null;
-  }
-  for (const key of keys) {
-    const value = config[key];
-    if (typeof value === 'string' && value.trim() !== '') {
-      return value;
-    }
-  }
-  return null;
-}
-
-function getRetryAttempts(retryPolicy: RetryDescriptor | null) {
-  const attempts = getNumericConfigValue(retryPolicy?.config ?? null, ['attempts', 'max_attempts', 'retries']);
-  return attempts ?? (retryPolicy ? 1 : 0);
-}
-
-function getSuccessRate(task: TaskDashboardSummary) {
-  const total = task.succeeded + task.failed + task.dead_lettered + task.cancelled;
-  if (total === 0) {
-    return 100;
-  }
-  return Number(((task.succeeded / total) * 100).toFixed(2));
-}
-
-function mapService(
-  service: ServiceSummary,
-  dashboard?: ServiceDashboardResponse,
-  tasks: TaskDashboardSummary[] = [],
-): Service {
-  const status =
-    service.online_instance_count === 0
-      ? 'stopped'
-      : service.service_status === 'online'
-      ? 'running'
-      : service.service_status === 'attention'
-      ? 'degraded'
-      : 'stopped';
-  const failedEvents = dashboard?.recent_events.filter((event) => event.kind === 'failed' || event.kind === 'dead_lettered').length ?? 0;
-  const fetched = tasks.reduce((sum, task) => sum + task.fetched, 0);
-  const taskCount = dashboard?.task_count ?? service.task_count;
-  const failingTaskCount = dashboard?.failing_task_count ?? service.failing_task_count ?? 0;
-  // A task is "online" only when the service has at least one online instance
-  // (matches the Offline status derived in mapTask). Tasks on offline services
-  // are not running, so onlineTaskCount is 0 regardless of failing events.
-  const serviceHasOnlineInstances = service.online_instance_count > 0;
-  const onlineTaskCount = serviceHasOnlineInstances ? Math.max(taskCount - failingTaskCount, 0) : 0;
-  const taskHealth = taskCount === 0 ? 100 : Number((((taskCount - failingTaskCount) / taskCount) * 100).toFixed(1));
-  const throughputValue = Math.round(fetched / Math.max(dashboard?.lookback_minutes ?? DEFAULT_LOOKBACK_MINUTES, 1));
-
+function mapService(service: ServiceSummary): Service {
   return {
     id: serviceId(service),
     apiName: service.name,
     environment: service.environment,
     name: displayServiceName(service),
-    status,
-    uptime: minutesSince(service.last_seen_at ?? service.latest_sync_at),
-    throughput: `${throughputValue}/min`,
-    throughputValue,
-    successRate: taskHealth,
-    errorCount24h: failedEvents,
+    viewStatus: service.view_status,
+    uptimeReferenceAt: service.uptime_reference_at ?? service.last_seen_at ?? service.latest_sync_at,
+    throughputPerMin: service.throughput_per_min,
+    successRate: service.success_rate,
+    errorCount: service.error_count,
     totalInstances: service.instance_count,
     activeInstances: service.online_instance_count,
-    standbyInstances: Math.max(service.instance_count - service.online_instance_count, 0),
-    taskHealth,
-    taskHealthTrend: failingTaskCount > 0 ? `-${failingTaskCount}` : '+0',
-    totalTaskCount: taskCount,
-    failingTaskCount,
-    onlineTaskCount,
+    standbyInstances: service.standby_instance_count,
+    totalTaskCount: service.task_count,
+    failingTaskCount: service.failing_task_count,
+    onlineTaskCount: service.online_task_count,
   };
 }
 
-function mapTask(service: ServiceSummary, task: TaskDashboardSummary, lookbackMinutes: number): Task {
-  const sourceLabel =
-    task.source_name ??
-    getStringConfigValue(task.source_config, ['topic', 'queue', 'stream', 'url', 'schedule', 'cron']) ??
-    'input';
+function mapTask(service: ServiceSummary, task: TaskDashboardSummary): Task {
   const sink = task.emit[0];
-  const sinkLabel =
-    sink?.name ??
-    getStringConfigValue(sink?.config ?? null, ['topic', 'queue', 'stream', 'url', 'table', 'database']) ??
-    'handler';
-  const throughputNum = Math.round(task.fetched / Math.max(lookbackMinutes, 1));
-  const errorCount = task.failed + task.dead_lettered + task.timeouts;
-  const status =
-    service.online_instance_count === 0
-      ? 'Offline'
-      : errorCount > 0
-      ? 'Failed'
-      : task.started > 0 || task.succeeded > 0
-      ? 'Running'
-      : 'Idle';
-
   return {
     id: `${serviceId(service)}:${task.task_name}`,
     apiName: task.task_name,
@@ -550,38 +598,29 @@ function mapTask(service: ServiceSummary, task: TaskDashboardSummary, lookbackMi
     environment: service.environment,
     serviceId: serviceId(service),
     name: task.task_name,
-    status,
+    viewStatus: task.view_status,
+    supportedCommands: task.supported_commands ?? [],
     pipelineSource: task.source_kind ?? task.source_name ?? 'Source',
-    pipelineSourceLabel: sourceLabel,
+    pipelineSourceLabel: task.source_label ?? 'input',
     sourceKind: task.source_kind,
     sourceConfig: task.source_config,
     sourceName: task.source_name,
     pipelineSink: sink?.kind ?? 'Handler',
-    pipelineSinkLabel: sinkLabel,
+    pipelineSinkLabel: task.sink_label ?? 'handler',
     sinkKind: sink?.kind ?? null,
     sinkConfig: sink?.config ?? null,
     sinkName: sink?.name ?? null,
     concurrency: task.concurrency ?? 1,
-    retryAttempts: getRetryAttempts(task.retry_policy),
-    uptime: minutesSince(task.latest_window_started_at ?? task.last_event_at),
-    throughputValue: `${throughputNum}/min`,
-    throughputNum,
-    successRate: getSuccessRate(task),
-    errorCount,
-    configYaml: buildTaskConfigYaml(task),
+    retryAttempts: task.retry_attempts,
+    uptimeReferenceAt: task.uptime_reference_at,
+    throughputPerMin: task.throughput_per_min,
+    successRate: task.success_rate,
+    errorCount: task.error_count,
+    configYaml: task.config_yaml ?? '',
   };
 }
 
 function mapInstance(service: ServiceSummary, instance: InstanceSummary): Instance {
-  const status =
-    instance.status === 'ok'
-      ? 'Running'
-      : instance.status === 'starting'
-      ? 'Starting'
-      : instance.status === 'error' || instance.status === 'degraded'
-      ? 'Failed'
-      : 'Stopped';
-
   return {
     uuid: instance.instance_id,
     apiServiceName: service.name,
@@ -591,40 +630,17 @@ function mapInstance(service: ServiceSummary, instance: InstanceSummary): Instan
     nodeName: instance.node_name,
     pid: instance.pid ?? 0,
     version: instance.deployment_version,
-    status,
+    viewStatus: instance.view_status,
   };
 }
 
 function mapLog(event: TaskEventSummary): LogEntry {
-  const level = event.kind === 'failed' || event.kind === 'dead_lettered' ? 'error' : event.kind === 'retried' ? 'warn' : 'info';
   return {
     timestamp: new Date(event.occurred_at).toTimeString().split(' ')[0],
-    level,
+    level: event.level,
     source: event.task_name,
     message: event.message ?? `${event.kind} on ${event.instance_id}`,
   };
-}
-
-function buildTaskConfigYaml(task: TaskDashboardSummary) {
-  const emit = task.emit[0];
-  return `task_config:
-  id: "${task.task_name}"
-  topology_hash: "${task.topology_hash ?? 'unknown'}"
-
-  execution:
-    concurrency: ${task.concurrency ?? 1}
-    timeout_s: ${task.timeout_s ?? 'null'}
-    retry_policy:
-      kind: "${task.retry_policy?.kind ?? 'none'}"
-      attempts: ${getRetryAttempts(task.retry_policy)}
-
-  source:
-    type: "${task.source_kind ?? 'unknown'}"
-    name: "${task.source_name ?? 'default'}"
-
-  sink:
-    type: "${emit?.kind ?? 'handler'}"
-    name: "${emit?.name ?? 'default'}"`;
 }
 
 async function listServices(environment?: Environment) {
@@ -737,6 +753,134 @@ export async function loadTaskMetricWindows(task: Task) {
   return response.recent_metric_windows;
 }
 
+/**
+ * Fetch the current aggregated `pause_requested` for a task across its service's
+ * instances. Returns true when any online instance reports pause_requested=true,
+ * false when at least one reports a known state and none report true, and null
+ * when no instance has reported a known state yet. Used to poll for the pause/
+ * resume outcome (the worker reports this via heartbeat, not the command ack, so
+ * the dashboard list status lags the command by up to one heartbeat cycle).
+ */
+export async function loadTaskPauseRequested(task: Task): Promise<boolean | null> {
+  if (!task.apiServiceName || !task.apiName || !task.environment) {
+    return null;
+  }
+
+  const response = await request<TaskDetailResponse>(
+    `/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}`,
+    {
+      query: {
+        environment: task.environment,
+        lookback_minutes: DEFAULT_LOOKBACK_MINUTES,
+        metric_window_limit: 1,
+        event_limit: 1,
+      },
+    },
+  );
+  return aggregatePauseRequested(response.task_control);
+}
+
+function aggregatePauseRequested(taskControl: TaskControlStateSummary | undefined): boolean | null {
+  const instances = taskControl?.instances ?? [];
+  if (instances.length === 0) return null;
+  let seenKnown = false;
+  for (const instance of instances) {
+    if (instance.pause_requested === null) continue;
+    seenKnown = true;
+    if (instance.pause_requested) return true;
+  }
+  return seenKnown ? false : null;
+}
+
+/**
+ * Poll a task's pause_requested until it reaches the expected value or the
+ * timeout elapses. Resolves true if the expected state was observed within the
+ * timeout, false otherwise (the command was still dispatched; the worker just
+ * has not reported back via heartbeat yet).
+ */
+export async function pollTaskPauseRequested(
+  task: Task,
+  expected: boolean,
+  {
+    intervalMs = 3000,
+    timeoutMs = 45000,
+    signal,
+  }: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  // First poll immediately, then on interval, until deadline or aborted.
+  while (Date.now() < deadline) {
+    if (signal?.aborted) return false;
+    let observed: boolean | null;
+    try {
+      observed = await loadTaskPauseRequested(task);
+    } catch {
+      observed = null;
+    }
+    if (observed === expected) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+async function listServiceCommands(serviceName: string, environment: Environment, kind: AgentCommandKind) {
+  return request<AgentCommandListResponse>(`/api/v1/services/${encodeURIComponent(serviceName)}/commands`, {
+    query: {
+      environment,
+      kind,
+      limit: PAGE_SIZE,
+      offset: 0,
+    },
+  });
+}
+
+export function getFanoutCommandIds(response: ServiceCommandFanoutResponse): string[] {
+  return [...(response.dispatched ?? []), ...(response.queued ?? [])]
+    .map((target) => target.command_id)
+    .filter((commandId): commandId is string => Boolean(commandId));
+}
+
+export async function pollTaskCommandCompletion(
+  task: Task,
+  commandIds: string[],
+  {
+    intervalMs = 1000,
+    timeoutMs = 15000,
+    signal,
+  }: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<CommandCompletionResult> {
+  if (!task.apiServiceName || !task.environment || commandIds.length === 0) {
+    return { completed: false, failed: false };
+  }
+
+  const expectedCommandIds = new Set(commandIds);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (signal?.aborted) return { completed: false, failed: false };
+    try {
+      const response = await listServiceCommands(task.apiServiceName, task.environment, 'restart_task');
+      const matchingCommands = response.items.filter((command) => expectedCommandIds.has(command.command_id));
+      if (matchingCommands.length === expectedCommandIds.size) {
+        const completed = matchingCommands.every((command) => TERMINAL_COMMAND_STATUSES.has(command.status));
+        if (completed) {
+          return {
+            completed: true,
+            failed: matchingCommands.some((command) => FAILED_COMMAND_STATUSES.has(command.status)),
+          };
+        }
+      }
+    } catch {
+      // Keep polling. Pause/resume does the same because command state can lag
+      // the HTTP request briefly while the worker heartbeat catches up.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, Math.max(intervalMs, 0)));
+  }
+
+  return { completed: false, failed: false };
+}
+
 export async function loadRecentEvents(environment?: Environment, limit = 20): Promise<RecentEvent[]> {
   const response = await request<{ items: RecentEvent[]; total: number }>('/api/v1/events', {
     query: {
@@ -763,18 +907,21 @@ export async function loadControlPlaneData(selectedServiceId?: string, environme
     listServiceTasks(selectedSummary),
     listServiceInstances(selectedSummary),
   ]);
+  // The dashboard's embedded ServiceSummary already carries the plane-computed
+  // derived fields, so use it as the authoritative view for the selected
+  // service; other services come straight from the list response.
   const selectedDashboardSummary = dashboard.service;
 
   const services = servicesResponse.items.map((service) =>
     serviceId(service) === serviceId(selectedSummary)
-      ? mapService(selectedDashboardSummary, dashboard, taskResponse.items)
+      ? mapService(selectedDashboardSummary)
       : mapService(service),
   );
 
   return {
     services,
     selectedServiceId: serviceId(selectedDashboardSummary),
-    tasks: taskResponse.items.map((task) => mapTask(selectedDashboardSummary, task, taskResponse.lookback_minutes)),
+    tasks: taskResponse.items.map((task) => mapTask(selectedDashboardSummary, task)),
     instances: instanceResponse.items.map((instance) => mapInstance(selectedDashboardSummary, instance)),
     logs: dashboard.recent_events.map(mapLog),
     serviceSummary: servicesResponse.summary,

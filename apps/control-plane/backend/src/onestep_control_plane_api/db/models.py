@@ -59,6 +59,10 @@ class Service(Base):
         back_populates="service",
         cascade="all, delete-orphan",
     )
+    task_custom_metric_windows: Mapped[list[TaskCustomMetricWindow]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+    )
     task_events: Mapped[list[TaskEvent]] = relationship(
         back_populates="service",
         cascade="all, delete-orphan",
@@ -659,6 +663,57 @@ class TaskMetricWindow(Base):
     instance: Mapped[Instance] = relationship(
         back_populates="task_metric_windows",
         primaryjoin=lambda: foreign(TaskMetricWindow.instance_id) == Instance.instance_id,
+    )
+
+
+class TaskCustomMetricWindow(Base):
+    __tablename__ = "task_custom_metric_windows"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "instance_id",
+            "task_name",
+            "window_id",
+            "metric_name",
+            "metric_kind",
+            "labels_hash",
+            name="uq_task_custom_metric_windows_series_window",
+        ),
+        sa.Index(
+            "ix_task_custom_metric_windows_service_window",
+            "service_id",
+            "window_ended_at",
+        ),
+        sa.Index(
+            "ix_task_custom_metric_windows_metric_kind",
+            "metric_name",
+            "metric_kind",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    service_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    instance_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("instances.instance_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    task_name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    window_id: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    window_started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    window_ended_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    metric_name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
+    metric_kind: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    metric_value: Mapped[float] = mapped_column(sa.Float, nullable=False)
+    labels_hash: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    labels_json: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, nullable=False, default=dict)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+
+    service: Mapped[Service] = relationship(back_populates="task_custom_metric_windows")
+    instance: Mapped[Instance] = relationship(
+        primaryjoin=lambda: foreign(TaskCustomMetricWindow.instance_id) == Instance.instance_id,
     )
 
 

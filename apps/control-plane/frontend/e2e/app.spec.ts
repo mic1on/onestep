@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const ISO_NOW = "2026-07-16T08:00:00Z";
+const LOOKBACK_MINUTES = 15;
 
 const billingService = {
   name: "billing-sync",
@@ -14,6 +15,14 @@ const billingService = {
   last_seen_at: ISO_NOW,
   source_kinds: ["redis_stream"],
   task_count: 2,
+  failing_task_count: 1,
+  view_status: "running",
+  success_rate: 99.17,
+  throughput_per_min: 48,
+  error_count: 1,
+  uptime_reference_at: ISO_NOW,
+  online_task_count: 1,
+  standby_instance_count: 0,
   created_at: ISO_NOW,
   updated_at: ISO_NOW,
 };
@@ -22,7 +31,7 @@ const auditService = {
   name: "audit-sync",
   environment: "staging",
   latest_deployment_version: "2026.7.15",
-  service_status: "attention",
+  service_status: "offline",
   latest_topology_hash: "topo-audit",
   latest_sync_at: ISO_NOW,
   instance_count: 1,
@@ -30,11 +39,20 @@ const auditService = {
   last_seen_at: ISO_NOW,
   source_kinds: ["schedule"],
   task_count: 1,
+  failing_task_count: 1,
+  view_status: "stopped",
+  success_rate: 0,
+  throughput_per_min: 0,
+  error_count: 1,
+  uptime_reference_at: ISO_NOW,
+  online_task_count: 0,
+  standby_instance_count: 1,
   created_at: ISO_NOW,
   updated_at: ISO_NOW,
 };
 
 const eventCounts = {
+  started: 1,
   failed: 0,
   retried: 0,
   dead_lettered: 0,
@@ -58,6 +76,7 @@ function taskEvent(overrides: Record<string, unknown> = {}) {
     meta: {},
     received_at: ISO_NOW,
     created_at: ISO_NOW,
+    level: "info",
     ...overrides,
   };
 }
@@ -88,7 +107,18 @@ function taskSummary(overrides: Record<string, unknown> = {}) {
     weighted_avg_duration_ms: 42,
     max_p95_duration_ms: 120,
     last_event_at: ISO_NOW,
+    pause_requested: false,
+    supported_commands: ["pause_task", "resume_task", "restart_task", "run_task_once"],
     event_counts: { ...eventCounts, retried: 5, succeeded: 590 },
+    view_status: "running",
+    success_rate: 99.15,
+    throughput_per_min: 40,
+    error_count: 0,
+    retry_attempts: 3,
+    source_label: "orders.v1",
+    sink_label: "ledger-api",
+    config_yaml: "task_config:\n  name: orders_to_ledger\n  source: redis_stream\n  sink: ledger-api",
+    uptime_reference_at: ISO_NOW,
     ...overrides,
   };
 }
@@ -135,6 +165,7 @@ function instanceSummary(overrides: Record<string, unknown> = {}) {
     status: "ok",
     connectivity: "online",
     active_session: null,
+    view_status: "running",
     created_at: ISO_NOW,
     updated_at: ISO_NOW,
     ...overrides,
@@ -143,14 +174,16 @@ function instanceSummary(overrides: Record<string, unknown> = {}) {
 
 async function installApiMocks(page: Page) {
   const commands: Array<{ method: string; path: string; query: Record<string, string>; body: unknown }> = [];
+  const commandResults: Array<{ command_id: string; kind: string; status: string; updated_at: string }> = [];
   let serviceListHits = 0;
+  const pauseRequestedByTask = new Map<string, boolean>();
 
   const serviceData = {
     "billing-sync": {
       service: billingService,
       dashboard: {
         service: billingService,
-        lookback_minutes: 60,
+        lookback_minutes: LOOKBACK_MINUTES,
         lookback_started_at: ISO_NOW,
         task_count: 2,
         failing_task_count: 1,
@@ -161,6 +194,7 @@ async function installApiMocks(page: Page) {
             kind: "failed",
             message: "sink timeout",
             exception_type: "TimeoutError",
+            level: "error",
           }),
         ],
       },
@@ -177,6 +211,10 @@ async function installApiMocks(page: Page) {
           dead_lettered: 0,
           timeouts: 0,
           event_counts: { ...eventCounts, succeeded: 120 },
+          throughput_per_min: 8,
+          source_label: "*/5 * * * *",
+          sink_label: "invoice-api",
+          config_yaml: "task_config:\n  name: invoice_retry\n  source: schedule\n  sink: invoice-api",
         }),
       ],
       instances: [
@@ -188,6 +226,7 @@ async function installApiMocks(page: Page) {
           pid: 4343,
           status: "degraded",
           connectivity: "online",
+          view_status: "failed",
         }),
       ],
     },
@@ -195,11 +234,11 @@ async function installApiMocks(page: Page) {
       service: auditService,
       dashboard: {
         service: auditService,
-        lookback_minutes: 60,
+        lookback_minutes: LOOKBACK_MINUTES,
         lookback_started_at: ISO_NOW,
         task_count: 1,
         failing_task_count: 1,
-        recent_events: [taskEvent({ event_id: "evt-audit", task_name: "audit_archive", kind: "retried" })],
+        recent_events: [taskEvent({ event_id: "evt-audit", task_name: "audit_archive", kind: "retried", level: "warn" })],
       },
       tasks: [
         taskSummary({
@@ -212,6 +251,14 @@ async function installApiMocks(page: Page) {
           dead_lettered: 0,
           timeouts: 0,
           event_counts: { ...eventCounts, failed: 1 },
+          pause_requested: null,
+          view_status: "offline",
+          success_rate: 0,
+          throughput_per_min: 0,
+          error_count: 1,
+          source_label: "0 2 * * *",
+          sink_label: "archive-api",
+          config_yaml: "task_config:\n  name: audit_archive\n  source: schedule\n  sink: archive-api",
         }),
       ],
       instances: [
@@ -222,6 +269,7 @@ async function installApiMocks(page: Page) {
           pid: 4444,
           status: "error",
           connectivity: "offline",
+          view_status: "stopped",
         }),
       ],
     },
@@ -234,21 +282,75 @@ async function installApiMocks(page: Page) {
     const query = Object.fromEntries(url.searchParams.entries());
 
     if (request.method() === "POST") {
+      const body = request.postDataJSON() as { kind?: string; args?: Record<string, unknown> } | null;
       commands.push({
         method: request.method(),
         path,
         query,
-        body: request.postDataJSON(),
+        body,
       });
+      const commandId = `cmd-${commands.length.toString().padStart(4, "0")}`;
+      const taskCommandMatch = path.match(/^\/api\/v1\/services\/([^/]+)\/tasks\/([^/]+)\/commands$/);
+      if (taskCommandMatch && body?.kind) {
+        const serviceName = decodeURIComponent(taskCommandMatch[1]);
+        const taskName = decodeURIComponent(taskCommandMatch[2]);
+        const key = `${serviceName}:${query.environment ?? ""}:${taskName}`;
+        if (body.kind === "pause_task") pauseRequestedByTask.set(key, true);
+        if (body.kind === "resume_task") pauseRequestedByTask.set(key, false);
+      }
+      if (body?.kind) {
+        commandResults.unshift({
+          command_id: commandId,
+          kind: body.kind,
+          status: body.kind === "restart_task" ? "succeeded" : "dispatched",
+          updated_at: ISO_NOW,
+        });
+      }
       await route.fulfill({
         status: 202,
         contentType: "application/json",
         body: JSON.stringify({
-          command_id: "99999999-9999-9999-9999-999999999999",
-          status: "queued",
-          counts: { dispatched: 0, queued: 1, skipped: 0, rejected: 0, total: 1 },
+          kind: body?.kind ?? "restart",
+          target_mode: "all_online",
+          offline_behavior: "skip",
           noop_reason_code: null,
           noop_reason_message: null,
+          counts: { dispatched: 1, queued: 0, skipped: 0, rejected: 0, total: 1 },
+          dispatched: [
+            {
+              instance_id: "11111111-1111-1111-1111-111111111111",
+              node_name: "worker-a",
+              connectivity: "online",
+              session_id: "session-a",
+              command_id: commandId,
+              outcome: "dispatched",
+              reason_code: null,
+              reason_message: null,
+            },
+          ],
+          queued: [],
+          skipped: [],
+          rejected: [],
+        }),
+      });
+      return;
+    }
+
+    if (path === "/api/v1/events") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              ...taskEvent({ event_id: "evt-overview", service_name: "billing-sync", environment: "prod" }),
+              service_name: "billing-sync",
+              environment: "prod",
+            },
+          ],
+          total: 1,
+          limit: 20,
+          offset: 0,
         }),
       });
       return;
@@ -265,6 +367,34 @@ async function installApiMocks(page: Page) {
           limit: 100,
           offset: 0,
           source_kind_counts: { redis_stream: 1, schedule: 1 },
+          summary: {
+            total_services: 2,
+            online_services: 1,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 1,
+            total_instances: 3,
+            online_instances: 2,
+            total_tasks: 3,
+            failing_tasks: 2,
+          },
+        }),
+      });
+      return;
+    }
+
+    const serviceCommandsMatch = path.match(/^\/api\/v1\/services\/([^/]+)\/commands$/);
+    if (serviceCommandsMatch) {
+      const kind = query.kind;
+      const items = kind ? commandResults.filter((command) => command.kind === kind) : commandResults;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items,
+          total: items.length,
+          limit: 100,
+          offset: 0,
         }),
       });
       return;
@@ -287,10 +417,19 @@ async function installApiMocks(page: Page) {
         body: JSON.stringify({
           service: data.service,
           task_name: taskName,
-          lookback_minutes: 60,
+          lookback_minutes: LOOKBACK_MINUTES,
           lookback_started_at: ISO_NOW,
           summary: task,
-          task_control: { task_name: taskName, instances: [] },
+          task_control: {
+            task_name: taskName,
+            instances: [
+              {
+                instance_id: "11111111-1111-1111-1111-111111111111",
+                pause_requested: pauseRequestedByTask.get(`${serviceName}:${query.environment ?? ""}:${taskName}`) ?? false,
+                paused: pauseRequestedByTask.get(`${serviceName}:${query.environment ?? ""}:${taskName}`) ?? false,
+              },
+            ],
+          },
           recent_metric_windows: [
             metricWindow({
               task_name: taskName,
@@ -333,7 +472,7 @@ async function installApiMocks(page: Page) {
           total: data[resource].length,
           limit: 100,
           offset: 0,
-          ...(resource === "tasks" ? { lookback_minutes: 60, lookback_started_at: ISO_NOW } : {}),
+          ...(resource === "tasks" ? { lookback_minutes: LOOKBACK_MINUTES, lookback_started_at: ISO_NOW } : {}),
         }),
       });
       return;
@@ -389,11 +528,7 @@ test("does not render demo services while the initial API load is pending", asyn
   releaseApi();
 });
 
-// These four tests walk multi-step detail flows (Instances tab bar, topology
-// inspector, "View traces") that reference UI elements not present in the
-// current service-detail component. They need rewriting against the live UI
-// and are skipped here so CI stays green for the routing/navigation coverage.
-test.skip("loads API-backed service, task, instance, topology, config, and log views", async ({ page }) => {
+test("loads API-backed service, task, instance, topology, config, and log views", async ({ page }) => {
   await installApiMocks(page);
   await page.goto("/");
 
@@ -410,27 +545,21 @@ test.skip("loads API-backed service, task, instance, topology, config, and log v
 
   await page.getByText("orders_to_ledger").first().click();
   await expect(page.getByRole("heading", { name: "orders_to_ledger" })).toBeVisible();
-  await expect(page.getByText("Task Metrics (Last 1h)")).toBeVisible();
+  await expect(page.getByText("Task Metrics (Last 15m)")).toBeVisible();
   await expect(page.getByText("1020")).toBeVisible();
   await expect(page.getByRole("button", { name: "Failures" })).toBeVisible();
 
-  await page.getByText("View traces ->").click();
-  await expect(page.getByText("Active Latency Traces")).toBeVisible();
-
-  await page.getByRole("button", { name: "redis_stream orders" }).click();
-  await expect(page.getByText("redis_stream Source Protocol")).toBeVisible();
+  await page.getByRole("button", { name: "redis_stream orders.v1" }).click();
+  await expect(page.getByText("redis_stream Source")).toBeVisible();
   await page.getByRole("button", { name: "orders_to_ledger Task Processing" }).click();
-  await expect(page.getByText("orders_to_ledger Stream Thread")).toBeVisible();
+  await expect(page.getByText("orders_to_ledger Task")).toBeVisible();
   await page.getByRole("button", { name: "http_sink ledger-api" }).click();
-  await expect(page.getByText("http_sink Analytics Engine")).toBeVisible();
+  await expect(page.getByText("http_sink Sink")).toBeVisible();
 
-  await page.getByRole("button", { name: "Modify" }).click();
-  await page.locator("textarea").fill(`task_config:\n  id: "orders_to_ledger"\n  execution:\n    concurrency: 7`);
-  await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("Configuration update saved for orders_to_ledger")).toBeVisible();
-  await expect(page.getByText("concurrency")).toBeVisible();
-  await expect(page.getByText("7", { exact: true })).toBeVisible();
+  await expect(page.getByText("Active Configuration")).toBeVisible();
+  await expect(page.getByText("source: redis_stream")).toBeVisible();
 
+  await page.goto("/services/billing-sync%3Aprod?tab=instances");
   await page.getByRole("button", { name: "Instances" }).click();
   await expect(page.getByText("worker-a.local")).toBeVisible();
   await page.getByPlaceholder("Filter instances...").fill("worker-b");
@@ -443,21 +572,19 @@ test.skip("loads API-backed service, task, instance, topology, config, and log v
   await expect(page.getByText("worker-b.local")).toBeVisible();
   await expect(page.getByText("worker-a.local")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Export" }).click();
-  await expect(page.getByText("Spreadsheet download initiated successfully")).toBeVisible();
-
+  await page.goto("/services/billing-sync%3Aprod?tab=logs");
   await page.getByRole("button", { name: "Logs" }).click();
   await expect(page.getByText("processed order batch")).toBeVisible();
   await page.getByRole("button", { name: "Clear stream" }).click();
-  await expect(page.getByText("Kafka Consumer initialized successfully.")).toBeVisible();
+  await expect(page.getByText("processed order batch")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Configuration" }).click();
-  await expect(page.getByText("Global Service Spec")).toBeVisible();
-  await page.getByRole("button", { name: "Modify Global Config" }).click();
-  await expect(page.getByText("Global Service Spec is read-only")).toBeVisible();
+  await expect(page.getByText("Service Configuration")).toBeVisible();
+  await expect(page.getByText("No service-level configuration reported")).toBeVisible();
+  await expect(page.getByText("replication_factor")).toHaveCount(0);
 });
 
-test.skip("dispatches service, task, and instance commands to the control-plane API", async ({ page }) => {
+test("dispatches service, task, and instance commands to the control-plane API", async ({ page }) => {
   const api = await installApiMocks(page);
   await page.goto("/");
   await expect(page.getByText("API connected")).toBeVisible();
@@ -478,29 +605,27 @@ test.skip("dispatches service, task, and instance commands to the control-plane 
   await page.getByRole("button", { name: "Stop Task" }).click();
   await expect(page.getByText("orders_to_ledger command accepted.")).toBeVisible();
 
+  await page.goto("/services/billing-sync%3Aprod?tab=instances");
   await page.getByRole("button", { name: "Instances" }).click();
-  await page.getByTitle("Restart Instance").first().click();
-  await expect(page.getByText("Restart command accepted for [111111].")).toBeVisible();
-
   await page.getByTitle("Stop Instance").first().click();
   await expect(page.getByText("Shutdown command accepted for [111111].")).toBeVisible();
+  await page.getByTitle("Restart Instance").first().click();
+  await expect(page.getByText("Restart command accepted for [111111].")).toBeVisible();
 
   expect(api.commands.map((command) => [command.path, (command.body as { kind: string }).kind])).toEqual([
     ["/api/v1/services/billing-sync/commands", "restart"],
     ["/api/v1/services/billing-sync/commands", "sync_now"],
+    ["/api/v1/services/billing-sync/tasks/orders_to_ledger/commands", "restart_task"],
     ["/api/v1/services/billing-sync/tasks/orders_to_ledger/commands", "pause_task"],
-    ["/api/v1/services/billing-sync/tasks/orders_to_ledger/commands", "resume_task"],
-    ["/api/v1/services/billing-sync/tasks/orders_to_ledger/commands", "pause_task"],
-    ["/api/v1/instances/11111111-1111-1111-1111-111111111111/commands", "restart"],
     ["/api/v1/instances/11111111-1111-1111-1111-111111111111/commands", "shutdown"],
+    ["/api/v1/instances/11111111-1111-1111-1111-111111111111/commands", "restart"],
   ]);
   expect(api.commands[0].query).toEqual({ environment: "prod" });
   expect(api.commands[2].query).toEqual({ environment: "prod" });
-  expect(api.commands[5].query).toEqual({});
+  expect(api.commands[4].query).toEqual({});
 });
 
-// References the removed TopAppBar tab bar / overview layout; see skip note above.
-test.skip("switches service context and refreshes from the selected service endpoints", async ({ page }) => {
+test("switches service context and refreshes from the selected service endpoints", async ({ page }) => {
   const api = await installApiMocks(page);
   await page.goto("/");
   // Open a service to land in the detail view first.
@@ -519,8 +644,7 @@ test.skip("switches service context and refreshes from the selected service endp
   await expect.poll(() => api.serviceListHits).toBeGreaterThan(hitsBeforeRefresh);
 });
 
-// References the removed TopAppBar tab bar (Instances tab); see skip note above.
-test.skip("handles instance bulk actions through the same command API", async ({ page }) => {
+test("handles instance bulk actions through the same command API", async ({ page }) => {
   const api = await installApiMocks(page);
   await page.goto("/");
   // Open the service to reach its detail view (Instances tab lives here).

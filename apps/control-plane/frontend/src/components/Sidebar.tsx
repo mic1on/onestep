@@ -1,4 +1,4 @@
-import { Bell, LayoutDashboard, Server, Settings, HelpCircle } from 'lucide-react';
+import { Bell, LayoutDashboard, Server } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { ControlPlaneView } from '../appRoute';
 
@@ -7,15 +7,11 @@ export type { ControlPlaneView };
 interface SidebarProps {
   currentView: ControlPlaneView;
   onViewChange: (view: ControlPlaneView) => void;
-  onSettingsClick: () => void;
-  onSupportClick: () => void;
 }
 
 export default function Sidebar({
   currentView,
   onViewChange,
-  onSettingsClick,
-  onSupportClick,
 }: SidebarProps) {
   const { t } = useI18n();
 
@@ -76,23 +72,6 @@ export default function Sidebar({
           </button>
         </li>
       </ul>
-
-      <div className="border-t border-slate-100 pt-4 space-y-1">
-        <button
-          onClick={onSettingsClick}
-          className="w-full flex items-center gap-3 p-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 rounded-lg transition-colors"
-        >
-          <Settings className="w-4 h-4 text-slate-500" />
-          <span>{t('nav.settings')}</span>
-        </button>
-        <button
-          onClick={onSupportClick}
-          className="w-full flex items-center gap-3 p-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 rounded-lg transition-colors"
-        >
-          <HelpCircle className="w-4 h-4 text-slate-500" />
-          <span>{t('nav.support')}</span>
-        </button>
-      </div>
     </nav>
   );
 }

@@ -22,6 +22,7 @@ from onestep_control_plane_api.db.models import (
     NotificationChannel,
     NotificationDelivery,
     Service,
+    TaskCustomMetricWindow,
     TaskDefinition,
     TaskEvent,
     TaskMetricWindow,
@@ -386,6 +387,96 @@ def test_metrics_ingestion_is_idempotent_without_prior_heartbeat(db_session) -> 
     assert len(metric_windows) == 1
     assert metric_windows[0].task_name == "sync_users"
     assert metric_windows[0].succeeded == 118
+
+
+def test_metrics_ingestion_persists_custom_metrics_idempotently(db_session) -> None:
+    payload = make_metrics_payload()
+    payload["tasks"][0]["custom_metrics"] = [
+        {
+            "name": "rows_success",
+            "kind": "counter",
+            "value": 118,
+            "labels": {},
+        },
+        {
+            "name": "rows_failed",
+            "kind": "counter",
+            "value": 2,
+            "labels": {"reason": "validation"},
+        },
+        {
+            "name": "batch_size",
+            "kind": "gauge",
+            "value": 120,
+            "labels": {},
+        },
+    ]
+
+    first = ingest_metrics(db_session, payload)
+    second = ingest_metrics(db_session, payload)
+
+    custom_metrics = db_session.scalars(
+        select(TaskCustomMetricWindow).order_by(TaskCustomMetricWindow.metric_name)
+    ).all()
+    assert first.ingested_count == 1
+    assert second.ingested_count == 0
+    assert len(custom_metrics) == 3
+    by_name = {metric.metric_name: metric for metric in custom_metrics}
+    assert by_name["rows_success"].metric_kind == "counter"
+    assert by_name["rows_success"].metric_value == 118
+    assert by_name["rows_success"].labels_json == {}
+    assert by_name["rows_failed"].labels_json == {"reason": "validation"}
+    assert len(by_name["rows_failed"].labels_hash) == 64
+    assert by_name["batch_size"].metric_kind == "gauge"
+    assert by_name["batch_size"].metric_value == 120
+
+
+def test_metrics_ingestion_keeps_custom_metric_kinds_idempotent(db_session) -> None:
+    payload = make_metrics_payload()
+    payload["tasks"][0]["custom_metrics"] = [
+        {
+            "name": "shared_metric",
+            "kind": "counter",
+            "value": 5,
+            "labels": {"tenant": "acme"},
+        },
+        {
+            "name": "shared_metric",
+            "kind": "gauge",
+            "value": 9,
+            "labels": {"tenant": "acme"},
+        },
+    ]
+
+    first = ingest_metrics(db_session, payload)
+    second = ingest_metrics(db_session, payload)
+
+    custom_metrics = db_session.scalars(
+        select(TaskCustomMetricWindow).order_by(TaskCustomMetricWindow.metric_kind)
+    ).all()
+    assert first.ingested_count == 1
+    assert second.ingested_count == 0
+    assert len(custom_metrics) == 2
+    by_kind = {metric.metric_kind: metric for metric in custom_metrics}
+    assert by_kind["counter"].metric_name == "shared_metric"
+    assert by_kind["counter"].metric_value == 5
+    assert by_kind["gauge"].metric_name == "shared_metric"
+    assert by_kind["gauge"].metric_value == 9
+
+
+def test_metrics_ingestion_rejects_invalid_custom_metric_labels(db_session) -> None:
+    payload = make_metrics_payload()
+    payload["tasks"][0]["custom_metrics"] = [
+        {
+            "name": "rows_success",
+            "kind": "counter",
+            "value": 1,
+            "labels": {"service": "billing-sync"},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="reserved"):
+        ingest_metrics(db_session, payload)
 
 
 def test_events_ingestion_is_idempotent(db_session) -> None:

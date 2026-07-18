@@ -201,10 +201,14 @@ Idempotency:
 ### 13.3 `metrics`
 
 - same structure as historical `POST /api/v1/agents/metrics`
+- when both sides negotiate `telemetry.custom_metrics`, each task metric window
+  may include `custom_metrics`, a list of handler-reported counter/gauge samples
 
 Idempotency:
 
 - `(instance_id, task_name, window_id)`
+- custom metric samples are deduped by
+  `(instance_id, task_name, window_id, metric_name, labels_hash)`
 
 ### 13.4 `events`
 

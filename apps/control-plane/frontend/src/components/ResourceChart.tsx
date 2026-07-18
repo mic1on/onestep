@@ -69,15 +69,21 @@ export default function ResourceChart({ windows, isLoading = false, error = null
   }, [data]);
 
   const width = 500;
-  const height = 200;
+  const height = 220;
   const paddingX = 40;
   const paddingY = 22;
+  // Reserve a dedicated band at the bottom of the viewBox for X-axis labels,
+  // so they are never crowded against the edge (previously labels sat at
+  // y = height - 4 and got clipped/shrunk out of view).
+  const xAxisSpace = 20;
+  const chartBottom = height - paddingY - xAxisSpace;
+  const plotHeight = chartBottom - paddingY;
   const maxValue = Math.max(1, ...data.flatMap((point) => [point.fetched, point.failed]));
 
   const getCoordinates = (index: number, value: number) => {
     const spread = Math.max(data.length - 1, 1);
     const x = paddingX + (index / spread) * (width - 2 * paddingX);
-    const y = height - paddingY - (value / maxValue) * (height - 2 * paddingY);
+    const y = chartBottom - (value / maxValue) * plotHeight;
     return { x, y };
   };
 
@@ -226,7 +232,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
 
           {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
             const value = Math.round(visibleMaxLabel * ratio);
-            const y = height - paddingY - ratio * (height - 2 * paddingY);
+            const y = chartBottom - ratio * plotHeight;
             return (
               <g key={ratio} className="opacity-15">
                 <line x1={paddingX} y1={y} x2={width - paddingX} y2={y} stroke="#737685" strokeWidth="1" />
@@ -252,12 +258,12 @@ export default function ResourceChart({ windows, isLoading = false, error = null
               <text
                 key={point.id}
                 x={x}
-                y={height - 4}
+                y={height - 6}
                 textAnchor="middle"
-                fontSize="8"
+                fontSize="10"
                 fontWeight="bold"
                 fill="#737685"
-                className="font-mono opacity-60"
+                className="font-mono opacity-80"
               >
                 {point.time}
               </text>
@@ -286,7 +292,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
               x1={getCoordinates(hoveredIndex, 0).x}
               y1={paddingY}
               x2={getCoordinates(hoveredIndex, 0).x}
-              y2={height - paddingY}
+              y2={chartBottom}
               stroke="#4f46e5"
               strokeDasharray="3,3"
               strokeWidth="1.5"

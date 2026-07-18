@@ -19,6 +19,7 @@ from onestep_control_plane_api.api.common import (
     utcnow,
 )
 from onestep_control_plane_api.api.ingestion_support import (
+    build_custom_metric_window_payloads,
     build_metric_window_payload,
     build_task_event_payload,
     sync_task_definitions,
@@ -36,7 +37,7 @@ from onestep_control_plane_api.api.schemas import (
     SyncAcceptedResponse,
     SyncIngestRequest,
 )
-from onestep_control_plane_api.db.models import TaskEvent, TaskMetricWindow
+from onestep_control_plane_api.db.models import TaskCustomMetricWindow, TaskEvent, TaskMetricWindow
 
 
 def ingest_sync_request(
@@ -150,6 +151,42 @@ def ingest_metrics_request(
             .returning(TaskMetricWindow.id)
         ).all()
         inserted_count = len(inserted_rows)
+        custom_metric_rows = dedupe_by_key(
+            [
+                row
+                for task in tasks
+                for row in build_custom_metric_window_payloads(
+                    service,
+                    request.service,
+                    task,
+                    request,
+                    received_at,
+                )
+            ],
+            lambda row: (
+                row["instance_id"],
+                row["task_name"],
+                row["window_id"],
+                row["metric_name"],
+                row["metric_kind"],
+                row["labels_hash"],
+            ),
+        )
+        if custom_metric_rows:
+            db.execute(
+                build_insert_statement(db, TaskCustomMetricWindow)
+                .values(custom_metric_rows)
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        "instance_id",
+                        "task_name",
+                        "window_id",
+                        "metric_name",
+                        "metric_kind",
+                        "labels_hash",
+                    ]
+                )
+            )
 
     db.commit()
     return MetricsAcceptedResponse(received_at=received_at, ingested_count=inserted_count)

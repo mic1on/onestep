@@ -1,4 +1,4 @@
-import { Server, Activity, ArrowUpRight, ArrowDownRight, TrendingUp } from 'lucide-react';
+import { Server, Activity, TrendingUp } from 'lucide-react';
 import { Service } from '../types';
 import { useI18n } from '../i18n';
 
@@ -9,11 +9,10 @@ interface TelemetryStatsProps {
 export default function TelemetryStats({ service }: TelemetryStatsProps) {
   const { t } = useI18n();
   const activePercent = service.totalInstances > 0 ? (service.activeInstances / service.totalInstances) * 100 : 0;
-  const isOffline = service.status === 'stopped' || service.activeInstances === 0;
-  const isHealthy = !isOffline && service.taskHealth >= 99;
-  const isDeclined = service.taskHealthTrend.startsWith('-');
+  const isOffline = service.viewStatus === 'stopped' || service.activeInstances === 0;
+  const isHealthy = !isOffline && service.successRate >= 99;
   const inactiveInstances = Math.max(service.totalInstances - service.activeInstances, 0);
-  const hasTraffic = !isOffline && service.throughputValue > 0;
+  const hasTraffic = !isOffline && service.throughputPerMin > 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -55,20 +54,13 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
           </div>
           <div className="flex items-center gap-2 mt-2">
             <span className="text-4xl font-extrabold text-slate-900 font-sans tracking-tight">
-              {service.taskHealth}%
+              {service.successRate}%
             </span>
-            <span
-              className={`flex items-center gap-0.5 text-xs font-bold px-1.5 py-0.5 rounded-md ${
-                isDeclined ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
-              }`}
-            >
-              {isDeclined ? (
-                <ArrowDownRight className="w-3 h-3" />
-              ) : (
-                <ArrowUpRight className="w-3 h-3" />
-              )}
-              {service.taskHealthTrend.replace('+', '').replace('-', '')}
-            </span>
+            {service.failingTaskCount > 0 && (
+              <span className="flex items-center gap-0.5 text-xs font-bold px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600">
+                {service.failingTaskCount} {t('servicesList.failing')}
+              </span>
+            )}
           </div>
         </div>
 
@@ -78,7 +70,7 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
               <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
               {service.totalInstances === 0 ? t('telemetry.noInstances') : t('telemetry.serviceOffline')}
             </span>
-          ) : service.status === 'running' ? (
+          ) : service.viewStatus === 'running' ? (
             <span className="text-slate-600 flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               {t('telemetry.allTasksHealthy')}
@@ -123,11 +115,9 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
           </div>
           <div className="flex items-baseline gap-2 mt-2">
             <span className="text-4xl font-extrabold text-slate-900 font-sans tracking-tight">
-              {service.throughput.split(' ')[0]}
+              {service.throughputPerMin}
             </span>
-            <span className="text-xs text-slate-500 font-medium">
-              {service.throughput.substring(service.throughput.indexOf(' ') + 1)}
-            </span>
+            <span className="text-xs text-slate-500 font-medium">/min</span>
           </div>
         </div>
 

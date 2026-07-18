@@ -73,6 +73,10 @@ const GENERIC_FIELDS: ExpectedField[] = [
 
 const MYSQL_KINDS = new Set(['mysql_incremental', 'mysql_table_queue', 'binlog', 'mysql']);
 const KAFKA_KINDS = new Set(['kafka', 'kafka_topic']);
+const INTERVAL_KINDS = new Set(['interval']);
+const CRON_KINDS = new Set(['cron', 'schedule']);
+const WEBHOOK_KINDS = new Set(['webhook']);
+const MEMORY_QUEUE_KINDS = new Set(['memory_queue', 'memory']);
 
 /** MySQL sink: writes to a table (upsert/append) keyed by given columns. */
 const MYSQL_SINK_FIELDS: ExpectedField[] = [
@@ -98,6 +102,19 @@ function isMySql(kind: string): boolean {
 
 function isKafka(kind: string): boolean {
   return KAFKA_KINDS.has(kind);
+}
+
+/** i18n key for the type badge of a source kind. Classifies well-known
+ *  trigger kinds (interval/cron/webhook/memory_queue) explicitly so they no
+ *  longer fall through to the generic "event ingestion / queue" bucket. */
+function sourceTypeKey(kind: string): MessageKey {
+  if (isMySql(kind)) return 'topology.relationalDb';
+  if (isKafka(kind)) return 'topology.kafkaCluster';
+  if (INTERVAL_KINDS.has(kind)) return 'topology.intervalTrigger';
+  if (CRON_KINDS.has(kind)) return 'topology.cronTrigger';
+  if (WEBHOOK_KINDS.has(kind)) return 'topology.webhookTrigger';
+  if (MEMORY_QUEUE_KINDS.has(kind)) return 'topology.memoryQueue';
+  return 'topology.eventIngestion';
 }
 
 /** Fields expected for a given source kind, in display order. */
@@ -148,13 +165,10 @@ export function buildSourceDetails(
     ...fields.map((field) => ({ labelKey: field.labelKey, configKey: field.configKey, mono: field.mono })),
   ];
 
-  // MySQL sources are table/cursor ingestion; Kafka is a stream. Generic kinds
-  // are best described as queues/schedules.
-  const typeKey: MessageKey = isMySql(kind)
-    ? 'topology.relationalDb'
-    : isKafka(kind)
-      ? 'topology.kafkaCluster'
-      : 'topology.eventIngestion';
+  // Classify well-known trigger kinds explicitly so interval/cron/webhook/
+  // memory_queue sources show an accurate badge instead of the generic queue
+  // label. Unknown and queue-style kinds still fall back to event ingestion.
+  const typeKey: MessageKey = sourceTypeKey(kind);
 
   return {
     titleKey: 'topology.sourceTitle',

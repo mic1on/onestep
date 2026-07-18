@@ -39,6 +39,7 @@ COMMAND_CAPABILITY_BY_KIND: dict[AgentCommandKind, str] = {
     "drain": "command.drain",
     "pause_task": "command.pause_task",
     "resume_task": "command.resume_task",
+    "restart_task": "command.restart_task",
     "discard_dead_letters": "command.discard_dead_letters",
     "replay_dead_letters": "command.replay_dead_letters",
     "run_task_once": "command.run_task_once",

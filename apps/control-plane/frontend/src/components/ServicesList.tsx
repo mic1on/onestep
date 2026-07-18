@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Server, ChevronRight, Activity, CheckCircle, AlertCircle } from 'lucide-react';
 import { Service } from '../types';
+import { formatThroughput } from '../api';
 import { useI18n } from '../i18n';
 
 interface ServicesListProps {
@@ -16,7 +17,8 @@ interface ServiceStatusMeta {
 }
 
 function getStatusMeta(service: Service, t: ReturnType<typeof useI18n>['t']): ServiceStatusMeta {
-  if (service.status === 'running' && service.activeInstances > 0) {
+  // The plane computes view_status; the frontend only maps it to a label/style.
+  if (service.viewStatus === 'running' && service.activeInstances > 0) {
     return {
       label: t('common.running'),
       dotClassName: 'bg-emerald-500',
@@ -24,7 +26,7 @@ function getStatusMeta(service: Service, t: ReturnType<typeof useI18n>['t']): Se
       Icon: CheckCircle,
     };
   }
-  if (service.status === 'degraded' || (service.taskHealth > 0 && service.taskHealth < 99)) {
+  if (service.viewStatus === 'degraded') {
     return {
       label: t('common.degraded'),
       dotClassName: 'bg-amber-500',
@@ -136,7 +138,7 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                           {status.label}
                         </span>
                       </td>
-                      <td className="p-4 font-semibold text-slate-700">{svc.throughput}</td>
+                      <td className="p-4 font-semibold text-slate-700">{formatThroughput(svc.throughputPerMin)}</td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
                           <span
@@ -170,14 +172,14 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                           <Activity className="w-3.5 h-3.5 text-slate-400" />
                           <span
                             className={`font-bold ${
-                              svc.taskHealth >= 99
+                              svc.successRate >= 99
                                 ? 'text-emerald-600'
-                                : svc.taskHealth > 0
+                                : svc.successRate > 0
                                 ? 'text-amber-600'
                                 : 'text-slate-400'
                             }`}
                           >
-                            {svc.taskHealth}%
+                            {svc.successRate}%
                           </span>
                         </div>
                       </td>
