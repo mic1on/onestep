@@ -1,10 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Activity, AlertCircle, CheckCircle2, Clock3, Database, Timer } from 'lucide-react';
-import type { TaskMetricWindowSummary } from '../api';
+import {
+  MAX_TASK_METRIC_LOOKBACK_MINUTES,
+  TASK_METRIC_LOOKBACK_PRESETS,
+  type TaskMetricChartPointSummary,
+} from '../api';
 import { useI18n } from '../i18n';
 
 interface ResourceChartProps {
-  windows: TaskMetricWindowSummary[];
+  windows: TaskMetricChartPointSummary[];
+  lookbackMinutes: number;
+  onLookbackMinutesChange: (minutes: number) => void;
   isLoading?: boolean;
   error?: string | null;
 }
@@ -12,12 +18,18 @@ interface ResourceChartProps {
 interface ChartPoint {
   id: string;
   time: string;
+  timeRange: string;
   fetched: number;
   failed: number;
   succeeded: number;
   inflight: number;
   p95DurationMs: number | null;
+  reportedWindowCount: number;
 }
+
+const DEFAULT_CHART_SIZE = { width: 900, height: 220 };
+const MIN_CHART_WIDTH = 320;
+const MIN_CHART_HEIGHT = 180;
 
 function formatTime(value: string) {
   const date = new Date(value);
@@ -25,6 +37,10 @@ function formatTime(value: string) {
     return value;
   }
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatTimeRange(start: string, end: string) {
+  return `${formatTime(start)}-${formatTime(end)}`;
 }
 
 function formatDuration(value: number | null) {
@@ -37,22 +53,67 @@ function formatDuration(value: number | null) {
   return `${Math.round(value)}ms`;
 }
 
-export default function ResourceChart({ windows, isLoading = false, error = null }: ResourceChartProps) {
+function normalizeLookbackMinutes(value: number) {
+  if (!Number.isFinite(value)) return null;
+  return Math.min(MAX_TASK_METRIC_LOOKBACK_MINUTES, Math.max(1, Math.trunc(value)));
+}
+
+export default function ResourceChart({
+  windows,
+  lookbackMinutes,
+  onLookbackMinutesChange,
+  isLoading = false,
+  error = null,
+}: ResourceChartProps) {
   const { t } = useI18n();
+  const chartSvgRef = useRef<SVGSVGElement | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [activeMetric, setActiveMetric] = useState<'all' | 'fetched' | 'failed'>('all');
+  const [customLookbackValue, setCustomLookbackValue] = useState(String(lookbackMinutes));
+  const [chartSize, setChartSize] = useState(DEFAULT_CHART_SIZE);
+
+  useEffect(() => {
+    setCustomLookbackValue(String(lookbackMinutes));
+  }, [lookbackMinutes]);
+
+  useEffect(() => {
+    const element = chartSvgRef.current;
+    if (!element) return;
+
+    const updateSize = () => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+
+      const nextSize = {
+        width: Math.max(MIN_CHART_WIDTH, Math.round(rect.width)),
+        height: Math.max(MIN_CHART_HEIGHT, Math.round(rect.height)),
+      };
+      setChartSize((current) =>
+        current.width === nextSize.width && current.height === nextSize.height ? current : nextSize,
+      );
+    };
+
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const data = useMemo<ChartPoint[]>(() => {
     return [...windows]
-      .sort((left, right) => new Date(left.window_ended_at).getTime() - new Date(right.window_ended_at).getTime())
-      .map((window) => ({
-        id: window.window_id,
-        time: formatTime(window.window_ended_at),
-        fetched: window.fetched,
-        failed: window.failed + window.dead_lettered + window.timeouts,
-        succeeded: window.succeeded,
-        inflight: window.inflight,
-        p95DurationMs: window.p95_duration_ms,
+      .sort((left, right) => new Date(left.bucket_started_at).getTime() - new Date(right.bucket_started_at).getTime())
+      .map((point) => ({
+        id: `${point.bucket_started_at}/${point.bucket_ended_at}`,
+        time: formatTime(point.bucket_started_at),
+        timeRange: formatTimeRange(point.bucket_started_at, point.bucket_ended_at),
+        fetched: point.fetched,
+        failed: point.failed + point.dead_lettered + point.timeouts,
+        succeeded: point.succeeded,
+        inflight: point.inflight,
+        p95DurationMs: point.p95_duration_ms,
+        reportedWindowCount: point.reported_window_count,
       }));
   }, [windows]);
 
@@ -68,14 +129,14 @@ export default function ResourceChart({ windows, isLoading = false, error = null
     );
   }, [data]);
 
-  const width = 500;
-  const height = 220;
-  const paddingX = 40;
+  const width = chartSize.width;
+  const height = chartSize.height;
+  const paddingX = width < 480 ? 32 : 44;
   const paddingY = 22;
   // Reserve a dedicated band at the bottom of the viewBox for X-axis labels,
   // so they are never crowded against the edge (previously labels sat at
   // y = height - 4 and got clipped/shrunk out of view).
-  const xAxisSpace = 20;
+  const xAxisSpace = 36;
   const chartBottom = height - paddingY - xAxisSpace;
   const plotHeight = chartBottom - paddingY;
   const maxValue = Math.max(1, ...data.flatMap((point) => [point.fetched, point.failed]));
@@ -111,52 +172,149 @@ export default function ResourceChart({ windows, isLoading = false, error = null
 
   const hasData = data.length > 0;
   const visibleMaxLabel = maxValue >= 10 ? Math.ceil(maxValue / 10) * 10 : maxValue;
+  const hasFailures = totals.failed > 0;
+  const showFailedSeries = activeMetric === 'failed' || (activeMetric === 'all' && hasFailures);
+  const yAxisValues = useMemo(() => {
+    if (visibleMaxLabel <= 4) {
+      return Array.from({ length: visibleMaxLabel + 1 }, (_, index) => index);
+    }
 
-  // Thin X-axis labels so they don't overlap when there are many windows.
-  // Aim for at most ~6 evenly spaced labels across the chart width.
-  const maxLabels = 6;
+    const tickStep = Math.ceil(visibleMaxLabel / 4);
+    const values: number[] = [];
+    for (let value = 0; value < visibleMaxLabel; value += tickStep) {
+      values.push(value);
+    }
+    values.push(visibleMaxLabel);
+    return values;
+  }, [visibleMaxLabel]);
+
+  // Show each minute in the default 15-minute view, then thin longer lookbacks.
+  const maxLabels = data.length <= 16 ? data.length : 8;
   const labelStride = data.length > maxLabels ? Math.ceil(data.length / maxLabels) : 1;
   const shouldShowLabel = (index: number) => {
     if (data.length <= maxLabels) return true;
     // Always show the last label; otherwise only on stride boundaries.
     return index === data.length - 1 || index % labelStride === 0;
   };
+  const tooltipPosition = (() => {
+    if (hoveredIndex === null || !hasData) return null;
+
+    const point = data[hoveredIndex];
+    const value = activeMetric === 'failed' ? point.failed : point.fetched;
+    const { x, y } = getCoordinates(hoveredIndex, value);
+    const leftPercent = Math.min(Math.max((x / width) * 100, 14), 86);
+    const placeBelowPoint = y < height * 0.42;
+
+    if (placeBelowPoint) {
+      return {
+        left: `${leftPercent}%`,
+        top: `${Math.min((y / height) * 100 + 8, 68)}%`,
+      };
+    }
+
+    return {
+      left: `${leftPercent}%`,
+      bottom: `${Math.min(((height - y) / height) * 100 + 8, 68)}%`,
+    };
+  })();
+  const applyLookbackMinutes = (minutes: number) => {
+    const next = normalizeLookbackMinutes(minutes);
+    if (next === null) {
+      setCustomLookbackValue(String(lookbackMinutes));
+      return;
+    }
+    setCustomLookbackValue(String(next));
+    if (next !== lookbackMinutes) {
+      onLookbackMinutesChange(next);
+    }
+  };
+  const handleCustomLookbackSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    applyLookbackMinutes(Number(customLookbackValue));
+  };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl flex flex-col h-[340px] shadow-xs relative overflow-hidden">
-      <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl shrink-0">
-        <h3 className="font-sans text-sm font-bold text-slate-800 flex items-center gap-2">
-          <Activity className="w-4 h-4 text-indigo-600" />
-          <span>{t('chart.taskMetrics')}</span>
-        </h3>
+    <div className="bg-white border border-slate-200 rounded-xl flex flex-col h-[400px] shadow-xs relative overflow-hidden">
+      <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-xl shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h3 className="font-sans text-sm font-bold text-slate-800 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-indigo-600" />
+              <span>{t('chart.taskMetrics')}</span>
+            </h3>
 
-        <div className="flex gap-2 items-center shrink-0 text-[10px] font-bold">
-          <button
-            onClick={() => setActiveMetric('all')}
-            className={`px-2 py-1 rounded transition-colors ${
-              activeMetric === 'all' ? 'bg-slate-200/70 text-slate-800' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            {t('chart.all')}
-          </button>
-          <button
-            onClick={() => setActiveMetric('fetched')}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
-              activeMetric === 'fetched' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-indigo-600" />
-            {t('chart.fetched')}
-          </button>
-          <button
-            onClick={() => setActiveMetric('failed')}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
-              activeMetric === 'failed' ? 'bg-rose-50 text-rose-600' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-rose-500" />
-            {t('chart.failures')}
-          </button>
+            <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
+              <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-1">
+                {TASK_METRIC_LOOKBACK_PRESETS.map((minutes) => (
+                  <button
+                    key={minutes}
+                    type="button"
+                    aria-pressed={lookbackMinutes === minutes}
+                    onClick={() => applyLookbackMinutes(minutes)}
+                    className={`h-6 rounded px-2 transition-colors ${
+                      lookbackMinutes === minutes
+                        ? 'bg-indigo-50 text-indigo-600'
+                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                    }`}
+                  >
+                    {minutes}m
+                  </button>
+                ))}
+              </div>
+
+              <form onSubmit={handleCustomLookbackSubmit} className="flex items-center gap-1.5">
+                <span className="text-slate-400">{t('chart.customLookback')}</span>
+                <input
+                  aria-label={t('chart.lookbackMinutes')}
+                  type="number"
+                  min={1}
+                  max={MAX_TASK_METRIC_LOOKBACK_MINUTES}
+                  value={customLookbackValue}
+                  onChange={(event) => setCustomLookbackValue(event.target.value)}
+                  className="h-7 w-14 rounded-md border border-slate-200 bg-white px-2 text-right font-mono text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                />
+                <span className="text-slate-400">{t('chart.minutesUnit')}</span>
+                <button
+                  type="submit"
+                  className="h-7 rounded-md border border-slate-200 bg-white px-2 text-slate-600 transition-colors hover:bg-slate-100"
+                >
+                  {t('chart.applyLookback')}
+                </button>
+              </form>
+            </div>
+          </div>
+
+          <div className="flex gap-2 items-center shrink-0 text-[10px] font-bold">
+            <button
+              type="button"
+              onClick={() => setActiveMetric('all')}
+              className={`px-2 py-1 rounded transition-colors ${
+                activeMetric === 'all' ? 'bg-slate-200/70 text-slate-800' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              {t('chart.all')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMetric('fetched')}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
+                activeMetric === 'fetched' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-indigo-600" />
+              {t('chart.fetched')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMetric('failed')}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
+                activeMetric === 'failed' ? 'bg-rose-50 text-rose-600' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              {t('chart.failures')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -191,7 +349,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
         </div>
       </div>
 
-      <div className="flex-1 p-4 relative flex items-end justify-center select-none bg-white">
+      <div className="flex-1 min-h-0 p-5 relative flex items-end justify-center select-none bg-white">
         {isLoading && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 text-xs font-bold text-slate-500">
             {t('chart.loadingMetrics')}
@@ -219,6 +377,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
         )}
 
         <svg
+          ref={chartSvgRef}
           viewBox={`0 0 ${width} ${height}`}
           className={`w-full h-full ${hasData ? '' : 'opacity-20'}`}
           onMouseLeave={() => setHoveredIndex(null)}
@@ -230,11 +389,11 @@ export default function ResourceChart({ windows, isLoading = false, error = null
             </linearGradient>
           </defs>
 
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-            const value = Math.round(visibleMaxLabel * ratio);
+          {yAxisValues.map((value) => {
+            const ratio = value / visibleMaxLabel;
             const y = chartBottom - ratio * plotHeight;
             return (
-              <g key={ratio} className="opacity-15">
+              <g key={value} className="opacity-15">
                 <line x1={paddingX} y1={y} x2={width - paddingX} y2={y} stroke="#737685" strokeWidth="1" />
                 <text
                   x={paddingX - 10}
@@ -258,9 +417,9 @@ export default function ResourceChart({ windows, isLoading = false, error = null
               <text
                 key={point.id}
                 x={x}
-                y={height - 6}
+                y={chartBottom + 24}
                 textAnchor="middle"
-                fontSize="10"
+                fontSize="9"
                 fontWeight="bold"
                 fill="#737685"
                 className="font-mono opacity-80"
@@ -269,6 +428,18 @@ export default function ResourceChart({ windows, isLoading = false, error = null
               </text>
             );
           })}
+
+          {hasData && (
+            <line
+              x1={paddingX}
+              y1={chartBottom}
+              x2={width - paddingX}
+              y2={chartBottom}
+              stroke="#cbd5e1"
+              strokeWidth="1"
+              className="opacity-70"
+            />
+          )}
 
           {data.map((_, index) => {
             const { x } = getCoordinates(index, 0);
@@ -313,7 +484,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
               className="transition-all duration-300"
             />
           )}
-          {hasData && activeMetric !== 'fetched' && (
+          {hasData && showFailedSeries && (
             <path
               d={failedPath}
               fill="none"
@@ -342,7 +513,7 @@ export default function ResourceChart({ windows, isLoading = false, error = null
                     className="transition-all duration-150"
                   />
                 )}
-                {activeMetric !== 'fetched' && (
+                {showFailedSeries && (
                   <circle
                     cx={failedPoint.x}
                     cy={failedPoint.y}
@@ -358,17 +529,17 @@ export default function ResourceChart({ windows, isLoading = false, error = null
           })}
         </svg>
 
-        {hoveredIndex !== null && hasData && (
+        {hoveredIndex !== null && hasData && tooltipPosition && (
           <div
-            className="absolute bg-[#1a1c24] border border-slate-700/50 rounded-lg p-2.5 text-[10px] text-white shadow-lg pointer-events-none z-10 transition-all font-sans"
-            style={{
-              left: `${Math.min((hoveredIndex / Math.max(data.length - 1, 1)) * 75 + 12, 78)}%`,
-              bottom: '40px',
-            }}
+            role="tooltip"
+            className="absolute min-w-[190px] max-w-[240px] -translate-x-1/2 bg-[#1a1c24] border border-slate-700/50 rounded-lg p-2.5 text-[10px] text-white shadow-lg pointer-events-none z-10 transition-all font-sans"
+            style={tooltipPosition}
           >
             <div className="font-bold border-b border-slate-700/50 pb-1 mb-1 font-mono text-slate-300 flex justify-between gap-4">
-              <span>{t('chart.time', { time: data[hoveredIndex].time })}</span>
-              <span className="text-emerald-400">{t('chart.reported')}</span>
+              <span>{t('chart.time', { time: data[hoveredIndex].timeRange })}</span>
+              {data[hoveredIndex].reportedWindowCount > 0 && (
+                <span className="text-emerald-400">{t('chart.reported')}</span>
+              )}
             </div>
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 font-semibold">
@@ -381,11 +552,13 @@ export default function ResourceChart({ windows, isLoading = false, error = null
                 <span>{t('chart.succeeded')}:</span>
                 <span className="font-mono font-bold text-emerald-300">{data[hoveredIndex].succeeded}</span>
               </div>
-              <div className="flex items-center gap-1.5 font-semibold">
-                <AlertCircle className="w-3 h-3 text-rose-400" />
-                <span>{t('chart.failures')}:</span>
-                <span className="font-mono font-bold text-rose-300">{data[hoveredIndex].failed}</span>
-              </div>
+              {showFailedSeries && (
+                <div className="flex items-center gap-1.5 font-semibold">
+                  <AlertCircle className="w-3 h-3 text-rose-400" />
+                  <span>{t('chart.failures')}:</span>
+                  <span className="font-mono font-bold text-rose-300">{data[hoveredIndex].failed}</span>
+                </div>
+              )}
               <div className="flex items-center gap-1.5 font-semibold">
                 <Timer className="w-3 h-3 text-slate-400" />
                 <span>{t('chart.p95Duration')}:</span>

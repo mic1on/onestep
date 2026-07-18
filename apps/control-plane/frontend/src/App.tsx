@@ -9,12 +9,14 @@ import {
   isAuthRequiredError,
   loadControlPlaneData,
   loadTaskMetricWindows,
+  logoutConsole,
   pollTaskCommandCompletion,
   pollTaskPauseRequested,
+  DEFAULT_TASK_METRIC_LOOKBACK_MINUTES,
   type Environment,
   type ServiceCommandFanoutResponse,
   type ServiceSummaryStats,
-  type TaskMetricWindowSummary,
+  type TaskMetricChartPointSummary,
 } from './api';
 import {
   INITIAL_SERVICES,
@@ -115,7 +117,8 @@ export default function App() {
   const [apiConnected, setApiConnected] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isLoadingApi, setIsLoadingApi] = useState(true);
-  const [taskMetricWindows, setTaskMetricWindows] = useState<TaskMetricWindowSummary[]>([]);
+  const [taskMetricWindows, setTaskMetricWindows] = useState<TaskMetricChartPointSummary[]>([]);
+  const [taskMetricLookbackMinutes, setTaskMetricLookbackMinutes] = useState(DEFAULT_TASK_METRIC_LOOKBACK_MINUTES);
   const [taskMetricsError, setTaskMetricsError] = useState<string | null>(null);
   const [isLoadingTaskMetrics, setIsLoadingTaskMetrics] = useState(false);
 
@@ -139,6 +142,7 @@ export default function App() {
   // --- Loading / Overlay State ---
   const [isRestartingAll, setIsRestartingAll] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
+  const [isLogoutPending, setIsLogoutPending] = useState(false);
   const [deploymentProgress, setDeploymentProgress] = useState(0);
   // Task id currently awaiting a pause/resume outcome from the worker (command
   // dispatched, polling pause_requested until it reflects the new state or times
@@ -317,6 +321,22 @@ export default function App() {
     addToast(tr('toast.withError', { action: fallbackMessage, message: getApiErrorMessage(error) }), 'warn');
   };
 
+  const handleLogout = async () => {
+    setIsLogoutPending(true);
+    try {
+      await logoutConsole();
+      replaceRoute('/login');
+    } catch (error) {
+      if (isAuthRequiredError(error)) {
+        replaceRoute('/login');
+        return;
+      }
+      addToast(tr('toast.logoutFailed', { message: getApiErrorMessage(error) }), 'warn');
+    } finally {
+      setIsLogoutPending(false);
+    }
+  };
+
   const handleFanoutResponse = (response: ServiceCommandFanoutResponse, targetName: string, acceptedMessage: string) => {
     const acceptedCount = (response.counts.dispatched ?? 0) + (response.counts.queued ?? 0);
     if (acceptedCount > 0) {
@@ -417,7 +437,7 @@ export default function App() {
 
     setIsLoadingTaskMetrics(true);
     setTaskMetricsError(null);
-    void loadTaskMetricWindows(selectedTask)
+    void loadTaskMetricWindows(selectedTask, taskMetricLookbackMinutes)
       .then((windows) => {
         if (cancelled) return;
         setTaskMetricWindows(windows);
@@ -440,7 +460,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [redirectToLogin, selectedTask]);
+  }, [redirectToLogin, selectedTask, taskMetricLookbackMinutes]);
 
   // --- Interactive Control plane Handlers ---
 
@@ -676,6 +696,8 @@ export default function App() {
       {/* --- Sidebar Navigator panel --- */}
       <Sidebar
         currentView={currentView}
+        isLogoutPending={isLogoutPending}
+        onLogout={() => void handleLogout()}
         onViewChange={navigateToView}
       />
 
@@ -813,17 +835,34 @@ export default function App() {
                 <div>
                   <nav aria-label="Breadcrumb" className="flex items-center text-slate-400 font-medium text-xs mb-1">
                     <button
+                      type="button"
                       onClick={navigateToServicesList}
-                      className="hover:text-indigo-600 transition-colors"
+                      className="rounded-sm hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
                     >
                       {tr('nav.services')}
                     </button>
                     <ChevronRight className="w-3.5 h-3.5 mx-1" />
-                    <span className="text-slate-800 font-bold">{selectedService.name.split(' ')[0]}</span>
+                    {selectedTask ? (
+                      <button
+                        type="button"
+                        onClick={() => navigateToService(selectedServiceId)}
+                        className="rounded-sm text-slate-800 font-bold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
+                      >
+                        {selectedService.name.split(' ')[0]}
+                      </button>
+                    ) : (
+                      <span className="text-slate-800 font-bold">{selectedService.name.split(' ')[0]}</span>
+                    )}
                     {selectedTask && (
                       <>
                         <ChevronRight className="w-3.5 h-3.5 mx-1" />
-                        <span className="text-slate-500 font-semibold">{tr('tabs.tasks')}</span>
+                        <button
+                          type="button"
+                          onClick={() => navigateToServiceTab('Tasks')}
+                          className="rounded-sm text-slate-500 font-semibold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
+                        >
+                          {tr('tabs.tasks')}
+                        </button>
                         <ChevronRight className="w-3.5 h-3.5 mx-1" />
                         <span className="text-slate-900 font-bold">{selectedTask.name}</span>
                       </>
@@ -1022,6 +1061,8 @@ export default function App() {
                       <TopologyFlow task={selectedTask} />
                       <ResourceChart
                         windows={taskMetricWindows}
+                        lookbackMinutes={taskMetricLookbackMinutes}
+                        onLookbackMinutesChange={setTaskMetricLookbackMinutes}
                         isLoading={isLoadingTaskMetrics}
                         error={taskMetricsError}
                       />

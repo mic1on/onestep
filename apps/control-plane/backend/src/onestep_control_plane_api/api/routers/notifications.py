@@ -12,10 +12,12 @@ from onestep_control_plane_api.api.notification_service import (
     list_notification_channels,
     list_notification_services,
     update_notification_channel,
+    update_notification_channel_enabled,
 )
 from onestep_control_plane_api.api.schemas import (
     NotificationChannelCreateRequest,
     NotificationChannelDeleteResponse,
+    NotificationChannelEnabledPatchRequest,
     NotificationChannelListResponse,
     NotificationChannelSummary,
     NotificationChannelUpdateRequest,
@@ -54,6 +56,19 @@ def post_notification_channel(
     db: Session = Depends(get_db_session),
 ) -> NotificationChannelSummary:
     return create_notification_channel(db, request)
+
+
+@router.patch(
+    "/channels/{channel_id}/enabled",
+    response_model=NotificationChannelSummary,
+    dependencies=[Depends(require_console_write_access)],
+)
+def patch_notification_channel_enabled(
+    channel_id: UUID,
+    request: NotificationChannelEnabledPatchRequest,
+    db: Session = Depends(get_db_session),
+) -> NotificationChannelSummary:
+    return update_notification_channel_enabled(db, channel_id, request)
 
 
 @router.patch(

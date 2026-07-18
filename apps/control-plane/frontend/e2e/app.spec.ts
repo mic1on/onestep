@@ -282,6 +282,28 @@ async function installApiMocks(page: Page) {
     const query = Object.fromEntries(url.searchParams.entries());
 
     if (request.method() === "POST") {
+      if (path === "/api/v1/auth/logout") {
+        commands.push({
+          method: request.method(),
+          path,
+          query,
+          body: null,
+        });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            auth_configured: true,
+            bootstrap_required: false,
+            authenticated: false,
+            username: null,
+            role: null,
+            roles: [],
+          }),
+        });
+        return;
+      }
+
       const body = request.postDataJSON() as { kind?: string; args?: Record<string, unknown> } | null;
       commands.push({
         method: request.method(),
@@ -331,6 +353,22 @@ async function installApiMocks(page: Page) {
           queued: [],
           skipped: [],
           rejected: [],
+        }),
+      });
+      return;
+    }
+
+    if (path === "/api/v1/auth/session") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          auth_configured: true,
+          bootstrap_required: false,
+          authenticated: false,
+          username: null,
+          role: null,
+          roles: [],
         }),
       });
       return;
@@ -504,6 +542,25 @@ test("renders the control plane dashboard", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Restart All" })).toBeVisible();
 });
 
+test("shows support links in nav bottom and signs out", async ({ page }) => {
+  const api = await installApiMocks(page);
+  await page.goto("/");
+
+  const docsLink = page.getByRole("link", { name: "Docs" });
+  await expect(docsLink).toHaveAttribute("href", "https://onestep.code05.com/");
+  await expect(docsLink).toHaveAttribute("target", "_blank");
+
+  const githubLink = page.getByRole("link", { name: "GitHub" });
+  await expect(githubLink).toHaveAttribute("href", "https://github.com/mic1on/onestep");
+  await expect(githubLink).toHaveAttribute("target", "_blank");
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
+  expect(api.commands.some((command) => command.path === "/api/v1/auth/logout")).toBe(true);
+});
+
 test("does not render demo services while the initial API load is pending", async ({ page }) => {
   let releaseApi: () => void = () => {};
   const apiPending = new Promise<void>((resolve) => {
@@ -545,9 +602,19 @@ test("loads API-backed service, task, instance, topology, config, and log views"
 
   await page.getByText("orders_to_ledger").first().click();
   await expect(page.getByRole("heading", { name: "orders_to_ledger" })).toBeVisible();
-  await expect(page.getByText("Task Metrics (Last 15m)")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Task Metrics" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "15m", pressed: true })).toBeVisible();
   await expect(page.getByText("1020")).toBeVisible();
   await expect(page.getByRole("button", { name: "Failures" })).toBeVisible();
+
+  await page.getByLabel("Breadcrumb").getByRole("button", { name: "Tasks" }).click();
+  await expect(page).toHaveURL(/\/services\/billing-sync%3Aprod$/);
+  await expect(page.getByText("orders_to_ledger").first()).toBeVisible();
+
+  await page.getByText("orders_to_ledger").first().click();
+  await page.getByLabel("Breadcrumb").getByRole("button", { name: "billing-sync" }).click();
+  await expect(page).toHaveURL(/\/services\/billing-sync%3Aprod$/);
+  await page.getByText("orders_to_ledger").first().click();
 
   await page.getByRole("button", { name: "redis_stream orders.v1" }).click();
   await expect(page.getByText("redis_stream Source")).toBeVisible();
@@ -602,7 +669,7 @@ test("dispatches service, task, and instance commands to the control-plane API",
   await page.getByRole("button", { name: "Restart" }).click();
   await expect(page.getByText("orders_to_ledger restart sequence accepted.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Stop Task" }).click();
+  await page.getByRole("button", { name: "Pause" }).click();
   await expect(page.getByText("orders_to_ledger command accepted.")).toBeVisible();
 
   await page.goto("/services/billing-sync%3Aprod?tab=instances");

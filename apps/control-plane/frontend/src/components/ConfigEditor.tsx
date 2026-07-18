@@ -55,11 +55,11 @@ export default function ConfigEditor({ task }: ConfigEditorProps) {
         const isMainHeader = key.trim() === 'task_config';
 
         return (
-          <div key={idx} className="font-mono text-xs leading-relaxed flex">
-            <span className="text-slate-500/80 select-none pr-3 text-right w-8 text-[10px]">
+          <div key={idx} data-testid="config-yaml-line" className="font-mono text-xs leading-relaxed flex min-w-max">
+            <span className="text-slate-500/80 select-none pr-3 text-right w-8 shrink-0 text-[10px]">
               {idx + 1}
             </span>
-            <span>
+            <span data-testid="config-yaml-line-content" className="whitespace-pre">
               {/* Render key */}
               <span className={isMainHeader ? 'text-[#e5c07b] font-bold' : 'text-[#ef596f]'}>
                 {key}
@@ -78,11 +78,11 @@ export default function ConfigEditor({ task }: ConfigEditorProps) {
       }
 
       return (
-        <div key={idx} className="font-mono text-xs leading-relaxed flex">
-          <span className="text-slate-500/80 select-none pr-3 text-right w-8 text-[10px]">
+        <div key={idx} data-testid="config-yaml-line" className="font-mono text-xs leading-relaxed flex min-w-max">
+          <span className="text-slate-500/80 select-none pr-3 text-right w-8 shrink-0 text-[10px]">
             {idx + 1}
           </span>
-          <span className="text-[#abb2bf]">
+          <span data-testid="config-yaml-line-content" className="text-[#abb2bf] whitespace-pre">
             {line}
             {comment && <span className="text-slate-500/90 italic">{comment}</span>}
           </span>

@@ -1194,6 +1194,10 @@ class NotificationChannelUpdateRequest(APIModel):
         return self
 
 
+class NotificationChannelEnabledPatchRequest(APIModel):
+    enabled: bool
+
+
 class NotificationChannelSummary(APIModel):
     id: UUID
     name: str
@@ -1304,6 +1308,23 @@ class TaskMetricWindowSummary(APIModel):
     p95_duration_ms: float | None = Field(default=None, ge=0)
     received_at: datetime
     created_at: datetime
+
+
+class TaskMetricChartPointSummary(APIModel):
+    bucket_started_at: datetime
+    bucket_ended_at: datetime
+    reported_window_count: int = Field(ge=0)
+    fetched: int = Field(ge=0)
+    started: int = Field(ge=0)
+    succeeded: int = Field(ge=0)
+    retried: int = Field(ge=0)
+    failed: int = Field(ge=0)
+    dead_lettered: int = Field(ge=0)
+    cancelled: int = Field(ge=0)
+    timeouts: int = Field(ge=0)
+    inflight: int = Field(ge=0)
+    avg_duration_ms: float | None = Field(default=None, ge=0)
+    p95_duration_ms: float | None = Field(default=None, ge=0)
 
 
 class TaskMetricWindowListResponse(PaginatedResponse):
@@ -1431,6 +1452,7 @@ class TaskDetailResponse(APIModel):
     lookback_started_at: datetime
     summary: TaskDashboardSummary
     task_control: TaskControlStateSummary
+    recent_metric_points: list[TaskMetricChartPointSummary]
     recent_metric_windows: list[TaskMetricWindowSummary]
     recent_events: list[TaskEventSummary]
 

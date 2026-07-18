@@ -193,6 +193,23 @@ export interface TaskMetricWindowSummary {
   created_at: string;
 }
 
+export interface TaskMetricChartPointSummary {
+  bucket_started_at: string;
+  bucket_ended_at: string;
+  reported_window_count: number;
+  fetched: number;
+  started: number;
+  succeeded: number;
+  retried: number;
+  failed: number;
+  dead_lettered: number;
+  cancelled: number;
+  timeouts: number;
+  inflight: number;
+  avg_duration_ms: number | null;
+  p95_duration_ms: number | null;
+}
+
 interface TaskInstanceControlState {
   instance_id: string;
   pause_requested: boolean | null;
@@ -211,6 +228,7 @@ interface TaskDetailResponse {
   lookback_started_at: string;
   summary: TaskDashboardSummary;
   task_control: TaskControlStateSummary;
+  recent_metric_points?: TaskMetricChartPointSummary[];
   recent_metric_windows: TaskMetricWindowSummary[];
   recent_events: TaskEventSummary[];
 }
@@ -389,9 +407,11 @@ export interface RecentEvent {
   environment: Environment;
 }
 
-// Matches the control plane's DEFAULT_LOOKBACK_MINUTES so the client and server
-// always agree on the aggregation window for throughput / success metrics.
+// Matches the control plane's DEFAULT_LOOKBACK_MINUTES for service/task summaries.
 const DEFAULT_LOOKBACK_MINUTES = 15;
+export const DEFAULT_TASK_METRIC_LOOKBACK_MINUTES = DEFAULT_LOOKBACK_MINUTES;
+export const MAX_TASK_METRIC_LOOKBACK_MINUTES = 24 * 60;
+export const TASK_METRIC_LOOKBACK_PRESETS = [5, 10, 15, 30] as const;
 const PAGE_SIZE = 100;
 
 class ApiError extends Error {
@@ -451,13 +471,13 @@ export interface NotificationChannelInput {
   name: string;
   provider: NotificationProvider;
   webhook_url: string;
-  enabled: boolean;
+  enabled?: boolean;
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];
   missed_start_grace_seconds: number;
 }
 
-export type NotificationChannelPatch = Partial<NotificationChannelInput>;
+export type NotificationChannelPatch = Partial<Omit<NotificationChannelInput, 'enabled'>>;
 
 export interface NotificationTestResponse {
   status: 'accepted';
@@ -667,6 +687,12 @@ export function loginConsole(username: string, password: string) {
   });
 }
 
+export function logoutConsole() {
+  return request<ConsoleSessionResponse>('/api/v1/auth/logout', {
+    method: 'POST',
+  });
+}
+
 export async function listNotificationChannels() {
   const response = await request<NotificationChannelListResponse>('/api/v1/settings/notifications/channels');
   return response.items;
@@ -688,6 +714,13 @@ export function updateNotificationChannel(channelId: string, patch: Notification
   return request<NotificationChannel>(`/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}`, {
     method: 'PATCH',
     body: patch,
+  });
+}
+
+export function setNotificationChannelEnabled(channelId: string, enabled: boolean) {
+  return request<NotificationChannel>(`/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}/enabled`, {
+    method: 'PATCH',
+    body: { enabled },
   });
 }
 
@@ -734,7 +767,10 @@ async function listServiceInstances(service: ServiceSummary) {
   });
 }
 
-export async function loadTaskMetricWindows(task: Task) {
+export async function loadTaskMetricWindows(
+  task: Task,
+  lookbackMinutes = DEFAULT_TASK_METRIC_LOOKBACK_MINUTES,
+): Promise<TaskMetricChartPointSummary[]> {
   if (!task.apiServiceName || !task.apiName || !task.environment) {
     return [];
   }
@@ -744,13 +780,31 @@ export async function loadTaskMetricWindows(task: Task) {
     {
       query: {
         environment: task.environment,
-        lookback_minutes: DEFAULT_LOOKBACK_MINUTES,
+        lookback_minutes: lookbackMinutes,
         metric_window_limit: 24,
         event_limit: 1,
       },
     },
   );
-  return response.recent_metric_windows;
+  if (response.recent_metric_points) {
+    return response.recent_metric_points;
+  }
+  return response.recent_metric_windows.map((window) => ({
+    bucket_started_at: window.window_started_at,
+    bucket_ended_at: window.window_ended_at,
+    reported_window_count: 1,
+    fetched: window.fetched,
+    started: window.started,
+    succeeded: window.succeeded,
+    retried: window.retried,
+    failed: window.failed,
+    dead_lettered: window.dead_lettered,
+    cancelled: window.cancelled,
+    timeouts: window.timeouts,
+    inflight: window.inflight,
+    avg_duration_ms: window.avg_duration_ms,
+    p95_duration_ms: window.p95_duration_ms,
+  }));
 }
 
 /**

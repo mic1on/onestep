@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
+  Check,
   CheckCircle2,
   Edit3,
   Plus,
@@ -17,6 +18,7 @@ import {
   isAuthRequiredError,
   listNotificationChannels,
   listNotificationServices,
+  setNotificationChannelEnabled,
   testNotificationChannel,
   updateNotificationChannel,
   type NotificationChannel,
@@ -37,16 +39,18 @@ type FormState = {
   name: string;
   provider: NotificationProvider;
   webhookUrl: string;
-  enabled: boolean;
   serviceScopeKeys: string[];
   eventTypes: NotificationEventType[];
   missedStartGraceSeconds: string;
 };
 
-const PROVIDERS: Array<{ value: NotificationProvider; label: string }> = [
-  { value: 'feishu', label: 'Feishu' },
-  { value: 'wechat_work', label: 'WeCom' },
-];
+const PROVIDER_VALUES: NotificationProvider[] = ['feishu', 'wechat_work'];
+
+type Translate = ReturnType<typeof useI18n>['t'];
+
+function providerLabelKey(provider: NotificationProvider) {
+  return `notifications.provider.${provider}` as const;
+}
 
 const EVENTS: Array<{ value: NotificationEventType; label: string }> = [
   { value: 'task_started', label: 'Task started' },
@@ -64,18 +68,39 @@ const EMPTY_FORM: FormState = {
   name: '',
   provider: 'feishu',
   webhookUrl: '',
-  enabled: true,
   serviceScopeKeys: [],
   eventTypes: DEFAULT_EVENTS,
   missedStartGraceSeconds: '300',
 };
 
-function providerLabel(provider: NotificationProvider) {
-  return PROVIDERS.find((item) => item.value === provider)?.label ?? provider;
+function providerLabel(provider: NotificationProvider, t: Translate) {
+  return t(providerLabelKey(provider));
 }
 
 function eventLabel(eventType: NotificationEventType) {
   return EVENTS.find((item) => item.value === eventType)?.label ?? eventType;
+}
+
+interface StyledCheckboxProps {
+  checked: boolean;
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+}
+
+function StyledCheckbox({ checked, onChange }: StyledCheckboxProps) {
+  return (
+    <span className="relative grid h-5 w-5 shrink-0 place-items-center">
+      <input
+        checked={checked}
+        className="peer h-5 w-5 cursor-pointer appearance-none rounded-md border border-slate-300 bg-white shadow-xs transition-colors duration-150 checked:border-indigo-600 checked:bg-indigo-600 hover:border-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100 focus-visible:ring-offset-1"
+        onChange={onChange}
+        type="checkbox"
+      />
+      <Check
+        aria-hidden="true"
+        className="pointer-events-none absolute h-3.5 w-3.5 stroke-[3] text-white opacity-0 transition-opacity duration-150 peer-checked:opacity-100"
+      />
+    </span>
+  );
 }
 
 function scopeKey(scope: NotificationServiceScope) {
@@ -106,7 +131,6 @@ function channelToForm(channel: NotificationChannel): FormState {
     name: channel.name,
     provider: channel.provider,
     webhookUrl: '',
-    enabled: channel.enabled,
     serviceScopeKeys: channel.service_scopes.map(scopeKey),
     eventTypes: channel.event_types,
     missedStartGraceSeconds: String(channel.missed_start_grace_seconds),
@@ -122,10 +146,6 @@ function channelScopeText(channel: NotificationChannel) {
   return `${channel.service_scopes.length} services`;
 }
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleString();
-}
-
 export default function NotificationSettingsPage({
   onAuthRequired,
   onNotify,
@@ -136,11 +156,13 @@ export default function NotificationSettingsPage({
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [enabledToggleId, setEnabledToggleId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const isEditing = form.id !== null;
   const includesMissedStart = form.eventTypes.includes('task_missed_start');
   const selectedServiceKeys = new Set(form.serviceScopeKeys);
+  const allServicesSelected = form.serviceScopeKeys.length === 0;
   const serviceOptions = useMemo(() => uniqueScopes(services), [services]);
 
   const localEventLabel = (eventType: NotificationEventType) => {
@@ -221,7 +243,6 @@ export default function NotificationSettingsPage({
     const payload = {
       name: form.name.trim(),
       provider: form.provider,
-      enabled: form.enabled,
       service_scopes: form.serviceScopeKeys.map(scopeFromKey),
       event_types: form.eventTypes,
       missed_start_grace_seconds: graceSeconds,
@@ -261,7 +282,7 @@ export default function NotificationSettingsPage({
     setError(null);
     try {
       const response = await testNotificationChannel(channel.id);
-      onNotify(t('notifications.testAccepted', { provider: providerLabel(response.provider), name: channel.name }), 'success');
+      onNotify(t('notifications.testAccepted', { provider: providerLabel(response.provider, t), name: channel.name }), 'success');
     } catch (testError) {
       if (isAuthRequiredError(testError)) {
         onAuthRequired();
@@ -270,6 +291,33 @@ export default function NotificationSettingsPage({
       const message = getApiErrorMessage(testError);
       setError(message);
       onNotify(t('notifications.testFailed', { message }), 'warn');
+    }
+  }
+
+  async function toggleChannelEnabled(channel: NotificationChannel) {
+    setError(null);
+    setEnabledToggleId(channel.id);
+    try {
+      const updated = await setNotificationChannelEnabled(channel.id, !channel.enabled);
+      setChannels((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      onNotify(
+        t(updated.enabled ? 'notifications.enabledUpdated' : 'notifications.disabledUpdated', {
+          name: updated.name,
+        }),
+        'success',
+      );
+    } catch (toggleError) {
+      if (isAuthRequiredError(toggleError)) {
+        onAuthRequired();
+        return;
+      }
+      const message = getApiErrorMessage(toggleError);
+      setError(message);
+      onNotify(t('notifications.toggleFailed', { message }), 'warn');
+    } finally {
+      setEnabledToggleId((current) => (current === channel.id ? null : current));
     }
   }
 
@@ -347,38 +395,45 @@ export default function NotificationSettingsPage({
           </div>
 
           {channels.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 bg-white text-[11px] uppercase tracking-wide text-slate-400">
-                    <th className="px-4 py-3 font-bold">{t('notifications.channel')}</th>
-                    <th className="px-4 py-3 font-bold">{t('notifications.provider')}</th>
-                    <th className="px-4 py-3 font-bold">{t('notifications.status')}</th>
-                    <th className="px-4 py-3 font-bold">{t('notifications.scope')}</th>
-                    <th className="px-4 py-3 font-bold">{t('notifications.events')}</th>
-                    <th className="px-4 py-3 font-bold">{t('notifications.updatedAt')}</th>
-                    <th className="px-4 py-3 text-right font-bold">{t('notifications.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {channels.map((channel) => (
-                    <tr key={channel.id} className="border-b border-slate-100 last:border-0">
-                      <td className="px-4 py-3">
-                        <div className="font-bold text-slate-900">{channel.name}</div>
-                        <div className="mt-1 max-w-xs truncate font-mono text-[11px] font-medium text-slate-400">
-                          {channel.webhook_url_masked}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 font-semibold text-slate-700">
-                        {providerLabel(channel.provider)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-bold ${
+            <div>
+              <div className="hidden border-b border-slate-100 bg-white px-4 py-2.5 text-[11px] font-bold uppercase tracking-wide text-slate-400 lg:grid lg:grid-cols-[minmax(220px,1.05fr)_minmax(270px,1.55fr)_104px] lg:gap-3">
+                <span>{t('notifications.channel')}</span>
+                <span>
+                  {t('notifications.scope')} / {t('notifications.events')}
+                </span>
+                <span className="text-right">{t('notifications.actions')}</span>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {channels.map((channel) => (
+                  <article
+                    key={channel.id}
+                    className={`grid gap-4 px-4 py-4 transition-colors lg:grid-cols-[minmax(220px,1.05fr)_minmax(270px,1.55fr)_104px] lg:items-center lg:gap-3 ${
+                      form.id === channel.id ? 'bg-indigo-50/35' : 'hover:bg-slate-50/70'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <div className="min-w-0 truncate text-sm font-bold text-slate-950">{channel.name}</div>
+                        <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[11px] font-bold text-indigo-700">
+                          {providerLabel(channel.provider, t)}
+                        </span>
+                        <button
+                          aria-label={t(channel.enabled ? 'notifications.disableTitle' : 'notifications.enableTitle', {
+                            name: channel.name,
+                          })}
+                          aria-pressed={channel.enabled}
+                          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-bold transition-colors disabled:cursor-wait disabled:opacity-70 ${
                             channel.enabled
-                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                              : 'border-slate-200 bg-slate-50 text-slate-500'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
                           }`}
+                          disabled={enabledToggleId === channel.id}
+                          onClick={() => void toggleChannelEnabled(channel)}
+                          title={t(channel.enabled ? 'notifications.disableTitle' : 'notifications.enableTitle', {
+                            name: channel.name,
+                          })}
+                          type="button"
                         >
                           <span
                             className={`h-1.5 w-1.5 rounded-full ${
@@ -386,60 +441,80 @@ export default function NotificationSettingsPage({
                             }`}
                           />
                           {channel.enabled ? t('notifications.enabled') : t('notifications.disabled')}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex min-w-0 items-center gap-2 rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-100">
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-slate-300" />
+                        <span className="min-w-0 truncate font-mono text-[11px] font-semibold text-slate-500">
+                          {channel.webhook_url_masked}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 text-xs font-semibold text-slate-600">
-                        {localChannelScopeText(channel)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex max-w-xs flex-wrap gap-1.5">
+                      </div>
+                    </div>
+
+                    <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(140px,0.75fr)_minmax(0,1fr)] sm:items-start">
+                      <div className="min-w-0">
+                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400 lg:hidden">
+                          {t('notifications.scope')}
+                        </div>
+                        <span className="inline-flex max-w-full rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700">
+                          <span className="truncate">{localChannelScopeText(channel)}</span>
+                        </span>
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-400 lg:hidden">
+                          {t('notifications.events')}
+                        </div>
+                        <div className="flex min-w-0 flex-wrap gap-1.5">
                           {channel.event_types.slice(0, 3).map((eventType) => (
                             <span
                               key={eventType}
-                              className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-600"
+                              className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-bold text-slate-600"
                             >
                               {localEventLabel(eventType)}
                             </span>
                           ))}
                           {channel.event_types.length > 3 ? (
-                            <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-500">
+                            <span className="whitespace-nowrap rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-bold text-slate-500">
                               +{channel.event_types.length - 3}
                             </span>
                           ) : null}
                         </div>
-                      </td>
-                      <td className="px-4 py-3 text-xs font-semibold text-slate-500">
-                        {formatDate(channel.updated_at)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-50 hover:text-indigo-600"
-                            onClick={() => void runTest(channel)}
-                            title={t('notifications.testTitle', { name: channel.name })}
-                          >
-                            <Send className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-50 hover:text-indigo-600"
-                            onClick={() => setForm(channelToForm(channel))}
-                            title={t('notifications.editTitle', { name: channel.name })}
-                          >
-                            <Edit3 className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                            onClick={() => void removeChannel(channel)}
-                            title={t('notifications.deleteTitle', { name: channel.name })}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    </div>
+
+                    <div className="flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-xs lg:justify-self-end">
+                      <button
+                        aria-label={t('notifications.testTitle', { name: channel.name })}
+                        className="grid h-8 w-8 place-items-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                        onClick={() => void runTest(channel)}
+                        title={t('notifications.testTitle', { name: channel.name })}
+                        type="button"
+                      >
+                        <Send className="h-4 w-4" />
+                      </button>
+                      <button
+                        aria-label={t('notifications.editTitle', { name: channel.name })}
+                        className="grid h-8 w-8 place-items-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                        onClick={() => setForm(channelToForm(channel))}
+                        title={t('notifications.editTitle', { name: channel.name })}
+                        type="button"
+                      >
+                        <Edit3 className="h-4 w-4" />
+                      </button>
+                      <button
+                        aria-label={t('notifications.deleteTitle', { name: channel.name })}
+                        className="grid h-8 w-8 place-items-center rounded-md text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                        onClick={() => void removeChannel(channel)}
+                        title={t('notifications.deleteTitle', { name: channel.name })}
+                        type="button"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 p-8 text-center">
@@ -494,8 +569,8 @@ export default function NotificationSettingsPage({
                 {t('notifications.provider')}
               </div>
               <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
-                {PROVIDERS.map((provider) => {
-                  const active = form.provider === provider.value;
+                {PROVIDER_VALUES.map((providerValue) => {
+                  const active = form.provider === providerValue;
                   return (
                     <button
                       aria-pressed={active}
@@ -504,13 +579,13 @@ export default function NotificationSettingsPage({
                           ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-indigo-100'
                           : 'text-slate-500 hover:bg-white/70 hover:text-slate-800'
                       }`}
-                      key={provider.value}
+                      key={providerValue}
                       onClick={() =>
-                        setForm((current) => ({ ...current, provider: provider.value }))
+                        setForm((current) => ({ ...current, provider: providerValue }))
                       }
                       type="button"
                     >
-                      {provider.label}
+                      {t(providerLabelKey(providerValue))}
                     </button>
                   );
                 })}
@@ -529,33 +604,28 @@ export default function NotificationSettingsPage({
               />
             </label>
 
-            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
-              <input
-                checked={form.enabled}
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600"
-                onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
-                type="checkbox"
-              />
-              <span>{form.enabled ? t('notifications.enabled') : t('notifications.disabled')}</span>
-            </label>
-
             <div>
               <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{t('notifications.events')}</div>
               <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                {EVENTS.map((eventType) => (
-                  <label
-                    className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
-                    key={eventType.value}
-                  >
-                    <input
-                      checked={form.eventTypes.includes(eventType.value)}
-                      className="h-4 w-4 rounded border-slate-300 text-indigo-600"
-                      onChange={(event) => updateEventType(eventType.value, event.target.checked)}
-                      type="checkbox"
-                    />
-                    <span className="truncate">{localEventLabel(eventType.value)}</span>
-                  </label>
-                ))}
+                {EVENTS.map((eventType) => {
+                  const checked = form.eventTypes.includes(eventType.value);
+                  return (
+                    <label
+                      className={`flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold transition-colors ${
+                        checked
+                          ? 'border-indigo-100 bg-indigo-50/60 text-slate-900'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                      key={eventType.value}
+                    >
+                      <StyledCheckbox
+                        checked={checked}
+                        onChange={(event) => updateEventType(eventType.value, event.target.checked)}
+                      />
+                      <span className="truncate">{localEventLabel(eventType.value)}</span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -580,27 +650,34 @@ export default function NotificationSettingsPage({
             <div>
               <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{t('nav.services')}</div>
               <div className="mt-2 max-h-52 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2">
-                <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50">
-                  <input
-                    checked={form.serviceScopeKeys.length === 0}
-                    className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                <label
+                  className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-bold transition-colors ${
+                    allServicesSelected
+                      ? 'bg-indigo-50 text-slate-900'
+                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+                  }`}
+                >
+                  <StyledCheckbox
+                    checked={allServicesSelected}
                     onChange={() => setForm((current) => ({ ...current, serviceScopeKeys: [] }))}
-                    type="checkbox"
                   />
                   <span>{t('notifications.allServices')}</span>
                 </label>
                 {serviceOptions.map((service) => {
                   const key = scopeKey(service);
+                  const checked = selectedServiceKeys.has(key);
                   return (
                     <label
-                      className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                      className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs font-bold transition-colors ${
+                        checked
+                          ? 'bg-indigo-50 text-slate-900'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+                      }`}
                       key={key}
                     >
-                      <input
-                        checked={selectedServiceKeys.has(key)}
-                        className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                      <StyledCheckbox
+                        checked={checked}
                         onChange={(event) => updateServiceScope(key, event.target.checked)}
-                        type="checkbox"
                       />
                       <span className="truncate">
                         {service.environment}/{service.name}

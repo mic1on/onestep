@@ -40,6 +40,7 @@ from onestep_control_plane_api.api.query_support import (
     build_task_control_summary,
     build_task_counts_map,
     build_task_event_summary,
+    build_task_metric_chart_points,
     build_task_summary_map,
     compute_success_rate,
     compute_throughput_per_min,
@@ -527,7 +528,7 @@ def get_service_task_detail(
         )
     ).all()
 
-    recent_metric_windows = db.scalars(
+    metric_windows = db.scalars(
         select(TaskMetricWindow)
         .where(
             TaskMetricWindow.service_id == service.id,
@@ -535,8 +536,8 @@ def get_service_task_detail(
             TaskMetricWindow.window_ended_at >= lookback_started_at,
         )
         .order_by(TaskMetricWindow.window_ended_at.desc(), TaskMetricWindow.window_id)
-        .limit(metric_window_limit)
     ).all()
+    recent_metric_windows = metric_windows[:metric_window_limit]
     recent_events = db.scalars(
         select(TaskEvent)
         .where(
@@ -559,6 +560,11 @@ def get_service_task_detail(
             active_sessions_by_instance_id=active_sessions_by_instance_id,
             task_name=task_name,
             cutoff=online_scope_cutoff,
+        ),
+        recent_metric_points=build_task_metric_chart_points(
+            metric_windows,
+            lookback_started_at=lookback_started_at,
+            lookback_minutes=lookback_minutes,
         ),
         recent_metric_windows=[
             build_metric_window_summary(metric_window) for metric_window in recent_metric_windows

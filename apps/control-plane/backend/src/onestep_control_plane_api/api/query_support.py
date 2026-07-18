@@ -10,7 +10,7 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
-from onestep_control_plane_api.api.common import utcnow
+from onestep_control_plane_api.api.common import as_utc, utcnow
 from onestep_control_plane_api.api.constants import (
     HEALTH_STATUS_VALUES,
     RETRY_ATTEMPTS_CONFIG_KEYS,
@@ -43,6 +43,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskEventKind,
     TaskEventSummary,
     TaskInstanceControlState,
+    TaskMetricChartPointSummary,
     TaskMetricWindowSummary,
     TaskViewStatus,
 )
@@ -805,6 +806,99 @@ def build_metric_window_summary(metric_window: TaskMetricWindow) -> TaskMetricWi
         received_at=metric_window.received_at,
         created_at=metric_window.created_at,
     )
+
+
+def build_task_metric_chart_points(
+    metric_windows: list[TaskMetricWindow],
+    *,
+    lookback_started_at: datetime,
+    lookback_minutes: int,
+) -> list[TaskMetricChartPointSummary]:
+    if lookback_minutes <= 0:
+        return []
+
+    bucket_start = as_utc(lookback_started_at)
+    bucket_end = bucket_start + timedelta(minutes=lookback_minutes)
+    buckets = [
+        {
+            "bucket_started_at": bucket_start + timedelta(minutes=index),
+            "bucket_ended_at": bucket_start + timedelta(minutes=index + 1),
+            "reported_window_count": 0,
+            "fetched": 0,
+            "started": 0,
+            "succeeded": 0,
+            "retried": 0,
+            "failed": 0,
+            "dead_lettered": 0,
+            "cancelled": 0,
+            "timeouts": 0,
+            "inflight": 0,
+            "avg_duration_weighted_sum": 0.0,
+            "avg_duration_weight": 0,
+            "p95_duration_ms": None,
+        }
+        for index in range(lookback_minutes)
+    ]
+
+    for metric_window in metric_windows:
+        ended_at = as_utc(metric_window.window_ended_at)
+        if ended_at < bucket_start or ended_at > bucket_end:
+            continue
+        bucket_index = min(
+            int((ended_at - bucket_start).total_seconds() // 60),
+            lookback_minutes - 1,
+        )
+        bucket = buckets[bucket_index]
+        bucket["reported_window_count"] += 1
+        bucket["fetched"] += metric_window.fetched
+        bucket["started"] += metric_window.started
+        bucket["succeeded"] += metric_window.succeeded
+        bucket["retried"] += metric_window.retried
+        bucket["failed"] += metric_window.failed
+        bucket["dead_lettered"] += metric_window.dead_lettered
+        bucket["cancelled"] += metric_window.cancelled
+        bucket["timeouts"] += metric_window.timeouts
+        bucket["inflight"] = max(bucket["inflight"], metric_window.inflight)
+        if metric_window.avg_duration_ms is not None and metric_window.started > 0:
+            bucket["avg_duration_weighted_sum"] += (
+                metric_window.avg_duration_ms * metric_window.started
+            )
+            bucket["avg_duration_weight"] += metric_window.started
+        if metric_window.p95_duration_ms is not None:
+            current_p95 = bucket["p95_duration_ms"]
+            bucket["p95_duration_ms"] = (
+                metric_window.p95_duration_ms
+                if current_p95 is None
+                else max(current_p95, metric_window.p95_duration_ms)
+            )
+
+    points: list[TaskMetricChartPointSummary] = []
+    for bucket in buckets:
+        avg_duration_weight = bucket["avg_duration_weight"]
+        avg_duration_ms = (
+            bucket["avg_duration_weighted_sum"] / avg_duration_weight
+            if avg_duration_weight
+            else None
+        )
+        points.append(
+            TaskMetricChartPointSummary(
+                bucket_started_at=bucket["bucket_started_at"],
+                bucket_ended_at=bucket["bucket_ended_at"],
+                reported_window_count=bucket["reported_window_count"],
+                fetched=bucket["fetched"],
+                started=bucket["started"],
+                succeeded=bucket["succeeded"],
+                retried=bucket["retried"],
+                failed=bucket["failed"],
+                dead_lettered=bucket["dead_lettered"],
+                cancelled=bucket["cancelled"],
+                timeouts=bucket["timeouts"],
+                inflight=bucket["inflight"],
+                avg_duration_ms=avg_duration_ms,
+                p95_duration_ms=bucket["p95_duration_ms"],
+            )
+        )
+    return points
 
 
 def build_task_control_summary(

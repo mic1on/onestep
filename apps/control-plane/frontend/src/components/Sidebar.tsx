@@ -1,16 +1,21 @@
-import { Bell, LayoutDashboard, Server } from 'lucide-react';
+import { Bell, BookOpen, Github, LayoutDashboard, LogOut, Server } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { ControlPlaneView } from '../appRoute';
+import BrandLogo from './BrandLogo';
 
 export type { ControlPlaneView };
 
 interface SidebarProps {
   currentView: ControlPlaneView;
+  isLogoutPending?: boolean;
+  onLogout: () => void;
   onViewChange: (view: ControlPlaneView) => void;
 }
 
 export default function Sidebar({
   currentView,
+  isLogoutPending = false,
+  onLogout,
   onViewChange,
 }: SidebarProps) {
   const { t } = useI18n();
@@ -21,8 +26,8 @@ export default function Sidebar({
     <nav className="bg-white border-r border-slate-200 fixed left-0 top-0 h-full w-[240px] flex flex-col p-4 z-20 shadow-xs">
       <div className="mb-8">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
-            <Server className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
+            <BrandLogo className="h-8 w-7" decorative />
           </div>
           <div>
             <h1 className="font-sans text-lg font-bold text-slate-900 tracking-tight">OneStep</h1>
@@ -72,6 +77,36 @@ export default function Sidebar({
           </button>
         </li>
       </ul>
+
+      <div className="border-t border-slate-200 pt-3">
+        <a
+          className="flex w-full items-center gap-3 rounded-lg p-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          href="https://onestep.code05.com/"
+          rel="noreferrer"
+          target="_blank"
+        >
+          <BookOpen className="h-4 w-4 text-slate-500" />
+          <span>{t('nav.docs')}</span>
+        </a>
+        <a
+          className="flex w-full items-center gap-3 rounded-lg p-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          href="https://github.com/mic1on/onestep"
+          rel="noreferrer"
+          target="_blank"
+        >
+          <Github className="h-4 w-4 text-slate-500" />
+          <span>{t('nav.github')}</span>
+        </a>
+        <button
+          className="flex w-full items-center gap-3 rounded-lg p-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isLogoutPending}
+          onClick={onLogout}
+          type="button"
+        >
+          <LogOut className="h-4 w-4 text-slate-500" />
+          <span>{isLogoutPending ? t('button.signingOut') : t('button.signOut')}</span>
+        </button>
+      </div>
     </nav>
   );
 }

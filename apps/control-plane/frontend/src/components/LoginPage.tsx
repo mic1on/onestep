@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { LockKeyhole, Server, ShieldCheck } from 'lucide-react';
+import { LockKeyhole, ShieldCheck } from 'lucide-react';
 import { getApiErrorMessage, getConsoleSession, loginConsole } from '../api';
 import { useI18n } from '../i18n';
+import BrandLogo from './BrandLogo';
 
 interface LoginPageProps {
   onAuthenticated: (nextPath: string) => void;
@@ -77,8 +78,8 @@ export default function LoginPage({ onAuthenticated }: LoginPageProps) {
         <section className="grid w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:grid-cols-[0.9fr_1.1fr]">
           <div className="border-b border-slate-200 bg-slate-950 p-8 text-white md:border-b-0 md:border-r">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600">
-                <Server className="h-5 w-5" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600 text-white">
+                <BrandLogo className="h-9 w-8" decorative />
               </div>
               <div>
                 <h1 className="text-lg font-bold">OneStep</h1>

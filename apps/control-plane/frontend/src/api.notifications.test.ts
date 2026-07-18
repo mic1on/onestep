@@ -4,6 +4,7 @@ import {
   deleteNotificationChannel,
   listNotificationChannels,
   listNotificationServices,
+  setNotificationChannelEnabled,
   testNotificationChannel,
   updateNotificationChannel,
 } from './api';
@@ -95,17 +96,42 @@ describe('notification api', () => {
       event_types: ['task_failed'],
       missed_start_grace_seconds: 300,
     });
-    await updateNotificationChannel('channel-1', { enabled: false });
+    await setNotificationChannelEnabled('channel-1', false);
     await testNotificationChannel('channel-1');
     await deleteNotificationChannel('channel-1');
 
     expect(calledPath(fetchMock.mock.calls[0])).toBe('/api/v1/settings/notifications/channels');
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'POST' }));
-    expect(calledPath(fetchMock.mock.calls[1])).toBe('/api/v1/settings/notifications/channels/channel-1');
+    expect(calledPath(fetchMock.mock.calls[1])).toBe('/api/v1/settings/notifications/channels/channel-1/enabled');
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'PATCH' }));
+    expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({ enabled: false });
     expect(calledPath(fetchMock.mock.calls[2])).toBe('/api/v1/settings/notifications/channels/channel-1/test');
     expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: 'POST' }));
     expect(calledPath(fetchMock.mock.calls[3])).toBe('/api/v1/settings/notifications/channels/channel-1');
     expect(fetchMock.mock.calls[3][1]).toEqual(expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('keeps the full notification channel patch endpoint for form edits', async () => {
+    const channelBody = {
+      id: 'channel-1',
+      name: 'ops-feishu',
+      provider: 'feishu',
+      webhook_url_masked: 'https://example.com/***',
+      enabled: true,
+      service_scopes: [],
+      event_types: ['task_failed'],
+      missed_start_grace_seconds: 300,
+      created_at: '2026-07-16T00:00:00Z',
+      updated_at: '2026-07-16T00:00:00Z',
+    };
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(jsonResponse(channelBody));
+
+    await updateNotificationChannel('channel-1', { name: 'ops-alerts' });
+
+    expect(calledPath(fetchMock.mock.calls[0])).toBe('/api/v1/settings/notifications/channels/channel-1');
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'PATCH' }));
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      name: 'ops-alerts',
+    });
   });
 });

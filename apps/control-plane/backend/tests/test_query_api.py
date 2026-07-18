@@ -3488,6 +3488,14 @@ def test_get_service_task_detail_returns_summary_windows_and_events(client, db_s
         "sync_users:two",
         "sync_users:one",
     ]
+    assert len(payload["recent_metric_points"]) == 15
+    assert sum(point["fetched"] for point in payload["recent_metric_points"]) == 66
+    assert sum(point["reported_window_count"] for point in payload["recent_metric_points"]) == 2
+    assert any(point["fetched"] == 0 for point in payload["recent_metric_points"])
+    assert payload["recent_metric_points"] == sorted(
+        payload["recent_metric_points"],
+        key=lambda point: point["bucket_started_at"],
+    )
     assert [event["event_id"] for event in payload["recent_events"]] == [
         "evt_task_detail_retried",
         "evt_task_detail_failed",

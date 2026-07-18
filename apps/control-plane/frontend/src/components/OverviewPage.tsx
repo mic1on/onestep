@@ -181,10 +181,10 @@ export default function OverviewPage({
       </div>
 
       {/* Stats bento cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         {/* Services */}
         <StatCard
-          icon={<Server className="w-5 h-5 text-indigo-600" />}
+          icon={<Server className="w-4 h-4 text-indigo-600" />}
           label={t('overview.totalServices')}
           value={serviceSummary.total_services}
           footer={
@@ -201,7 +201,7 @@ export default function OverviewPage({
         />
         {/* Instances */}
         <StatCard
-          icon={<Boxes className="w-5 h-5 text-indigo-600" />}
+          icon={<Boxes className="w-4 h-4 text-indigo-600" />}
           label={t('overview.totalInstances')}
           value={serviceSummary.total_instances}
           footer={
@@ -216,7 +216,7 @@ export default function OverviewPage({
         />
         {/* Tasks */}
         <StatCard
-          icon={<ListChecks className="w-5 h-5 text-indigo-600" />}
+          icon={<ListChecks className="w-4 h-4 text-indigo-600" />}
           label={t('overview.totalTasks')}
           value={serviceSummary.total_tasks}
           footer={
@@ -236,7 +236,7 @@ export default function OverviewPage({
         />
         {/* Source connectors */}
         <StatCard
-          icon={<Plug className="w-5 h-5 text-indigo-600" />}
+          icon={<Plug className="w-4 h-4 text-indigo-600" />}
           label={t('overview.sourceConnectors')}
           value={sourceKinds.length}
           footer={
@@ -373,14 +373,14 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, subValue, footer }: StatCardProps) {
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-40 shadow-xs">
+    <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between h-32 shadow-xs">
       <div className="flex justify-between items-start">
         <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{label}</span>
-        <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center">{icon}</div>
+        <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center">{icon}</div>
       </div>
       <div>
         <div className="flex items-baseline gap-2">
-          <span className="text-3xl font-extrabold text-slate-900 font-sans tracking-tight">{value}</span>
+          <span className="text-2xl font-extrabold text-slate-900 font-sans tracking-tight">{value}</span>
           {subValue && <span className="text-xs text-slate-400 font-medium">{subValue}</span>}
         </div>
       </div>

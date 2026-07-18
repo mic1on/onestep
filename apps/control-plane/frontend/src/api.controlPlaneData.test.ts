@@ -362,7 +362,7 @@ describe('loadControlPlaneData', () => {
     );
   });
 
-  it('loads recent metric windows from task detail telemetry', async () => {
+  it('loads recent metric chart points from task detail telemetry', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
       jsonResponse({
         service: serviceSummary,
@@ -414,6 +414,40 @@ describe('loadControlPlaneData', () => {
           uptime_reference_at: '2026-07-16T07:59:00Z',
         },
         task_control: { task_name: 'inspect_dead_letter', instances: [] },
+        recent_metric_points: [
+          {
+            bucket_started_at: '2026-07-16T07:58:00Z',
+            bucket_ended_at: '2026-07-16T07:59:00Z',
+            reported_window_count: 0,
+            fetched: 0,
+            started: 0,
+            succeeded: 0,
+            retried: 0,
+            failed: 0,
+            dead_lettered: 0,
+            cancelled: 0,
+            timeouts: 0,
+            inflight: 0,
+            avg_duration_ms: null,
+            p95_duration_ms: null,
+          },
+          {
+            bucket_started_at: '2026-07-16T07:59:00Z',
+            bucket_ended_at: '2026-07-16T08:00:00Z',
+            reported_window_count: 1,
+            fetched: 12,
+            started: 12,
+            succeeded: 11,
+            retried: 0,
+            failed: 1,
+            dead_lettered: 0,
+            cancelled: 0,
+            timeouts: 0,
+            inflight: 2,
+            avg_duration_ms: 42,
+            p95_duration_ms: 84,
+          },
+        ],
         recent_metric_windows: [
           {
             instance_id: '11111111-1111-4111-8111-111111111111',
@@ -440,15 +474,21 @@ describe('loadControlPlaneData', () => {
       }),
     );
 
-    const windows = await loadTaskMetricWindows(taskFixture);
+    const points = await loadTaskMetricWindows(taskFixture, 30);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toContain(
-      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter?environment=dev&lookback_minutes=15&metric_window_limit=24&event_limit=1',
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter?environment=dev&lookback_minutes=30&metric_window_limit=24&event_limit=1',
     );
-    expect(windows).toEqual([
+    expect(points).toEqual([
       expect.objectContaining({
-        window_id: 'inspect_dead_letter:one',
+        bucket_started_at: '2026-07-16T07:58:00Z',
+        reported_window_count: 0,
+        fetched: 0,
+      }),
+      expect.objectContaining({
+        bucket_started_at: '2026-07-16T07:59:00Z',
+        reported_window_count: 1,
         fetched: 12,
         failed: 1,
         p95_duration_ms: 84,

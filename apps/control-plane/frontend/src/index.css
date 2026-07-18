@@ -6,6 +6,12 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+.brand-logo svg {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
 /* Custom scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;

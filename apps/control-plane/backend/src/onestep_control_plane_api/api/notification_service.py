@@ -29,6 +29,7 @@ from onestep_control_plane_api.api.query_support import (
 )
 from onestep_control_plane_api.api.schemas import (
     NotificationChannelCreateRequest,
+    NotificationChannelEnabledPatchRequest,
     NotificationChannelSummary,
     NotificationChannelUpdateRequest,
     NotificationServiceListResponse,
@@ -753,6 +754,18 @@ def update_notification_channel(
     except IntegrityError as error:
         db.rollback()
         _ensure_channel_name_available(error)
+    db.refresh(channel)
+    return _build_channel_summary(channel)
+
+
+def update_notification_channel_enabled(
+    db: Session,
+    channel_id,
+    payload: NotificationChannelEnabledPatchRequest,
+) -> NotificationChannelSummary:
+    channel = _get_channel_or_404(db, channel_id)
+    channel.enabled = payload.enabled
+    db.commit()
     db.refresh(channel)
     return _build_channel_summary(channel)
 

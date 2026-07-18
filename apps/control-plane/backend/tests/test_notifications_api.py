@@ -97,11 +97,33 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
     assert list_response.json()["items"] == [created]
 
     channel_id = created["id"]
+    enabled_patch_response = client.patch(
+        f"/api/v1/settings/notifications/channels/{channel_id}/enabled",
+        json={"enabled": False},
+    )
+    assert enabled_patch_response.status_code == 200
+    enabled_patched = enabled_patch_response.json()
+    assert enabled_patched["enabled"] is False
+    assert enabled_patched["name"] == "ops-feishu"
+    assert enabled_patched["provider"] == "feishu"
+    assert enabled_patched["event_types"] == [
+        "task_started",
+        "task_failed",
+        "task_missed_start",
+        "instance_offline",
+    ]
+
+    enabled_patch_extra_field_response = client.patch(
+        f"/api/v1/settings/notifications/channels/{channel_id}/enabled",
+        json={"enabled": True, "name": "should-not-be-accepted"},
+    )
+    assert enabled_patch_extra_field_response.status_code == 422
+
     patch_response = client.patch(
         f"/api/v1/settings/notifications/channels/{channel_id}",
         json={
             "provider": "wechat_work",
-            "enabled": False,
+            "enabled": True,
             "service_scopes": [
                 {"name": "billing-worker", "environment": "prod"},
                 {"name": "invoice-worker", "environment": "staging"},
@@ -113,7 +135,7 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
     assert patch_response.status_code == 200
     updated = patch_response.json()
     assert updated["provider"] == "wechat_work"
-    assert updated["enabled"] is False
+    assert updated["enabled"] is True
     assert updated["service_scopes"] == [
         {"name": "billing-worker", "environment": "prod"},
         {"name": "invoice-worker", "environment": "staging"},
@@ -210,6 +232,12 @@ def test_notification_channel_name_conflict_and_not_found(client) -> None:
     )
     assert missing_patch.status_code == 404
 
+    missing_enabled_patch = client.patch(
+        "/api/v1/settings/notifications/channels/00000000-0000-0000-0000-000000000001/enabled",
+        json={"enabled": False},
+    )
+    assert missing_enabled_patch.status_code == 404
+
     missing_delete = client.delete(
         "/api/v1/settings/notifications/channels/00000000-0000-0000-0000-000000000001"
     )
@@ -276,6 +304,13 @@ def test_notification_viewer_can_read_channels_but_cannot_write(client, db_sessi
     )
     assert patch_forbidden.status_code == 403
     assert patch_forbidden.json()["detail"] == "insufficient role for command execution"
+
+    enabled_patch_forbidden = client.patch(
+        f"/api/v1/settings/notifications/channels/{channel_id}/enabled",
+        json={"enabled": False},
+    )
+    assert enabled_patch_forbidden.status_code == 403
+    assert enabled_patch_forbidden.json()["detail"] == "insufficient role for command execution"
 
     test_forbidden = client.post(
         f"/api/v1/settings/notifications/channels/{channel_id}/test",
