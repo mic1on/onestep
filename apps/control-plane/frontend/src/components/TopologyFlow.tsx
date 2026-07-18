@@ -193,7 +193,10 @@ export function getTopologyFlowDurationSeconds(throughputPerMin: number) {
 
 function TopologyConnector({ isFlowing, testId }: { isFlowing: boolean; testId: string }) {
   return (
-    <div className="flex-1 flex flex-col sm:flex-row items-center justify-center relative w-1 sm:w-full min-h-[24px] sm:min-h-0">
+    <div
+      data-testid={`${testId}-frame`}
+      className="flex-1 flex flex-col sm:flex-row items-center justify-center relative w-1 sm:w-full min-h-[24px] sm:min-h-0 sm:self-start sm:mt-7"
+    >
       <div
         data-testid={testId}
         data-flowing={isFlowing ? 'true' : 'false'}

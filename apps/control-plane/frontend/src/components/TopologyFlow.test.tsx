@@ -59,8 +59,11 @@ describe('topology flow motion', () => {
     renderTopology({ throughputPerMin: 120 });
 
     const diagram = screen.getByTestId('topology-flow-diagram') as HTMLElement;
+    const sourceConnectorFrame = screen.getByTestId('topology-source-connector-frame') as HTMLElement;
     expect(diagram.dataset.flowing).toBe('true');
     expect(diagram.style.getPropertyValue('--topology-flow-duration')).toBe('0.75s');
+    expect(sourceConnectorFrame.className).toContain('sm:self-start');
+    expect(sourceConnectorFrame.className).toContain('sm:mt-7');
     expect(screen.getByTestId('topology-source-connector').dataset.flowing).toBe('true');
     expect(screen.getByTestId('topology-sink-connector').dataset.flowing).toBe('true');
     expect(screen.getAllByTestId('topology-flow-packet')).toHaveLength(4);
