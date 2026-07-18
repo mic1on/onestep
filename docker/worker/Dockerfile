@@ -14,6 +14,8 @@ COPY pyproject.toml README.md /tmp/onestep/
 COPY src/onestep /tmp/onestep/src/onestep
 COPY plugins/onestep-rabbitmq/pyproject.toml plugins/onestep-rabbitmq/README.md /tmp/onestep/plugins/onestep-rabbitmq/
 COPY plugins/onestep-rabbitmq/src/onestep_rabbitmq /tmp/onestep/plugins/onestep-rabbitmq/src/onestep_rabbitmq
+COPY plugins/onestep-control-plane/pyproject.toml plugins/onestep-control-plane/README.md /tmp/onestep/plugins/onestep-control-plane/
+COPY plugins/onestep-control-plane/src/onestep_control_plane /tmp/onestep/plugins/onestep-control-plane/src/onestep_control_plane
 COPY plugins/onestep-redis/pyproject.toml plugins/onestep-redis/README.md /tmp/onestep/plugins/onestep-redis/
 COPY plugins/onestep-redis/src/onestep_redis /tmp/onestep/plugins/onestep-redis/src/onestep_redis
 COPY plugins/onestep-mysql/pyproject.toml plugins/onestep-mysql/README.md /tmp/onestep/plugins/onestep-mysql/
@@ -27,6 +29,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install \
         "/tmp/onestep[all]" \
         /tmp/onestep/plugins/onestep-rabbitmq \
+        /tmp/onestep/plugins/onestep-control-plane \
         /tmp/onestep/plugins/onestep-redis \
         /tmp/onestep/plugins/onestep-mysql \
         /tmp/onestep/plugins/onestep-postgres \
