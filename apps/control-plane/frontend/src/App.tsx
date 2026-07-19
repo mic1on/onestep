@@ -1239,7 +1239,7 @@ export default function App() {
   );
 }
 
-function getHeaderStatus(
+export function getHeaderStatus(
   serviceViewStatus: Service['viewStatus'],
   taskViewStatus: Task['viewStatus'] | undefined,
   t: ReturnType<typeof useI18n>['t'],
@@ -1259,6 +1259,13 @@ function getHeaderStatus(
       label: t('status.paused'),
       className: 'bg-sky-50 text-sky-700 border-sky-200',
       dotClassName: 'bg-sky-500',
+    };
+  }
+  if (resolvedStatus === 'idle') {
+    return {
+      label: t('status.idle'),
+      className: 'bg-slate-50 text-slate-600 border-slate-200',
+      dotClassName: 'bg-slate-400',
     };
   }
   if (resolvedStatus === 'failed' || resolvedStatus === 'degraded') {

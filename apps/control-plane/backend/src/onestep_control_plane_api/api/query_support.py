@@ -314,14 +314,14 @@ def derive_task_view_status(
     started: int,
     succeeded: int,
 ) -> TaskViewStatus:
-    if online_instance_count == 0:
-        return "offline"
     if pause_requested is True:
         return "paused"
     if error_count > 0:
         return "failed"
     if started > 0 or succeeded > 0:
         return "running"
+    if online_instance_count == 0:
+        return "offline"
     return "idle"
 
 

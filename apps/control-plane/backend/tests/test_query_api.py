@@ -1121,6 +1121,49 @@ def test_query_endpoints_expose_derived_view_fields(client, db_session) -> None:
     assert failed_event["level"] == "error"
 
 
+def test_task_status_keeps_recent_activity_when_instance_heartbeat_is_stale(
+    client, db_session
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="hourly-sync", environment="prod")
+    stale_instance = seed_instance(
+        db_session,
+        service,
+        node_name="hourly-sync-1",
+        status="ok",
+        last_seen_at=now - timedelta(minutes=10),
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_contracts",
+        source_name="cron:hourly",
+        source_kind="cron",
+    )
+    seed_metric_window(
+        db_session,
+        service,
+        stale_instance,
+        task_name="sync_contracts",
+        window_id="sync_contracts:latest",
+        window_started_at=now - timedelta(minutes=1),
+        window_ended_at=now,
+        succeeded=1,
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/hourly-sync/tasks",
+        params={"environment": "prod", "lookback_minutes": 120},
+    )
+
+    assert response.status_code == 200
+    task = response.json()["items"][0]
+    assert task["task_name"] == "sync_contracts"
+    assert task["view_status"] == "running"
+    assert task["error_count"] == 0
+
+
 def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(
     client, db_session
 ) -> None:
