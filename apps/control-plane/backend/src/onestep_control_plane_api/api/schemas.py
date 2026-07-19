@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from onestep_control_plane_api.api.notification_custom import validate_custom_template_value
 from onestep_control_plane_api.core.settings import settings
 
 
@@ -46,7 +47,7 @@ TaskViewStatus = Literal["running", "idle", "failed", "paused", "offline"]
 InstanceViewStatus = Literal["running", "starting", "failed", "stopped"]
 EventLogLevel = Literal["error", "warn", "info"]
 TaskEventKind = Literal["started", "failed", "retried", "dead_lettered", "cancelled", "succeeded"]
-NotificationProvider = Literal["feishu", "wechat_work"]
+NotificationProvider = Literal["feishu", "wechat_work", "custom"]
 NotificationEventType = Literal[
     "task_started",
     "task_succeeded",
@@ -1089,6 +1090,54 @@ class NotificationServiceScope(APIModel):
         return value.strip()
 
 
+NotificationWebhookMethod = Literal["GET", "POST"]
+
+
+class NotificationCustomParam(APIModel):
+    key: str = Field(min_length=1, max_length=255)
+    value: str = Field(default="", max_length=2000)
+
+    @field_validator("key", "value", mode="before")
+    @classmethod
+    def normalize_param_strings(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return value.strip()
+
+    @field_validator("value")
+    @classmethod
+    def validate_template_value(cls, value: str) -> str:
+        validate_custom_template_value(value)
+        return value
+
+
+class NotificationCustomConfig(APIModel):
+    method: NotificationWebhookMethod = "POST"
+    query_params: list[NotificationCustomParam] = Field(default_factory=list)
+    body_params: list[NotificationCustomParam] = Field(default_factory=list)
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def normalize_method(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return value.strip().upper()
+
+    @staticmethod
+    def _validate_unique_keys(params: list[NotificationCustomParam], field_name: str) -> None:
+        keys = [param.key for param in params]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"{field_name} keys must be unique")
+
+    @model_validator(mode="after")
+    def validate_custom_config(self) -> NotificationCustomConfig:
+        self._validate_unique_keys(self.query_params, "query_params")
+        self._validate_unique_keys(self.body_params, "body_params")
+        if self.method == "GET" and self.body_params:
+            raise ValueError("body_params are only supported for POST custom webhooks")
+        return self
+
+
 class NotificationChannelBase(APIModel):
     name: str = Field(min_length=1, max_length=255)
     provider: NotificationProvider
@@ -1097,6 +1146,7 @@ class NotificationChannelBase(APIModel):
     service_scopes: list[NotificationServiceScope] = Field(default_factory=list)
     event_types: list[NotificationEventType] = Field(default_factory=list)
     missed_start_grace_seconds: int = Field(default=300, ge=1, le=86400)
+    custom_config: NotificationCustomConfig | None = None
 
     @field_validator("name", "webhook_url", mode="before")
     @classmethod
@@ -1138,6 +1188,14 @@ class NotificationChannelBase(APIModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_provider_custom_config(self) -> NotificationChannelBase:
+        if self.provider == "custom" and self.custom_config is None:
+            raise ValueError("custom_config is required when provider is custom")
+        if self.provider != "custom" and self.custom_config is not None:
+            raise ValueError("custom_config is only supported when provider is custom")
+        return self
+
 
 class NotificationChannelCreateRequest(NotificationChannelBase):
     pass
@@ -1151,6 +1209,7 @@ class NotificationChannelUpdateRequest(APIModel):
     service_scopes: list[NotificationServiceScope] | None = None
     event_types: list[NotificationEventType] | None = None
     missed_start_grace_seconds: int | None = Field(default=None, ge=1, le=86400)
+    custom_config: NotificationCustomConfig | None = None
 
     @field_validator("name", "webhook_url", mode="before")
     @classmethod
@@ -1207,6 +1266,7 @@ class NotificationChannelSummary(APIModel):
     service_scopes: list[NotificationServiceScope] = Field(default_factory=list)
     event_types: list[NotificationEventType] = Field(default_factory=list)
     missed_start_grace_seconds: int = Field(ge=1)
+    custom_config: NotificationCustomConfig | None = None
     created_at: datetime
     updated_at: datetime
 

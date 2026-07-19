@@ -12,6 +12,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from onestep_control_plane_api.api.common import utcnow
+from onestep_control_plane_api.api.notification_custom import (
+    build_custom_webhook_preview,
+    render_custom_webhook_request,
+)
 from onestep_control_plane_api.api.notification_helpers import (
     NotificationEventRecord,
     NotificationFailureInfo,
@@ -131,6 +135,7 @@ def _build_channel_summary(channel: NotificationChannel) -> NotificationChannelS
         service_scopes=channel.service_scopes_json,
         event_types=channel.event_types_json,
         missed_start_grace_seconds=channel.missed_start_grace_seconds,
+        custom_config=channel.custom_config_json,
         created_at=channel.created_at,
         updated_at=channel.updated_at,
     )
@@ -164,6 +169,22 @@ def _validate_merged_missed_start_settings(
                 "missed_start_grace_seconds can only be customized when "
                 "event_types includes task_missed_start"
             ),
+        )
+
+
+def _validate_merged_custom_config(
+    provider: str,
+    custom_config: dict[str, Any] | None,
+) -> None:
+    if provider == "custom" and custom_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="custom_config is required when provider is custom",
+        )
+    if provider != "custom" and custom_config is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="custom_config is only supported when provider is custom",
         )
 
 
@@ -315,7 +336,7 @@ def _persist_pending_delivery(
         task_event_id=task_event_id,
         scheduled_at=scheduled_at,
         status="pending",
-        request_payload_json=build_webhook_payload(channel.provider, notification_event),
+        request_payload_json=_build_delivery_request_payload(channel, notification_event),
     )
     db.add(delivery)
     try:
@@ -328,6 +349,19 @@ def _persist_pending_delivery(
     return delivery
 
 
+def _build_delivery_request_payload(
+    channel: NotificationChannel,
+    notification_event: NotificationEventRecord,
+) -> dict[str, object]:
+    if channel.provider == "custom":
+        rendered = render_custom_webhook_request(
+            channel.custom_config_json or {},
+            notification_event,
+        )
+        return rendered.to_delivery_payload()
+    return build_webhook_payload(channel.provider, notification_event)
+
+
 def _post_webhook(
     delivery: NotificationDelivery,
     *,
@@ -336,7 +370,17 @@ def _post_webhook(
 ) -> None:
     try:
         with httpx.Client(timeout=timeout_s) as client:
-            response = client.post(webhook_url, json=delivery.request_payload_json)
+            if delivery.channel.provider == "custom":
+                request_payload = delivery.request_payload_json or {}
+                method = str(request_payload.get("method", "POST")).upper()
+                query = request_payload.get("query") or {}
+                body = request_payload.get("body") or {}
+                if method == "GET":
+                    response = client.get(webhook_url, params=query)
+                else:
+                    response = client.post(webhook_url, params=query, json=body)
+            else:
+                response = client.post(webhook_url, json=delivery.request_payload_json)
         delivery.response_status_code = response.status_code
         delivery.response_body = response.text[:4000] if response.text else None
         delivery.status = "succeeded" if response.is_success else "failed"
@@ -698,6 +742,9 @@ def create_notification_channel(
         service_scopes_json=[_scope_to_json(scope) for scope in payload.service_scopes],
         event_types_json=list(payload.event_types),
         missed_start_grace_seconds=payload.missed_start_grace_seconds,
+        custom_config_json=(
+            payload.custom_config.model_dump() if payload.custom_config is not None else None
+        ),
     )
     db.add(channel)
     try:
@@ -731,6 +778,13 @@ def update_notification_channel(
         merged_event_types,
         merged_missed_start_grace_seconds,
     )
+    merged_provider = update_data["provider"] if "provider" in update_data else channel.provider
+    merged_custom_config = (
+        update_data["custom_config"]
+        if "custom_config" in update_data
+        else channel.custom_config_json
+    )
+    _validate_merged_custom_config(merged_provider, merged_custom_config)
 
     if "name" in update_data:
         channel.name = update_data["name"]
@@ -748,6 +802,8 @@ def update_notification_channel(
         channel.event_types_json = list(update_data["event_types"])
     if "missed_start_grace_seconds" in update_data:
         channel.missed_start_grace_seconds = update_data["missed_start_grace_seconds"]
+    if "custom_config" in update_data:
+        channel.custom_config_json = update_data["custom_config"]
 
     try:
         db.commit()
@@ -782,7 +838,11 @@ def build_notification_test_response(
     payload: NotificationTestRequest,
 ) -> NotificationTestResponse:
     channel = _get_channel_or_404(db, channel_id)
-    preview_text = payload.message or f"Test notification for channel {channel.name}"
+    preview_text = (
+        build_custom_webhook_preview(channel.custom_config_json)
+        if channel.provider == "custom" and payload.message is None
+        else payload.message or f"Test notification for channel {channel.name}"
+    )
     return NotificationTestResponse(
         channel_id=channel.id,
         provider=channel.provider,

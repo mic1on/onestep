@@ -441,7 +441,8 @@ export interface ConsoleSessionResponse {
   roles: Array<'viewer' | 'operator' | 'admin'>;
 }
 
-export type NotificationProvider = 'feishu' | 'wechat_work';
+export type NotificationProvider = 'feishu' | 'wechat_work' | 'custom';
+export type NotificationWebhookMethod = 'GET' | 'POST';
 export type NotificationEventType =
   | 'task_started'
   | 'task_succeeded'
@@ -455,6 +456,17 @@ export interface NotificationServiceScope {
   environment: Environment;
 }
 
+export interface NotificationCustomParam {
+  key: string;
+  value: string;
+}
+
+export interface NotificationCustomConfig {
+  method: NotificationWebhookMethod;
+  query_params: NotificationCustomParam[];
+  body_params: NotificationCustomParam[];
+}
+
 export interface NotificationChannel {
   id: string;
   name: string;
@@ -464,6 +476,7 @@ export interface NotificationChannel {
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];
   missed_start_grace_seconds: number;
+  custom_config: NotificationCustomConfig | null;
   created_at: string;
   updated_at: string;
 }
@@ -476,6 +489,7 @@ export interface NotificationChannelInput {
   service_scopes: NotificationServiceScope[];
   event_types: NotificationEventType[];
   missed_start_grace_seconds: number;
+  custom_config?: NotificationCustomConfig | null;
 }
 
 export type NotificationChannelPatch = Partial<Omit<NotificationChannelInput, 'enabled'>>;

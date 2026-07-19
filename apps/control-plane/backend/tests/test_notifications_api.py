@@ -162,6 +162,73 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
     assert db_session.query(NotificationChannel).count() == 0
 
 
+def test_custom_notification_channel_crud_round_trip(client, db_session) -> None:
+    login_console_role(client, username="operator-custom", role="operator")
+    seed_service(db_session, name="billing-worker", environment="prod")
+
+    create_response = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": "ops-custom",
+            "provider": "custom",
+            "webhook_url": "https://example.com/notify",
+            "enabled": True,
+            "service_scopes": [{"name": "billing-worker", "environment": "prod"}],
+            "event_types": ["task_failed", "instance_offline"],
+            "missed_start_grace_seconds": 300,
+            "custom_config": {
+                "method": "POST",
+                "query_params": [
+                    {"key": "service", "value": "{{ service_name }}"},
+                    {"key": "event", "value": "{{ event_type }}"},
+                ],
+                "body_params": [
+                    {"key": "task", "value": "{{ task_name }}"},
+                    {"key": "detail_url", "value": "{{ console_url }}"},
+                ],
+            },
+        },
+    )
+
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["provider"] == "custom"
+    assert created["custom_config"] == {
+        "method": "POST",
+        "query_params": [
+            {"key": "service", "value": "{{ service_name }}"},
+            {"key": "event", "value": "{{ event_type }}"},
+        ],
+        "body_params": [
+            {"key": "task", "value": "{{ task_name }}"},
+            {"key": "detail_url", "value": "{{ console_url }}"},
+        ],
+    }
+
+    list_response = client.get("/api/v1/settings/notifications/channels")
+    assert list_response.status_code == 200
+    assert list_response.json()["items"] == [created]
+
+    channel_id = created["id"]
+    patch_response = client.patch(
+        f"/api/v1/settings/notifications/channels/{channel_id}",
+        json={
+            "custom_config": {
+                "method": "GET",
+                "query_params": [{"key": "service", "value": "{{ service_name }}"}],
+                "body_params": [],
+            }
+        },
+    )
+
+    assert patch_response.status_code == 200
+    assert patch_response.json()["custom_config"] == {
+        "method": "GET",
+        "query_params": [{"key": "service", "value": "{{ service_name }}"}],
+        "body_params": [],
+    }
+
+
 def test_notification_channel_validation_errors(client) -> None:
     login_console_role(client, username="operator", role="operator")
 
@@ -194,6 +261,94 @@ def test_notification_channel_validation_errors(client) -> None:
         },
     )
     assert invalid_grace_response.status_code == 422
+
+
+def test_custom_notification_channel_validation_errors(client) -> None:
+    login_console_role(client, username="operator-custom-validation", role="operator")
+
+    missing_config = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": "custom-missing-config",
+            "provider": "custom",
+            "webhook_url": "https://example.com/notify",
+            "enabled": True,
+            "service_scopes": [],
+            "event_types": ["task_failed"],
+        },
+    )
+    assert missing_config.status_code == 422
+
+    feishu_with_config = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": "feishu-with-config",
+            "provider": "feishu",
+            "webhook_url": "https://example.com/notify",
+            "enabled": True,
+            "service_scopes": [],
+            "event_types": ["task_failed"],
+            "custom_config": {"method": "GET", "query_params": [], "body_params": []},
+        },
+    )
+    assert feishu_with_config.status_code == 422
+
+    duplicate_query_keys = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": "custom-duplicate-query",
+            "provider": "custom",
+            "webhook_url": "https://example.com/notify",
+            "enabled": True,
+            "service_scopes": [],
+            "event_types": ["task_failed"],
+            "custom_config": {
+                "method": "GET",
+                "query_params": [
+                    {"key": "service", "value": "{{ service_name }}"},
+                    {"key": "service", "value": "{{ event_type }}"},
+                ],
+                "body_params": [],
+            },
+        },
+    )
+    assert duplicate_query_keys.status_code == 422
+
+    unknown_variable = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": "custom-unknown-variable",
+            "provider": "custom",
+            "webhook_url": "https://example.com/notify",
+            "enabled": True,
+            "service_scopes": [],
+            "event_types": ["task_failed"],
+            "custom_config": {
+                "method": "POST",
+                "query_params": [{"key": "service", "value": "{{ missing_field }}"}],
+                "body_params": [],
+            },
+        },
+    )
+    assert unknown_variable.status_code == 422
+
+    get_with_body = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": "custom-get-body",
+            "provider": "custom",
+            "webhook_url": "https://example.com/notify",
+            "enabled": True,
+            "service_scopes": [],
+            "event_types": ["task_failed"],
+            "custom_config": {
+                "method": "GET",
+                "query_params": [],
+                "body_params": [{"key": "event", "value": "{{ event_type }}"}],
+            },
+        },
+    )
+    assert get_with_body.status_code == 422
 
 
 def test_notification_channel_name_conflict_and_not_found(client) -> None:

@@ -14,7 +14,7 @@ NotificationEventType = Literal[
     "instance_online",
     "instance_offline",
 ]
-NotificationProvider = Literal["feishu", "wechat_work"]
+NotificationProvider = Literal["feishu", "wechat_work", "custom"]
 
 NOTIFICATION_EVENT_TYPES: Final[tuple[NotificationEventType, ...]] = (
     "task_started",

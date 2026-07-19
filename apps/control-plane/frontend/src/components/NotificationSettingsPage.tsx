@@ -2,6 +2,7 @@ import { type ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react
 import {
   AlertTriangle,
   Bell,
+  Braces,
   Check,
   CheckCircle2,
   Edit3,
@@ -22,12 +23,14 @@ import {
   testNotificationChannel,
   updateNotificationChannel,
   type NotificationChannel,
+  type NotificationCustomParam,
+  type NotificationWebhookMethod,
   type NotificationChannelInput,
   type NotificationEventType,
   type NotificationProvider,
   type NotificationServiceScope,
 } from '../api';
-import { useI18n } from '../i18n';
+import { type MessageKey, useI18n } from '../i18n';
 
 interface NotificationSettingsPageProps {
   onAuthRequired: () => void;
@@ -38,13 +41,33 @@ type FormState = {
   id: string | null;
   name: string;
   provider: NotificationProvider;
+  originalProvider: NotificationProvider | null;
   webhookUrl: string;
   serviceScopeKeys: string[];
   eventTypes: NotificationEventType[];
   missedStartGraceSeconds: string;
+  customMethod: NotificationWebhookMethod;
+  queryParams: NotificationCustomParam[];
+  bodyParams: NotificationCustomParam[];
 };
 
-const PROVIDER_VALUES: NotificationProvider[] = ['feishu', 'wechat_work'];
+const PROVIDER_VALUES: NotificationProvider[] = ['feishu', 'wechat_work', 'custom'];
+const WEBHOOK_METHOD_VALUES: NotificationWebhookMethod[] = ['GET', 'POST'];
+const CUSTOM_VARIABLES = [
+  'event_type',
+  'service_name',
+  'service_environment',
+  'task_name',
+  'occurred_at',
+  'scheduled_at',
+  'duration_ms',
+  'attempts',
+  'instance_id',
+  'node_name',
+  'console_url',
+  'failure_message',
+  'success_summary',
+] as const;
 
 type Translate = ReturnType<typeof useI18n>['t'];
 
@@ -67,10 +90,14 @@ const EMPTY_FORM: FormState = {
   id: null,
   name: '',
   provider: 'feishu',
+  originalProvider: null,
   webhookUrl: '',
   serviceScopeKeys: [],
   eventTypes: DEFAULT_EVENTS,
   missedStartGraceSeconds: '300',
+  customMethod: 'POST',
+  queryParams: [],
+  bodyParams: [],
 };
 
 function providerLabel(provider: NotificationProvider, t: Translate) {
@@ -125,15 +152,25 @@ function uniqueScopes(scopes: NotificationServiceScope[]) {
   });
 }
 
+function normalizeParams(params: NotificationCustomParam[]) {
+  return params
+    .map((param) => ({ key: param.key.trim(), value: param.value.trim() }))
+    .filter((param) => param.key || param.value);
+}
+
 function channelToForm(channel: NotificationChannel): FormState {
   return {
     id: channel.id,
     name: channel.name,
     provider: channel.provider,
+    originalProvider: channel.provider,
     webhookUrl: '',
     serviceScopeKeys: channel.service_scopes.map(scopeKey),
     eventTypes: channel.event_types,
     missedStartGraceSeconds: String(channel.missed_start_grace_seconds),
+    customMethod: channel.custom_config?.method ?? 'POST',
+    queryParams: channel.custom_config?.query_params ?? [],
+    bodyParams: channel.custom_config?.body_params ?? [],
   };
 }
 
@@ -158,6 +195,7 @@ export default function NotificationSettingsPage({
   const [isSaving, setIsSaving] = useState(false);
   const [enabledToggleId, setEnabledToggleId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openVariablePicker, setOpenVariablePicker] = useState<string | null>(null);
 
   const isEditing = form.id !== null;
   const includesMissedStart = form.eventTypes.includes('task_missed_start');
@@ -240,12 +278,24 @@ export default function NotificationSettingsPage({
 
     const webhookUrl = form.webhookUrl.trim();
     const graceSeconds = includesMissedStart ? Number(form.missedStartGraceSeconds) || 300 : 300;
+    const customConfig =
+      form.provider === 'custom'
+        ? {
+            method: form.customMethod,
+            query_params: normalizeParams(form.queryParams),
+            body_params: form.customMethod === 'POST' ? normalizeParams(form.bodyParams) : [],
+          }
+        : undefined;
     const payload = {
       name: form.name.trim(),
       provider: form.provider,
       service_scopes: form.serviceScopeKeys.map(scopeFromKey),
       event_types: form.eventTypes,
       missed_start_grace_seconds: graceSeconds,
+      ...(customConfig ? { custom_config: customConfig } : {}),
+      ...(form.provider !== 'custom' && form.originalProvider === 'custom'
+        ? { custom_config: null }
+        : {}),
     };
 
     try {
@@ -340,6 +390,125 @@ export default function NotificationSettingsPage({
       setError(message);
       onNotify(t('notifications.deleteFailed', { message }), 'warn');
     }
+  }
+
+  function insertVariable(
+    params: NotificationCustomParam[],
+    index: number,
+    variableName: string,
+  ) {
+    const token = `{{ ${variableName} }}`;
+    return params.map((param, itemIndex) =>
+      itemIndex === index
+        ? {
+            key: param.key.trim() ? param.key : variableName,
+            value: param.value ? `${param.value} ${token}` : token,
+          }
+        : param,
+    );
+  }
+
+  function renderParamEditor(
+    paramGroup: 'query' | 'body',
+    title: string,
+    params: NotificationCustomParam[],
+    setParams: (params: NotificationCustomParam[]) => void,
+    addLabel: string,
+    keyLabelKey: MessageKey,
+    valueLabelKey: MessageKey,
+  ) {
+    return (
+      <div>
+        <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{title}</div>
+        <div className="mt-2 space-y-2">
+          {params.map((param, index) => {
+            const pickerId = `${paramGroup}-${index}`;
+            return (
+              <div className="rounded-lg border border-slate-200 bg-white p-2" key={index}>
+                <div className="grid grid-cols-[minmax(0,1fr)_36px] gap-2">
+                  <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(96px,0.42fr)_minmax(0,1fr)]">
+                    <input
+                      aria-label={t(keyLabelKey, { index: index + 1 })}
+                      className="min-w-0 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold outline-hidden transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                      onChange={(event) => {
+                        const next = [...params];
+                        next[index] = { ...next[index], key: event.target.value };
+                        setParams(next);
+                      }}
+                      value={param.key}
+                    />
+                    <div className="relative min-w-0">
+                      <input
+                        aria-label={t(valueLabelKey, { index: index + 1 })}
+                        className="w-full min-w-0 rounded-lg border border-slate-200 px-2.5 py-2 pr-10 font-mono text-xs font-semibold outline-hidden transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                        onChange={(event) => {
+                          const next = [...params];
+                          next[index] = { ...next[index], value: event.target.value };
+                          setParams(next);
+                        }}
+                        title={param.value}
+                        value={param.value}
+                      />
+                      <button
+                        aria-expanded={openVariablePicker === pickerId}
+                        aria-label={t('notifications.insertField')}
+                        className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
+                        onClick={() =>
+                          setOpenVariablePicker((current) =>
+                            current === pickerId ? null : pickerId,
+                          )
+                        }
+                        title={t('notifications.insertField')}
+                        type="button"
+                      >
+                        <Braces className="h-4 w-4" />
+                      </button>
+                      {openVariablePicker === pickerId ? (
+                        <div className="absolute right-0 top-10 z-20 max-h-64 w-full min-w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                          {CUSTOM_VARIABLES.map((variableName) => (
+                            <button
+                              className="block w-full rounded-md px-2.5 py-2 text-left font-mono text-xs font-semibold text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
+                              key={variableName}
+                              onClick={() => {
+                                setParams(insertVariable(params, index, variableName));
+                                setOpenVariablePicker(null);
+                              }}
+                              type="button"
+                            >
+                              {variableName}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button
+                    aria-label={t('notifications.deleteParam', { index: index + 1 })}
+                    className="grid h-9 w-9 place-items-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                    onClick={() => {
+                      setParams(params.filter((_, itemIndex) => itemIndex !== index));
+                      setOpenVariablePicker(null);
+                    }}
+                    title={t('notifications.deleteParam', { index: index + 1 })}
+                    type="button"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <button
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+            onClick={() => setParams([...params, { key: '', value: '' }])}
+            type="button"
+          >
+            <Plus className="h-4 w-4" />
+            {addLabel}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const canSubmit =
@@ -568,7 +737,7 @@ export default function NotificationSettingsPage({
               <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
                 {t('notifications.provider')}
               </div>
-              <div className="mt-2 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+              <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1 sm:grid-cols-3">
                 {PROVIDER_VALUES.map((providerValue) => {
                   const active = form.provider === providerValue;
                   return (
@@ -603,6 +772,60 @@ export default function NotificationSettingsPage({
                 value={form.webhookUrl}
               />
             </label>
+
+            {form.provider === 'custom' ? (
+              <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                <div>
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                    {t('notifications.method')}
+                  </div>
+                  <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white p-1 sm:grid-cols-2">
+                    {WEBHOOK_METHOD_VALUES.map((methodValue) => {
+                      const active = form.customMethod === methodValue;
+                      return (
+                        <button
+                          aria-pressed={active}
+                          className={`rounded-md px-3 py-2 text-xs font-bold transition-all ${
+                            active
+                              ? 'bg-indigo-50 text-indigo-700 shadow-xs ring-1 ring-indigo-100'
+                              : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                          }`}
+                          key={methodValue}
+                          onClick={() =>
+                            setForm((current) => ({ ...current, customMethod: methodValue }))
+                          }
+                          type="button"
+                        >
+                          {methodValue}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {renderParamEditor(
+                  'query',
+                  t('notifications.queryParams'),
+                  form.queryParams,
+                  (queryParams) => setForm((current) => ({ ...current, queryParams })),
+                  t('notifications.addQueryParam'),
+                  'notifications.queryParamKey',
+                  'notifications.queryParamValue',
+                )}
+
+                {form.customMethod === 'POST'
+                  ? renderParamEditor(
+                      'body',
+                      t('notifications.bodyParams'),
+                      form.bodyParams,
+                      (bodyParams) => setForm((current) => ({ ...current, bodyParams })),
+                      t('notifications.addBodyParam'),
+                      'notifications.bodyParamKey',
+                      'notifications.bodyParamValue',
+                    )
+                  : null}
+              </div>
+            ) : null}
 
             <div>
               <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{t('notifications.events')}</div>

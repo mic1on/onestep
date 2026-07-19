@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202607180002"
+HEAD_REVISION = "202607190001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -136,6 +136,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "service_scopes_json",
         "event_types_json",
         "missed_start_grace_seconds",
+        "custom_config_json",
         "created_at",
         "updated_at",
     }

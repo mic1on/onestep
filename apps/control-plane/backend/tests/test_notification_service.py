@@ -61,6 +61,164 @@ def seed_channel(db_session, *, event_types: list[str]) -> NotificationChannel:
     return channel
 
 
+def seed_custom_channel(
+    db_session,
+    *,
+    method: str,
+    query_params: list[dict[str, str]],
+    body_params: list[dict[str, str]],
+    event_types: list[str],
+) -> NotificationChannel:
+    channel = NotificationChannel(
+        name=f"ops-custom-{method.lower()}-{len(query_params)}-{len(body_params)}",
+        provider="custom",
+        webhook_url="https://example.com/custom",
+        enabled=True,
+        service_scopes_json=[{"name": "billing-sync", "environment": "prod"}],
+        event_types_json=event_types,
+        missed_start_grace_seconds=300,
+        custom_config_json={
+            "method": method,
+            "query_params": query_params,
+            "body_params": body_params,
+        },
+    )
+    db_session.add(channel)
+    db_session.commit()
+    db_session.refresh(channel)
+    return channel
+
+
+def test_custom_webhook_get_sends_rendered_query_params(db_session, monkeypatch) -> None:
+    service, instance = seed_runtime_service(db_session)
+    seed_custom_channel(
+        db_session,
+        method="GET",
+        query_params=[
+            {"key": "service", "value": "{{ service_name }}"},
+            {"key": "event", "value": "{{ event_type }}"},
+            {"key": "missing_task", "value": "{{ task_name }}"},
+        ],
+        body_params=[],
+        event_types=["instance_offline"],
+    )
+
+    instance.last_seen_at = datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC)
+    db_session.commit()
+
+    sent_requests: list[dict[str, object]] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_requests.append(
+            {
+                "provider": delivery.channel.provider,
+                "webhook_url": webhook_url,
+                "payload": delivery.request_payload_json,
+            }
+        )
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 0, 5, tzinfo=UTC),
+    )
+    created_count = scan_and_dispatch_instance_connectivity_notifications(
+        db_session,
+        now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
+    )
+
+    assert created_count == 1
+    assert sent_requests == [
+        {
+            "provider": "custom",
+            "webhook_url": "https://example.com/custom",
+            "payload": {
+                "method": "GET",
+                "query": {
+                    "service": "billing-sync",
+                    "event": "instance_offline",
+                    "missing_task": "",
+                },
+                "body": {},
+            },
+        }
+    ]
+
+
+def test_custom_webhook_post_sends_rendered_query_and_body(db_session, monkeypatch) -> None:
+    service, instance = seed_runtime_service(db_session)
+    seed_custom_channel(
+        db_session,
+        method="POST",
+        query_params=[{"key": "service", "value": "{{ service_name }}"}],
+        body_params=[
+            {"key": "event", "value": "{{ event_type }}"},
+            {"key": "task", "value": "{{ task_name }}"},
+            {"key": "failure", "value": "{{ failure_message }}"},
+            {"key": "attempts", "value": "{{ attempts }}"},
+        ],
+        event_types=["task_failed"],
+    )
+
+    task_event = TaskEvent(
+        event_id="evt-runtime-custom-failed",
+        service_id=service.id,
+        instance_id=instance.instance_id,
+        task_name="sync_users",
+        kind="failed",
+        occurred_at=datetime(2026, 4, 30, 2, 5, 0, tzinfo=UTC),
+        attempts=2,
+        duration_ms=1234,
+        failure_kind="timeout",
+        exception_type="TimeoutError",
+        message="upstream timeout",
+        meta_json={"scheduled_at": "2026-04-30T02:00:00Z"},
+        received_at=datetime(2026, 4, 30, 2, 5, 1, tzinfo=UTC),
+    )
+    db_session.add(task_event)
+    db_session.commit()
+    db_session.refresh(task_event)
+
+    sent_payloads: list[dict[str, object] | None] = []
+
+    def fake_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        sent_payloads.append(delivery.request_payload_json)
+        delivery.status = "succeeded"
+        delivery.sent_at = datetime(2026, 4, 30, 2, 5, 2, tzinfo=UTC)
+        delivery.response_status_code = 200
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fake_post_webhook,
+    )
+
+    created_count = dispatch_runtime_task_event_notifications(
+        db_session,
+        task_events=[task_event],
+    )
+
+    assert created_count == 1
+    assert sent_payloads == [
+        {
+            "method": "POST",
+            "query": {"service": "billing-sync"},
+            "body": {
+                "event": "task_failed",
+                "task": "sync_users",
+                "failure": "upstream timeout",
+                "attempts": "2",
+            },
+        }
+    ]
+
+
 def test_runtime_notifications_build_absolute_console_url_when_base_url_configured(
     db_session,
     monkeypatch,

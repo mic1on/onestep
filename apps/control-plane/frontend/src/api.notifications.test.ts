@@ -134,4 +134,56 @@ describe('notification api', () => {
       name: 'ops-alerts',
     });
   });
+
+  it('writes custom notification channel config through the backend contract', async () => {
+    const channelBody = {
+      id: 'channel-custom',
+      name: 'ops-custom',
+      provider: 'custom',
+      webhook_url_masked: 'https://example.com/***',
+      enabled: true,
+      service_scopes: [],
+      event_types: ['task_failed'],
+      missed_start_grace_seconds: 300,
+      custom_config: {
+        method: 'POST',
+        query_params: [{ key: 'service', value: '{{ service_name }}' }],
+        body_params: [{ key: 'event', value: '{{ event_type }}' }],
+      },
+      created_at: '2026-07-19T00:00:00Z',
+      updated_at: '2026-07-19T00:00:00Z',
+    };
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(jsonResponse(channelBody));
+
+    await createNotificationChannel({
+      name: 'ops-custom',
+      provider: 'custom',
+      webhook_url: 'https://example.com/hook',
+      enabled: true,
+      service_scopes: [],
+      event_types: ['task_failed'],
+      missed_start_grace_seconds: 300,
+      custom_config: {
+        method: 'POST',
+        query_params: [{ key: 'service', value: '{{ service_name }}' }],
+        body_params: [{ key: 'event', value: '{{ event_type }}' }],
+      },
+    });
+
+    expect(calledPath(fetchMock.mock.calls[0])).toBe('/api/v1/settings/notifications/channels');
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      name: 'ops-custom',
+      provider: 'custom',
+      webhook_url: 'https://example.com/hook',
+      enabled: true,
+      service_scopes: [],
+      event_types: ['task_failed'],
+      missed_start_grace_seconds: 300,
+      custom_config: {
+        method: 'POST',
+        query_params: [{ key: 'service', value: '{{ service_name }}' }],
+        body_params: [{ key: 'event', value: '{{ event_type }}' }],
+      },
+    });
+  });
 });

@@ -177,6 +177,7 @@ class NotificationChannel(Base):
         nullable=False,
         default=300,
     )
+    custom_config_json: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(),
