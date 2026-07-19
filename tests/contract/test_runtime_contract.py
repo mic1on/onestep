@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -13,6 +15,7 @@ from onestep import (
     FailureKind,
     InMemoryMetrics,
     InMemoryStateStore,
+    IntervalSource,
     MaxAttempts,
     MemoryQueue,
     NoRetry,
@@ -200,6 +203,17 @@ class _NonCancelSafeSource(Source):
         self.fetch_started.set()
         await self.release_fetch.wait()
         return [self.delivery]
+
+
+class _FakeClock:
+    def __init__(self, current: datetime) -> None:
+        self.current = current
+
+    def __call__(self) -> datetime:
+        return self.current
+
+    def advance(self, **kwargs) -> None:
+        self.current += timedelta(**kwargs)
 
 
 def test_return_value_publishes_to_default_sink_contract() -> None:
@@ -584,6 +598,62 @@ def test_task_pause_and_resume_control_intake_contract() -> None:
             {"value": 1},
             {"value": 2},
         ]
+
+    asyncio.run(scenario())
+
+
+def test_interval_task_resume_does_not_backfill_paused_ticks_contract() -> None:
+    async def scenario() -> None:
+        tz = ZoneInfo("Asia/Shanghai")
+        clock = _FakeClock(datetime(2026, 3, 7, 10, 0, tzinfo=tz))
+        source = IntervalSource.every(
+            seconds=5,
+            immediate=True,
+            timezone=tz,
+            clock=clock,
+            poll_interval_s=0.01,
+        )
+        app = OneStepApp("interval-resume-contract")
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        scheduled_runs: list[str] = []
+
+        @app.task(source=source, concurrency=1)
+        async def tick(ctx, item):
+            scheduled_runs.append(ctx.current.meta["scheduled_at"])
+            if len(scheduled_runs) == 1:
+                first_started.set()
+            if len(scheduled_runs) == 2:
+                second_started.set()
+
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+        app.request_task_pause("tick")
+        pause_status = await asyncio.wait_for(app.wait_for_task_pause("tick"), timeout=1.0)
+        assert pause_status["paused"] is True
+
+        clock.advance(seconds=13)
+        app.request_task_resume("tick")
+        resume_status = await asyncio.wait_for(app.wait_for_task_resume("tick"), timeout=1.0)
+        assert resume_status["accepting_new_work"] is True
+
+        await asyncio.sleep(0.05)
+        assert scheduled_runs == ["2026-03-07T10:00:00+08:00"]
+
+        clock.advance(seconds=4)
+        await asyncio.sleep(0.05)
+        assert scheduled_runs == ["2026-03-07T10:00:00+08:00"]
+
+        clock.advance(seconds=1)
+        await asyncio.wait_for(second_started.wait(), timeout=1.0)
+        assert scheduled_runs == [
+            "2026-03-07T10:00:00+08:00",
+            "2026-03-07T10:00:18+08:00",
+        ]
+
+        app.request_shutdown()
+        await asyncio.wait_for(serve_task, timeout=1.0)
 
     asyncio.run(scenario())
 

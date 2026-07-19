@@ -408,6 +408,7 @@ class ControlPlaneReporter:
         self._heartbeat_sequence = 0
         self._sync_sequence = 0
         self._event_sequence = 0
+        self._event_stream_id = uuid4().hex
         self._pending_events: list[dict[str, Any]] = []
         self._metrics_window_started_at = _utcnow()
         self._metrics_by_task: dict[str, _TaskMetricsState] = {}
@@ -456,6 +457,7 @@ class ControlPlaneReporter:
         self._heartbeat_sequence = 0
         self._sync_sequence = 0
         self._event_sequence = 0
+        self._event_stream_id = uuid4().hex
         self._pending_events.clear()
         self._pending_metric_batches.clear()
         self._metrics_by_task.clear()
@@ -605,7 +607,7 @@ class ControlPlaneReporter:
 
     def _next_event_id(self) -> str:
         self._event_sequence += 1
-        return f"{self._require_instance_id().hex}-{self._event_sequence}"
+        return f"{self._require_instance_id().hex}-{self._event_stream_id}-{self._event_sequence}"
 
     def _service_descriptor(self) -> dict[str, Any]:
         return {

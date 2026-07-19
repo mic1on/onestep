@@ -116,6 +116,14 @@ class BaseScheduleSource(Source):
     async def close(self) -> None:
         return None
 
+    async def resume_after_pause(self) -> None:
+        async with self._runtime_lock():
+            now = self._now()
+            self._pending_immediate = False
+            self._queued_runs.clear()
+            self._next_fire_at = self._initial_fire_at(now)
+            self._initialized = True
+
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
         fetch_limit = max(1, limit)

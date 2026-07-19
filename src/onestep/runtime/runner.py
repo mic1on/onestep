@@ -81,7 +81,10 @@ class TaskRunner:
                         continue
                     break
 
+                resumed_from_pause = self._pause_parked
                 self._set_drain_parked(False)
+                if resumed_from_pause:
+                    await self._resume_source_after_pause()
                 self._set_pause_parked(False)
                 available = self.task.concurrency - len(self._inflight)
                 if available <= 0:
@@ -207,6 +210,16 @@ class TaskRunner:
             return
         self._pause_parked = value
         self.app.notify_runner_state_changed()
+
+    async def _resume_source_after_pause(self) -> None:
+        if self.task.source is None:
+            return
+        hook = getattr(self.task.source, "resume_after_pause", None)
+        if not callable(hook):
+            return
+        result = hook()
+        if inspect.isawaitable(result):
+            await result
 
     async def _handle_source_fetch_error(self, exc: ConnectorOperationError) -> None:
         fallback_s = self.task.source.poll_interval_s if self.task.source is not None else 1.0

@@ -362,6 +362,46 @@ def test_reporter_flushes_metrics_and_events() -> None:
     assert heartbeat_calls[-1]["health"]["status"] == "degraded"
 
 
+def test_reporter_event_ids_stay_unique_after_same_instance_restarts() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def emit_one_event() -> None:
+        await app.startup()
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.STARTED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=0,
+            )
+        )
+        await reporter.flush_events_now()
+        await app.shutdown()
+
+    async def scenario() -> None:
+        await emit_one_event()
+        await emit_one_event()
+
+    asyncio.run(scenario())
+
+    event_ids = [
+        event["event_id"]
+        for channel, payload in recorder.calls
+        if channel == "events"
+        for event in payload["events"]
+    ]
+    assert len(event_ids) == 2
+    assert len(set(event_ids)) == 2
+    assert all(
+        event_id.startswith("8f9f0d7c4b4a4a588a6f52d6735f44df-")
+        for event_id in event_ids
+    )
+
+
 def test_reporter_includes_custom_metrics_when_sender_supports_them() -> None:
     recorder = SenderRecorder()
     app = OneStepApp("billing-sync")
