@@ -3,12 +3,13 @@ import {
   dispatchInstanceCommand,
   dispatchServiceCommand,
   dispatchTaskCommand,
-  formatUptime,
+  formatRelativeTime,
   getFanoutCommandIds,
   getApiErrorMessage,
   isAuthRequiredError,
   loadControlPlaneData,
   loadTaskMetricWindows,
+  loadTaskRecentLogs,
   logoutConsole,
   pollTaskCommandCompletion,
   pollTaskPauseRequested,
@@ -34,6 +35,7 @@ import InstancesTable from './components/InstancesTable';
 import TopologyFlow from './components/TopologyFlow';
 import ConfigEditor from './components/ConfigEditor';
 import ResourceChart from './components/ResourceChart';
+import TaskEventDiagnostics from './components/TaskEventDiagnostics';
 import LoginPage from './components/LoginPage';
 import NotificationSettingsPage from './components/NotificationSettingsPage';
 import LocaleSwitcher from './components/LocaleSwitcher';
@@ -90,13 +92,13 @@ function taskSupportsCommand(task: Task | null | undefined, command: TaskCommand
   return task?.supportedCommands.includes(command) ?? false;
 }
 
-function getTaskToggleCommand(task: Task | null | undefined): 'pause_task' | 'resume_task' | null {
-  if (task?.viewStatus === 'running') return 'pause_task';
+export function getTaskToggleCommand(task: Task | null | undefined): 'pause_task' | 'resume_task' | null {
   if (task?.viewStatus === 'paused') return 'resume_task';
+  if (task && task.viewStatus !== 'offline') return 'pause_task';
   return null;
 }
 
-function isTaskToggleSupported(task: Task | null | undefined): boolean {
+export function isTaskToggleSupported(task: Task | null | undefined): boolean {
   const command = getTaskToggleCommand(task);
   return command !== null && taskSupportsCommand(task, command);
 }
@@ -121,6 +123,9 @@ export default function App() {
   const [taskMetricLookbackMinutes, setTaskMetricLookbackMinutes] = useState(DEFAULT_TASK_METRIC_LOOKBACK_MINUTES);
   const [taskMetricsError, setTaskMetricsError] = useState<string | null>(null);
   const [isLoadingTaskMetrics, setIsLoadingTaskMetrics] = useState(false);
+  const [taskEventLogs, setTaskEventLogs] = useState<LogEntry[]>([]);
+  const [taskEventsError, setTaskEventsError] = useState<string | null>(null);
+  const [isLoadingTaskEvents, setIsLoadingTaskEvents] = useState(false);
 
   // --- UI Navigation State ---
   const [routePath, setRoutePath] = useState(() => `${window.location.pathname}${window.location.search}`);
@@ -409,6 +414,8 @@ export default function App() {
   }, [tasks, selectedTaskId]);
   const serviceHasOnlineInstances = selectedService.activeInstances > 0;
   const selectedTaskIsOffline = selectedTask?.viewStatus === 'offline' || !serviceHasOnlineInstances;
+  const selectedTaskToggleCommand = getTaskToggleCommand(selectedTask);
+  const selectedTaskToggleIsPause = selectedTaskToggleCommand === 'pause_task';
   const selectedTaskCanToggle = isTaskToggleSupported(selectedTask);
   const selectedTaskCanRestart = taskSupportsCommand(selectedTask, 'restart_task');
   const isPendingTaskToggle = !!selectedTask && pendingTaskId === selectedTask.id;
@@ -430,6 +437,9 @@ export default function App() {
       setTaskMetricWindows([]);
       setTaskMetricsError(null);
       setIsLoadingTaskMetrics(false);
+      setTaskEventLogs([]);
+      setTaskEventsError(null);
+      setIsLoadingTaskEvents(false);
       return () => {
         cancelled = true;
       };
@@ -437,6 +447,9 @@ export default function App() {
 
     setIsLoadingTaskMetrics(true);
     setTaskMetricsError(null);
+    setIsLoadingTaskEvents(true);
+    setTaskEventsError(null);
+    setTaskEventLogs([]);
     void loadTaskMetricWindows(selectedTask, taskMetricLookbackMinutes)
       .then((windows) => {
         if (cancelled) return;
@@ -454,6 +467,25 @@ export default function App() {
       .finally(() => {
         if (!cancelled) {
           setIsLoadingTaskMetrics(false);
+        }
+      });
+    void loadTaskRecentLogs(selectedTask, taskMetricLookbackMinutes)
+      .then((events) => {
+        if (cancelled) return;
+        setTaskEventLogs(events);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (isAuthRequiredError(error)) {
+          redirectToLogin();
+          return;
+        }
+        setTaskEventLogs([]);
+        setTaskEventsError(getApiErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingTaskEvents(false);
         }
       });
 
@@ -916,7 +948,7 @@ export default function App() {
                         onClick={() => handleToggleTaskStatus(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanToggle || !apiConnected || isPendingTaskToggle}
                         className={`flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg transition-colors text-xs font-bold bg-white shadow-xs ${
-                          selectedTask.viewStatus === 'running'
+                          selectedTaskToggleIsPause
                             ? 'text-rose-600 hover:bg-rose-50 border-rose-200'
                             : 'text-emerald-600 hover:bg-emerald-50 border-emerald-200'
                         } disabled:cursor-not-allowed disabled:opacity-50`}
@@ -926,7 +958,7 @@ export default function App() {
                             <RefreshCw className="w-4 h-4 animate-spin" />
                             <span>{tr('button.processing')}</span>
                           </>
-                        ) : selectedTask.viewStatus === 'running' ? (
+                        ) : selectedTaskToggleIsPause ? (
                           <>
                             <Square className="w-4 h-4" />
                             <span>{tr('button.stopTask')}</span>
@@ -1007,13 +1039,15 @@ export default function App() {
                 <div className="space-y-6 animate-fadeIn">
                   {/* Stats Bento Grid for Selected Task */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
-                    {/* Stat: Uptime */}
+                    {/* Stat: Last run */}
                     <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-28 shadow-xs">
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
-                        {tr('common.uptime')}
+                        {tr('common.lastRun')}
                       </span>
-                      <div className="text-2xl font-bold text-slate-900 mt-2">{formatUptime(selectedTask.uptimeReferenceAt)}</div>
-                      <span className="text-[10px] text-slate-500 font-medium">{tr('task.activeStreamStatus')}</span>
+                      <div className="text-2xl font-bold text-slate-900 mt-2">
+                        {formatRelativeTime(selectedTask.uptimeReferenceAt, tr)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-medium">{tr('task.latestActivity')}</span>
                     </div>
 
                     {/* Stat: Throughput */}
@@ -1071,6 +1105,14 @@ export default function App() {
                     {/* Right 1/3 column: Config editor */}
                     <div className="lg:col-span-1">
                       <ConfigEditor task={selectedTask} />
+                    </div>
+
+                    <div className="lg:col-span-3">
+                      <TaskEventDiagnostics
+                        logs={taskEventLogs}
+                        isLoading={isLoadingTaskEvents}
+                        error={taskEventsError}
+                      />
                     </div>
                   </div>
                 </div>
@@ -1175,15 +1217,27 @@ export default function App() {
                           if (isError) tagClass = 'text-rose-400';
 
                           return (
-                            <div key={idx} className="mb-1 text-[#b5c2d1] leading-relaxed flex">
-                              <span className="text-slate-500 shrink-0 w-16">{log.timestamp}</span>
-                              <span className={`font-bold shrink-0 w-16 ${tagClass}`}>
-                                [{log.level.toUpperCase()}]
-                              </span>
-                              <span className="text-slate-400 shrink-0 w-32 font-bold select-none truncate pr-2">
-                                {log.source}
-                              </span>
-                              <span className="text-slate-200 font-medium">{log.message}</span>
+                            <div key={idx} className="mb-2 text-[#b5c2d1] leading-relaxed">
+                              <div className="flex">
+                                <span className="text-slate-500 shrink-0 w-16">{log.timestamp}</span>
+                                <span className={`font-bold shrink-0 w-16 ${tagClass}`}>
+                                  [{log.level.toUpperCase()}]
+                                </span>
+                                <span className="text-slate-400 shrink-0 w-32 font-bold select-none truncate pr-2">
+                                  {log.source}
+                                </span>
+                                <span className="text-slate-200 font-medium break-words min-w-0">{log.message}</span>
+                              </div>
+                              {log.traceback ? (
+                                <details className="mt-1 max-w-full sm:ml-64">
+                                  <summary className="cursor-pointer select-none text-[11px] font-bold text-rose-300">
+                                    {tr('logs.traceback')}
+                                  </summary>
+                                  <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-700 bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-100">
+                                    {log.traceback}
+                                  </pre>
+                                </details>
+                              ) : null}
                             </div>
                           );
                         })}

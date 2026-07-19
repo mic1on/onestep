@@ -94,4 +94,12 @@ export interface LogEntry {
   level: 'info' | 'warn' | 'error';
   message: string;
   source: string;
+  eventKind?: string | null;
+  attempts?: number | null;
+  durationMs?: number | null;
+  instanceId?: string | null;
+  sourceDetail?: string | null;
+  exceptionType?: string | null;
+  failureKind?: string | null;
+  traceback?: string | null;
 }

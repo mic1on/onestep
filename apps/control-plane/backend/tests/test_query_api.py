@@ -1164,6 +1164,72 @@ def test_task_status_keeps_recent_activity_when_instance_heartbeat_is_stale(
     assert task["error_count"] == 0
 
 
+def test_task_summary_uses_historical_activity_for_last_run_outside_lookback(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="hourly-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="hourly-sync-1",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_contracts",
+        source_name="cron:hourly",
+        source_kind="cron",
+    )
+    old_metric_ended_at = now - timedelta(hours=1)
+    seed_metric_window(
+        db_session,
+        service,
+        instance,
+        task_name="sync_contracts",
+        window_id="sync_contracts:old",
+        window_started_at=old_metric_ended_at - timedelta(minutes=1),
+        window_ended_at=old_metric_ended_at,
+        succeeded=1,
+    )
+    old_event_at = now - timedelta(minutes=45)
+    seed_task_event(
+        db_session,
+        service,
+        instance,
+        event_id="evt_sync_contracts_old_success",
+        task_name="sync_contracts",
+        kind="succeeded",
+        occurred_at=old_event_at,
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/hourly-sync/tasks",
+        params={"environment": "prod", "lookback_minutes": 15},
+    )
+
+    assert response.status_code == 200
+    task = response.json()["items"][0]
+    assert task["task_name"] == "sync_contracts"
+    assert task["view_status"] == "idle"
+    assert task["metric_window_count"] == 0
+    assert task["latest_window_ended_at"] is None
+    assert task["fetched"] == 0
+    assert task["started"] == 0
+    assert task["succeeded"] == 0
+    assert task["event_counts"]["succeeded"] == 0
+    assert task["last_event_at"] is None
+    assert task["throughput_per_min"] == 0
+    assert (
+        datetime.fromisoformat(task["uptime_reference_at"].replace("Z", "+00:00"))
+        == old_event_at
+    )
+
+
 def test_service_dashboard_marks_topology_drift_when_online_instances_disagree(
     client, db_session
 ) -> None:
@@ -2079,6 +2145,87 @@ def test_task_command_fanout_dispatches_restart_task_when_advertised(
         )
         assert command is not None
         assert command.kind == "restart_task"
+    finally:
+        asyncio.run(
+            agent_connection_registry.unregister(
+                instance_id=instance.instance_id,
+                session_id=session.session_id,
+            )
+        )
+
+
+def test_task_command_fanout_allows_restart_when_snapshot_lacks_task_supported_commands(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-restart-task",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "sync_users",
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
+    session = seed_agent_session(
+        db_session,
+        service,
+        instance,
+        status="active",
+        connected_at=now - timedelta(minutes=1),
+        session_id="sess_restart_task_without_task_commands",
+        accepted_capabilities_json=[
+            "telemetry.sync",
+            "command.pause_task",
+            "command.resume_task",
+            "command.restart_task",
+        ],
+    )
+    db_session.commit()
+
+    send_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    asyncio.run(
+        agent_connection_registry.register(
+            instance_id=instance.instance_id,
+            session_id=session.session_id,
+            send_queue=send_queue,
+        )
+    )
+    try:
+        response = client.post(
+            "/api/v1/services/billing-sync/tasks/sync_users/commands",
+            params={"environment": "prod"},
+            json={
+                "kind": "restart_task",
+                "reason": "Restart this idle task",
+                "target_mode": "all_online",
+                "offline_behavior": "skip",
+                "timeout_s": 120,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["kind"] == "restart_task"
+        assert payload["counts"]["dispatched"] == 1
+        assert payload["counts"]["rejected"] == 0
+        command_message = send_queue.get_nowait()
+        assert command_message["payload"]["kind"] == "restart_task"
+        assert command_message["payload"]["args"] == {"task_name": "sync_users"}
     finally:
         asyncio.run(
             agent_connection_registry.unregister(
@@ -3344,6 +3491,28 @@ def test_list_service_tasks_exposes_online_supported_commands(client, db_session
             ],
         },
     )
+    restart_capable_snapshot_without_task_commands = seed_instance(
+        db_session,
+        service,
+        node_name="vm-restart-capable-snapshot-without-task-commands",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {
+                    "task_name": "idle_sync",
+                    "pause_requested": False,
+                    "paused": False,
+                    "accepting_new_work": True,
+                    "runner_count": 1,
+                    "parked_runner_count": 0,
+                    "fetching_runner_count": 1,
+                    "inflight_task_count": 0,
+                }
+            ],
+        },
+    )
     seed_agent_session(
         db_session,
         service,
@@ -3366,6 +3535,19 @@ def test_list_service_tasks_exposes_online_supported_commands(client, db_session
         session_id="sess_legacy",
         accepted_capabilities_json=["command.pause_task", "command.resume_task"],
     )
+    seed_agent_session(
+        db_session,
+        service,
+        restart_capable_snapshot_without_task_commands,
+        status="active",
+        connected_at=now - timedelta(minutes=1),
+        session_id="sess_restart_capable_snapshot_without_task_commands",
+        accepted_capabilities_json=[
+            "command.pause_task",
+            "command.resume_task",
+            "command.restart_task",
+        ],
+    )
     seed_task_definition(
         db_session,
         service,
@@ -3379,6 +3561,13 @@ def test_list_service_tasks_exposes_online_supported_commands(client, db_session
         task_name="legacy_sync",
         source_name="interval:5s",
         source_kind="interval",
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="idle_sync",
+        source_name="cron:hourly",
+        source_kind="cron",
     )
     db_session.commit()
 
@@ -3397,6 +3586,11 @@ def test_list_service_tasks_exposes_online_supported_commands(client, db_session
     assert by_task_name["legacy_sync"]["supported_commands"] == [
         "pause_task",
         "resume_task",
+    ]
+    assert by_task_name["idle_sync"]["supported_commands"] == [
+        "pause_task",
+        "resume_task",
+        "restart_task",
     ]
 
 

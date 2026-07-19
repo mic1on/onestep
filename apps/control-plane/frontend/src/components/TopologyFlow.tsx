@@ -2,7 +2,7 @@ import { ArrowRight, Database, ArrowRightLeft, Server, Cpu, HardDrive, Info } fr
 import { Task } from '../types';
 import { type CSSProperties, useState } from 'react';
 import { useI18n } from '../i18n';
-import { formatUptime } from '../api';
+import { formatRelativeTime } from '../api';
 import { buildSourceDetails, buildSinkDetails, resolveRowValue } from './sourceFields';
 
 interface TopologyFlowProps {
@@ -271,7 +271,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
           title: t('topology.taskTitle', { task: task.name }),
           type: t('topology.eventTransform'),
           concurrency: t('topology.workerThreads', { count: task.concurrency }),
-          uptime: formatUptime(task.uptimeReferenceAt),
+          uptime: formatRelativeTime(task.uptimeReferenceAt, t),
           throughput: `${task.throughputPerMin}/min`,
           retryPolicy: t('topology.exponentialRetries', { count: task.retryAttempts }),
         };
@@ -431,7 +431,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
                     <span className="text-slate-800 font-bold">{activeDetails.concurrency}</span>
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('topology.uptimeStatus')}</span>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t('common.lastRun')}</span>
                     <span className="text-slate-800">{activeDetails.uptime}</span>
                   </div>
                   <div>

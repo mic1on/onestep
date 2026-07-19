@@ -44,10 +44,12 @@ export default function TasksList({
       {tasks.map((task) => {
         const isRunning = task.viewStatus === 'running';
         const isPaused = task.viewStatus === 'paused';
+        const isIdle = task.viewStatus === 'idle';
         const isOffline = task.viewStatus === 'offline';
+        const toggleCommand = isPaused ? 'resume_task' : isOffline ? null : 'pause_task';
         const isToggleSupported =
-          (isRunning && taskSupportsCommand(task, 'pause_task')) ||
-          (isPaused && taskSupportsCommand(task, 'resume_task'));
+          toggleCommand !== null && taskSupportsCommand(task, toggleCommand);
+        const isPauseToggle = toggleCommand === 'pause_task';
         const isRestartSupported = taskSupportsCommand(task, 'restart_task');
         const isPending = pendingTaskId === task.id;
         const isMenuOpen = openMenuId === task.id;
@@ -80,7 +82,7 @@ export default function TasksList({
                               ? 'bg-emerald-500 animate-pulse'
                               : isPaused
                               ? 'bg-sky-500'
-                              : isOffline
+                              : isIdle || isOffline
                               ? 'bg-slate-400'
                               : 'bg-amber-400'
                           }`}
@@ -91,6 +93,8 @@ export default function TasksList({
                               ? 'text-emerald-600'
                               : isPaused
                               ? 'text-sky-600'
+                              : isIdle
+                              ? 'text-slate-600'
                               : isOffline
                               ? 'text-slate-500'
                               : 'text-amber-600'
@@ -138,7 +142,7 @@ export default function TasksList({
                             <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />
                             <span>{t('button.processing')}</span>
                           </>
-                        ) : isRunning ? (
+                        ) : isPauseToggle ? (
                           <>
                             <Square className="w-3.5 h-3.5 text-slate-400" />
                             <span>{isToggleSupported ? t('button.stopTask') : t('button.unavailable')}</span>

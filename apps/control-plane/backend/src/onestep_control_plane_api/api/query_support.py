@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Iterable
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -975,7 +975,7 @@ def _task_control_supported_commands(
         return [
             command_kind
             for command_kind in capability_commands
-            if command_kind in {"pause_task", "resume_task"}
+            if command_kind in {"pause_task", "resume_task", "restart_task"}
         ]
     return [
         command_kind
@@ -1496,6 +1496,14 @@ def build_task_summary_map(
             summaries[task_name] = summary
         summary.supported_commands = supported_commands
 
+    uptime_references = build_task_uptime_reference_map(
+        db,
+        service_id=service_id,
+        task_names=summaries.keys(),
+    )
+    for task_name, uptime_reference_at in uptime_references.items():
+        summaries[task_name].uptime_reference_at = uptime_reference_at
+
     # Finalise view-facing derived fields on every summary so clients never have
     # to recompute business state.
     for summary in summaries.values():
@@ -1506,6 +1514,52 @@ def build_task_summary_map(
         )
 
     return summaries
+
+
+def build_task_uptime_reference_map(
+    db: Session,
+    *,
+    service_id: UUID,
+    task_names: Iterable[str],
+) -> dict[str, datetime]:
+    task_name_list = list(task_names)
+    if not task_name_list:
+        return {}
+
+    result: dict[str, datetime] = {}
+    metric_rows = db.execute(
+        select(
+            TaskMetricWindow.task_name,
+            func.max(TaskMetricWindow.window_ended_at),
+        )
+        .where(
+            TaskMetricWindow.service_id == service_id,
+            TaskMetricWindow.task_name.in_(task_name_list),
+        )
+        .group_by(TaskMetricWindow.task_name)
+    ).all()
+    for task_name, window_ended_at in metric_rows:
+        if window_ended_at is not None:
+            result[task_name] = window_ended_at
+
+    event_rows = db.execute(
+        select(
+            TaskEvent.task_name,
+            func.max(TaskEvent.occurred_at),
+        )
+        .where(
+            TaskEvent.service_id == service_id,
+            TaskEvent.task_name.in_(task_name_list),
+        )
+        .group_by(TaskEvent.task_name)
+    ).all()
+    for task_name, event_at in event_rows:
+        if event_at is None:
+            continue
+        current = result.get(task_name)
+        if current is None or event_at > current:
+            result[task_name] = event_at
+    return result
 
 
 def finalize_task_summary(
@@ -1544,12 +1598,13 @@ def finalize_task_summary(
     summary.config_yaml = build_task_config_yaml(summary)
     uptime_reference_candidates = [
         candidate
-        for candidate in (summary.latest_window_started_at, summary.last_event_at)
+        for candidate in (summary.latest_window_ended_at, summary.last_event_at)
         if candidate is not None
     ]
-    summary.uptime_reference_at = (
-        max(uptime_reference_candidates) if uptime_reference_candidates else None
-    )
+    if summary.uptime_reference_at is None:
+        summary.uptime_reference_at = (
+            max(uptime_reference_candidates) if uptime_reference_candidates else None
+        )
     summary.view_status = derive_task_view_status(
         online_instance_count=online_instance_count,
         pause_requested=summary.pause_requested,

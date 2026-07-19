@@ -1,4 +1,5 @@
 import type { Instance, LogEntry, Service, Task, TaskCommandKind } from './types';
+import type { MessageKey } from './i18n';
 
 export type Environment = 'dev' | 'staging' | 'prod';
 
@@ -565,23 +566,43 @@ function displayServiceName(service: Pick<ServiceSummary, 'name' | 'environment'
 // derived here; that all lives in the backend.
 
 /** Render a live "time since <referenceAt>" label that ticks as time passes. */
-export function formatUptime(referenceAt: string | null): string {
+type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
+
+const englishTimeLabels: Translate = (key, values = {}) => {
+  const labels: Partial<Record<MessageKey, string>> = {
+    'time.neverRun': 'Not run yet',
+    'time.now': 'just now',
+    'time.minutesAgo': '{count}m ago',
+    'time.hoursAgo': '{count}h ago',
+    'time.daysAgo': '{count}d ago',
+  };
+  return (labels[key] ?? key).replace(/\{(\w+)\}/g, (match, name) => {
+    const value = values[name];
+    return value === undefined ? match : String(value);
+  });
+};
+
+export function formatRelativeTime(referenceAt: string | null, t: Translate): string {
   if (!referenceAt) {
-    return 'never';
+    return t('time.neverRun');
   }
   const elapsedMs = Date.now() - new Date(referenceAt).getTime();
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
-    return 'now';
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 60_000) {
+    return t('time.now');
   }
   const minutes = Math.floor(elapsedMs / 60_000);
   if (minutes < 60) {
-    return `${Math.max(minutes, 0)}m ago`;
+    return t('time.minutesAgo', { count: minutes });
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `${hours}h ago`;
+    return t('time.hoursAgo', { count: hours });
   }
-  return `${Math.floor(hours / 24)}d ago`;
+  return t('time.daysAgo', { count: Math.floor(hours / 24) });
+}
+
+export function formatUptime(referenceAt: string | null): string {
+  return formatRelativeTime(referenceAt, englishTimeLabels);
 }
 
 /** Render a per-minute throughput scalar with its unit, e.g. "12/min". */
@@ -655,11 +676,25 @@ function mapInstance(service: ServiceSummary, instance: InstanceSummary): Instan
 }
 
 function mapLog(event: TaskEventSummary): LogEntry {
+  const failureParts = [event.exception_type, event.message].filter(Boolean);
+  const sourceDetail = typeof event.meta.source === 'string' ? event.meta.source : null;
+  const fallbackMessage =
+    failureParts.length > 0
+      ? failureParts.join(': ')
+      : event.failure_kind ?? event.kind;
   return {
     timestamp: new Date(event.occurred_at).toTimeString().split(' ')[0],
     level: event.level,
     source: event.task_name,
-    message: event.message ?? `${event.kind} on ${event.instance_id}`,
+    message: fallbackMessage,
+    eventKind: event.kind,
+    attempts: event.attempts,
+    durationMs: event.duration_ms,
+    instanceId: event.instance_id,
+    sourceDetail,
+    exceptionType: event.exception_type,
+    failureKind: event.failure_kind,
+    traceback: event.traceback,
   };
 }
 
@@ -805,6 +840,29 @@ export async function loadTaskMetricWindows(
     avg_duration_ms: window.avg_duration_ms,
     p95_duration_ms: window.p95_duration_ms,
   }));
+}
+
+export async function loadTaskRecentLogs(
+  task: Task,
+  lookbackMinutes = DEFAULT_TASK_METRIC_LOOKBACK_MINUTES,
+  eventLimit = 10,
+): Promise<LogEntry[]> {
+  if (!task.apiServiceName || !task.apiName || !task.environment) {
+    return [];
+  }
+
+  const response = await request<TaskDetailResponse>(
+    `/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}`,
+    {
+      query: {
+        environment: task.environment,
+        lookback_minutes: lookbackMinutes,
+        metric_window_limit: 1,
+        event_limit: eventLimit,
+      },
+    },
+  );
+  return response.recent_events.map(mapLog);
 }
 
 /**

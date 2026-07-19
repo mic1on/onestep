@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getFanoutCommandIds, loadControlPlaneData, loadTaskMetricWindows, pollTaskCommandCompletion } from './api';
+import {
+  getFanoutCommandIds,
+  loadControlPlaneData,
+  loadTaskMetricWindows,
+  loadTaskRecentLogs,
+  pollTaskCommandCompletion,
+} from './api';
 import type { Task } from './types';
 
 function jsonResponse(body: unknown, status = 200) {
@@ -362,6 +368,87 @@ describe('loadControlPlaneData', () => {
     );
   });
 
+  it('maps failed task events into logs with exception details and tracebacks', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [serviceSummary],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          source_kind_counts: { memory_queue: 1 },
+          summary: {
+            total_services: 1,
+            online_services: 0,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 0,
+            total_instances: 0,
+            online_instances: 0,
+            total_tasks: 1,
+            failing_tasks: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          service: serviceSummary,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+          task_count: 1,
+          failing_task_count: 1,
+          recent_events: [
+            {
+              event_id: 'evt_failed',
+              instance_id: '11111111-1111-4111-8111-111111111111',
+              task_name: 'inspect_dead_letter',
+              kind: 'failed',
+              occurred_at: '2026-07-16T08:00:00Z',
+              attempts: 1,
+              duration_ms: 42,
+              failure_kind: 'error',
+              exception_type: 'RuntimeError',
+              message: 'boom',
+              traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+              meta: { source: 'interval:5s' },
+              received_at: '2026-07-16T08:00:01Z',
+              created_at: '2026-07-16T08:00:01Z',
+              level: 'error',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [],
+          total: 0,
+          limit: 100,
+          offset: 0,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }));
+
+    const data = await loadControlPlaneData();
+
+    expect(data.logs[0]).toEqual(
+      expect.objectContaining({
+        level: 'error',
+        source: 'inspect_dead_letter',
+        message: 'RuntimeError: boom',
+        eventKind: 'failed',
+        attempts: 1,
+        durationMs: 42,
+        instanceId: '11111111-1111-4111-8111-111111111111',
+        sourceDetail: 'interval:5s',
+        exceptionType: 'RuntimeError',
+        failureKind: 'error',
+        traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+      }),
+    );
+  });
+
   it('loads recent metric chart points from task detail telemetry', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
       jsonResponse({
@@ -492,6 +579,51 @@ describe('loadControlPlaneData', () => {
         fetched: 12,
         failed: 1,
         p95_duration_ms: 84,
+      }),
+    ]);
+  });
+
+  it('loads recent task logs from task detail events', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        recent_events: [
+          {
+            event_id: 'evt_task_failed',
+            instance_id: '11111111-1111-4111-8111-111111111111',
+            task_name: 'inspect_dead_letter',
+            kind: 'failed',
+            occurred_at: '2026-07-16T08:00:00Z',
+            attempts: 1,
+            duration_ms: 42,
+            failure_kind: 'error',
+            exception_type: 'RuntimeError',
+            message: 'boom',
+            traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+            meta: { source: 'interval:5s' },
+            received_at: '2026-07-16T08:00:01Z',
+            created_at: '2026-07-16T08:00:01Z',
+            level: 'error',
+          },
+        ],
+      }),
+    );
+
+    const logs = await loadTaskRecentLogs(taskFixture, 30, 10);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter?environment=dev&lookback_minutes=30&metric_window_limit=1&event_limit=10',
+    );
+    expect(logs).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        message: 'RuntimeError: boom',
+        eventKind: 'failed',
+        attempts: 1,
+        durationMs: 42,
+        instanceId: '11111111-1111-4111-8111-111111111111',
+        sourceDetail: 'interval:5s',
+        traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
       }),
     ]);
   });

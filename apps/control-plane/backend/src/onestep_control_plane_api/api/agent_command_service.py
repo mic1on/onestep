@@ -112,7 +112,7 @@ def _task_support_rejection(
 
     raw_supported_commands = task_control_state.get("supported_commands")
     if not isinstance(raw_supported_commands, list):
-        if kind in {"pause_task", "resume_task"}:
+        if kind in {"pause_task", "resume_task", "restart_task"}:
             return None
         return (
             "task_command_unsupported",
