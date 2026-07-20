@@ -163,10 +163,37 @@ tasks:
 onestep run worker.yaml
 onestep check --strict worker.yaml   # schema validation, unknown-field detection
 onestep init billing-sync            # scaffold a minimal YAML project
+onestep build worker.yaml --out dist/worker.zip
 ```
 
 The full YAML schema, resource types, conditional routing, and state binding
 are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
+
+### Build a deployable worker package
+
+`onestep build` packages a YAML worker project into a zip that a worker agent can
+download and run. It validates the target first, collects the YAML entrypoint,
+local Python modules referenced by handler/hook refs, dependency declaration
+files such as `pyproject.toml`, `requirements.txt`, and `uv.lock`, and writes an
+`onestep-package.json` manifest into the zip.
+
+```bash
+onestep build worker.yaml --strict --out dist/worker.zip
+```
+
+For files that cannot be inferred from imports, add build hints to
+`pyproject.toml`:
+
+```toml
+[tool.onestep.build]
+include = ["templates/**"]
+exclude = ["templates/private/**"]
+```
+
+Use `--env-file .env` to provide local values for the pre-build check. `.env`
+files are excluded from packages by default; deploy-time configuration should be
+provided through the worker agent or control plane. Use `--json` to emit the
+build report for automation.
 
 ## Deployment
 
