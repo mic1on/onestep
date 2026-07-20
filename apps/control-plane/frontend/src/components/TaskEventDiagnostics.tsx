@@ -73,7 +73,11 @@ export default function TaskEventDiagnostics({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
-            <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-1">
+            <div
+              role="group"
+              aria-label={`${t('task.events')} ${t('chart.lookbackMinutes')}`}
+              className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-1"
+            >
               {TASK_EVENT_LOOKBACK_PRESETS.map((minutes) => (
                 <button
                   key={minutes}

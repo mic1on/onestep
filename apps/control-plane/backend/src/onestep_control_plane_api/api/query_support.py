@@ -60,7 +60,6 @@ from onestep_control_plane_api.db.models import (
     TaskMetricWindow,
 )
 
-
 TASK_EVENT_HISTORY_COMMAND_KINDS = (
     "pause_task",
     "resume_task",
@@ -1205,7 +1204,9 @@ def build_task_runtime_history_item(event: TaskEvent) -> TaskEventHistoryItem:
     )
 
 
-def build_task_command_history_item(command: AgentCommand, *, task_name: str) -> TaskEventHistoryItem:
+def build_task_command_history_item(
+    command: AgentCommand, *, task_name: str
+) -> TaskEventHistoryItem:
     meta: dict[str, Any] = {
         "status": command.status,
         "args": command.args_json,

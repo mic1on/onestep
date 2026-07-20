@@ -603,7 +603,8 @@ test("loads API-backed service, task, instance, topology, config, and log views"
   await page.getByText("orders_to_ledger").first().click();
   await expect(page.getByRole("heading", { name: "orders_to_ledger" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Task Metrics" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "15m", pressed: true })).toBeVisible();
+  const taskMetricsLookback = page.getByRole("group", { name: "Task Metrics Lookback minutes" });
+  await expect(taskMetricsLookback.getByRole("button", { name: "15m", pressed: true })).toBeVisible();
   await expect(page.getByText("1020")).toBeVisible();
   await expect(page.getByRole("button", { name: "Failures" })).toBeVisible();
 
