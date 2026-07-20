@@ -29,17 +29,24 @@ from onestep_control_plane_api.db.models import (
 )
 from sqlalchemy import select, update
 
+DESCRIPTION_UNSET = object()
+
 
 def make_service_payload(
     instance_id: str = "8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df",
-) -> dict[str, str]:
-    return {
+    *,
+    description: str | None | object = DESCRIPTION_UNSET,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
         "name": "billing-sync",
         "environment": "prod",
         "node_name": "vm-prod-3",
         "instance_id": instance_id,
         "deployment_version": "1.0.0a0+c435c99",
     }
+    if description is not DESCRIPTION_UNSET:
+        payload["description"] = description
+    return payload
 
 
 def make_heartbeat_payload(
@@ -520,6 +527,106 @@ def test_sync_ingestion_creates_service_instance_and_task_definitions(db_session
         "process_orders",
         "sync_users",
     ]
+
+
+def test_sync_ingestion_persists_service_description(db_session) -> None:
+    payload = make_sync_payload()
+    payload["service"] = make_service_payload(
+        description="  Reconciles billing data into the warehouse.  "
+    )
+
+    ingest_sync(db_session, payload)
+
+    service = db_session.scalar(select(Service))
+    assert service is not None
+    assert service.description == "Reconciles billing data into the warehouse."
+
+
+def test_newer_heartbeat_persists_service_description(db_session) -> None:
+    payload = make_heartbeat_payload()
+    payload["service"] = make_service_payload(
+        description="Processes billing health checks."
+    )
+
+    ingest_heartbeat(db_session, payload)
+
+    service = db_session.scalar(select(Service))
+    assert service is not None
+    assert service.description == "Processes billing health checks."
+
+
+def test_missing_service_description_does_not_clear_existing_value(db_session) -> None:
+    ingest_sync(db_session, make_sync_payload())
+    service = db_session.scalar(select(Service))
+    assert service is not None
+    service.description = "Existing description"
+    db_session.commit()
+
+    payload = make_sync_payload()
+    payload["sent_at"] = "2026-03-08T17:31:06Z"
+    payload["sequence"] = 6
+    ingest_sync(db_session, payload)
+
+    db_session.refresh(service)
+    assert service.description == "Existing description"
+
+
+def test_explicit_null_service_description_clears_existing_value(db_session) -> None:
+    ingest_sync(db_session, make_sync_payload())
+    service = db_session.scalar(select(Service))
+    assert service is not None
+    service.description = "Existing description"
+    db_session.commit()
+
+    payload = make_sync_payload()
+    payload["service"] = make_service_payload(description=None)
+    payload["sent_at"] = "2026-03-08T17:31:06Z"
+    payload["sequence"] = 6
+    ingest_sync(db_session, payload)
+
+    db_session.refresh(service)
+    assert service.description is None
+
+
+def test_blank_service_description_clears_existing_value(db_session) -> None:
+    ingest_sync(db_session, make_sync_payload())
+    service = db_session.scalar(select(Service))
+    assert service is not None
+    service.description = "Existing description"
+    db_session.commit()
+
+    payload = make_sync_payload()
+    payload["service"] = make_service_payload(description="   ")
+    payload["sent_at"] = "2026-03-08T17:31:06Z"
+    payload["sequence"] = 6
+    ingest_sync(db_session, payload)
+
+    db_session.refresh(service)
+    assert service.description is None
+
+
+def test_metrics_and_events_do_not_update_service_description(db_session) -> None:
+    payload = make_sync_payload()
+    payload["service"] = make_service_payload(description="Original description")
+    ingest_sync(db_session, payload)
+
+    metrics_payload = make_metrics_payload()
+    metrics_payload["service"] = make_service_payload(
+        "33fb10d0-7580-4552-b8ca-4ef55f98f844",
+        description="Metrics should not update metadata",
+    )
+    ingest_metrics(db_session, metrics_payload)
+
+    events_payload = make_events_payload()
+    events_payload["service"] = make_service_payload(
+        "9d91f3e5-655b-498f-a5c8-f99c5c3b518e",
+        description=None,
+    )
+    ingest_events(db_session, events_payload)
+
+    service = db_session.scalar(select(Service))
+    assert service is not None
+    assert service.description == "Original description"
 
 
 def test_sync_refreshes_task_definitions_for_newer_payload_with_same_topology_hash(

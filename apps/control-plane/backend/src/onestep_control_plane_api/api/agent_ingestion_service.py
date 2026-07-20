@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from onestep_control_plane_api.api.common import (
     apply_heartbeat_snapshot,
+    apply_service_metadata,
     apply_sync_snapshot,
     as_utc,
     build_insert_statement,
@@ -55,6 +56,7 @@ def ingest_sync_request(
 
     apply_sync = is_newer_sync(instance, sent_at=sent_at, sequence=request.sequence)
     if apply_sync:
+        apply_service_metadata(service, request.service)
         service.latest_deployment_version = request.service.deployment_version
         service.latest_topology_hash = request.app.topology_hash
         service.latest_sync_at = received_at
@@ -96,6 +98,7 @@ def ingest_heartbeat_request(
     ensure_instance_identity_matches(instance, request.service)
 
     if is_newer_heartbeat(instance, sent_at=sent_at, sequence=request.sequence):
+        apply_service_metadata(service, request.service)
         service.latest_deployment_version = request.service.deployment_version
         apply_heartbeat_snapshot(
             instance,

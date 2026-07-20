@@ -249,9 +249,18 @@ def _normalize_task_command_args(
 class ServiceDescriptor(APIModel):
     name: str = Field(min_length=1, max_length=255)
     environment: Environment
+    description: str | None = None
     node_name: str = Field(min_length=1, max_length=255)
     instance_id: UUID
     deployment_version: str = Field(min_length=1, max_length=128)
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class IngestionEnvelope(APIModel):

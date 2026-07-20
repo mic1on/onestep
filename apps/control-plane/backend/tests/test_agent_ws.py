@@ -38,10 +38,11 @@ def _drain_ui_stream_channels(queue: asyncio.Queue) -> list[str]:
 def make_service_payload(
     instance_id: str = "8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df",
     node_name: str = "vm-prod-3",
-) -> dict[str, str]:
+) -> dict[str, object]:
     return {
         "name": "billing-sync",
         "environment": "prod",
+        "description": "Billing warehouse sync service.",
         "node_name": node_name,
         "instance_id": instance_id,
         "deployment_version": "1.0.0a0+c435c99",
@@ -183,6 +184,7 @@ def test_agent_ws_hello_establishes_session_and_returns_hello_ack(
     )
 
     assert service is not None
+    assert service.description == "Billing warehouse sync service."
     assert instance is not None
     assert session is not None
     assert session.status == "disconnected"
@@ -240,6 +242,7 @@ def test_agent_ws_telemetry_reuses_ingestion_logic(
         )
 
     db_session.expire_all()
+    service = db_session.scalar(select(Service).where(Service.name == "billing-sync"))
     instance = db_session.scalar(
         select(Instance).where(
             Instance.instance_id == UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df")
@@ -249,6 +252,8 @@ def test_agent_ws_telemetry_reuses_ingestion_logic(
         select(TaskDefinition).where(TaskDefinition.task_name == "sync_users")
     )
 
+    assert service is not None
+    assert service.description == "Billing warehouse sync service."
     assert instance is not None
     assert task_definition is not None
     assert instance.last_sync_sequence == 5

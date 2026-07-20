@@ -26,6 +26,7 @@ from onestep_control_plane_api.api.agent_ingestion_service import (
     ingest_sync_request,
 )
 from onestep_control_plane_api.api.common import (
+    apply_service_metadata,
     as_utc,
     ensure_instance_stub,
     ensure_service,
@@ -148,6 +149,7 @@ def _handle_hello(
 
     accepted_capabilities = _accepted_capabilities(message.payload.capabilities)
     service = ensure_service(db, message.payload.service, update_existing_version=True)
+    apply_service_metadata(service, message.payload.service)
     instance = ensure_instance_stub(db, service=service, identity=message.payload.service)
     instance.service = service
     instance.node_name = message.payload.service.node_name

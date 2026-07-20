@@ -86,6 +86,11 @@ def ensure_service(
     return service
 
 
+def apply_service_metadata(service: Service, identity: ServiceDescriptor) -> None:
+    if "description" in identity.model_fields_set:
+        service.description = identity.description
+
+
 def get_instance(
     db: Session,
     instance_id: UUID,
