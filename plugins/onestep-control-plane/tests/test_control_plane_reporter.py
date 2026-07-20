@@ -33,6 +33,7 @@ def _make_config() -> ControlPlaneReporterConfig:
         token="secret-token",
         environment="prod",
         service_name="billing-sync",
+        service_description="Synchronizes billing data.",
         node_name="vm-prod-3",
         deployment_version="1.0.0+c435c99",
         instance_id=UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
@@ -70,11 +71,13 @@ def test_reporter_startup_sends_heartbeat() -> None:
     assert heartbeat_payload["service"] == {
         "name": "billing-sync",
         "environment": "prod",
+        "description": "Synchronizes billing data.",
         "node_name": "vm-prod-3",
         "instance_id": UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
         "deployment_version": "1.0.0+c435c99",
     }
     assert heartbeat_payload["health"]["status"] == "ok"
+    assert sync_payload["service"]["description"] == "Synchronizes billing data."
     assert heartbeat_payload["health"]["task_controls"] == []
     assert heartbeat_payload["sequence"] == 1
     assert heartbeat_payload["runtime"]["pid"] > 0
@@ -831,6 +834,7 @@ def test_reporter_config_from_env_uses_fallback_names(monkeypatch) -> None:
     monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "secret-token")
     monkeypatch.setenv("ONESTEP_ENV", "staging")
     monkeypatch.setenv("ONESTEP_SERVICE_NAME", "payments-sync")
+    monkeypatch.setenv("ONESTEP_SERVICE_DESCRIPTION", "Processes payment events.")
     monkeypatch.setenv("ONESTEP_NODE_NAME", "node-a")
     monkeypatch.setenv("ONESTEP_DEPLOYMENT_VERSION", "2026.03.08")
     monkeypatch.setenv("ONESTEP_INSTANCE_ID", "f13b655a-b4c9-4b69-a8d4-3027f3fa7415")
@@ -846,6 +850,7 @@ def test_reporter_config_from_env_uses_fallback_names(monkeypatch) -> None:
     assert config.token == "secret-token"
     assert config.environment == "staging"
     assert config.service_name == "payments-sync"
+    assert config.service_description == "Processes payment events."
     assert config.node_name == "node-a"
     assert config.deployment_version == "2026.03.08"
     assert config.instance_id == UUID("f13b655a-b4c9-4b69-a8d4-3027f3fa7415")

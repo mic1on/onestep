@@ -64,6 +64,13 @@ def _normalize_state_dir(value: str | None) -> str | None:
     return os.path.abspath(os.path.expanduser(normalized))
 
 
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _coerce_positive_float(name: str, value: float) -> float:
     if value <= 0:
         raise ValueError(f"{name} must be > 0")
@@ -172,6 +179,7 @@ class ControlPlaneReporterConfig:
     token: str
     environment: str = "dev"
     service_name: str | None = None
+    service_description: str | None = None
     node_name: str | None = None
     deployment_version: str | None = None
     instance_id: UUID | None = None
@@ -195,6 +203,7 @@ class ControlPlaneReporterConfig:
             raise ValueError("control plane token must not be empty")
         if self.environment not in {"dev", "staging", "prod"}:
             raise ValueError("environment must be one of: dev, staging, prod")
+        self.service_description = _normalize_optional_text(self.service_description)
         self.heartbeat_interval_s = _coerce_positive_float(
             "heartbeat_interval_s",
             self.heartbeat_interval_s,
@@ -242,6 +251,7 @@ class ControlPlaneReporterConfig:
         base_url: str | None = None,
         token: str | None = None,
         service_name: str | None = None,
+        service_description: str | None = None,
     ) -> "ControlPlaneReporterConfig":
         base_url = base_url or _read_env("ONESTEP_CONTROL_PLANE_URL", "ONESTEP_CONTROL_URL")
         token = token or _read_env("ONESTEP_CONTROL_PLANE_TOKEN", "ONESTEP_CONTROL_TOKEN")
@@ -251,6 +261,7 @@ class ControlPlaneReporterConfig:
             raise ValueError("missing ONESTEP_CONTROL_PLANE_TOKEN or ONESTEP_CONTROL_TOKEN")
         environment = _read_env("ONESTEP_CONTROL_PLANE_ENVIRONMENT", "ONESTEP_ENV") or "dev"
         service_name = service_name or _read_env("ONESTEP_SERVICE_NAME") or app_name
+        service_description = service_description or _read_env("ONESTEP_SERVICE_DESCRIPTION")
         node_name = _read_env("ONESTEP_NODE_NAME")
         deployment_version = _read_env(
             "ONESTEP_DEPLOYMENT_VERSION",
@@ -299,6 +310,7 @@ class ControlPlaneReporterConfig:
             token=token,
             environment=environment,
             service_name=service_name,
+            service_description=service_description,
             node_name=node_name,
             deployment_version=deployment_version,
             instance_id=instance_id,
@@ -440,13 +452,14 @@ class ControlPlaneReporter:
         bind_reporter = getattr(self._sender, "bind_reporter", None)
         if callable(bind_reporter):
             bind_reporter(self)
-        app.set_reporter_summary(
-            {
-                "type": "control_plane",
-                "base_url": self.config.base_url,
-                "service_name": self._service_name or app.name,
-            }
-        )
+        summary = {
+            "type": "control_plane",
+            "base_url": self.config.base_url,
+            "service_name": self._service_name or app.name,
+        }
+        if self.config.service_description is not None:
+            summary["service_description"] = self.config.service_description
+        app.set_reporter_summary(summary)
         app.on_startup(self.startup)
         app.on_shutdown(self.shutdown)
         app.on_event(self.handle_event)
@@ -610,13 +623,16 @@ class ControlPlaneReporter:
         return f"{self._require_instance_id().hex}-{self._event_stream_id}-{self._event_sequence}"
 
     def _service_descriptor(self) -> dict[str, Any]:
-        return {
+        descriptor = {
             "name": self._service_name,
             "environment": self.config.environment,
             "node_name": self._node_name,
             "instance_id": self._require_instance_id(),
             "deployment_version": self._deployment_version,
         }
+        if self.config.service_description is not None:
+            descriptor["description"] = self.config.service_description
+        return descriptor
 
     def _build_runtime_descriptor(self) -> dict[str, Any]:
         return {

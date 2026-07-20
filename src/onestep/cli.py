@@ -378,6 +378,9 @@ def _format_reporter(reporter: dict[str, str] | None) -> str:
     base_url = reporter.get("base_url")
     if base_url:
         parts.append(f"base_url={base_url}")
+    service_description = reporter.get("service_description")
+    if service_description:
+        parts.append(f"description={service_description!r}")
     return " ".join(parts)
 
 
