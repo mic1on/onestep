@@ -531,6 +531,10 @@ def _pyproject_referenced_metadata_paths_fallback(path: Path) -> tuple[str, ...]
             value = _inline_table_file_value(raw_value)
             if value is not None:
                 references.append(value)
+        elif key == "license-files":
+            value = _literal_string_list_value(raw_value)
+            if value is not None:
+                references.extend(value)
     return tuple(references)
 
 
@@ -543,6 +547,16 @@ def _literal_string_value(raw_value: str) -> str | None:
     except (SyntaxError, ValueError):
         return None
     return value if isinstance(value, str) else None
+
+
+def _literal_string_list_value(raw_value: str) -> tuple[str, ...] | None:
+    try:
+        value = ast.literal_eval(raw_value)
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(value, list):
+        return None
+    return tuple(item for item in value if isinstance(item, str))
 
 
 def _inline_table_file_value(raw_value: str) -> str | None:
@@ -627,6 +641,10 @@ def _expand_include_pattern(project_root: Path, pattern: str) -> set[Path]:
         return {direct}
     if direct.is_dir():
         return _iter_files(direct)
+    if normalized.endswith("/**"):
+        directory = (project_root / normalized[:-3].rstrip("/")).resolve()
+        if directory.is_dir():
+            return _iter_files(directory)
     return {
         item.resolve()
         for item in project_root.glob(normalized)
