@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
-    "onestep>=1.7.0",
+    "onestep>=1.7.1",
     "aio-pika>=9.0.0",
 ]
 

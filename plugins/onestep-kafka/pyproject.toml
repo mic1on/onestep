@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "onestep>=1.7.0",
+    "onestep>=1.7.1",
     "aiokafka>=0.14.0",
 ]
 
