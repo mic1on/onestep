@@ -160,10 +160,37 @@ tasks:
 onestep run worker.yaml
 onestep check --strict worker.yaml   # schema 校验、未知字段检测
 onestep init billing-sync            # 脚手架生成最小 YAML 工程
+onestep build worker.yaml --out dist/worker.zip
 ```
 
 完整的 YAML schema、资源类型、条件路由、状态绑定，见
 [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md)。
+
+### 构建可部署 worker 包
+
+`onestep build` 会把 YAML worker 工程打成可由 worker agent 下载运行的 zip。
+它会先校验目标，然后收集 YAML 入口、handler/hook/条件路由引用到的本地
+Python 模块、`pyproject.toml`、`requirements.txt`、`uv.lock` 等依赖声明文件、
+README 和 license 等打包元数据文件，并把 `onestep-package.json` manifest
+写入 zip。
+
+```bash
+onestep build worker.yaml --strict --out dist/worker.zip
+```
+
+无法从 Python 引用自动推断的文件，可以在 `pyproject.toml` 中添加构建提示：
+
+```toml
+[tool.onestep.build]
+entrypoint = "worker.yaml"
+include = ["templates/**"]
+exclude = ["templates/private/**"]
+```
+
+使用 `--env-file .env` 可以为构建前校验提供本地环境变量值。`.env` 文件默认
+不会进入包；部署时配置应由 worker agent 或控制面提供。package manifest 会记录
+入口文件，兼容的控制面上传接口可以自动读取；上传到旧控制面时，请显式传入同一个
+entrypoint。使用 `--json` 可以输出适合自动化流程消费的构建报告。
 
 ## 部署
 

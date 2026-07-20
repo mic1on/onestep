@@ -173,8 +173,9 @@ are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
 
 `onestep build` packages a YAML worker project into a zip that a worker agent can
 download and run. It validates the target first, collects the YAML entrypoint,
-local Python modules referenced by handler/hook refs, dependency declaration
-files such as `pyproject.toml`, `requirements.txt`, and `uv.lock`, and writes an
+local Python modules referenced by handler, hook, and conditional routing refs,
+dependency declaration files such as `pyproject.toml`, `requirements.txt`, and
+`uv.lock`, packaging metadata such as README and license files, and writes an
 `onestep-package.json` manifest into the zip.
 
 ```bash
@@ -186,14 +187,17 @@ For files that cannot be inferred from imports, add build hints to
 
 ```toml
 [tool.onestep.build]
+entrypoint = "worker.yaml"
 include = ["templates/**"]
 exclude = ["templates/private/**"]
 ```
 
 Use `--env-file .env` to provide local values for the pre-build check. `.env`
 files are excluded from packages by default; deploy-time configuration should be
-provided through the worker agent or control plane. Use `--json` to emit the
-build report for automation.
+provided through the worker agent or control plane. The package manifest records
+the entrypoint so compatible control-plane uploads can infer it automatically;
+when uploading to an older control plane, pass the same entrypoint explicitly.
+Use `--json` to emit the build report for automation.
 
 ## Deployment
 

@@ -44,6 +44,17 @@ DEPENDENCY_FILES = (
     "Pipfile.lock",
 )
 
+PACKAGING_METADATA_FILE_PATTERNS = (
+    "README",
+    "README.*",
+    "LICENSE",
+    "LICENSE.*",
+    "COPYING",
+    "COPYING.*",
+    "NOTICE",
+    "NOTICE.*",
+)
+
 PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
 
 
@@ -356,7 +367,7 @@ def _collect_callable_refs(value: Any, refs: set[str], *, key: str | None = None
             child_key_str = str(child_key)
             if child_key_str == "ref" and isinstance(child_value, str):
                 _add_callable_ref(child_value, refs)
-            elif child_key_str == "handler" and isinstance(child_value, str):
+            elif child_key_str in {"handler", "when"} and isinstance(child_value, str):
                 _add_callable_ref(child_value, refs)
             else:
                 _collect_callable_refs(child_value, refs, key=child_key_str)
@@ -397,6 +408,7 @@ def _default_files(
         candidate = project_root / filename
         if candidate.is_file():
             files.add(candidate)
+    files.update(_packaging_metadata_files(project_root, warnings=warnings))
 
     source_roots = _source_roots(project_root, target_path.parent)
     for ref in sorted(callable_refs):
@@ -448,6 +460,139 @@ def _iter_files(path: Path) -> set[Path]:
     if path.is_file():
         return {path}
     return {item for item in path.rglob("*") if item.is_file()}
+
+
+def _packaging_metadata_files(project_root: Path, *, warnings: list[str]) -> set[Path]:
+    files: set[Path] = set()
+    for pattern in PACKAGING_METADATA_FILE_PATTERNS:
+        files.update(item.resolve() for item in project_root.glob(pattern) if item.is_file())
+
+    pyproject = project_root / "pyproject.toml"
+    if not pyproject.is_file():
+        return files
+
+    for reference in _pyproject_referenced_metadata_paths(pyproject):
+        files.update(_resolve_packaging_metadata_reference(project_root, reference, warnings=warnings))
+    return files
+
+
+def _pyproject_referenced_metadata_paths(path: Path) -> tuple[str, ...]:
+    try:
+        import tomllib  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return _pyproject_referenced_metadata_paths_fallback(path)
+
+    with path.open("rb") as handle:
+        payload = tomllib.load(handle)
+    project = payload.get("project", {})
+    if not isinstance(project, Mapping):
+        return ()
+
+    references: list[str] = []
+    references.extend(_metadata_file_refs(project.get("readme"), string_is_path=True))
+    references.extend(_metadata_file_refs(project.get("license"), string_is_path=False))
+    license_files = project.get("license-files")
+    if isinstance(license_files, list):
+        references.extend(item for item in license_files if isinstance(item, str))
+    return tuple(references)
+
+
+def _metadata_file_refs(value: Any, *, string_is_path: bool) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,) if string_is_path else ()
+    if isinstance(value, Mapping):
+        file_value = value.get("file")
+        if isinstance(file_value, str):
+            return (file_value,)
+    return ()
+
+
+def _pyproject_referenced_metadata_paths_fallback(path: Path) -> tuple[str, ...]:
+    references: list[str] = []
+    in_project = False
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_project:
+                break
+            in_project = stripped == "[project]"
+            continue
+        if not in_project or "=" not in stripped:
+            continue
+
+        key, raw_value = [part.strip() for part in stripped.split("=", 1)]
+        if key == "readme":
+            value = _literal_string_value(raw_value) or _inline_table_file_value(raw_value)
+            if value is not None:
+                references.append(value)
+        elif key == "license":
+            value = _inline_table_file_value(raw_value)
+            if value is not None:
+                references.append(value)
+    return tuple(references)
+
+
+def _literal_string_value(raw_value: str) -> str | None:
+    raw_value = raw_value.strip()
+    if not raw_value or raw_value[0] not in {"'", '"'}:
+        return None
+    try:
+        value = ast.literal_eval(raw_value)
+    except (SyntaxError, ValueError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _inline_table_file_value(raw_value: str) -> str | None:
+    if "file" not in raw_value:
+        return None
+    after_file = raw_value.split("file", 1)[1]
+    if "=" not in after_file:
+        return None
+    raw_file_value = after_file.split("=", 1)[1].strip()
+    for quote in ("'", '"'):
+        start = raw_file_value.find(quote)
+        if start < 0:
+            continue
+        end = raw_file_value.find(quote, start + 1)
+        if end > start:
+            return raw_file_value[start + 1 : end]
+    return None
+
+
+def _resolve_packaging_metadata_reference(
+    project_root: Path,
+    reference: str,
+    *,
+    warnings: list[str],
+) -> set[Path]:
+    normalized = reference.replace("\\", "/").strip()
+    if not normalized:
+        return set()
+    if Path(normalized).is_absolute():
+        warnings.append(f"pyproject.toml references packaging metadata outside project root: {reference!r}")
+        return set()
+
+    if any(char in normalized for char in "*?["):
+        matches = {
+            item.resolve()
+            for item in project_root.glob(normalized)
+            if item.is_file() and _relative_to(item, project_root) is not None
+        }
+        if not matches:
+            warnings.append(f"pyproject.toml metadata pattern matched no files: {reference!r}")
+        return matches
+
+    path = (project_root / normalized).resolve()
+    if _relative_to(path, project_root) is None:
+        warnings.append(f"pyproject.toml references packaging metadata outside project root: {reference!r}")
+        return set()
+    if not path.is_file():
+        warnings.append(f"pyproject.toml references missing packaging metadata file: {reference!r}")
+        return set()
+    return {path}
 
 
 def _expand_include_patterns(
