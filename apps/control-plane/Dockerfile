@@ -14,7 +14,7 @@ COPY scripts ./scripts
 RUN uv sync --frozen --no-dev
 
 
-FROM public.ecr.aws/docker/library/node:22-alpine AS frontend-build
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:22-alpine AS frontend-build
 
 WORKDIR /app
 
