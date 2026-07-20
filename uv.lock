@@ -517,7 +517,7 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.6.0"
+version = "1.6.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -635,7 +635,7 @@ provides-extras = ["control-plane", "yaml", "mysql", "postgres", "rabbitmq", "re
 
 [[package]]
 name = "onestep-control-plane"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "plugins/onestep-control-plane" }
 dependencies = [
     { name = "onestep" },

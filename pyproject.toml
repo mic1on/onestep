@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "1.6.0"
+version = "1.6.1"
 description = "Async task runtime for queue, polling, schedule, and webhook workloads."
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -25,7 +25,7 @@ dependencies = []
 
 [project.optional-dependencies]
 control-plane = [
-    "onestep-control-plane>=0.1.0",
+    "onestep-control-plane>=0.1.1",
 ]
 yaml = [
     "PyYAML>=6.0",
@@ -65,7 +65,7 @@ integration = [
     "onestep-kafka>=0.1.0; python_version >= '3.10'",
 ]
 all = [
-    "onestep-control-plane>=0.1.0",
+    "onestep-control-plane>=0.1.1",
     "PyYAML>=6.0",
     "onestep-mq>=0.2.0",
     "onestep-redis>=0.2.0",
@@ -75,7 +75,7 @@ all = [
     "onestep-kafka>=0.1.0; python_version >= '3.10'",
 ]
 dev = [
-    "onestep-control-plane>=0.1.0",
+    "onestep-control-plane>=0.1.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "PyYAML>=6.0",

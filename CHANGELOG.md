@@ -1,12 +1,16 @@
 # Changelog
 
+## 1.6.1
+
+- Adds `reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` so workers can report service-level descriptions to the control plane.
+- Raises the `onestep-control-plane` reporter plugin package to `0.1.1` and requires `onestep>=1.6.1`.
+
 ## 1.6.0
 
 - Adds the `onestep build` command for packaging YAML worker projects into deployable zip archives with an `onestep-package.json` manifest.
 - Includes conditional `emit.when` predicate modules, pyproject-referenced README/license metadata, and common packaging metadata files in worker packages.
 - Resets interval and cron schedule sources after task resume so paused tasks do not backfill stale ticks.
 - Keeps control-plane reporter event IDs unique across same-instance restarts.
-- Adds `reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` so workers can report service-level descriptions to the control plane.
 
 ## 1.5.1
 
