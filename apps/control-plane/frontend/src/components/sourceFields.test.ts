@@ -1,89 +1,83 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildSourceDetails, resolveRowValue } from './sourceFields';
-import { buildSinkDetails } from './sourceFields';
+import type { ResourceCatalogEntry } from '../api';
+import { buildSinkDetails, buildSourceDetails, resolveRowValue } from './sourceFields';
 import type { Translate } from './sourceFields';
 
-// Stub translate: returns the key (prefixed) so tests assert on behavior, not
-// localized copy. Real i18n coverage lives in i18n.test.ts.
 const t: Translate = vi.fn((key: string) => `[${key}]`) as unknown as Translate;
 
-describe('buildSourceDetails', () => {
-  it('classifies mysql_incremental as a MySQL source (table-centric type badge)', () => {
-    const details = buildSourceDetails('mysql_incremental', { table: 'orders' }, 'mysql.orders');
-    expect(details.typeKey).toBe('topology.relationalDb');
+const catalog: ResourceCatalogEntry[] = [
+  {
+    type: 'mysql_incremental',
+    roles: ['source'],
+    label: 'MySQL Incremental',
+    connector_types: ['mysql'],
+    fields: [
+      { name: 'table', type: 'string', required: true, secret: false, options: [] },
+      { name: 'key', type: 'string', required: true, secret: false, options: [] },
+      { name: 'cursor', type: 'string_list', required: true, secret: false, options: [] },
+      { name: 'batch_size', type: 'integer', required: false, secret: false, options: [] },
+      { name: 'poll_interval_s', type: 'number', required: false, secret: false, options: [] },
+    ],
+    topology_fields: ['table', 'key', 'cursor', 'batch_size', 'poll_interval_s'],
+  },
+  {
+    type: 'http_sink',
+    roles: ['sink'],
+    label: 'HTTP Sink',
+    connector_types: [],
+    fields: [
+      { name: 'url', type: 'string', required: true, secret: true, options: [] },
+      { name: 'method', type: 'string', required: false, secret: false, options: ['POST', 'PUT'] },
+      { name: 'timeout_s', type: 'number', required: false, secret: false, options: [] },
+    ],
+    topology_fields: ['url', 'method', 'timeout_s'],
+  },
+];
+
+describe('catalog-driven source details', () => {
+  it('builds source rows from catalog topology_fields in order', () => {
+    const details = buildSourceDetails('mysql_incremental', catalog);
+
+    expect(details.typeLabel).toBe('MySQL Incremental');
     expect(details.titleKey).toBe('topology.sourceTitle');
-    // Expected MySQL fields are present in display order.
-    const keys = details.rows.map((r) => r.configKey);
-    expect(keys).toContain('table');
-    expect(keys).toContain('cursor');
-    expect(keys).toContain('batch_size');
+    expect(details.rows.map((row) => row.configKey)).toEqual([
+      null,
+      null,
+      'table',
+      'key',
+      'cursor',
+      'batch_size',
+      'poll_interval_s',
+    ]);
+    expect(details.rows.find((row) => row.configKey === 'poll_interval_s')?.label).toBe('Poll Interval S');
   });
 
-  it('classifies kafka_topic as a Kafka source', () => {
-    const details = buildSourceDetails('kafka_topic', {}, null);
-    expect(details.typeKey).toBe('topology.kafkaCluster');
-    const keys = details.rows.map((r) => r.configKey);
-    expect(keys).toContain('topic');
-    expect(keys).toContain('group_id');
-    expect(keys).toContain('brokers');
-  });
+  it('does not invent fallback field rows for unknown kinds', () => {
+    const details = buildSourceDetails('unknown_source', catalog);
 
-  it('falls back to the generic event-ingestion type for unknown queue kinds', () => {
-    const details = buildSourceDetails('rabbitmq_queue', { queue: 'work' }, null);
-    expect(details.typeKey).toBe('topology.eventIngestion');
-  });
-
-  it('classifies interval as an interval trigger (not event ingestion)', () => {
-    // Regression: interval sources reported seconds=5 but the type badge
-    // showed "Event Ingestion / Queue" because the classifier only knew
-    // mysql/kafka and fell through for everything else.
-    const details = buildSourceDetails('interval', { seconds: 5 }, 'interval:5s');
-    expect(details.typeKey).toBe('topology.intervalTrigger');
-    // The seconds field row must still render so the interval value is visible.
-    const secondsRow = details.rows.find((r) => r.configKey === 'seconds')!;
-    expect(secondsRow).toBeDefined();
-    expect(
-      resolveRowValue(secondsRow, 'interval', { seconds: 5 }, null, t),
-    ).toEqual({ value: '5', mono: false, placeholder: false });
-  });
-
-  it('classifies cron as a cron schedule', () => {
-    const details = buildSourceDetails('cron', { expression: '*/5 * * * *' }, null);
-    expect(details.typeKey).toBe('topology.cronTrigger');
-  });
-
-  it('classifies webhook as a webhook trigger', () => {
-    const details = buildSourceDetails('webhook', { path: '/hook' }, null);
-    expect(details.typeKey).toBe('topology.webhookTrigger');
-  });
-
-  it('classifies memory_queue as an in-memory queue (not event ingestion)', () => {
-    const details = buildSourceDetails('memory_queue', { maxsize: 0 }, null);
-    expect(details.typeKey).toBe('topology.memoryQueue');
+    expect(details.typeLabel).toBe('unknown_source');
+    expect(details.rows.map((row) => row.configKey)).toEqual([null, null]);
   });
 });
 
-describe('resolveRowValue', () => {
-  it('renders real MySQL config values from the reported config dict', () => {
-    const config = { table: 'orders', cursor: 'updated_at', batch_size: 500 };
-    const details = buildSourceDetails('mysql_incremental', config, 'mysql.orders');
-    const tableRow = details.rows.find((r) => r.configKey === 'table')!;
-    const cursorRow = details.rows.find((r) => r.configKey === 'cursor')!;
-    const batchRow = details.rows.find((r) => r.configKey === 'batch_size')!;
+describe('catalog-driven row resolution', () => {
+  it('renders reported catalog field values', () => {
+    const config = { table: 'orders', cursor: ['updated_at', 'id'], batch_size: 500 };
+    const details = buildSourceDetails('mysql_incremental', catalog);
+    const tableRow = details.rows.find((row) => row.configKey === 'table')!;
+    const cursorRow = details.rows.find((row) => row.configKey === 'cursor')!;
+    const batchRow = details.rows.find((row) => row.configKey === 'batch_size')!;
 
     expect(resolveRowValue(tableRow, 'mysql_incremental', config, null, t)).toEqual({
       value: 'orders',
       mono: true,
       placeholder: false,
     });
-
     expect(resolveRowValue(cursorRow, 'mysql_incremental', config, null, t)).toEqual({
-      value: 'updated_at',
+      value: 'updated_at, id',
       mono: true,
       placeholder: false,
     });
-
-    // Numeric config values are stringified for display.
     expect(resolveRowValue(batchRow, 'mysql_incremental', config, null, t)).toEqual({
       value: '500',
       mono: false,
@@ -91,139 +85,62 @@ describe('resolveRowValue', () => {
     });
   });
 
-  it('shows "Not reported" for missing MySQL fields instead of hiding them', () => {
-    const details = buildSourceDetails('mysql_incremental', { table: 'orders' }, 'mysql.orders');
-    const cursorRow = details.rows.find((r) => r.configKey === 'cursor')!;
-    const resolved = resolveRowValue(cursorRow, 'mysql_incremental', { table: 'orders' }, null, t);
-    expect(resolved).toEqual({ value: '[topology.notReported]', mono: false, placeholder: true });
+  it('shows not reported for missing catalog topology fields', () => {
+    const details = buildSourceDetails('mysql_incremental', catalog);
+    const cursorRow = details.rows.find((row) => row.configKey === 'cursor')!;
+
+    expect(resolveRowValue(cursorRow, 'mysql_incremental', { table: 'orders' }, null, t)).toEqual({
+      value: '[topology.notReported]',
+      mono: false,
+      placeholder: true,
+    });
   });
 
-  it('shows "Not reported" for Kafka when the connector reported an empty config', () => {
-    const details = buildSourceDetails('kafka_topic', {}, null);
-    const topicRow = details.rows.find((r) => r.configKey === 'topic')!;
-    const resolved = resolveRowValue(topicRow, 'kafka_topic', {}, null, t);
-    expect(resolved).toEqual({ value: '[topology.notReported]', mono: false, placeholder: true });
-  });
+  it('uses derived kind and connector rows independently of catalog fields', () => {
+    const details = buildSourceDetails('mysql_incremental', catalog);
+    const kindRow = details.rows.find((row) => row.labelKey === 'topology.sourceKind')!;
+    const nameRow = details.rows.find((row) => row.labelKey === 'topology.connectorName')!;
 
-  it('omits absent fields for generic kinds (only present keys are shown)', () => {
-    const details = buildSourceDetails('rabbitmq_queue', { queue: 'work' }, null);
-    const queueRow = details.rows.find((r) => r.configKey === 'queue')!;
-    const streamRow = details.rows.find((r) => r.configKey === 'stream')!;
-
-    expect(resolveRowValue(queueRow, 'rabbitmq_queue', { queue: 'work' }, null, t)).toEqual({
-      value: 'work',
+    expect(resolveRowValue(kindRow, 'mysql_incremental', {}, null, t)).toEqual({
+      value: 'mysql_incremental',
       mono: true,
       placeholder: false,
     });
-    expect(resolveRowValue(streamRow, 'rabbitmq_queue', { queue: 'work' }, null, t)).toBeNull();
-  });
-
-  it('uses the connector name when present, placeholder when absent', () => {
-    const details = buildSourceDetails('kafka_topic', {}, null);
-    const nameRow = details.rows.find((r) => r.labelKey === 'topology.connectorName')!;
-
-    const withName = resolveRowValue(nameRow, 'kafka_topic', {}, 'kafka.events', t);
-    expect(withName).toEqual({ value: 'kafka.events', mono: true, placeholder: false });
-
-    const withoutName = resolveRowValue(nameRow, 'kafka_topic', {}, null, t);
-    expect(withoutName).toEqual({ value: '[topology.notReported]', mono: true, placeholder: true });
-  });
-
-  it('always surfaces the raw kind in the Source Type row', () => {
-    const details = buildSourceDetails('mysql_table_queue', {}, null);
-    const kindRow = details.rows.find((r) => r.labelKey === 'topology.sourceKind')!;
-    const resolved = resolveRowValue(kindRow, 'mysql_table_queue', {}, null, t);
-    expect(resolved).toEqual({ value: 'mysql_table_queue', mono: true, placeholder: false });
+    expect(resolveRowValue(nameRow, 'mysql_incremental', {}, 'mysql.orders', t)).toEqual({
+      value: 'mysql.orders',
+      mono: true,
+      placeholder: false,
+    });
+    expect(resolveRowValue(nameRow, 'mysql_incremental', {}, null, t)).toEqual({
+      value: '[topology.notReported]',
+      mono: true,
+      placeholder: true,
+    });
   });
 });
 
-describe('buildSinkDetails / sink resolution', () => {
-  it('classifies mysql_table_sink as a relational sink', () => {
-    const details = buildSinkDetails('mysql_table_sink', { table: 'orders_audit' }, 'mysql.audit');
-    expect(details.typeKey).toBe('topology.relationalDb');
-    expect(details.rows.map((r) => r.configKey)).toEqual(
-      expect.arrayContaining(['table', 'mode', 'keys']),
-    );
-  });
+describe('catalog-driven sink details', () => {
+  it('builds sink rows from catalog topology_fields', () => {
+    const details = buildSinkDetails('http_sink', catalog);
 
-  it('classifies http_sink as an event-ingestion sink', () => {
-    const details = buildSinkDetails('http_sink', { url: 'https://example.com' }, 'ses.gateway');
-    expect(details.typeKey).toBe('topology.eventIngestion');
-  });
-
-  it('renders real mysql_table_sink config values', () => {
-    const config = { table: 'orders_audit', mode: 'upsert', keys: 'id' };
-    const details = buildSinkDetails('mysql_table_sink', config, 'mysql.audit');
-    const tableRow = details.rows.find((r) => r.configKey === 'table')!;
-    const modeRow = details.rows.find((r) => r.configKey === 'mode')!;
-    const keysRow = details.rows.find((r) => r.configKey === 'keys')!;
-
-    expect(resolveRowValue(tableRow, 'mysql_table_sink', config, null, t, true)).toEqual({
-      value: 'orders_audit',
-      mono: true,
-      placeholder: false,
-    });
-    expect(resolveRowValue(modeRow, 'mysql_table_sink', config, null, t, true)).toEqual({
-      value: 'upsert',
-      mono: false,
-      placeholder: false,
-    });
-    expect(resolveRowValue(keysRow, 'mysql_table_sink', config, null, t, true)).toEqual({
-      value: 'id',
-      mono: true,
-      placeholder: false,
-    });
-  });
-
-  it('shows "Not reported" for missing mysql_table_sink fields (isSink path)', () => {
-    const details = buildSinkDetails('mysql_table_sink', { table: 'orders_audit' }, 'mysql.audit');
-    const modeRow = details.rows.find((r) => r.configKey === 'mode')!;
-    const resolved = resolveRowValue(modeRow, 'mysql_table_sink', { table: 'orders_audit' }, null, t, true);
-    expect(resolved).toEqual({ value: '[topology.notReported]', mono: false, placeholder: true });
-  });
-
-  it('renders http_sink url and method', () => {
-    const config = { url: 'https://api.example.com/send', method: 'POST' };
-    const details = buildSinkDetails('http_sink', config, 'ses.gateway');
-    const urlRow = details.rows.find((r) => r.configKey === 'url')!;
-    const methodRow = details.rows.find((r) => r.configKey === 'method')!;
-    expect(resolveRowValue(urlRow, 'http_sink', config, null, t, true)).toEqual({
-      value: 'https://api.example.com/send',
-      mono: true,
-      placeholder: false,
-    });
-    expect(resolveRowValue(methodRow, 'http_sink', config, null, t, true)).toEqual({
-      value: 'POST',
-      mono: false,
-      placeholder: false,
-    });
-  });
-
-  it('omits absent fields for generic sink kinds', () => {
-    const details = buildSinkDetails('clickhouse', { table: 'logs' }, 'clickhouse.analytics');
-    const tableRow = details.rows.find((r) => r.configKey === 'table')!;
-    const streamRow = details.rows.find((r) => r.configKey === 'stream')!;
-    expect(resolveRowValue(tableRow, 'clickhouse', { table: 'logs' }, null, t, true)).toEqual({
-      value: 'logs',
-      mono: true,
-      placeholder: false,
-    });
-    expect(resolveRowValue(streamRow, 'clickhouse', { table: 'logs' }, null, t, true)).toBeNull();
-  });
-
-  it('classifies memory_queue sink as a generic sink/queue (not OLAP storage)', () => {
-    // Regression: memory_queue used to fall through to a fallback i18n key
-    // that was hard-coded to "Columnar OLAP Storage / Cache", which is
-    // wrong for an in-memory queue sink. The fallback key must be neutral.
-    // Reporter emits maxsize/batch_size/poll_interval_s for MemoryQueue.
-    const config = { maxsize: 0, batch_size: 100, poll_interval_s: 0.5 };
-    const details = buildSinkDetails('memory_queue', config, 'control-plane-demo.results');
-    expect(details.typeKey).toBe('topology.sinkType');
+    expect(details.typeLabel).toBe('HTTP Sink');
     expect(details.titleKey).toBe('topology.sinkTitle');
-    // batch_size / poll_interval_s are in the generic field set and should render.
-    const batchRow = details.rows.find((r) => r.configKey === 'batch_size')!;
-    expect(resolveRowValue(batchRow, 'memory_queue', config, null, t, true)).toEqual({
-      value: '100',
+    expect(details.rows.map((row) => row.configKey)).toEqual([null, null, 'url', 'method', 'timeout_s']);
+  });
+
+  it('renders sink values using the same catalog row contract', () => {
+    const config = { url: 'https://example.com', method: 'POST' };
+    const details = buildSinkDetails('http_sink', catalog);
+    const urlRow = details.rows.find((row) => row.configKey === 'url')!;
+    const methodRow = details.rows.find((row) => row.configKey === 'method')!;
+
+    expect(resolveRowValue(urlRow, 'http_sink', config, null, t)).toEqual({
+      value: 'https://example.com',
+      mono: true,
+      placeholder: false,
+    });
+    expect(resolveRowValue(methodRow, 'http_sink', config, null, t)).toEqual({
+      value: 'POST',
       mono: false,
       placeholder: false,
     });

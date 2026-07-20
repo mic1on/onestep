@@ -79,6 +79,36 @@ def test_create_mysql_connector_from_split_fields_encodes_credentials(
     }
 
 
+def test_create_sqs_connector_splits_secret_options_from_catalog(client, db_session) -> None:
+    response = client.post(
+        "/api/v1/connectors",
+        json={
+            "name": "sqs-prod",
+            "type": "sqs",
+            "config": {
+                "region_name": "us-east-1",
+                "options": {"aws_secret_access_key": "secret-key"},
+            },
+            "secret": {},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["config"] == {"region_name": "us-east-1"}
+    assert body["secret"] == {"options": "****"}
+
+    row = db_session.scalar(select(Connector).where(Connector.name == "sqs-prod"))
+    assert row is not None
+    summary = build_connector_summary(row, include_cleartext_secret=True)
+    assert summary["secret"] == {"options": {"aws_secret_access_key": "secret-key"}}
+    assert build_runtime_connector_payload(row) == {
+        "type": "sqs",
+        "config": {"region_name": "us-east-1"},
+        "secret": {"options": {"aws_secret_access_key": "secret-key"}},
+    }
+
+
 def test_update_mysql_connector_keeps_blank_password_and_rebuilds_dsn(
     client, db_session
 ) -> None:

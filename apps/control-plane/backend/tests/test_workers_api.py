@@ -104,7 +104,7 @@ def test_create_and_list_worker(client):
     }
 
 
-def test_create_worker_defaults_http_sink_method_to_post(client):
+def test_create_worker_keeps_http_sink_fields_catalog_defaults_apply_at_compile_time(client):
     payload = _create_worker_payload()
     payload["sink_configs"] = [
         {
@@ -119,7 +119,6 @@ def test_create_worker_defaults_http_sink_method_to_post(client):
     assert response.status_code == 200
     assert response.json()["sink_configs"][0]["fields"] == {
         "url": "https://example.com/events",
-        "method": "POST",
     }
 
 

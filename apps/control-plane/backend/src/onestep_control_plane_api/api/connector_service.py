@@ -11,35 +11,16 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from onestep_control_plane_api.api.resource_catalog import (
+    is_connector_type,
+    runtime_config_fields,
+    runtime_secret_fields,
+    secret_fields,
+)
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import Connector
 
-#: Fields that must be encrypted, keyed by connector type. Both this dict and
-#: the frontend catalog.ts must agree — a field listed here is stored encrypted,
-#: everything else in the payload goes to config_json (cleartext).
-SENSITIVE_FIELDS_BY_TYPE: dict[str, frozenset[str]] = {
-    "mysql": frozenset({"dsn", "password"}),
-    "postgres": frozenset({"dsn", "password"}),
-    "redis": frozenset({"url", "password"}),
-    "rabbitmq": frozenset({"url", "password"}),
-    "sqs": frozenset(),
-    "feishu_bitable": frozenset({"app_secret"}),
-    "http": frozenset({"url"}),
-}
-
-VALID_CONNECTOR_TYPES = frozenset(SENSITIVE_FIELDS_BY_TYPE.keys())
-
 MASK = "****"
-
-RUNTIME_SECRET_FIELDS_BY_TYPE: dict[str, frozenset[str]] = {
-    "mysql": frozenset({"dsn"}),
-    "postgres": frozenset({"dsn"}),
-    "redis": frozenset({"url"}),
-    "rabbitmq": frozenset({"url"}),
-    "sqs": frozenset(),
-    "feishu_bitable": frozenset({"app_secret"}),
-    "http": frozenset({"url"}),
-}
 
 
 class ConnectorSecretError(RuntimeError):
@@ -98,7 +79,12 @@ def split_payload(
     connector_type: str, payload: dict[str, object]
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Split a request payload into (cleartext config, sensitive secret)."""
-    sensitive = SENSITIVE_FIELDS_BY_TYPE.get(connector_type, frozenset())
+    if not is_connector_type(connector_type):
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported connector type: {connector_type}",
+        )
+    sensitive = secret_fields(connector_type)
     config: dict[str, object] = {}
     secret: dict[str, object] = {}
     for key, value in payload.items():
@@ -271,13 +257,16 @@ def build_runtime_connector_payload(connector: Connector) -> dict[str, object]:
     """Return only the fields expected by generated worker.yaml resources."""
     cipher = get_cipher()
     secret = cipher.decrypt(connector.secret_encrypted)
-    runtime_secret_fields = RUNTIME_SECRET_FIELDS_BY_TYPE.get(connector.type, frozenset())
+    config_field_names = runtime_config_fields(connector.type)
+    secret_field_names = runtime_secret_fields(connector.type)
     runtime_secret = {
-        key: value for key, value in secret.items() if key in runtime_secret_fields
+        key: value for key, value in secret.items() if key in secret_field_names
     }
-    runtime_config = dict(connector.config_json)
-    if runtime_secret_fields:
-        runtime_config = {}
+    runtime_config = {
+        key: value
+        for key, value in connector.config_json.items()
+        if key in config_field_names
+    }
     return {
         "type": connector.type,
         "config": runtime_config,
@@ -331,7 +320,7 @@ def create_connector(
     config: dict[str, object],
     secret: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    if connector_type not in VALID_CONNECTOR_TYPES:
+    if not is_connector_type(connector_type):
         raise HTTPException(
             status_code=422,
             detail=f"unsupported connector type: {connector_type}",
@@ -385,12 +374,14 @@ def update_connector(
     else:
         cipher = get_cipher()
         secret = cipher.decrypt(connector.secret_encrypted)
-    runtime_secret_fields = RUNTIME_SECRET_FIELDS_BY_TYPE.get(connector.type, frozenset())
+    runtime_secret_field_names = runtime_secret_fields(connector.type)
     connector.config_json, normalized_secret = normalize_connector_storage(
         connector.type,
         dict(connector.config_json),
         dict(secret),
-        prefer_runtime_url=config is None and bool(incoming_secret_keys & runtime_secret_fields),
+        prefer_runtime_url=(
+            config is None and bool(incoming_secret_keys & runtime_secret_field_names)
+        ),
     )
     connector.secret_encrypted = cipher.encrypt(normalized_secret)
     db.commit()

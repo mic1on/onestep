@@ -13,8 +13,8 @@ def test_agent_install_script_uses_request_origin(client) -> None:
     assert "PLANE_URL=https://plane.example.com" in body
     assert "python3 -m pip install --upgrade" in body
     assert "onestep-worker-agent" in body
-    assert "'onestep[all]>=1.4.2'" in body
-    assert "'onestep-feishu-bitable>=0.1.2'" in body
+    assert "'onestep[all]>=1.7.1'" in body
+    assert "'onestep-feishu-bitable>=0.1.3'" in body
     assert "--registration-token \"$TOKEN\"" in body
     assert "--name \"$NAME\"" in body
     assert "--max-concurrency \"$MAX_CONCURRENCY\"" in body

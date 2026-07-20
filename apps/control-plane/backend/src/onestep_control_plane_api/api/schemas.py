@@ -1616,6 +1616,29 @@ class ConnectorUpdateRequest(APIModel):
     secret: dict[str, object] | None = None
 
 
+class ResourceCatalogFieldSummary(APIModel):
+    name: str
+    type: str
+    required: bool = False
+    default: object | None = None
+    secret: bool = False
+    label: str | None = None
+    options: list[str] = Field(default_factory=list)
+
+
+class ResourceCatalogEntrySummary(APIModel):
+    type: str
+    roles: list[str]
+    label: str
+    connector_types: list[str] = Field(default_factory=list)
+    fields: list[ResourceCatalogFieldSummary] = Field(default_factory=list)
+    topology_fields: list[str] = Field(default_factory=list)
+
+
+class ResourceCatalogResponse(APIModel):
+    resources: list[ResourceCatalogEntrySummary]
+
+
 class WorkerSourceConfig(APIModel):
     type: str
     connector_id: str | None = None
@@ -1626,12 +1649,6 @@ class WorkerSinkConfig(APIModel):
     type: str
     connector_id: str | None = None
     fields: dict[str, object] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def apply_type_defaults(self) -> WorkerSinkConfig:
-        if self.type == "http_sink" and not str(self.fields.get("method") or "").strip():
-            self.fields = {**self.fields, "method": "POST"}
-        return self
 
 
 class WorkerReportingConfig(APIModel):

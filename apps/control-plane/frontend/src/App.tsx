@@ -6,6 +6,7 @@ import {
   formatRelativeTime,
   getFanoutCommandIds,
   getApiErrorMessage,
+  getResourceCatalog,
   isAuthRequiredError,
   loadControlPlaneData,
   loadTaskEventLogs,
@@ -19,6 +20,7 @@ import {
   type Environment,
   type ServiceCommandFanoutResponse,
   type ServiceSummaryStats,
+  type ResourceCatalogEntry,
   type TaskMetricChartPointSummary,
 } from './api';
 import {
@@ -118,6 +120,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [serviceSummary, setServiceSummary] = useState<ServiceSummaryStats>(EMPTY_SERVICE_SUMMARY);
   const [sourceKindCounts, setSourceKindCounts] = useState<Record<string, number>>({});
+  const [resourceCatalog, setResourceCatalog] = useState<ResourceCatalogEntry[]>([]);
   const [apiConnected, setApiConnected] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isLoadingApi, setIsLoadingApi] = useState(true);
@@ -275,7 +278,10 @@ export default function App() {
 
     setIsLoadingApi(true);
     try {
-      const data = await loadControlPlaneData(targetServiceId, apiEnvironment(targetEnvironment));
+      const [data, catalog] = await Promise.all([
+        loadControlPlaneData(targetServiceId, apiEnvironment(targetEnvironment)),
+        getResourceCatalog(),
+      ]);
       if (!isLatestRequest()) {
         return;
       }
@@ -285,6 +291,7 @@ export default function App() {
       setLogs(data.logs.length > 0 ? data.logs : []);
       setServiceSummary(data.serviceSummary);
       setSourceKindCounts(data.sourceKindCounts);
+      setResourceCatalog(catalog.resources);
       setApiConnected(true);
       setApiError(null);
       if (data.selectedServiceId !== targetServiceId) {
@@ -311,6 +318,7 @@ export default function App() {
         setTasks(INITIAL_TASKS);
         setInstances(INITIAL_INSTANCES);
         setLogs(INITIAL_LOGS);
+        setResourceCatalog([]);
         setSelectedServiceId(INITIAL_SERVICES[0]?.id ?? '');
       }
       if (!silent) {
@@ -1123,7 +1131,7 @@ export default function App() {
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Left 2/3 column: Topology + Resource chart */}
                     <div className="lg:col-span-2 space-y-6">
-                      <TopologyFlow task={selectedTask} />
+                      <TopologyFlow task={selectedTask} resourceCatalog={resourceCatalog} />
                       <ResourceChart
                         windows={taskMetricWindows}
                         lookbackMinutes={taskMetricLookbackMinutes}

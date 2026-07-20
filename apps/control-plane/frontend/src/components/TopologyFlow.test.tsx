@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { I18nProvider } from '../i18n';
 import type { Task } from '../types';
+import type { ResourceCatalogEntry } from '../api';
 import TopologyFlow, {
   getTopologyFlowDurationSeconds,
   getTopologySourceLabel,
@@ -36,11 +37,46 @@ const baseTask: Task = {
   configYaml: '',
 };
 
+const catalog: ResourceCatalogEntry[] = [
+  {
+    type: 'interval',
+    roles: ['source'],
+    label: 'Interval',
+    connector_types: [],
+    fields: [
+      { name: 'seconds', type: 'number', required: false, secret: false, options: [] },
+    ],
+    topology_fields: ['seconds'],
+  },
+  {
+    type: 'mysql_table_sink',
+    roles: ['sink'],
+    label: 'MySQL Table Sink',
+    connector_types: ['mysql'],
+    fields: [
+      { name: 'table', type: 'string', required: true, secret: false, options: [] },
+      { name: 'mode', type: 'string', required: false, secret: false, options: ['insert', 'upsert'] },
+      { name: 'keys', type: 'string_list', required: false, secret: false, options: [] },
+    ],
+    topology_fields: ['table', 'mode', 'keys'],
+  },
+  {
+    type: 'sqs_queue',
+    roles: ['source', 'sink'],
+    label: 'SQS Queue',
+    connector_types: ['sqs'],
+    fields: [
+      { name: 'url', type: 'string', required: true, secret: true, options: [] },
+    ],
+    topology_fields: ['url'],
+  },
+];
+
 function renderTopology(overrides: Partial<Task> = {}) {
   const task = { ...baseTask, ...overrides };
   return render(
     <I18nProvider initialLocale="en">
-      <TopologyFlow task={task} />
+      <TopologyFlow task={task} resourceCatalog={catalog} />
     </I18nProvider>,
   );
 }

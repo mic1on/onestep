@@ -2,11 +2,12 @@ import { ArrowRight, Database, ArrowRightLeft, Server, Cpu, HardDrive, Info } fr
 import { Task } from '../types';
 import { type CSSProperties, useState } from 'react';
 import { useI18n } from '../i18n';
-import { formatRelativeTime } from '../api';
+import { formatRelativeTime, type ResourceCatalogEntry } from '../api';
 import { buildSourceDetails, buildSinkDetails, resolveRowValue } from './sourceFields';
 
 interface TopologyFlowProps {
   task: Task;
+  resourceCatalog: ResourceCatalogEntry[];
 }
 
 const MIN_FLOW_DURATION_SECONDS = 0.75;
@@ -241,7 +242,7 @@ function TopologyConnector({ isFlowing, testId }: { isFlowing: boolean; testId: 
   );
 }
 
-export default function TopologyFlow({ task }: TopologyFlowProps) {
+export default function TopologyFlow({ task, resourceCatalog }: TopologyFlowProps) {
   const { t } = useI18n();
   const [selectedNode, setSelectedNode] = useState<'source' | 'task' | 'sink' | null>(null);
 
@@ -255,27 +256,21 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
     '--topology-stage-duration': `${Math.max(1.6, flowDurationSeconds * 1.8).toFixed(2)}s`,
   } as TopologyFlowStyle;
 
-  // The source panel is driven by the real connector config reported by the
-  // worker (see sourceFields.ts). MySQL/Kafka/etc. each render their own field
-  // set instead of a hardcoded Kafka block.
   const kind = task.sourceKind ?? task.pipelineSource;
-  const sourceDetails = buildSourceDetails(kind, task.sourceConfig, task.sourceName);
+  const sourceDetails = buildSourceDetails(kind, resourceCatalog);
   const sourceRows = sourceDetails.rows
     .map((row) => {
       const resolved = resolveRowValue(row, kind, task.sourceConfig, task.sourceName, t);
-      return resolved ? { labelKey: row.labelKey, ...resolved } : null;
+      return resolved ? { labelKey: row.labelKey, label: row.label, configKey: row.configKey, ...resolved } : null;
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
 
-  // The sink panel is driven by the real emit[0] connector config, mirroring
-  // the source panel. Removes the previously hardcoded database/cluster/
-  // latency/batch-size placeholders.
   const sinkKind = task.sinkKind ?? task.pipelineSink;
-  const sinkDetails = buildSinkDetails(sinkKind, task.sinkConfig, task.sinkName);
+  const sinkDetails = buildSinkDetails(sinkKind, resourceCatalog);
   const sinkRows = sinkDetails.rows
     .map((row) => {
-      const resolved = resolveRowValue(row, sinkKind, task.sinkConfig, task.sinkName, t, true);
-      return resolved ? { labelKey: row.labelKey, ...resolved } : null;
+      const resolved = resolveRowValue(row, sinkKind, task.sinkConfig, task.sinkName, t);
+      return resolved ? { labelKey: row.labelKey, label: row.label, configKey: row.configKey, ...resolved } : null;
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
 
@@ -286,7 +281,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
       case 'source':
         return {
           title: t(sourceDetails.titleKey, { source: task.pipelineSource }),
-          type: t(sourceDetails.typeKey),
+          type: sourceDetails.typeLabel,
         };
       case 'task':
         return {
@@ -300,7 +295,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
       case 'sink':
         return {
           title: t(sinkDetails.titleKey, { sink: task.pipelineSink }),
-          type: t(sinkDetails.typeKey),
+          type: sinkDetails.typeLabel,
         };
       default:
         return null;
@@ -434,8 +429,10 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-medium text-slate-600">
               {selectedNode === 'source' &&
                 sourceRows.map((row) => (
-                  <div key={row.labelKey} className="min-w-0">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t(row.labelKey)}</span>
+                  <div key={row.labelKey ?? row.configKey ?? row.label} className="min-w-0">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">
+                      {row.labelKey ? t(row.labelKey) : row.label}
+                    </span>
                     <span
                       className={`block break-all ${
                         row.mono ? 'font-mono' : 'font-semibold'
@@ -465,8 +462,10 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
 
               {selectedNode === 'sink' &&
                 sinkRows.map((row) => (
-                  <div key={row.labelKey} className="min-w-0">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">{t(row.labelKey)}</span>
+                  <div key={row.labelKey ?? row.configKey ?? row.label} className="min-w-0">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">
+                      {row.labelKey ? t(row.labelKey) : row.label}
+                    </span>
                     <span
                       className={`block break-all ${
                         row.mono ? 'font-mono' : 'font-semibold'

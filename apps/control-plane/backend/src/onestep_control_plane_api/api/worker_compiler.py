@@ -6,30 +6,24 @@ from typing import Any
 
 import yaml
 
-#: Source/sink types that do NOT need a connector resource (built-in).
-BUILTIN_SOURCE_TYPES = frozenset({"interval", "cron", "webhook", "memory"})
-BUILTIN_SINK_TYPES = frozenset({"memory"})
+from onestep_control_plane_api.api.resource_catalog import (
+    catalog_field_default,
+    resource_needs_connector,
+)
 
-#: Sink types that have no connector dependency.
-NO_CONNECTOR_SINK_TYPES = frozenset({"http_sink"})
 REPORTING_TOKEN_ENV = "ONESTEP_WORKER_REPORTING_TOKEN"
 
 
 def _needs_connector(source_or_sink: dict[str, Any]) -> bool:
     typ = source_or_sink["type"]
-    if source_or_sink.get("connector_id"):
-        return True
-    return (
-        typ not in BUILTIN_SOURCE_TYPES
-        and typ not in BUILTIN_SINK_TYPES
-        and typ not in NO_CONNECTOR_SINK_TYPES
-    )
+    return bool(source_or_sink.get("connector_id")) or resource_needs_connector(typ)
 
 
 def _sink_fields(sink: dict[str, Any]) -> dict[str, Any]:
     fields = dict(sink.get("fields", {}))
-    if sink["type"] == "http_sink" and not str(fields.get("method") or "").strip():
-        fields["method"] = "POST"
+    method_default = catalog_field_default(sink["type"], "method")
+    if method_default is not None and not str(fields.get("method") or "").strip():
+        fields["method"] = method_default
     return fields
 
 

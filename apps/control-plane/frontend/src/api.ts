@@ -450,6 +450,29 @@ export interface RecentEvent {
   environment: Environment;
 }
 
+export interface ResourceCatalogField {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: unknown;
+  secret: boolean;
+  label?: string;
+  options: string[];
+}
+
+export interface ResourceCatalogEntry {
+  type: string;
+  roles: string[];
+  label: string;
+  connector_types: string[];
+  fields: ResourceCatalogField[];
+  topology_fields: string[];
+}
+
+export interface ResourceCatalogResponse {
+  resources: ResourceCatalogEntry[];
+}
+
 // Matches the control plane's DEFAULT_LOOKBACK_MINUTES for service/task summaries.
 const DEFAULT_LOOKBACK_MINUTES = 15;
 export const DEFAULT_TASK_METRIC_LOOKBACK_MINUTES = DEFAULT_LOOKBACK_MINUTES;
@@ -611,6 +634,10 @@ async function request<T>(
 
 export function isAuthRequiredError(error: unknown) {
   return error instanceof AuthRequiredError;
+}
+
+export async function getResourceCatalog(): Promise<ResourceCatalogResponse> {
+  return request<ResourceCatalogResponse>('/api/v1/resource-catalog');
 }
 
 function serviceId(service: Pick<ServiceSummary, 'name' | 'environment'>) {
