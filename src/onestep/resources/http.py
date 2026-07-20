@@ -4,10 +4,38 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from onestep.connectors.http import HttpSink
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+    ResourceValidationContext,
+)
 
 _HTTP_SINK_FIELDS = frozenset(
     {"type", "name", "url", "method", "headers", "params", "body", "timeout_s", "success_statuses"}
+)
+_HTTP_SINK_CATALOG = ResourceCatalogEntry(
+    type="http_sink",
+    roles=("sink",),
+    label="HTTP Sink",
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("url", "string", required=True, secret=True),
+        ResourceCatalogField(
+            "method",
+            "string",
+            default="POST",
+            options=("POST", "PUT", "PATCH", "GET", "DELETE"),
+        ),
+        ResourceCatalogField("headers", "mapping", secret=True),
+        ResourceCatalogField("params", "mapping", secret=True),
+        ResourceCatalogField("body", "json", secret=True),
+        ResourceCatalogField("timeout_s", "number", default=5.0),
+        ResourceCatalogField("success_statuses", "json"),
+    ),
+    topology_fields=("url", "method", "timeout_s", "success_statuses"),
 )
 
 
@@ -15,6 +43,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="http_sink",
+            catalog=_HTTP_SINK_CATALOG,
             allowed_fields=_HTTP_SINK_FIELDS,
             build=_build_http_sink,
             validate=_validate_http_sink,

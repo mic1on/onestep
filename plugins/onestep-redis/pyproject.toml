@@ -1,12 +1,12 @@
 [project]
 name = "onestep-redis"
-version = "0.2.0"
+version = "0.2.1"
 description = "Redis connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
-    "onestep>=1.4.1",
+    "onestep>=1.7.0",
     "redis>=4.2.0",
 ]
 

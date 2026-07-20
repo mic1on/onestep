@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+)
 
 from .connector import SQSConnector
 
@@ -27,12 +33,45 @@ _SQS_QUEUE_FIELDS = frozenset(
         "heartbeat_visibility_timeout",
     }
 )
+_SQS_CATALOG = ResourceCatalogEntry(
+    type="sqs",
+    roles=("connector",),
+    label="Amazon SQS",
+    fields=(
+        ResourceCatalogField("region_name", "string"),
+        ResourceCatalogField("options", "mapping", secret=True),
+    ),
+)
+_SQS_QUEUE_CATALOG = ResourceCatalogEntry(
+    type="sqs_queue",
+    roles=("source", "sink"),
+    label="SQS Queue",
+    connector_types=("sqs",),
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("url", "string", required=True, secret=True),
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("wait_time_s", "integer", default=20),
+        ResourceCatalogField("visibility_timeout", "integer"),
+        ResourceCatalogField("batch_size", "integer", default=10),
+        ResourceCatalogField("poll_interval_s", "number", default=0.0),
+        ResourceCatalogField("message_group_id", "string"),
+        ResourceCatalogField("deduplication_id_factory", "ref"),
+        ResourceCatalogField("on_fail", "string", default="leave", options=("leave", "release")),
+        ResourceCatalogField("delete_batch_size", "integer", default=10),
+        ResourceCatalogField("delete_flush_interval_s", "number", default=0.5),
+        ResourceCatalogField("heartbeat_interval_s", "number"),
+        ResourceCatalogField("heartbeat_visibility_timeout", "integer"),
+    ),
+    topology_fields=("url", "wait_time_s", "visibility_timeout", "batch_size", "poll_interval_s"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="sqs",
+            catalog=_SQS_CATALOG,
             allowed_fields=_SQS_FIELDS,
             build=_build_sqs,
         )
@@ -40,6 +79,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="sqs_queue",
+            catalog=_SQS_QUEUE_CATALOG,
             allowed_fields=_SQS_QUEUE_FIELDS,
             build=_build_sqs_queue,
         )

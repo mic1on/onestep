@@ -4,7 +4,14 @@ from collections.abc import Mapping
 from typing import Any
 
 from onestep.connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+    ResourceValidationContext,
+)
 
 _WEBHOOK_FIELDS = frozenset(
     {
@@ -26,12 +33,34 @@ _WEBHOOK_FIELDS = frozenset(
 )
 _WEBHOOK_AUTH_FIELDS = frozenset({"type", "token", "header", "scheme", "realm"})
 _WEBHOOK_RESPONSE_FIELDS = frozenset({"status_code", "body", "headers"})
+_WEBHOOK_CATALOG = ResourceCatalogEntry(
+    type="webhook",
+    roles=("source",),
+    label="Webhook",
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("path", "string", required=True),
+        ResourceCatalogField("methods", "string_list", default=("POST",)),
+        ResourceCatalogField("host", "string", default="127.0.0.1"),
+        ResourceCatalogField("port", "integer", default=8080),
+        ResourceCatalogField("parser", "string", default="auto", options=("auto", "json", "text", "bytes")),
+        ResourceCatalogField("auth", "mapping", secret=True),
+        ResourceCatalogField("response", "mapping"),
+        ResourceCatalogField("max_body_bytes", "integer", default=1024 * 1024),
+        ResourceCatalogField("read_timeout_s", "number", default=5.0),
+        ResourceCatalogField("queue_maxsize", "integer", default=1000),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=0.1),
+    ),
+    topology_fields=("path", "methods", "host", "port", "parser"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="webhook",
+            catalog=_WEBHOOK_CATALOG,
             allowed_fields=_WEBHOOK_FIELDS,
             build=_build_webhook,
             validate=_validate_webhook,

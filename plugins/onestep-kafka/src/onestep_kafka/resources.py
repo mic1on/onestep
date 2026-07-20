@@ -3,7 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+    ResourceValidationContext,
+)
 
 from .connector import KafkaConnector
 
@@ -24,12 +31,42 @@ _KAFKA_TOPIC_FIELDS = frozenset(
         "producer_options",
     }
 )
+_KAFKA_CATALOG = ResourceCatalogEntry(
+    type="kafka",
+    roles=("connector",),
+    label="Kafka",
+    fields=(
+        ResourceCatalogField("bootstrap_servers", "string_list", required=True),
+        ResourceCatalogField("options", "mapping", secret=True),
+    ),
+)
+_KAFKA_TOPIC_CATALOG = ResourceCatalogEntry(
+    type="kafka_topic",
+    roles=("source", "sink"),
+    label="Kafka Topic",
+    connector_types=("kafka",),
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("topic", "string", required=True),
+        ResourceCatalogField("group_id", "string"),
+        ResourceCatalogField("client_id", "string"),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_timeout_ms", "integer", default=1000),
+        ResourceCatalogField("key", "string"),
+        ResourceCatalogField("headers", "mapping"),
+        ResourceCatalogField("consumer_options", "mapping"),
+        ResourceCatalogField("producer_options", "mapping"),
+    ),
+    topology_fields=("topic", "group_id", "client_id", "batch_size", "poll_timeout_ms"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="kafka",
+            catalog=_KAFKA_CATALOG,
             allowed_fields=_KAFKA_FIELDS,
             build=_build_kafka,
             validate=_validate_kafka,
@@ -38,6 +75,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="kafka_topic",
+            catalog=_KAFKA_TOPIC_CATALOG,
             allowed_fields=_KAFKA_TOPIC_FIELDS,
             build=_build_kafka_topic,
             validate=_validate_kafka_topic,

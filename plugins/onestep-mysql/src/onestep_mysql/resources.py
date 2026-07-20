@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+)
 
 from .connector import MySQLConnector
 
@@ -36,12 +42,125 @@ _MYSQL_BINLOG_FIELDS = frozenset(
     }
 )
 _MYSQL_TABLE_SINK_FIELDS = frozenset({"type", "connector", "table", "mode", "keys"})
+_MYSQL_CATALOG = ResourceCatalogEntry(
+    type="mysql",
+    roles=("connector",),
+    label="MySQL",
+    fields=(
+        ResourceCatalogField("dsn", "string", required=True, secret=True),
+        ResourceCatalogField("engine_options", "mapping"),
+        ResourceCatalogField("host", "string"),
+        ResourceCatalogField("port", "string"),
+        ResourceCatalogField("database", "string"),
+        ResourceCatalogField("username", "string"),
+        ResourceCatalogField("password", "string", secret=True),
+    ),
+)
+_MYSQL_STATE_STORE_CATALOG = ResourceCatalogEntry(
+    type="mysql_state_store",
+    roles=("state_store",),
+    label="MySQL State Store",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", default="onestep_state"),
+        ResourceCatalogField("key_column", "string", default="state_key"),
+        ResourceCatalogField("value_column", "string", default="state_value"),
+        ResourceCatalogField("updated_at_column", "string", default="updated_at"),
+        ResourceCatalogField("auto_create", "boolean", default=True),
+    ),
+    topology_fields=("table", "key_column"),
+)
+_MYSQL_CURSOR_STORE_CATALOG = ResourceCatalogEntry(
+    type="mysql_cursor_store",
+    roles=("cursor_store",),
+    label="MySQL Cursor Store",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", default="onestep_cursor"),
+        ResourceCatalogField("key_column", "string", default="cursor_key"),
+        ResourceCatalogField("value_column", "string", default="cursor_value"),
+        ResourceCatalogField("updated_at_column", "string", default="updated_at"),
+        ResourceCatalogField("auto_create", "boolean", default=True),
+    ),
+    topology_fields=("table", "key_column"),
+)
+_MYSQL_TABLE_QUEUE_CATALOG = ResourceCatalogEntry(
+    type="mysql_table_queue",
+    roles=("source",),
+    label="MySQL Table Queue",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", required=True),
+        ResourceCatalogField("key", "string", required=True),
+        ResourceCatalogField("where", "string", required=True),
+        ResourceCatalogField("claim", "mapping", required=True),
+        ResourceCatalogField("ack", "mapping", required=True),
+        ResourceCatalogField("nack", "mapping"),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+    ),
+    topology_fields=("table", "key", "batch_size", "poll_interval_s"),
+)
+_MYSQL_INCREMENTAL_CATALOG = ResourceCatalogEntry(
+    type="mysql_incremental",
+    roles=("source",),
+    label="MySQL Incremental",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", required=True),
+        ResourceCatalogField("key", "string", required=True),
+        ResourceCatalogField("cursor", "string_list", required=True),
+        ResourceCatalogField("where", "string"),
+        ResourceCatalogField("batch_size", "integer", default=1000),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("state", "ref"),
+        ResourceCatalogField("state_key", "string"),
+    ),
+    topology_fields=("table", "key", "cursor", "batch_size", "poll_interval_s"),
+)
+_MYSQL_BINLOG_CATALOG = ResourceCatalogEntry(
+    type="mysql_binlog",
+    roles=("source",),
+    label="MySQL Binlog",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("server_id", "integer", required=True),
+        ResourceCatalogField("schemas", "string_list"),
+        ResourceCatalogField("tables", "string_list"),
+        ResourceCatalogField("events", "string_list", default=("insert", "update", "delete")),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("state", "ref"),
+        ResourceCatalogField("state_key", "string"),
+        ResourceCatalogField("blocking", "boolean", default=False),
+    ),
+    topology_fields=("schemas", "tables", "events", "batch_size", "poll_interval_s"),
+)
+_MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
+    type="mysql_table_sink",
+    roles=("sink",),
+    label="MySQL Table Sink",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", required=True),
+        ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert")),
+        ResourceCatalogField("keys", "string_list"),
+    ),
+    topology_fields=("table", "mode", "keys"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql",
+            catalog=_MYSQL_CATALOG,
             allowed_fields=_MYSQL_FIELDS,
             build=_build_mysql,
         )
@@ -49,6 +168,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql_state_store",
+            catalog=_MYSQL_STATE_STORE_CATALOG,
             allowed_fields=_MYSQL_STATE_STORE_FIELDS,
             build=_build_mysql_state_store,
         )
@@ -56,6 +176,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql_cursor_store",
+            catalog=_MYSQL_CURSOR_STORE_CATALOG,
             allowed_fields=_MYSQL_CURSOR_STORE_FIELDS,
             build=_build_mysql_cursor_store,
         )
@@ -63,6 +184,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql_table_queue",
+            catalog=_MYSQL_TABLE_QUEUE_CATALOG,
             allowed_fields=_MYSQL_TABLE_QUEUE_FIELDS,
             build=_build_mysql_table_queue,
         )
@@ -70,6 +192,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql_incremental",
+            catalog=_MYSQL_INCREMENTAL_CATALOG,
             allowed_fields=_MYSQL_INCREMENTAL_FIELDS,
             build=_build_mysql_incremental,
         )
@@ -77,6 +200,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql_binlog",
+            catalog=_MYSQL_BINLOG_CATALOG,
             allowed_fields=_MYSQL_BINLOG_FIELDS,
             build=_build_mysql_binlog,
         )
@@ -84,6 +208,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="mysql_table_sink",
+            catalog=_MYSQL_TABLE_SINK_CATALOG,
             allowed_fields=_MYSQL_TABLE_SINK_FIELDS,
             build=_build_mysql_table_sink,
         )

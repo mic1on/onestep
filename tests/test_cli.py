@@ -175,6 +175,23 @@ def test_cli_invalid_target_returns_non_zero(capsys) -> None:
     assert "failed to load testsupport_missing_module:app" in captured.err
 
 
+def test_cli_catalog_json_outputs_installed_resources(capsys) -> None:
+    exit_code = main(["catalog", "--json"])
+
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    resources = {item["type"]: item for item in body["resources"]}
+    assert exit_code == 0
+    assert set(resources) >= {"memory", "interval", "cron", "webhook", "http_sink"}
+    assert resources["memory"]["roles"] == ["source", "sink"]
+    assert resources["http_sink"]["fields"][1] == {
+        "name": "url",
+        "type": "string",
+        "required": True,
+        "secret": True,
+    }
+
+
 def test_cli_init_creates_minimal_project(tmp_path, monkeypatch, capsys) -> None:
     project_dir = tmp_path / "billing-sync"
 

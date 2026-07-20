@@ -8,7 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .app import OneStepApp
 from .build import BuildOptions, BuildResult, build_worker_package
-from .config import is_yaml_target, load_yaml_app
+from .config import is_yaml_target, load_resource_catalog, load_yaml_app
 from .init_project import init_project
 
 _PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
@@ -126,6 +126,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Emit the build report as JSON",
     )
 
+    catalog_parser = subparsers.add_parser("catalog", help="Print installed source/sink resource catalog")
+    catalog_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit the catalog as JSON")
+    catalog_parser.add_argument(
+        "--role",
+        choices=("connector", "source", "sink", "state_store", "cursor_store"),
+        default=None,
+        help="Filter resources by catalog role",
+    )
+
     return parser.parse_args(_normalize_argv(argv))
 
 
@@ -159,6 +168,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"onestep: failed to build {args.target}: {exc}", file=sys.stderr)
             return 2
         _print_build_summary(result, as_json=getattr(args, "as_json", False))
+        return 0
+
+    if args.command == "catalog":
+        try:
+            entries = load_resource_catalog(role=getattr(args, "role", None))
+        except Exception as exc:
+            print(f"onestep: failed to load resource catalog: {exc}", file=sys.stderr)
+            return 2
+        _print_catalog_summary(entries, as_json=getattr(args, "as_json", False))
         return 0
 
     _ensure_local_import_paths(args.target)
@@ -276,7 +294,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
         argv = sys.argv[1:]
     if not argv:
         return argv
-    if argv[0].startswith("-") or argv[0] in {"run", "check", "init", "build"}:
+    if argv[0].startswith("-") or argv[0] in {"run", "check", "init", "build", "catalog"}:
         return argv
     return ["run", *argv]
 
@@ -342,6 +360,17 @@ def _print_build_summary(result: BuildResult, *, as_json: bool) -> None:
         print("Warnings:")
         for warning in result.warnings:
             print(f"- {warning}")
+
+
+def _print_catalog_summary(entries, *, as_json: bool) -> None:
+    resources = [entry.as_dict() for entry in entries]
+    if as_json:
+        print(json.dumps({"resources": resources}, indent=2))
+        return
+
+    print(f"Resources: {len(resources)}")
+    for entry in resources:
+        print(f"- {entry['type']} roles={','.join(entry['roles'])}")
 
 
 def _format_timeout(value: float | None) -> str:

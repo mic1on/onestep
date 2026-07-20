@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+)
 
 from .connector import RabbitMQConnector
 
@@ -33,12 +39,56 @@ _RABBITMQ_QUEUE_FIELDS = frozenset(
         "persistent",
     }
 )
+_RABBITMQ_CATALOG = ResourceCatalogEntry(
+    type="rabbitmq",
+    roles=("connector",),
+    label="RabbitMQ",
+    fields=(
+        ResourceCatalogField("url", "string", required=True, secret=True),
+        ResourceCatalogField("options", "mapping"),
+        ResourceCatalogField("host", "string"),
+        ResourceCatalogField("port", "string"),
+        ResourceCatalogField("vhost", "string"),
+        ResourceCatalogField("username", "string"),
+        ResourceCatalogField("password", "string", secret=True),
+    ),
+)
+_RABBITMQ_QUEUE_CATALOG = ResourceCatalogEntry(
+    type="rabbitmq_queue",
+    roles=("source", "sink"),
+    label="RabbitMQ Queue",
+    connector_types=("rabbitmq",),
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("queue", "string"),
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("routing_key", "string"),
+        ResourceCatalogField("exchange", "string"),
+        ResourceCatalogField("exchange_type", "string", default="direct"),
+        ResourceCatalogField("bind", "boolean", default=True),
+        ResourceCatalogField("bind_arguments", "mapping"),
+        ResourceCatalogField("durable", "boolean", default=True),
+        ResourceCatalogField("auto_delete", "boolean", default=False),
+        ResourceCatalogField("exclusive", "boolean", default=False),
+        ResourceCatalogField("arguments", "mapping"),
+        ResourceCatalogField("exchange_durable", "boolean"),
+        ResourceCatalogField("exchange_auto_delete", "boolean", default=False),
+        ResourceCatalogField("exchange_arguments", "mapping"),
+        ResourceCatalogField("prefetch", "integer", default=100),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("publisher_confirms", "boolean", default=True),
+        ResourceCatalogField("persistent", "boolean", default=True),
+    ),
+    topology_fields=("queue", "exchange", "routing_key", "batch_size", "poll_interval_s"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="rabbitmq",
+            catalog=_RABBITMQ_CATALOG,
             allowed_fields=_RABBITMQ_FIELDS,
             build=_build_rabbitmq,
         )
@@ -46,6 +96,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="rabbitmq_queue",
+            catalog=_RABBITMQ_QUEUE_CATALOG,
             allowed_fields=_RABBITMQ_QUEUE_FIELDS,
             build=_build_rabbitmq_queue,
         )

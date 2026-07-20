@@ -8,6 +8,7 @@ import pytest
 
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.config import load_app_config
+from onestep.resource_registry import ResourceRegistry
 from onestep_mysql import (
     BinlogSource,
     IncrementalTableSource,
@@ -15,6 +16,7 @@ from onestep_mysql import (
     SQLAlchemyCursorStore,
     SQLAlchemyStateStore,
     TableSink,
+    register,
 )
 from onestep_mysql.resilience import as_mysql_connector_operation_error, classify_sqlalchemy_error
 
@@ -27,6 +29,22 @@ def test_package_exposes_onestep_resource_entry_point() -> None:
         and entry_point.value == "onestep_mysql:register"
         for entry_point in entry_points
     )
+
+
+def test_mysql_plugin_registers_catalog_metadata() -> None:
+    registry = ResourceRegistry()
+    register(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    connector_fields = {field.name: field for field in catalog["mysql"].fields}
+
+    assert catalog["mysql"].roles == ("connector",)
+    assert connector_fields["dsn"].required is True
+    assert connector_fields["dsn"].secret is True
+    assert connector_fields["password"].secret is True
+    assert catalog["mysql_incremental"].roles == ("source",)
+    assert catalog["mysql_incremental"].connector_types == ("mysql",)
+    assert catalog["mysql_table_sink"].roles == ("sink",)
+    assert catalog["mysql_table_sink"].connector_types == ("mysql",)
 
 
 def test_sqlalchemy_state_store_is_not_exposed_by_core() -> None:

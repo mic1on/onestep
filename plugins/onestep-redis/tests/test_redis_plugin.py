@@ -9,8 +9,9 @@ from uuid import UUID
 from onestep import OneStepApp
 from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
+from onestep.resource_registry import ResourceRegistry
 from onestep_control_plane import ControlPlaneReporter, ControlPlaneReporterConfig
-from onestep_redis import RedisConnector, RedisStreamQueue
+from onestep_redis import RedisConnector, RedisStreamQueue, register
 from onestep_redis.resilience import as_redis_connector_operation_error, classify_redis_error
 
 
@@ -30,6 +31,20 @@ def test_package_exposes_onestep_resource_entry_point() -> None:
         and entry_point.value == "onestep_redis:register"
         for entry_point in entry_points
     )
+
+
+def test_redis_plugin_registers_catalog_metadata() -> None:
+    registry = ResourceRegistry()
+    register(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    connector_fields = {field.name: field for field in catalog["redis"].fields}
+
+    assert catalog["redis"].roles == ("connector",)
+    assert connector_fields["url"].required is True
+    assert connector_fields["url"].secret is True
+    assert connector_fields["password"].secret is True
+    assert catalog["redis_stream"].roles == ("source", "sink")
+    assert catalog["redis_stream"].connector_types == ("redis",)
 
 
 def test_yaml_builds_redis_resources_via_plugin_entry_point() -> None:

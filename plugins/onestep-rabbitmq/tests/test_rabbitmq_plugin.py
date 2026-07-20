@@ -5,7 +5,8 @@ from typing import Any
 
 from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
-from onestep_rabbitmq import RabbitMQConnector, RabbitMQQueue
+from onestep.resource_registry import ResourceRegistry
+from onestep_rabbitmq import RabbitMQConnector, RabbitMQQueue, register
 from onestep_rabbitmq.resilience import as_rabbitmq_connector_operation_error, classify_rabbitmq_error
 
 
@@ -17,6 +18,20 @@ def test_package_exposes_onestep_resource_entry_point() -> None:
         and entry_point.value == "onestep_rabbitmq:register"
         for entry_point in entry_points
     )
+
+
+def test_rabbitmq_plugin_registers_catalog_metadata() -> None:
+    registry = ResourceRegistry()
+    register(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    connector_fields = {field.name: field for field in catalog["rabbitmq"].fields}
+
+    assert catalog["rabbitmq"].roles == ("connector",)
+    assert connector_fields["url"].required is True
+    assert connector_fields["url"].secret is True
+    assert connector_fields["password"].secret is True
+    assert catalog["rabbitmq_queue"].roles == ("source", "sink")
+    assert catalog["rabbitmq_queue"].connector_types == ("rabbitmq",)
 
 
 def test_yaml_builds_rabbitmq_resources_via_plugin_entry_point() -> None:

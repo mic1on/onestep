@@ -517,7 +517,7 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.6.1"
+version = "1.7.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -670,7 +670,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-feishu-bitable"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "plugins/onestep-feishu-bitable" }
 dependencies = [
     { name = "onestep" },
@@ -696,7 +696,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-kafka"
-version = "0.1.0"
+version = "0.1.1"
 source = { directory = "plugins/onestep-kafka" }
 dependencies = [
     { name = "aiokafka", marker = "python_full_version >= '3.10'" },
@@ -714,7 +714,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mq"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "plugins/onestep-rabbitmq" }
 dependencies = [
     { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -743,7 +743,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
     { name = "mysql-replication" },
@@ -775,7 +775,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-postgres"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "plugins/onestep-postgres" }
 dependencies = [
     { name = "onestep" },
@@ -806,7 +806,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-redis"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "plugins/onestep-redis" }
 dependencies = [
     { name = "onestep" },
@@ -845,7 +845,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-sqs"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "plugins/onestep-sqs" }
 dependencies = [
     { name = "boto3" },

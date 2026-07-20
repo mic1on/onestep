@@ -8,6 +8,8 @@ import pytest
 import onestep.resource_registry as registry_module
 from onestep.config import load_app_config, validate_app_config
 from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
     ResourceBuildContext,
     ResourceRegistry,
     ResourceSpecHandler,
@@ -53,19 +55,30 @@ def _build_dependent(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> dict
     }
 
 
+def _catalog(resource_type: str, *roles: str) -> ResourceCatalogEntry:
+    return ResourceCatalogEntry(
+        type=resource_type,
+        roles=roles or ("connector",),
+        fields=(ResourceCatalogField("value", "string"),),
+    )
+
+
 _BOX_HANDLER = ResourceSpecHandler(
     type="test_registry_box",
+    catalog=_catalog("test_registry_box"),
     allowed_fields=frozenset({"type", "value"}),
     build=_build_box,
     validate=_validate_box,
 )
 _DEPENDENCY_HANDLER = ResourceSpecHandler(
     type="test_registry_dependency",
+    catalog=_catalog("test_registry_dependency"),
     allowed_fields=frozenset({"type", "value"}),
     build=_build_dependency,
 )
 _DEPENDENT_HANDLER = ResourceSpecHandler(
     type="test_registry_dependent",
+    catalog=_catalog("test_registry_dependent", "source"),
     allowed_fields=frozenset({"type", "connector"}),
     build=_build_dependent,
 )
@@ -75,6 +88,7 @@ def test_resource_registry_normalizes_type_names() -> None:
     registry = ResourceRegistry()
     handler = ResourceSpecHandler(
         type="Example-Resource.Type",
+        catalog=_catalog("example_resource_type"),
         allowed_fields=frozenset({"type"}),
         build=_build_box,
     )
@@ -94,10 +108,40 @@ def test_resource_registry_rejects_conflicting_duplicate_type() -> None:
         registry.register_resource_type(
             ResourceSpecHandler(
                 type="test_registry_box",
+                catalog=_catalog("test_registry_box"),
                 allowed_fields=frozenset({"type"}),
                 build=_build_dependency,
             )
         )
+
+
+def test_resource_spec_handler_requires_catalog() -> None:
+    with pytest.raises(TypeError):
+        ResourceSpecHandler(  # type: ignore[call-arg]
+            type="missing_catalog",
+            allowed_fields=frozenset({"type"}),
+            build=_build_box,
+        )
+
+
+def test_resource_spec_handler_catalog_type_must_match() -> None:
+    with pytest.raises(ValueError, match="must match catalog type"):
+        ResourceSpecHandler(
+            type="catalog_mismatch",
+            catalog=_catalog("other_type"),
+            allowed_fields=frozenset({"type"}),
+            build=_build_box,
+        )
+
+
+def test_resource_registry_catalog_entries_filter_by_role() -> None:
+    registry = ResourceRegistry()
+    registry.register_resource_type(_BOX_HANDLER)
+    registry.register_resource_type(_DEPENDENT_HANDLER)
+
+    assert registry.get_resource_catalog_entry("test-registry-box") == _BOX_HANDLER.catalog
+    assert registry.catalog_entries("source") == (_DEPENDENT_HANDLER.catalog,)
+    assert registry.catalog_entries("connector") == (_BOX_HANDLER.catalog,)
 
 
 def test_load_resource_plugins_loads_entry_point_once(monkeypatch) -> None:

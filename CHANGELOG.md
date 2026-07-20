@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.0
+
+- Adds the source/sink resource catalog contract with roles, fields, defaults, secret metadata, connector types, and topology display fields.
+- Requires every `ResourceSpecHandler` to provide a matching `ResourceCatalogEntry`; older plugins without catalog metadata are no longer compatible.
+- Adds `onestep catalog --json` for exporting the installed resource catalog.
+- Raises the MySQL, Postgres, RabbitMQ, Redis, SQS, Kafka, and Feishu Bitable plugin package versions and requires `onestep>=1.7.0`.
+- Moves Worker Builder connector/source/sink decisions in the control plane to the installed onestep catalog.
+
 ## 1.6.1
 
 - Adds `reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` so workers can report service-level descriptions to the control plane.
