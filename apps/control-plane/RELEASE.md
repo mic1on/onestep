@@ -39,8 +39,8 @@ make docker-build-multi-arch
 - **项目**: `onestep-control-plane`
 
 ### 镜像命名
-- **API**: `onestep-control-plane-api`
-- **Frontend**: `onestep-control-plane-frontend`
+- **Plane**: `onestep-control-plane`
+- 单个镜像同时包含 API、WebSocket 服务和构建后的前端静态资源。
 
 ### 版本标签
 1. **日期版本**: `YYYY.MM.DD`（如 `2026.03.11`）- 生产环境使用
@@ -59,11 +59,8 @@ make docker-build
 # 多平台构建（推荐，自动推送）
 IMAGE_REPOSITORY=xxx make docker-build-multi-arch
 
-# 只构建 API 多平台
-IMAGE_REPOSITORY=xxx make docker-build-api-multi-arch
-
-# 只构建 Frontend 多平台
-IMAGE_REPOSITORY=xxx make docker-build-frontend-multi-arch
+# 只构建统一 plane 镜像多平台
+IMAGE_REPOSITORY=xxx make docker-build-plane-multi-arch
 
 # 查看将要构建的镜像名称
 IMAGE_REPOSITORY=xxx make docker-print-images
@@ -84,6 +81,7 @@ IMAGE_REPOSITORY=xxx BUILDX_BUILDER=my-builder make docker-build-multi-arch
 3. **两个标签** - 日期版本 + latest 标签都需要推送
 4. **Git 提交** - 确保所有修改都已提交并推送
 5. **镜像仓库** - 阿里云 registry.cn-shanghai.aliyuncs.com/ceeg
+6. **统一镜像** - Dockerfile 的发布 stage 是 `plane`，不要再使用旧的 `api` / `frontend` stage。
 
 ## 快捷命令
 

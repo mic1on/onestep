@@ -1,11 +1,10 @@
-.PHONY: docker-build docker-build-api docker-build-frontend docker-push docker-push-api docker-push-frontend docker-print-images \
-	docker-build-multi-arch docker-build-api-multi-arch docker-build-frontend-multi-arch docker-buildx-ensure-builder \
+.PHONY: docker-build docker-build-plane docker-build-api docker-build-frontend docker-push docker-push-plane docker-push-api docker-push-frontend docker-print-images \
+	docker-build-multi-arch docker-build-plane-multi-arch docker-build-api-multi-arch docker-build-frontend-multi-arch docker-buildx-ensure-builder \
 	release-preflight release-migrate release-up release-smoke release-down
 
 IMAGE_REPOSITORY ?=
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
-API_IMAGE_NAME ?= onestep-control-plane-api
-FRONTEND_IMAGE_NAME ?= onestep-control-plane-frontend
+PLANE_IMAGE_NAME ?= onestep-control-plane
 DOCKER_CONTEXT ?= $(shell docker context show 2>/dev/null || printf default)
 BUILDX_PROXY_SUFFIX := $(if $(or $(HTTP_PROXY),$(HTTPS_PROXY),$(ALL_PROXY)),-proxy,)
 BUILDX_BUILDER ?= multiarch-builder-$(DOCKER_CONTEXT)$(BUILDX_PROXY_SUFFIX)
@@ -27,57 +26,47 @@ BUILDX_BUILD_ARGS += $(if $(DOCKER_ALL_PROXY),--build-arg ALL_PROXY=$(DOCKER_ALL
 BUILDX_BUILD_ARGS += $(if $(NO_PROXY),--build-arg NO_PROXY=$(NO_PROXY))
 
 IMAGE_PREFIX := $(if $(IMAGE_REPOSITORY),$(IMAGE_REPOSITORY)/,)
-API_IMAGE := $(IMAGE_PREFIX)$(API_IMAGE_NAME):$(IMAGE_TAG)
-FRONTEND_IMAGE := $(IMAGE_PREFIX)$(FRONTEND_IMAGE_NAME):$(IMAGE_TAG)
+PLANE_IMAGE := $(IMAGE_PREFIX)$(PLANE_IMAGE_NAME):$(IMAGE_TAG)
 COMPOSE_FILE ?= docker-compose.yml
 ENV_FILE ?= .env
 SMOKE_BUILD ?= 0
 SMOKE_MANAGE_STACK ?= 0
 SMOKE_CLEANUP ?= 0
 
-docker-build: docker-build-api docker-build-frontend
+docker-build: docker-build-plane
 
-docker-build-api:
-	docker build --target api -t $(API_IMAGE) .
+docker-build-plane:
+	docker build --target plane -t $(PLANE_IMAGE) .
 
-docker-build-frontend:
-	docker build --target frontend -t $(FRONTEND_IMAGE) .
+docker-build-api docker-build-frontend: docker-build-plane
 
-docker-push: docker-push-api docker-push-frontend
+docker-push: docker-push-plane
 
-docker-push-api:
-	docker push $(API_IMAGE)
+docker-push-plane:
+	docker push $(PLANE_IMAGE)
 
-docker-push-frontend:
-	docker push $(FRONTEND_IMAGE)
+docker-push-api docker-push-frontend: docker-push-plane
 
 docker-print-images:
-	@printf 'API_IMAGE=%s\n' "$(API_IMAGE)"
-	@printf 'FRONTEND_IMAGE=%s\n' "$(FRONTEND_IMAGE)"
+	@printf 'PLANE_IMAGE=%s\n' "$(PLANE_IMAGE)"
 
 # Multi-architecture build targets (amd64 + arm64)
 # Note: Multi-arch builds require --push to registry, cannot create local images
-docker-build-multi-arch: docker-build-api-multi-arch docker-build-frontend-multi-arch
+docker-build-multi-arch: docker-build-plane-multi-arch
 
 docker-buildx-ensure-builder:
 	@docker buildx inspect $(BUILDX_BUILDER) >/dev/null 2>&1 || docker buildx create --name $(BUILDX_BUILDER) --driver $(BUILDX_DRIVER) $(BUILDX_CREATE_OPTS) --use
 	@docker buildx inspect --bootstrap $(BUILDX_BUILDER) >/dev/null
 
-docker-build-api-multi-arch: docker-buildx-ensure-builder
+docker-build-plane-multi-arch: docker-buildx-ensure-builder
 	docker buildx build --builder $(BUILDX_BUILDER) --platform $(BUILDX_PLATFORMS) \
 		$(BUILDX_BUILD_ARGS) \
-		--target api \
-		-t $(API_IMAGE) \
+		--target plane \
+		-t $(PLANE_IMAGE) \
 		--push \
 		.
 
-docker-build-frontend-multi-arch: docker-buildx-ensure-builder
-	docker buildx build --builder $(BUILDX_BUILDER) --platform $(BUILDX_PLATFORMS) \
-		$(BUILDX_BUILD_ARGS) \
-		--target frontend \
-		-t $(FRONTEND_IMAGE) \
-		--push \
-		.
+docker-build-api-multi-arch docker-build-frontend-multi-arch: docker-build-plane-multi-arch
 
 release-preflight:
 	bash scripts/release-preflight.sh --compose-file $(COMPOSE_FILE) --env-file $(ENV_FILE)
