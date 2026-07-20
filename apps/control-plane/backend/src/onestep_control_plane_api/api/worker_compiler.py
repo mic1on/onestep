@@ -99,21 +99,30 @@ def compile_worker_yaml(
     return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
 
 
+def _service_description(worker: dict[str, Any]) -> str | None:
+    description = str(worker.get("description") or "").strip()
+    return description or None
+
+
 def _reporter_config(worker: dict[str, Any]) -> bool | dict[str, str] | None:
     if worker.get("reporting_enabled", True) is False:
         return None
+    description = _service_description(worker)
     reporting_config = worker.get("reporting_config")
     if not isinstance(reporting_config, dict):
-        return True
+        return {"service_description": description} if description is not None else True
     if reporting_config.get("mode", "platform") != "custom":
-        return True
+        return {"service_description": description} if description is not None else True
     endpoint_url = str(reporting_config.get("endpoint_url") or "").strip()
     if not endpoint_url:
         raise ValueError("custom reporting endpoint_url is required")
-    return {
+    reporter = {
         "base_url": endpoint_url,
         "token": f"${{{REPORTING_TOKEN_ENV}}}",
     }
+    if description is not None:
+        reporter["service_description"] = description
+    return reporter
 
 
 def merge_package(handler_zip_bytes: bytes, worker_yaml_str: str) -> bytes:

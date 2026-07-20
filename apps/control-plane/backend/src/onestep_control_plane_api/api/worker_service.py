@@ -281,6 +281,7 @@ def compile_worker_package(db: Session, worker: Worker) -> CompiledWorkerPackage
     connectors = _resolve_connectors(db, worker)
     worker_dict = {
         "name": worker.name,
+        "description": worker.description,
         "handler_ref": worker.handler_ref,
         "source": worker.source_config,
         "sinks": worker.sink_configs,

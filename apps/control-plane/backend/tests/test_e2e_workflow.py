@@ -95,6 +95,7 @@ def test_e2e_full_workflow(client, db_session):
     yml = compile_worker_yaml(
         {
             "name": "order-sync",
+            "description": "incremental sync from MySQL",
             "handler_ref": "myworker.handlers:sync_order",
             "source": {
                 "type": "mysql_incremental",
@@ -113,6 +114,7 @@ def test_e2e_full_workflow(client, db_session):
     )
     data = yaml.safe_load(yml)
     assert data["app"]["name"] == "order-sync"
+    assert data["reporter"]["service_description"] == "incremental sync from MySQL"
     assert data["tasks"][0]["handler"]["ref"] == "myworker.handlers:sync_order"
     # Connector dedup: source + sink share connector_id → one resource.
     mysql_resources = [v for v in data["resources"].values() if v["type"] == "mysql"]

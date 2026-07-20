@@ -273,7 +273,34 @@ def test_download_worker_package_includes_compiled_worker_yaml(client):
         worker_yaml = archive.read("worker.yaml").decode()
     compiled = yaml.safe_load(worker_yaml)
     assert compiled["app"]["name"] == "order-sync"
+    assert compiled["reporter"]["service_description"] == "sync orders"
     assert compiled["tasks"][0]["handler"]["ref"] == "myworker.handlers:sync"
+
+
+def test_download_worker_package_includes_custom_reporting_config(client):
+    package = _upload_handler_package(client)
+    payload = _create_worker_payload()
+    payload["handler_package_id"] = package["package_id"]
+    payload["reporting_config"] = {
+        "mode": "custom",
+        "endpoint_url": "https://telemetry.example.com",
+    }
+    payload["reporting_secret"] = {"token": "custom-token"}
+    create = client.post("/api/v1/workers", json=payload)
+    worker_id = create.json()["id"]
+
+    response = client.get(f"/api/v1/workers/{worker_id}/package/download")
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content), "r") as archive:
+        worker_yaml = archive.read("worker.yaml").decode()
+    compiled = yaml.safe_load(worker_yaml)
+    assert compiled["reporter"] == {
+        "base_url": "https://telemetry.example.com",
+        "token": "${ONESTEP_WORKER_REPORTING_TOKEN}",
+        "service_description": "sync orders",
+    }
+    assert "custom-token" not in worker_yaml
 
 
 def test_deploy_worker_uses_saved_env(client, worker_agent_registration_token):
