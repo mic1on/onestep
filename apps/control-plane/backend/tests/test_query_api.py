@@ -300,6 +300,7 @@ def seed_task_definition(
 def test_list_services_and_get_service_summary(client, db_session) -> None:
     now = datetime.now(UTC)
     prod_service = seed_service(db_session, name="billing-sync", environment="prod")
+    prod_service.description = "Moves billing changes into downstream systems."
     staging_service = seed_service(db_session, name="billing-sync", environment="staging")
     seed_instance(
         db_session,
@@ -334,6 +335,7 @@ def test_list_services_and_get_service_summary(client, db_session) -> None:
     assert len(payload["items"]) == 1
     assert payload["items"][0]["name"] == "billing-sync"
     assert payload["items"][0]["environment"] == "prod"
+    assert payload["items"][0]["description"] == "Moves billing changes into downstream systems."
     assert payload["items"][0]["service_status"] == "attention"
     assert payload["items"][0]["instance_count"] == 2
     assert payload["items"][0]["online_instance_count"] == 1
@@ -351,6 +353,7 @@ def test_list_services_and_get_service_summary(client, db_session) -> None:
 
     detail = client.get("/api/v1/services/billing-sync", params={"environment": "prod"})
     assert detail.status_code == 200
+    assert detail.json()["description"] == "Moves billing changes into downstream systems."
     assert detail.json()["service_status"] == "attention"
     assert detail.json()["instance_count"] == 2
     assert detail.json()["online_instance_count"] == 1
@@ -824,6 +827,7 @@ def test_service_dashboard_returns_instance_and_task_overview(client, db_session
         latest_topology_hash="sha256:topology-b",
         latest_sync_at=now - timedelta(seconds=15),
     )
+    service.description = "Moves billing changes into downstream systems."
     online_instance = seed_instance(
         db_session,
         service,
@@ -906,6 +910,7 @@ def test_service_dashboard_returns_instance_and_task_overview(client, db_session
     assert response.status_code == 200
 
     payload = response.json()
+    assert payload["service"]["description"] == "Moves billing changes into downstream systems."
     assert payload["service"]["instance_count"] == 3
     assert payload["service"]["latest_topology_hash"] == "sha256:topology-b"
     assert payload["instance_connectivity"] == {

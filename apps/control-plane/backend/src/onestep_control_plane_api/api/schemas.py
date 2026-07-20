@@ -1047,6 +1047,7 @@ class AgentSessionListResponse(PaginatedResponse):
 class ServiceSummary(APIModel):
     name: str
     environment: Environment
+    description: str | None = None
     latest_deployment_version: str
     service_status: ServiceListStatus
     latest_topology_hash: str | None = None

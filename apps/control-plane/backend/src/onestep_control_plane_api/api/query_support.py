@@ -263,6 +263,7 @@ def build_service_summary(
     return ServiceSummary(
         name=service.name,
         environment=service.environment,
+        description=service.description,
         latest_deployment_version=service.latest_deployment_version,
         service_status=service_list_status,
         latest_topology_hash=service.latest_topology_hash,
