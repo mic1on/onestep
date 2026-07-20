@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
 import secrets
+import zipfile
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -44,6 +47,8 @@ from onestep_control_plane_api.db.models import (
 
 SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION = "1"
 DEFAULT_WORKER_AGENT_HEARTBEAT_INTERVAL_S = 30
+DEFAULT_WORKFLOW_PACKAGE_ENTRYPOINT = "worker.yaml"
+WORKFLOW_PACKAGE_MANIFEST_NAME = "onestep-package.json"
 WORKER_AGENT_CAPABILITIES = frozenset(
     {
         "deployment.start",
@@ -844,11 +849,13 @@ def create_workflow_package(
     filename: str,
     content_type: str,
     content: bytes,
-    entrypoint: str,
+    entrypoint: str | None,
     created_by: str,
 ) -> WorkflowPackage:
     package_id = uuid4()
     checksum = hashlib.sha256(content).hexdigest()
+    package_manifest = _read_workflow_package_manifest(content)
+    resolved_entrypoint = _resolve_workflow_package_entrypoint(entrypoint, package_manifest)
     storage_dir = _package_storage_dir()
     storage_dir.mkdir(parents=True, exist_ok=True)
     storage_path = storage_dir / f"{package_id}.zip"
@@ -863,14 +870,69 @@ def create_workflow_package(
         checksum_sha256=checksum,
         size_bytes=len(content),
         storage_path=str(storage_path),
-        entrypoint=entrypoint,
-        metadata_json={},
+        entrypoint=resolved_entrypoint,
+        metadata_json=(
+            {"onestep_package_manifest": package_manifest}
+            if package_manifest is not None
+            else {}
+        ),
         created_by=created_by,
     )
     db.add(package)
     db.commit()
     db.refresh(package)
     return package
+
+
+def _read_workflow_package_manifest(content: bytes) -> dict[str, object] | None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            if WORKFLOW_PACKAGE_MANIFEST_NAME not in archive.namelist():
+                return None
+            raw_manifest = archive.read(WORKFLOW_PACKAGE_MANIFEST_NAME)
+    except zipfile.BadZipFile:
+        return None
+
+    try:
+        manifest = json.loads(raw_manifest.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{WORKFLOW_PACKAGE_MANIFEST_NAME} is not valid JSON",
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{WORKFLOW_PACKAGE_MANIFEST_NAME} must be a JSON object",
+        )
+    return manifest
+
+
+def _resolve_workflow_package_entrypoint(
+    entrypoint: str | None,
+    package_manifest: dict[str, object] | None,
+) -> str:
+    if entrypoint is not None:
+        stripped = entrypoint.strip()
+        if stripped:
+            return stripped
+
+    if package_manifest is None or "entrypoint" not in package_manifest:
+        return DEFAULT_WORKFLOW_PACKAGE_ENTRYPOINT
+
+    manifest_entrypoint = package_manifest["entrypoint"]
+    if not isinstance(manifest_entrypoint, str) or not manifest_entrypoint.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{WORKFLOW_PACKAGE_MANIFEST_NAME} entrypoint must be a non-empty string",
+        )
+    stripped_manifest_entrypoint = manifest_entrypoint.strip()
+    if len(stripped_manifest_entrypoint) > 255:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{WORKFLOW_PACKAGE_MANIFEST_NAME} entrypoint must be at most 255 characters",
+        )
+    return stripped_manifest_entrypoint
 
 
 def get_workflow_package_or_404(db: Session, package_id: UUID) -> WorkflowPackage:

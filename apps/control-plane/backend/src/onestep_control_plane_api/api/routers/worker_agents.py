@@ -103,7 +103,7 @@ def create_workflow_package_endpoint(
     workflow_id: UUID = Query(...),
     version: str = Query(..., min_length=1, max_length=128),
     filename: str = Query("workflow.zip", min_length=1, max_length=255),
-    entrypoint: str = Query("worker.yaml", min_length=1, max_length=255),
+    entrypoint: str | None = Query(None, min_length=1, max_length=255),
     content_type: Annotated[str | None, Header(alias="content-type")] = None,
     identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),

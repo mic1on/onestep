@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
+import zipfile
 from uuid import UUID, uuid4
 
 from onestep_control_plane_api.db.models import WorkerAgent
@@ -49,6 +52,86 @@ def upload_workflow_package(client) -> dict[str, object]:
     assert payload["checksum_sha256"] == hashlib.sha256(content).hexdigest()
     assert payload["size_bytes"] == len(content)
     return payload
+
+
+def test_upload_workflow_package_uses_manifest_entrypoint_when_query_omitted(client) -> None:
+    buffer = io.BytesIO()
+    manifest = {
+        "format": "onestep.workflow_package.v1",
+        "entrypoint": "configs/custom-worker.yaml",
+    }
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("configs/custom-worker.yaml", "app:\n  name: demo\n")
+        archive.writestr("onestep-package.json", json.dumps(manifest))
+    content = buffer.getvalue()
+
+    response = client.post(
+        "/api/v1/workflow-packages",
+        params={
+            "workflow_id": str(uuid4()),
+            "version": "2026.07.20",
+            "filename": "workflow.zip",
+        },
+        headers={"content-type": "application/zip"},
+        content=content,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["entrypoint"] == "configs/custom-worker.yaml"
+    assert payload["metadata"]["onestep_package_manifest"] == manifest
+
+
+def test_upload_workflow_package_keeps_explicit_entrypoint_over_manifest(client) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("manifest-worker.yaml", "app:\n  name: manifest\n")
+        archive.writestr(
+            "onestep-package.json",
+            json.dumps(
+                {
+                    "format": "onestep.workflow_package.v1",
+                    "entrypoint": "manifest-worker.yaml",
+                }
+            ),
+        )
+    content = buffer.getvalue()
+
+    response = client.post(
+        "/api/v1/workflow-packages",
+        params={
+            "workflow_id": str(uuid4()),
+            "version": "2026.07.20",
+            "filename": "workflow.zip",
+            "entrypoint": "explicit-worker.yaml",
+        },
+        headers={"content-type": "application/zip"},
+        content=content,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["entrypoint"] == "explicit-worker.yaml"
+
+
+def test_upload_workflow_package_rejects_invalid_manifest_json(client) -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("worker.yaml", "app:\n  name: demo\n")
+        archive.writestr("onestep-package.json", "{")
+
+    response = client.post(
+        "/api/v1/workflow-packages",
+        params={
+            "workflow_id": str(uuid4()),
+            "version": "2026.07.20",
+            "filename": "workflow.zip",
+        },
+        headers={"content-type": "application/zip"},
+        content=buffer.getvalue(),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "onestep-package.json is not valid JSON"
 
 
 def test_register_worker_agent_persists_hashed_connection_token(
