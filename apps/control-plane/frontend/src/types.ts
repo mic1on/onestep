@@ -89,11 +89,13 @@ export interface Instance {
 }
 
 export interface LogEntry {
+  id?: string;
   timestamp: string;
   /** Derived by the plane from the event kind. */
   level: 'info' | 'warn' | 'error';
   message: string;
   source: string;
+  sourceType?: 'runtime' | 'command' | null;
   eventKind?: string | null;
   attempts?: number | null;
   durationMs?: number | null;
@@ -102,4 +104,7 @@ export interface LogEntry {
   exceptionType?: string | null;
   failureKind?: string | null;
   traceback?: string | null;
+  commandId?: string | null;
+  commandStatus?: string | null;
+  ackStatus?: string | null;
 }

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getFanoutCommandIds,
   loadControlPlaneData,
+  loadTaskEventLogs,
   loadTaskMetricWindows,
-  loadTaskRecentLogs,
   pollTaskCommandCompletion,
 } from './api';
 import type { Task } from './types';
@@ -583,39 +583,91 @@ describe('loadControlPlaneData', () => {
     ]);
   });
 
-  it('loads recent task logs from task detail events', async () => {
+  it('loads paginated task event history with runtime and command events', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
       jsonResponse({
-        recent_events: [
+        lookback_minutes: 30,
+        lookback_started_at: '2026-07-16T07:30:00Z',
+        total: 2,
+        limit: 20,
+        offset: 0,
+        items: [
           {
-            event_id: 'evt_task_failed',
+            id: 'command:cmd_restart_task',
+            source_type: 'command',
+            instance_id: '11111111-1111-4111-8111-111111111111',
+            task_name: 'inspect_dead_letter',
+            kind: 'restart_task',
+            occurred_at: '2026-07-16T08:00:02Z',
+            level: 'info',
+            message: 'succeeded',
+            meta: {
+              status: 'succeeded',
+              args: { task_name: 'inspect_dead_letter' },
+              source_surface: 'console',
+            },
+            attempts: null,
+            duration_ms: 1200,
+            failure_kind: null,
+            exception_type: null,
+            traceback: null,
+            command_id: 'cmd_restart_task',
+            command_status: 'succeeded',
+            ack_status: 'accepted',
+            created_at: '2026-07-16T08:00:01Z',
+            updated_at: '2026-07-16T08:00:02Z',
+          },
+          {
+            id: 'runtime:evt_task_failed',
+            source_type: 'runtime',
             instance_id: '11111111-1111-4111-8111-111111111111',
             task_name: 'inspect_dead_letter',
             kind: 'failed',
             occurred_at: '2026-07-16T08:00:00Z',
+            level: 'error',
+            message: 'boom',
+            meta: { source: 'interval:5s' },
             attempts: 1,
             duration_ms: 42,
             failure_kind: 'error',
             exception_type: 'RuntimeError',
-            message: 'boom',
             traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
-            meta: { source: 'interval:5s' },
-            received_at: '2026-07-16T08:00:01Z',
+            command_id: null,
+            command_status: null,
+            ack_status: null,
             created_at: '2026-07-16T08:00:01Z',
-            level: 'error',
+            updated_at: '2026-07-16T08:00:01Z',
           },
         ],
       }),
     );
 
-    const logs = await loadTaskRecentLogs(taskFixture, 30, 10);
+    const page = await loadTaskEventLogs(taskFixture, {
+      lookbackMinutes: 30,
+      limit: 20,
+      offset: 0,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toContain(
-      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter?environment=dev&lookback_minutes=30&metric_window_limit=1&event_limit=10',
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter/events?environment=dev&lookback_minutes=30&limit=20&offset=0',
     );
-    expect(logs).toEqual([
+    expect(page.total).toBe(2);
+    expect(page.logs).toEqual([
       expect.objectContaining({
+        id: 'command:cmd_restart_task',
+        sourceType: 'command',
+        eventKind: 'restart_task',
+        level: 'info',
+        message: 'succeeded',
+        durationMs: 1200,
+        commandId: 'cmd_restart_task',
+        commandStatus: 'succeeded',
+        ackStatus: 'accepted',
+      }),
+      expect.objectContaining({
+        id: 'runtime:evt_task_failed',
+        sourceType: 'runtime',
         level: 'error',
         message: 'RuntimeError: boom',
         eventKind: 'failed',

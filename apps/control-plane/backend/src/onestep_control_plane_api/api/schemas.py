@@ -1424,6 +1424,37 @@ class TaskEventListResponse(PaginatedResponse):
     items: list[TaskEventSummary]
 
 
+TaskEventHistorySource = Literal["runtime", "command"]
+
+
+class TaskEventHistoryItem(APIModel):
+    id: str
+    source_type: TaskEventHistorySource
+    instance_id: UUID
+    task_name: str
+    kind: str
+    occurred_at: datetime
+    level: EventLogLevel = "info"
+    message: str | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+    attempts: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    failure_kind: str | None = None
+    exception_type: str | None = None
+    traceback: str | None = None
+    command_id: str | None = None
+    command_status: AgentCommandStatus | None = None
+    ack_status: AgentCommandAckStatus | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+class TaskEventHistoryListResponse(PaginatedResponse):
+    lookback_minutes: int = Field(ge=1)
+    lookback_started_at: datetime
+    items: list[TaskEventHistoryItem]
+
+
 class RecentEventSummary(TaskEventSummary):
     service_name: str
     environment: Environment

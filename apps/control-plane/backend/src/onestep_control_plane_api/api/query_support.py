@@ -41,6 +41,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskControlStateSummary,
     TaskDashboardSummary,
     TaskEventCounts,
+    TaskEventHistoryItem,
     TaskEventKind,
     TaskEventSummary,
     TaskInstanceControlState,
@@ -57,6 +58,16 @@ from onestep_control_plane_api.db.models import (
     TaskDefinition,
     TaskEvent,
     TaskMetricWindow,
+)
+
+
+TASK_EVENT_HISTORY_COMMAND_KINDS = (
+    "pause_task",
+    "resume_task",
+    "restart_task",
+    "discard_dead_letters",
+    "replay_dead_letters",
+    "run_task_once",
 )
 
 
@@ -1154,6 +1165,122 @@ def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
         created_at=event.created_at,
         level=derive_event_level(event.kind),
     )
+
+
+def command_event_timestamp(command: AgentCommand) -> datetime:
+    return (
+        command.finished_at
+        or command.acked_at
+        or command.dispatched_at
+        or command.created_at
+    )
+
+
+def command_event_level(command: AgentCommand) -> EventLogLevel:
+    if command.status in {"failed", "timeout", "cancelled", "expired", "rejected"}:
+        return "error"
+    if command.status in {"pending", "dispatched", "accepted"}:
+        return "warn"
+    return "info"
+
+
+def build_task_runtime_history_item(event: TaskEvent) -> TaskEventHistoryItem:
+    return TaskEventHistoryItem(
+        id=f"runtime:{event.event_id}",
+        source_type="runtime",
+        instance_id=event.instance_id,
+        task_name=event.task_name,
+        kind=event.kind,
+        occurred_at=event.occurred_at,
+        level=derive_event_level(event.kind),
+        message=event.message,
+        meta=event.meta_json,
+        attempts=event.attempts,
+        duration_ms=event.duration_ms,
+        failure_kind=event.failure_kind,
+        exception_type=event.exception_type,
+        traceback=event.traceback,
+        created_at=event.created_at,
+        updated_at=event.created_at,
+    )
+
+
+def build_task_command_history_item(command: AgentCommand, *, task_name: str) -> TaskEventHistoryItem:
+    meta: dict[str, Any] = {
+        "status": command.status,
+        "args": command.args_json,
+        "source_surface": command.source_surface,
+    }
+    if command.created_by:
+        meta["created_by"] = command.created_by
+    if command.reason:
+        meta["reason"] = command.reason
+    if command.result_json is not None:
+        meta["result"] = command.result_json
+
+    return TaskEventHistoryItem(
+        id=f"command:{command.command_id}",
+        source_type="command",
+        instance_id=command.instance_id,
+        task_name=task_name,
+        kind=command.kind,
+        occurred_at=command_event_timestamp(command),
+        level=command_event_level(command),
+        message=command.error_message or command.reason or command.status,
+        meta=meta,
+        duration_ms=command.duration_ms,
+        command_id=command.command_id,
+        command_status=command.status,
+        ack_status=command.ack_status,
+        created_at=command.created_at,
+        updated_at=command.updated_at,
+    )
+
+
+def build_task_event_history_items(
+    db: Session,
+    *,
+    service_id: UUID,
+    task_name: str,
+    lookback_started_at: datetime,
+    limit: int,
+    offset: int,
+) -> tuple[list[TaskEventHistoryItem], int]:
+    runtime_events = db.scalars(
+        select(TaskEvent).where(
+            TaskEvent.service_id == service_id,
+            TaskEvent.task_name == task_name,
+            TaskEvent.occurred_at >= lookback_started_at,
+        )
+    ).all()
+
+    command_time = func.coalesce(
+        AgentCommand.finished_at,
+        AgentCommand.acked_at,
+        AgentCommand.dispatched_at,
+        AgentCommand.created_at,
+    )
+    commands = db.scalars(
+        select(AgentCommand).where(
+            AgentCommand.service_id == service_id,
+            AgentCommand.kind.in_(TASK_EVENT_HISTORY_COMMAND_KINDS),
+            command_time >= lookback_started_at,
+        )
+    ).all()
+
+    history_items = [
+        build_task_runtime_history_item(event)
+        for event in runtime_events
+    ]
+    for command in commands:
+        command_task_name = command.args_json.get("task_name")
+        if command_task_name != task_name:
+            continue
+        history_items.append(build_task_command_history_item(command, task_name=task_name))
+
+    history_items.sort(key=lambda item: (item.occurred_at, item.id), reverse=True)
+    total = len(history_items)
+    return history_items[offset : offset + limit], total
 
 
 def build_recent_event_summary(event: TaskEvent, *, service: Service) -> RecentEventSummary:

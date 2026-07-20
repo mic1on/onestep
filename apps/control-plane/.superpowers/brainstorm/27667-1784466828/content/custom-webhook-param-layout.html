@@ -1,0 +1,54 @@
+<h2>Custom Webhook Parameter Editor</h2>
+<p class="subtitle">Which right-panel form shape feels better for adding method, query params, and POST body params?</p>
+
+<div class="split">
+  <div class="card" data-choice="compact-sections" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Option A: Compact Sections</div>
+        <div class="mockup-body">
+          <div class="label">Destination</div>
+          <div class="mock-input">Provider: Custom</div>
+          <div class="mock-input">Method: GET | POST</div>
+          <div class="mock-input">Webhook URL</div>
+          <div style="height:14px"></div>
+          <div class="label">Query Parameters</div>
+          <div class="placeholder">+ key / value row</div>
+          <div class="placeholder">service = {{ service_name }}</div>
+          <div style="height:14px"></div>
+          <div class="label">JSON Body Parameters</div>
+          <div class="placeholder">+ key / value row</div>
+          <div class="placeholder">event = {{ event_type }}</div>
+          <button class="mock-button">Save Channel</button>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Compact Sections</h3>
+      <p>Everything stays in the current side panel. Body params appear only when method is POST. Fastest to operate and closest to the current UI.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="builder-drawer" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">Option B: Builder Drawer</div>
+        <div class="mockup-body">
+          <div class="mock-input">Provider: Custom</div>
+          <div class="mock-input">Method: GET | POST</div>
+          <div class="mock-input">Webhook URL</div>
+          <div style="height:14px"></div>
+          <button class="mock-button">Open Request Builder</button>
+          <div style="height:14px"></div>
+          <div class="placeholder">Preview: GET https://api.example.com/hook?service=...</div>
+          <div class="placeholder">Preview body JSON when POST</div>
+          <button class="mock-button">Save Channel</button>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Builder Drawer</h3>
+      <p>Side panel stays short; advanced params live in a separate builder with more room. Better for many params, but heavier for the first version.</p>
+    </div>
+  </div>
+</div>

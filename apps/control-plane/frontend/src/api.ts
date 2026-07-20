@@ -11,6 +11,8 @@ type TaskViewStatus = 'running' | 'idle' | 'failed' | 'paused' | 'offline';
 type InstanceViewStatus = 'running' | 'starting' | 'failed' | 'stopped';
 type EventLogLevel = 'error' | 'warn' | 'info';
 type TaskEventKind = 'started' | 'failed' | 'retried' | 'dead_lettered' | 'cancelled' | 'succeeded';
+type TaskEventHistorySource = 'runtime' | 'command';
+type AgentCommandAckStatus = 'accepted' | 'rejected';
 type AgentCommandStatus =
   | 'pending'
   | 'dispatched'
@@ -120,6 +122,37 @@ interface TaskEventSummary {
   received_at: string;
   created_at: string;
   level: EventLogLevel;
+}
+
+interface TaskEventHistoryItemSummary {
+  id: string;
+  source_type: TaskEventHistorySource;
+  instance_id: string;
+  task_name: string;
+  kind: string;
+  occurred_at: string;
+  level: EventLogLevel;
+  message: string | null;
+  meta: JsonObject;
+  attempts: number | null;
+  duration_ms: number | null;
+  failure_kind: string | null;
+  exception_type: string | null;
+  traceback: string | null;
+  command_id: string | null;
+  command_status: AgentCommandStatus | null;
+  ack_status: AgentCommandAckStatus | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+interface TaskEventHistoryListResponse {
+  lookback_minutes: number;
+  lookback_started_at: string;
+  items: TaskEventHistoryItemSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 interface TaskDashboardSummary {
@@ -378,6 +411,14 @@ export interface ControlPlaneData {
   sourceKindCounts: Record<string, number>;
 }
 
+export interface TaskEventLogPage {
+  logs: LogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  lookbackMinutes: number;
+}
+
 export interface ServiceSummaryStats {
   total_services: number;
   online_services: number;
@@ -413,6 +454,10 @@ const DEFAULT_LOOKBACK_MINUTES = 15;
 export const DEFAULT_TASK_METRIC_LOOKBACK_MINUTES = DEFAULT_LOOKBACK_MINUTES;
 export const MAX_TASK_METRIC_LOOKBACK_MINUTES = 24 * 60;
 export const TASK_METRIC_LOOKBACK_PRESETS = [5, 10, 15, 30] as const;
+export const DEFAULT_TASK_EVENT_LOOKBACK_MINUTES = DEFAULT_LOOKBACK_MINUTES;
+export const MAX_TASK_EVENT_LOOKBACK_MINUTES = MAX_TASK_METRIC_LOOKBACK_MINUTES;
+export const TASK_EVENT_LOOKBACK_PRESETS = TASK_METRIC_LOOKBACK_PRESETS;
+export const DEFAULT_TASK_EVENT_PAGE_SIZE = 20;
 const PAGE_SIZE = 100;
 
 class ApiError extends Error {
@@ -712,6 +757,34 @@ function mapLog(event: TaskEventSummary): LogEntry {
   };
 }
 
+function mapTaskEventHistoryLog(event: TaskEventHistoryItemSummary): LogEntry {
+  const failureParts = [event.exception_type, event.message].filter(Boolean);
+  const sourceDetail = typeof event.meta.source === 'string' ? event.meta.source : null;
+  const fallbackMessage =
+    failureParts.length > 0
+      ? failureParts.join(': ')
+      : event.failure_kind ?? event.message ?? event.kind;
+  return {
+    id: event.id,
+    timestamp: new Date(event.occurred_at).toTimeString().split(' ')[0],
+    level: event.level,
+    source: event.task_name,
+    sourceType: event.source_type,
+    message: fallbackMessage,
+    eventKind: event.kind,
+    attempts: event.attempts,
+    durationMs: event.duration_ms,
+    instanceId: event.instance_id,
+    sourceDetail,
+    exceptionType: event.exception_type,
+    failureKind: event.failure_kind,
+    traceback: event.traceback,
+    commandId: event.command_id,
+    commandStatus: event.command_status,
+    ackStatus: event.ack_status,
+  };
+}
+
 async function listServices(environment?: Environment) {
   return request<ServiceListResponse>('/api/v1/services', {
     query: {
@@ -854,6 +927,48 @@ export async function loadTaskMetricWindows(
     avg_duration_ms: window.avg_duration_ms,
     p95_duration_ms: window.p95_duration_ms,
   }));
+}
+
+export async function loadTaskEventLogs(
+  task: Task,
+  {
+    lookbackMinutes = DEFAULT_TASK_EVENT_LOOKBACK_MINUTES,
+    limit = DEFAULT_TASK_EVENT_PAGE_SIZE,
+    offset = 0,
+  }: {
+    lookbackMinutes?: number;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<TaskEventLogPage> {
+  if (!task.apiServiceName || !task.apiName || !task.environment) {
+    return {
+      logs: [],
+      total: 0,
+      limit,
+      offset,
+      lookbackMinutes,
+    };
+  }
+
+  const response = await request<TaskEventHistoryListResponse>(
+    `/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}/events`,
+    {
+      query: {
+        environment: task.environment,
+        lookback_minutes: lookbackMinutes,
+        limit,
+        offset,
+      },
+    },
+  );
+  return {
+    logs: response.items.map(mapTaskEventHistoryLog),
+    total: response.total,
+    limit: response.limit,
+    offset: response.offset,
+    lookbackMinutes: response.lookback_minutes,
+  };
 }
 
 export async function loadTaskRecentLogs(

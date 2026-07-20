@@ -8,11 +8,13 @@ import {
   getApiErrorMessage,
   isAuthRequiredError,
   loadControlPlaneData,
+  loadTaskEventLogs,
   loadTaskMetricWindows,
-  loadTaskRecentLogs,
   logoutConsole,
   pollTaskCommandCompletion,
   pollTaskPauseRequested,
+  DEFAULT_TASK_EVENT_LOOKBACK_MINUTES,
+  DEFAULT_TASK_EVENT_PAGE_SIZE,
   DEFAULT_TASK_METRIC_LOOKBACK_MINUTES,
   type Environment,
   type ServiceCommandFanoutResponse,
@@ -124,6 +126,9 @@ export default function App() {
   const [taskMetricsError, setTaskMetricsError] = useState<string | null>(null);
   const [isLoadingTaskMetrics, setIsLoadingTaskMetrics] = useState(false);
   const [taskEventLogs, setTaskEventLogs] = useState<LogEntry[]>([]);
+  const [taskEventLookbackMinutes, setTaskEventLookbackMinutes] = useState(DEFAULT_TASK_EVENT_LOOKBACK_MINUTES);
+  const [taskEventOffset, setTaskEventOffset] = useState(0);
+  const [taskEventTotal, setTaskEventTotal] = useState(0);
   const [taskEventsError, setTaskEventsError] = useState<string | null>(null);
   const [isLoadingTaskEvents, setIsLoadingTaskEvents] = useState(false);
 
@@ -420,6 +425,10 @@ export default function App() {
   const selectedTaskCanRestart = taskSupportsCommand(selectedTask, 'restart_task');
   const isPendingTaskToggle = !!selectedTask && pendingTaskId === selectedTask.id;
   const headerStatus = getHeaderStatus(selectedService.viewStatus, selectedTask?.viewStatus, tr);
+  const handleTaskEventLookbackMinutesChange = useCallback((minutes: number) => {
+    setTaskEventLookbackMinutes(minutes);
+    setTaskEventOffset(0);
+  }, []);
 
   // --- Live Terminal Logs Simulator ---
   const logTerminalRef = useRef<HTMLDivElement>(null);
@@ -431,15 +440,16 @@ export default function App() {
   }, [logs]);
 
   useEffect(() => {
+    setTaskEventOffset(0);
+  }, [selectedTaskId]);
+
+  useEffect(() => {
     let cancelled = false;
 
     if (!selectedTask) {
       setTaskMetricWindows([]);
       setTaskMetricsError(null);
       setIsLoadingTaskMetrics(false);
-      setTaskEventLogs([]);
-      setTaskEventsError(null);
-      setIsLoadingTaskEvents(false);
       return () => {
         cancelled = true;
       };
@@ -447,9 +457,6 @@ export default function App() {
 
     setIsLoadingTaskMetrics(true);
     setTaskMetricsError(null);
-    setIsLoadingTaskEvents(true);
-    setTaskEventsError(null);
-    setTaskEventLogs([]);
     void loadTaskMetricWindows(selectedTask, taskMetricLookbackMinutes)
       .then((windows) => {
         if (cancelled) return;
@@ -469,10 +476,37 @@ export default function App() {
           setIsLoadingTaskMetrics(false);
         }
       });
-    void loadTaskRecentLogs(selectedTask, taskMetricLookbackMinutes)
-      .then((events) => {
+
+    return () => {
+      cancelled = true;
+    };
+  }, [redirectToLogin, selectedTask, taskMetricLookbackMinutes]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedTask) {
+      setTaskEventLogs([]);
+      setTaskEventTotal(0);
+      setTaskEventsError(null);
+      setIsLoadingTaskEvents(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsLoadingTaskEvents(true);
+    setTaskEventsError(null);
+    setTaskEventLogs([]);
+    void loadTaskEventLogs(selectedTask, {
+      lookbackMinutes: taskEventLookbackMinutes,
+      limit: DEFAULT_TASK_EVENT_PAGE_SIZE,
+      offset: taskEventOffset,
+    })
+      .then((page) => {
         if (cancelled) return;
-        setTaskEventLogs(events);
+        setTaskEventLogs(page.logs);
+        setTaskEventTotal(page.total);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -481,6 +515,7 @@ export default function App() {
           return;
         }
         setTaskEventLogs([]);
+        setTaskEventTotal(0);
         setTaskEventsError(getApiErrorMessage(error));
       })
       .finally(() => {
@@ -492,7 +527,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [redirectToLogin, selectedTask, taskMetricLookbackMinutes]);
+  }, [redirectToLogin, selectedTask, taskEventLookbackMinutes, taskEventOffset]);
 
   // --- Interactive Control plane Handlers ---
 
@@ -1112,6 +1147,12 @@ export default function App() {
                         logs={taskEventLogs}
                         isLoading={isLoadingTaskEvents}
                         error={taskEventsError}
+                        lookbackMinutes={taskEventLookbackMinutes}
+                        onLookbackMinutesChange={handleTaskEventLookbackMinutesChange}
+                        total={taskEventTotal}
+                        limit={DEFAULT_TASK_EVENT_PAGE_SIZE}
+                        offset={taskEventOffset}
+                        onPageChange={setTaskEventOffset}
                       />
                     </div>
                   </div>

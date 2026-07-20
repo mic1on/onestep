@@ -39,6 +39,7 @@ from onestep_control_plane_api.api.query_support import (
     build_source_kinds_map,
     build_task_control_summary,
     build_task_counts_map,
+    build_task_event_history_items,
     build_task_event_summary,
     build_task_metric_chart_points,
     build_task_summary_map,
@@ -78,6 +79,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskDashboardSummary,
     TaskDetailResponse,
     TaskEventCounts,
+    TaskEventHistoryListResponse,
     TaskEventKind,
     TaskEventListResponse,
     TaskMetricWindowListResponse,
@@ -570,6 +572,45 @@ def get_service_task_detail(
             build_metric_window_summary(metric_window) for metric_window in recent_metric_windows
         ],
         recent_events=[build_task_event_summary(event) for event in recent_events],
+    )
+
+
+@router.get(
+    "/services/{service_name}/tasks/{task_name}/events",
+    response_model=TaskEventHistoryListResponse,
+)
+def list_service_task_events(
+    service_name: str,
+    task_name: str,
+    environment: Environment = Query(...),
+    lookback_minutes: int = Query(default=DEFAULT_LOOKBACK_MINUTES, ge=1, le=MAX_LOOKBACK_MINUTES),
+    limit: int = Query(default=DEFAULT_TASK_ACTIVITY_LIMIT, ge=1, le=MAX_TASK_ACTIVITY_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db_session),
+) -> TaskEventHistoryListResponse:
+    service = get_service_or_404(db, service_name=service_name, environment=environment)
+    if not service_has_task_data(db, service_id=service.id, task_name=task_name):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"task {task_name} was not found for service {service_name}/{environment}",
+        )
+
+    lookback_started_at = utcnow() - timedelta(minutes=lookback_minutes)
+    items, total = build_task_event_history_items(
+        db,
+        service_id=service.id,
+        task_name=task_name,
+        lookback_started_at=lookback_started_at,
+        limit=limit,
+        offset=offset,
+    )
+    return TaskEventHistoryListResponse(
+        lookback_minutes=lookback_minutes,
+        lookback_started_at=lookback_started_at,
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

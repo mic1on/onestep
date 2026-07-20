@@ -185,6 +185,7 @@ def seed_agent_command(
     source_surface: str = "unknown",
     error_code: str | None = None,
     error_message: str | None = None,
+    args_json: dict[str, object] | None = None,
 ) -> AgentCommand:
     command = AgentCommand(
         command_id=command_id,
@@ -195,7 +196,7 @@ def seed_agent_command(
         reason=reason,
         source_surface=source_surface,
         kind=kind,
-        args_json={},
+        args_json=args_json or {},
         timeout_s=timeout_s,
         status=status,
         ack_status=ack_status,
@@ -3740,6 +3741,145 @@ def test_get_service_task_detail_returns_summary_windows_and_events(client, db_s
     assert payload["recent_events"][1]["traceback"] == (
         "Traceback (most recent call last):\nTimeoutError: task exceeded timeout\n"
     )
+
+
+def test_list_service_task_events_merges_runtime_events_and_control_commands(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-online",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_users",
+        source_name="interval:3600s",
+        source_kind="interval",
+    )
+    seed_task_event(
+        db_session,
+        service,
+        instance,
+        event_id="evt_started",
+        task_name="sync_users",
+        kind="started",
+        occurred_at=now - timedelta(minutes=4),
+    )
+    seed_task_event(
+        db_session,
+        service,
+        instance,
+        event_id="evt_succeeded",
+        task_name="sync_users",
+        kind="succeeded",
+        occurred_at=now - timedelta(minutes=1),
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_pause_sync_users",
+        kind="pause_task",
+        status="succeeded",
+        created_at=now - timedelta(minutes=3),
+        finished_at=now - timedelta(minutes=2, seconds=55),
+        reason="operator paused the task",
+        args_json={"task_name": "sync_users"},
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_resume_sync_users",
+        kind="resume_task",
+        status="succeeded",
+        created_at=now - timedelta(minutes=2),
+        finished_at=now - timedelta(minutes=1, seconds=55),
+        args_json={"task_name": "sync_users"},
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_restart_sync_users",
+        kind="restart_task",
+        status="succeeded",
+        created_at=now - timedelta(seconds=30),
+        finished_at=now - timedelta(seconds=20),
+        duration_ms=1200,
+        args_json={"task_name": "sync_users"},
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_other_task",
+        kind="pause_task",
+        status="succeeded",
+        created_at=now - timedelta(seconds=10),
+        finished_at=now - timedelta(seconds=5),
+        args_json={"task_name": "other_task"},
+    )
+    seed_agent_command(
+        db_session,
+        service,
+        instance,
+        command_id="cmd_service_restart",
+        kind="restart",
+        status="succeeded",
+        created_at=now - timedelta(seconds=1),
+        finished_at=now,
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users/events",
+        params={
+            "environment": "prod",
+            "lookback_minutes": 15,
+            "limit": 3,
+            "offset": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 5
+    assert payload["limit"] == 3
+    assert payload["offset"] == 0
+    assert [item["id"] for item in payload["items"]] == [
+        "command:cmd_restart_sync_users",
+        "runtime:evt_succeeded",
+        "command:cmd_resume_sync_users",
+    ]
+    restart_event = payload["items"][0]
+    assert restart_event["source_type"] == "command"
+    assert restart_event["kind"] == "restart_task"
+    assert restart_event["command_id"] == "cmd_restart_sync_users"
+    assert restart_event["command_status"] == "succeeded"
+    assert restart_event["duration_ms"] == 1200
+
+    second_page = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users/events",
+        params={
+            "environment": "prod",
+            "lookback_minutes": 15,
+            "limit": 3,
+            "offset": 3,
+        },
+    )
+    assert second_page.status_code == 200
+    assert [item["id"] for item in second_page.json()["items"]] == [
+        "command:cmd_pause_sync_users",
+        "runtime:evt_started",
+    ]
 
 
 def test_get_service_task_detail_returns_404_for_unknown_task(client, db_session) -> None:
