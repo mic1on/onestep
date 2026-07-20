@@ -28,6 +28,7 @@ class Service(Base):
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
     environment: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    description: Mapped[str | None] = mapped_column(sa.Text)
     latest_deployment_version: Mapped[str] = mapped_column(sa.String(128), nullable=False)
     latest_topology_hash: Mapped[str | None] = mapped_column(sa.String(255))
     latest_sync_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
