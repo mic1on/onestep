@@ -31,6 +31,21 @@ describe('app route helpers', () => {
     ).toBe('/services/orders-svc?tab=instances');
   });
 
+  it('falls back to tasks for legacy service configuration tab URLs', () => {
+    expect(parseAppRoute('/services/orders-svc?tab=configuration')).toEqual({
+      currentView: 'services',
+      selectedServiceId: 'orders-svc',
+      activeTab: 'Tasks',
+      selectedTaskId: null,
+    });
+    expect(parseAppRoute('/services/orders-svc?tab=config')).toEqual({
+      currentView: 'services',
+      selectedServiceId: 'orders-svc',
+      activeTab: 'Tasks',
+      selectedTaskId: null,
+    });
+  });
+
   it('restores top-level views from the URL', () => {
     expect(parseAppRoute('/notifications')).toEqual({
       currentView: 'notifications',

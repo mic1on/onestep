@@ -1,5 +1,5 @@
 export type ControlPlaneView = 'overview' | 'servicesList' | 'services' | 'notifications';
-export type ServiceTab = 'Tasks' | 'Instances' | 'Configuration' | 'Logs';
+export type ServiceTab = 'Tasks' | 'Instances' | 'Logs';
 
 export interface AppRouteState {
   currentView: ControlPlaneView;
@@ -18,15 +18,12 @@ const DEFAULT_ROUTE_STATE: AppRouteState = {
 const tabToParam: Record<ServiceTab, string> = {
   Tasks: 'tasks',
   Instances: 'instances',
-  Configuration: 'configuration',
   Logs: 'logs',
 };
 
 const paramToTab: Record<string, ServiceTab> = {
   tasks: 'Tasks',
   instances: 'Instances',
-  configuration: 'Configuration',
-  config: 'Configuration',
   logs: 'Logs',
 };
 

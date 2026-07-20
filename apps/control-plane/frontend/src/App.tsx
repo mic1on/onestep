@@ -54,7 +54,6 @@ import {
   Square,
   RotateCcw,
   RefreshCw,
-  FileCode,
   Workflow,
   ChevronRight,
   Terminal,
@@ -105,7 +104,7 @@ export function isTaskToggleSupported(task: Task | null | undefined): boolean {
   return command !== null && taskSupportsCommand(task, command);
 }
 
-const SERVICE_TABS: ServiceTab[] = ['Tasks', 'Instances', 'Configuration', 'Logs'];
+const SERVICE_TABS: ServiceTab[] = ['Tasks', 'Instances', 'Logs'];
 
 export default function App() {
   const { t: tr } = useI18n();
@@ -1009,15 +1008,6 @@ export default function App() {
                           </>
                         )}
                       </button>
-                      <button
-                        onClick={() => {
-                          navigateToServiceTab('Configuration');
-                        }}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-800 transition-colors text-xs font-bold shadow-xs"
-                      >
-                        <FileCode className="w-4 h-4" />
-                        <span>{tr('button.editConfig')}</span>
-                      </button>
                     </>
                   ) : (
                     <>
@@ -1210,25 +1200,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {activeTab === 'Configuration' && (
-                    <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 animate-fadeIn font-sans">
-                      <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
-                        <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
-                          <FileCode className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <h3 className="text-sm font-bold text-slate-800">{tr('config.globalSpec')}</h3>
-                          <p className="text-xs text-slate-500 font-medium">{tr('config.globalSpecDescription')}</p>
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4">
-                        <p className="text-sm font-bold text-slate-700">{tr('config.noServiceConfig')}</p>
-                        <p className="mt-1 text-xs font-medium text-slate-500">{tr('config.noServiceConfigHint')}</p>
-                      </div>
-                    </div>
-                  )}
-
                   {activeTab === 'Logs' && (
                     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs animate-fadeIn flex flex-col h-[400px]">
                       {/* Log view top toolbar */}
@@ -1380,7 +1351,6 @@ export function getHeaderStatus(
 function serviceTabLabel(tab: ServiceTab, t: ReturnType<typeof useI18n>['t']): string {
   if (tab === 'Tasks') return t('tabs.tasks');
   if (tab === 'Instances') return t('tabs.instances');
-  if (tab === 'Configuration') return t('tabs.configuration');
   return t('tabs.logs');
 }
 

@@ -646,9 +646,7 @@ test("loads API-backed service, task, instance, topology, config, and log views"
   await page.getByRole("button", { name: "Clear stream" }).click();
   await expect(page.getByText("processed order batch")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Configuration" }).click();
-  await expect(page.getByText("Service Configuration")).toBeVisible();
-  await expect(page.getByText("No service-level configuration reported")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Configuration" })).toHaveCount(0);
   await expect(page.getByText("replication_factor")).toHaveCount(0);
 });
 

@@ -66,11 +66,11 @@ export default function TaskEventDiagnostics({
   return (
     <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
       <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="flex items-center gap-2 text-xs font-bold text-slate-700">
             <Terminal className="h-4 w-4 text-slate-400" />
-            <span className="text-xs font-bold text-slate-700">{t('task.events')}</span>
-          </div>
+            <span>{t('task.events')}</span>
+          </h3>
 
           <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
             <div

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Search, Server, ChevronRight, Activity, CheckCircle, AlertCircle } from 'lucide-react';
+import { Search, Server, ChevronRight, Activity, CheckCircle, AlertCircle, SlidersHorizontal, Check } from 'lucide-react';
 import { Service } from '../types';
 import { formatThroughput } from '../api';
 import { useI18n } from '../i18n';
@@ -16,9 +16,19 @@ interface ServiceStatusMeta {
   Icon: typeof CheckCircle;
 }
 
+type ServiceDisplayStatus = 'running' | 'degraded' | 'offline';
+type ServiceStatusFilter = 'all' | ServiceDisplayStatus;
+
+function getServiceDisplayStatus(service: Service): ServiceDisplayStatus {
+  if (service.viewStatus === 'running' && service.activeInstances > 0) return 'running';
+  if (service.viewStatus === 'degraded') return 'degraded';
+  return 'offline';
+}
+
 function getStatusMeta(service: Service, t: ReturnType<typeof useI18n>['t']): ServiceStatusMeta {
   // The plane computes view_status; the frontend only maps it to a label/style.
-  if (service.viewStatus === 'running' && service.activeInstances > 0) {
+  const displayStatus = getServiceDisplayStatus(service);
+  if (displayStatus === 'running') {
     return {
       label: t('common.running'),
       dotClassName: 'bg-emerald-500',
@@ -26,7 +36,7 @@ function getStatusMeta(service: Service, t: ReturnType<typeof useI18n>['t']): Se
       Icon: CheckCircle,
     };
   }
-  if (service.viewStatus === 'degraded') {
+  if (displayStatus === 'degraded') {
     return {
       label: t('common.degraded'),
       dotClassName: 'bg-amber-500',
@@ -42,28 +52,39 @@ function getStatusMeta(service: Service, t: ReturnType<typeof useI18n>['t']): Se
   };
 }
 
+function getStatusFilterLabel(status: ServiceStatusFilter, t: ReturnType<typeof useI18n>['t']) {
+  if (status === 'running') return t('common.running');
+  if (status === 'degraded') return t('common.degraded');
+  if (status === 'offline') return t('common.offline');
+  return t('status.all');
+}
+
 export default function ServicesList({ services, onSelectService }: ServicesListProps) {
   const { t } = useI18n();
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<ServiceStatusFilter>('all');
+  const [isStatusFilterOpen, setIsStatusFilterOpen] = useState(false);
 
   const filteredServices = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return services;
-    return services.filter(
-      (svc) =>
+    return services.filter((svc) => {
+      const matchesSearch =
+        !query ||
         svc.name.toLowerCase().includes(query) ||
-        svc.id.toLowerCase().includes(query),
-    );
-  }, [services, searchQuery]);
+        svc.id.toLowerCase().includes(query);
+      const matchesStatus =
+        statusFilter === 'all' || getServiceDisplayStatus(svc) === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [services, searchQuery, statusFilter]);
+
+  const statusFilters: ServiceStatusFilter[] = ['all', 'running', 'degraded', 'offline'];
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 animate-fadeIn">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <nav aria-label="Breadcrumb" className="flex items-center text-slate-400 font-medium text-xs mb-1">
-            <span className="text-slate-800 font-bold">{t('nav.services')}</span>
-          </nav>
           <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight font-sans">
             {t('servicesList.title')}
           </h2>
@@ -75,15 +96,53 @@ export default function ServicesList({ services, onSelectService }: ServicesList
 
       {/* Search bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
-        <div className="relative max-w-sm">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-          <input
-            type="text"
-            placeholder={t('servicesList.filterPlaceholder')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-xs focus:outline-hidden focus:ring-1 focus:ring-indigo-600 focus:border-indigo-600 font-medium"
-          />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="relative w-full max-w-sm">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+            <input
+              type="text"
+              placeholder={t('servicesList.filterPlaceholder')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-xs focus:outline-hidden focus:ring-1 focus:ring-indigo-600 focus:border-indigo-600 font-medium"
+            />
+          </div>
+
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              aria-haspopup="true"
+              aria-expanded={isStatusFilterOpen}
+              onClick={() => setIsStatusFilterOpen((isOpen) => !isOpen)}
+              className="flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 focus:outline-hidden focus:ring-1 focus:ring-indigo-600 focus:border-indigo-600"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>
+                {t('servicesList.statusFilter', {
+                  status: getStatusFilterLabel(statusFilter, t),
+                })}
+              </span>
+            </button>
+
+            {isStatusFilterOpen && (
+              <div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-slate-200 bg-white py-1 text-xs font-medium shadow-lg">
+                {statusFilters.map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() => {
+                      setStatusFilter(filter);
+                      setIsStatusFilterOpen(false);
+                    }}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-slate-700 transition-colors hover:bg-slate-50 focus:outline-hidden focus:bg-slate-50"
+                  >
+                    <span>{getStatusFilterLabel(filter, t)}</span>
+                    {statusFilter === filter && <Check className="w-3.5 h-3.5 text-indigo-600" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

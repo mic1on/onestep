@@ -2,7 +2,11 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { I18nProvider } from '../i18n';
 import type { Task } from '../types';
-import TopologyFlow, { getTopologyFlowDurationSeconds, isTopologyFlowActive } from './TopologyFlow';
+import TopologyFlow, {
+  getTopologyFlowDurationSeconds,
+  getTopologySourceLabel,
+  isTopologyFlowActive,
+} from './TopologyFlow';
 
 const baseTask: Task = {
   id: 'svc:dev:produce_and_store',
@@ -77,5 +81,26 @@ describe('topology flow motion', () => {
     expect(diagram.dataset.flowing).toBe('false');
     expect(screen.getByTestId('topology-source-connector').dataset.flowing).toBe('false');
     expect(screen.queryAllByTestId('topology-flow-packet')).toHaveLength(0);
+  });
+});
+
+describe('topology source label', () => {
+  it('shows only the core queue name for SQS URLs', () => {
+    const sqsUrl = 'https://sqs.cn-northwest-1.amazonaws.com.cn/928507961548/ceegic-bidding-signup.fifo';
+    const task = {
+      ...baseTask,
+      pipelineSource: 'sqs_queue',
+      pipelineSourceLabel: sqsUrl,
+      sourceKind: 'sqs_queue',
+      sourceConfig: { url: sqsUrl },
+      sourceName: sqsUrl,
+    };
+
+    expect(getTopologySourceLabel(task)).toBe('ceegic-bidding-signup.fifo');
+
+    renderTopology(task);
+
+    expect(screen.getByText('ceegic-bidding-signup.fifo')).toBeTruthy();
+    expect(screen.queryByText(sqsUrl)).toBeNull();
   });
 });

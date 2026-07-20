@@ -191,6 +191,27 @@ export function getTopologyFlowDurationSeconds(throughputPerMin: number) {
   );
 }
 
+function coreQueueName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withoutQuery = trimmed.split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  const lastSegment = withoutQuery.split('/').pop()?.trim();
+  return lastSegment || trimmed;
+}
+
+export function getTopologySourceLabel(
+  task: Pick<Task, 'pipelineSourceLabel' | 'sourceKind' | 'sourceConfig' | 'sourceName'>,
+) {
+  if (task.sourceKind !== 'sqs_queue') return task.pipelineSourceLabel;
+  return (
+    coreQueueName(task.sourceConfig?.url) ??
+    coreQueueName(task.sourceName) ??
+    coreQueueName(task.pipelineSourceLabel) ??
+    task.pipelineSourceLabel
+  );
+}
+
 function TopologyConnector({ isFlowing, testId }: { isFlowing: boolean; testId: string }) {
   return (
     <div
@@ -226,6 +247,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
 
   const isRunning = task.viewStatus === 'running';
   const isFlowing = isTopologyFlowActive(task);
+  const sourceLabel = getTopologySourceLabel(task);
   const flowDurationSeconds = getTopologyFlowDurationSeconds(task.throughputPerMin);
   const topologyStyle = {
     '--topology-flow-duration': `${flowDurationSeconds}s`,
@@ -327,7 +349,7 @@ export default function TopologyFlow({ task }: TopologyFlowProps) {
             <div className="text-center">
               <div className="font-sans text-xs font-bold text-slate-800">{task.pipelineSource}</div>
               <div className="font-mono text-[10px] text-slate-400 font-medium">
-                {task.pipelineSourceLabel}
+                {sourceLabel}
               </div>
             </div>
           </button>
