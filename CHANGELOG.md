@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0
+
+- Adds the `onestep build` command for packaging YAML worker projects into deployable zip archives with an `onestep-package.json` manifest.
+- Includes conditional `emit.when` predicate modules, pyproject-referenced README/license metadata, and common packaging metadata files in worker packages.
+- Resets interval and cron schedule sources after task resume so paused tasks do not backfill stale ticks.
+- Keeps control-plane reporter event IDs unique across same-instance restarts.
+
 ## 1.5.1
 
 - Moves control-plane reporter and WebSocket command integration into the new `onestep-control-plane` 0.1.0 plugin package.
