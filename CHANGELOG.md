@@ -6,6 +6,7 @@
 - Includes conditional `emit.when` predicate modules, pyproject-referenced README/license metadata, and common packaging metadata files in worker packages.
 - Resets interval and cron schedule sources after task resume so paused tasks do not backfill stale ticks.
 - Keeps control-plane reporter event IDs unique across same-instance restarts.
+- Adds `reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` so workers can report service-level descriptions to the control plane.
 
 ## 1.5.1
 

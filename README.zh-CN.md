@@ -221,6 +221,8 @@ reporter: true
 ```
 
 必需环境变量：`ONESTEP_CONTROL_PLANE_URL`、`ONESTEP_CONTROL_PLANE_TOKEN`。
+可选：设置 `reporter.service_description` 或 `ONESTEP_SERVICE_DESCRIPTION` 后，
+Control Plane 会在服务目录展示服务描述。
 
 身份解析、多副本指引、环境变量、本地 demo，见
 [`docs/stable-instance-identity.md`](docs/stable-instance-identity.md)。

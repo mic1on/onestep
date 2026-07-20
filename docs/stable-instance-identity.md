@@ -137,6 +137,7 @@ export ONESTEP_INSTANCE_ID=8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df
 ```bash
 export ONESTEP_ENV=prod
 export ONESTEP_SERVICE_NAME=billing-sync
+export ONESTEP_SERVICE_DESCRIPTION="Synchronizes billing data into the warehouse"
 export ONESTEP_STATE_DIR=/var/lib/onestep/billing-sync
 ```
 
@@ -144,6 +145,9 @@ export ONESTEP_STATE_DIR=/var/lib/onestep/billing-sync
 
 - 重启后 `instance_id` 不变
 - 控制面里仍然是同一个逻辑实例
+
+`ONESTEP_SERVICE_DESCRIPTION` 是可选的服务级描述，会显示在控制面的服务目录中；
+它和 `tasks[].description` 这种任务级描述相互独立。
 
 ### 4.2 同一台机器多个 worker
 

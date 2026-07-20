@@ -234,6 +234,13 @@ reporter: true
 ```
 
 Required env: `ONESTEP_CONTROL_PLANE_URL`, `ONESTEP_CONTROL_PLANE_TOKEN`.
+Optional service-level metadata can be reported with `reporter.service_description`
+or `ONESTEP_SERVICE_DESCRIPTION` and shown in the control plane:
+
+```yaml
+reporter:
+  service_description: Synchronizes billing data into the warehouse
+```
 
 Handlers can report low-cardinality custom counters and gauges through the same
 reporter. The plane stores them and can expose them from its Prometheus
