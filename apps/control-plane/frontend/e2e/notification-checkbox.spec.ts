@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const ISO_NOW = "2026-07-16T08:00:00Z";
+const RESOURCE_CATALOG_RESPONSE = { resources: [] };
 
 const service = {
   name: "service-01",
@@ -42,6 +43,14 @@ test("service checkbox clicks do not scroll the notifications page", async ({ pa
           role: null,
           roles: [],
         }),
+      });
+      return;
+    }
+
+    if (path === "/api/v1/resource-catalog") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(RESOURCE_CATALOG_RESPONSE),
       });
       return;
     }

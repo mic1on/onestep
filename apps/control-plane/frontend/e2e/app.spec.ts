@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const ISO_NOW = "2026-07-16T08:00:00Z";
 const LOOKBACK_MINUTES = 15;
+const RESOURCE_CATALOG_RESPONSE = { resources: [] };
 
 const billingService = {
   name: "billing-sync",
@@ -372,6 +373,15 @@ async function installApiMocks(page: Page) {
           role: null,
           roles: [],
         }),
+      });
+      return;
+    }
+
+    if (path === "/api/v1/resource-catalog") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(RESOURCE_CATALOG_RESPONSE),
       });
       return;
     }
@@ -760,6 +770,14 @@ test("redirects to login when the API requires authentication", async ({ page })
         role: null,
         roles: [],
       }),
+    });
+  });
+
+  await page.route("**/api/v1/resource-catalog", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(RESOURCE_CATALOG_RESPONSE),
     });
   });
 
