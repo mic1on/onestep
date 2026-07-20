@@ -7,6 +7,7 @@ export interface Service {
   apiName?: string;
   environment?: 'dev' | 'staging' | 'prod';
   name: string;
+  description: string | null;
   /** Derived by the plane from ServiceListStatus + online instance count. */
   viewStatus: 'running' | 'degraded' | 'stopped';
   /** Reference timestamp the UI uses to render a live "time since" label. */

@@ -9,6 +9,7 @@ function service(overrides: Partial<Service>): Service {
   return {
     id: 'billing-sync:prod',
     name: 'billing-sync / prod',
+    description: null,
     viewStatus: 'running',
     uptimeReferenceAt: null,
     throughputPerMin: 48,
@@ -63,5 +64,28 @@ describe('ServicesList filters', () => {
 
     expect(screen.getByText('audit-sync / prod')).toBeTruthy();
     expect(screen.queryByText('billing-sync / prod')).toBeNull();
+  });
+
+  it('renders and searches service descriptions', async () => {
+    const user = userEvent.setup();
+    renderServicesList([
+      service({
+        id: 'billing-sync:prod',
+        name: 'billing-sync / prod',
+        description: 'Reconciles invoices into the warehouse',
+      }),
+      service({
+        id: 'audit-sync:prod',
+        name: 'audit-sync / prod',
+        description: 'Ships audit events',
+      }),
+    ]);
+
+    expect(screen.getByText('Reconciles invoices into the warehouse')).toBeTruthy();
+
+    await user.type(screen.getByPlaceholderText('Search by service name or ID'), 'invoices');
+
+    expect(screen.getByText('billing-sync / prod')).toBeTruthy();
+    expect(screen.queryByText('audit-sync / prod')).toBeNull();
   });
 });

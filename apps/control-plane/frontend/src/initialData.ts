@@ -4,6 +4,7 @@ export const INITIAL_SERVICES: Service[] = [
   {
     id: 'user-auth-service',
     name: 'user-auth-service / prod',
+    description: null,
     viewStatus: 'running',
     uptimeReferenceAt: null,
     throughputPerMin: 1200,
@@ -19,6 +20,7 @@ export const INITIAL_SERVICES: Service[] = [
   {
     id: 'payment-gateway',
     name: 'Payment Gateway (prod)',
+    description: null,
     viewStatus: 'running',
     uptimeReferenceAt: null,
     throughputPerMin: 4200,
@@ -34,6 +36,7 @@ export const INITIAL_SERVICES: Service[] = [
   {
     id: 'notification-service',
     name: 'notification-service / prod',
+    description: null,
     viewStatus: 'degraded',
     uptimeReferenceAt: null,
     throughputPerMin: 340,

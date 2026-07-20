@@ -6,6 +6,7 @@ const LOOKBACK_MINUTES = 15;
 const billingService = {
   name: "billing-sync",
   environment: "prod",
+  description: "Synchronizes billing records into downstream systems.",
   latest_deployment_version: "2026.7.16",
   service_status: "online",
   latest_topology_hash: "topo-billing",
@@ -30,6 +31,7 @@ const billingService = {
 const auditService = {
   name: "audit-sync",
   environment: "staging",
+  description: "Archives audit events for compliance review.",
   latest_deployment_version: "2026.7.15",
   service_status: "offline",
   latest_topology_hash: "topo-audit",
@@ -536,9 +538,11 @@ test("renders the control plane dashboard", async ({ page }) => {
   await page.goto("/");
 
   // The landing view is the services list; open a service to reach its detail.
+  await expect(page.getByText("Synchronizes billing records into downstream systems.")).toBeVisible();
   await page.getByText("billing-sync").first().click();
   await expect(page.getByText("Service Detail")).toBeVisible();
   await expect(page.getByText("billing-sync").first()).toBeVisible();
+  await expect(page.getByText("Synchronizes billing records into downstream systems.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Restart All" })).toBeVisible();
 });
 

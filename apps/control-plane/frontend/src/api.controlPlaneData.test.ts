@@ -18,6 +18,7 @@ function jsonResponse(body: unknown, status = 200) {
 const serviceSummary = {
   name: 'control-plane-demo',
   environment: 'dev',
+  description: 'Shows the local control-plane demo worker.',
   latest_deployment_version: '2026.7.16',
   service_status: 'offline',
   latest_topology_hash: 'topology-demo',
@@ -163,7 +164,13 @@ describe('loadControlPlaneData', () => {
 
     const data = await loadControlPlaneData();
 
-    expect(data.services[0]).toEqual(expect.objectContaining({ viewStatus: 'stopped', activeInstances: 0 }));
+    expect(data.services[0]).toEqual(
+      expect.objectContaining({
+        description: 'Shows the local control-plane demo worker.',
+        viewStatus: 'stopped',
+        activeInstances: 0,
+      }),
+    );
     expect(data.tasks[0]).toEqual(expect.objectContaining({ name: 'inspect_dead_letter', viewStatus: 'offline' }));
   });
 

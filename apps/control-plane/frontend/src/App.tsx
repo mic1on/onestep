@@ -65,6 +65,7 @@ import {
 const EMPTY_SERVICE: Service = {
   id: '',
   name: '',
+  description: null,
   viewStatus: 'stopped',
   uptimeReferenceAt: null,
   throughputPerMin: 0,
@@ -954,6 +955,11 @@ export default function App() {
                       {headerStatus.label}
                     </span>
                   </div>
+                  {!selectedTask && selectedService.description && (
+                    <p className="ml-10 mt-1 max-w-3xl text-sm font-medium text-slate-500">
+                      {selectedService.description}
+                    </p>
+                  )}
                 </div>
 
                 {/* Main Action Triggers */}

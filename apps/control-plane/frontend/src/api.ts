@@ -55,6 +55,7 @@ interface RetryDescriptor {
 interface ServiceSummary {
   name: string;
   environment: Environment;
+  description: string | null;
   latest_deployment_version: string;
   service_status: ServiceListStatus;
   latest_topology_hash: string | null;
@@ -675,6 +676,7 @@ function mapService(service: ServiceSummary): Service {
     apiName: service.name,
     environment: service.environment,
     name: displayServiceName(service),
+    description: service.description,
     viewStatus: service.view_status,
     uptimeReferenceAt: service.uptime_reference_at ?? service.last_seen_at ?? service.latest_sync_at,
     throughputPerMin: service.throughput_per_min,

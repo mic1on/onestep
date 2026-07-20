@@ -68,10 +68,12 @@ export default function ServicesList({ services, onSelectService }: ServicesList
   const filteredServices = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return services.filter((svc) => {
+      const description = svc.description?.toLowerCase() ?? '';
       const matchesSearch =
         !query ||
         svc.name.toLowerCase().includes(query) ||
-        svc.id.toLowerCase().includes(query);
+        svc.id.toLowerCase().includes(query) ||
+        description.includes(query);
       const matchesStatus =
         statusFilter === 'all' || getServiceDisplayStatus(svc) === statusFilter;
       return matchesSearch && matchesStatus;
@@ -186,6 +188,11 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                           <div className="min-w-0">
                             <div className="font-bold text-slate-900 truncate">{svc.name}</div>
                             <div className="text-[11px] text-slate-400 font-mono truncate">{svc.id}</div>
+                            {svc.description && (
+                              <div className="mt-0.5 max-w-sm truncate text-[11px] font-medium text-slate-500">
+                                {svc.description}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
