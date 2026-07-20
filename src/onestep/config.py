@@ -12,7 +12,14 @@ from typing import Any
 
 from .app import OneStepApp
 from .connectors.base import Sink, Source
-from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .reporter_registry import (
+    ReporterRegistry,
+    ReporterSpecHandler,
+    build_reporter,
+    default_reporter_registry,
+    load_reporter_plugins,
+    validate_reporter_spec,
+)
 from .resource_registry import (
     ResourceBuildContext,
     ResourceRegistry,
@@ -30,12 +37,21 @@ from .resource_registry import (
     validate_unknown_fields as _validate_unknown_fields,
 )
 from .retry import MaxAttempts, NoRetry, RetryPolicy
-from .task import TaskHooks
+from .task import EmitRoute, TaskHooks
 
 _YAML_SUFFIXES = (".yaml", ".yml")
 
 # Pattern for ${VAR} or ${VAR:-default} or ${VAR:default}
 _ENV_VAR_PATTERN = re.compile(r"\$\{([^}]+)\}")
+
+# Pattern for .env file lines: KEY=VALUE with optional quoting and trailing comment
+_DOTENV_LINE_RE = re.compile(
+    r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'   # KEY=
+    r'(?:"([^"]*)"|'                           # "value"
+    r"'([^']*)'|"                               # 'value'
+    r'([^\s#][^#]*))'                           # value
+    r'\s*(?:\#.*)?$'                           # optional trailing comment
+)
 
 _STRICT_API_VERSION = "onestep/v1alpha1"
 _STRICT_KIND = "App"
@@ -55,9 +71,10 @@ _STRICT_TOP_LEVEL_FIELDS = frozenset(
         *_LEGACY_APP_FIELDS,
     }
 )
-_STRICT_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state", "logging"})
+_STRICT_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state", "logging", "env_file", "strict_env"})
 _STRICT_APP_LOGGING_FIELDS = frozenset({"level"})
 _STRICT_HANDLER_FIELDS = frozenset({"ref", "params"})
+_STRICT_EMIT_ROUTE_FIELDS = frozenset({"when", "then", "otherwise"})
 _STRICT_APP_HOOK_FIELDS = frozenset({"startup", "shutdown", "events"})
 _STRICT_TASK_HOOK_FIELDS = frozenset({"before", "after_success", "on_failure"})
 _STRICT_TASK_FIELDS = frozenset(
@@ -76,7 +93,6 @@ _STRICT_TASK_FIELDS = frozenset(
         "timeout_s",
     }
 )
-_STRICT_REPORTER_FIELDS = frozenset({"base_url", "token", "service_name"})
 _STRICT_RETRY_FIELDS: dict[str, frozenset[str]] = {
     "no_retry": frozenset({"type"}),
     "none": frozenset({"type"}),
@@ -127,17 +143,152 @@ def _expand_env_vars(value: Any) -> Any:
     return value
 
 
+def _load_dotenv(path: str) -> int:
+    """Parse a .env file and inject key=value pairs into os.environ.
+
+    Uses os.environ.setdefault so existing environment variables take
+    precedence over those defined in the .env file.
+
+    Returns the number of keys loaded from the file.
+    """
+    logger = logging.getLogger("onestep")
+    loaded = 0
+    with open(path, "r", encoding="utf-8") as handle:
+        for lineno, line in enumerate(handle, start=1):
+            line = line.rstrip("\n\r")
+            stripped = line.strip()
+            # Skip empty lines and whole-line comments
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = _DOTENV_LINE_RE.match(line)
+            if not match:
+                logger.warning(
+                    "skipped malformed .env line %d in %s: %r",
+                    lineno,
+                    path,
+                    stripped,
+                )
+                continue
+            key = match.group(1)
+            if match.group(2) is not None:
+                value = match.group(2)
+            elif match.group(3) is not None:
+                value = match.group(3)
+            else:
+                value = (match.group(4) or "").strip()
+            previous = os.environ.get(key)
+            if previous is not None:
+                logger.debug("skipped %s from %s (already set in environment)", key, path)
+            else:
+                os.environ[key] = value
+                loaded += 1
+    return loaded
+
+
+def _collect_env_refs(config: Any) -> dict[str, list[str]]:
+    """Collect all ${VAR} references without defaults that are missing from the environment.
+
+    Returns a dict mapping missing variable names to their field paths.
+    """
+    ref_re = re.compile(r"\$\{([^}]+)\}")
+    missing: dict[str, list[str]] = {}
+
+    def _walk(value: Any, field_path: str) -> None:
+        if isinstance(value, str):
+            for match in ref_re.finditer(value):
+                content = match.group(1)
+                # ${VAR:-default} or ${VAR:default} → skip (has default)
+                if ":-" in content or ":" in content:
+                    continue
+                var_name = content.strip()
+                if var_name and var_name not in os.environ:
+                    missing.setdefault(var_name, []).append(field_path)
+        elif isinstance(value, Mapping):
+            for k, v in value.items():
+                _walk(v, f"{field_path}.{k}")
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                _walk(v, f"{field_path}[{i}]")
+
+    _walk(config, "config")
+    return missing
+
+
 def is_yaml_target(target: str) -> bool:
     return target.lower().endswith(_YAML_SUFFIXES)
 
 
-def load_yaml_app(path: str, *, strict: bool = False) -> OneStepApp:
+def load_yaml_app(
+    path: str,
+    *,
+    strict: bool = False,
+    env_file: str | None = None,
+    strict_env: bool | None = None,
+) -> OneStepApp:
+    logger = logging.getLogger("onestep")
     yaml = _import_yaml()
     resolved_path = os.path.abspath(path)
     with open(resolved_path, "r", encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle) or {}
     if not isinstance(loaded, Mapping):
         raise TypeError("YAML app config must be a mapping at the top level")
+
+    # --- Determine env_file path ---
+    # Priority: CLI arg > app.env_file > auto-detect YAML-adjacent .env
+    dotenv_path: str | None = None
+    if env_file is not None:
+        dotenv_path = env_file
+    elif "app" in loaded and isinstance(loaded.get("app"), Mapping):
+        app_env_file = loaded["app"].get("env_file")
+        if app_env_file is not None:
+            if not isinstance(app_env_file, str):
+                raise TypeError("'app.env_file' must be a string")
+            dotenv_path = app_env_file
+    if dotenv_path is not None:
+        if not os.path.isabs(dotenv_path):
+            dotenv_path = os.path.join(os.path.dirname(resolved_path), dotenv_path)
+        if not os.path.isfile(dotenv_path):
+            raise ValueError(f"env_file not found: {dotenv_path}")
+
+    # Auto-detect: try YAML-adjacent .env (silently skip if missing)
+    if dotenv_path is None:
+        candidate = os.path.join(os.path.dirname(resolved_path), ".env")
+        if os.path.isfile(candidate):
+            dotenv_path = candidate
+            logger.debug("auto-detected .env next to %s", resolved_path)
+        else:
+            logger.debug("no .env found next to %s", resolved_path)
+
+    if dotenv_path is not None:
+        count = _load_dotenv(dotenv_path)
+        if count > 0:
+            logger.debug("loaded %d vars from %s", count, dotenv_path)
+
+    # --- Determine strict_env flag ---
+    # Priority: CLI arg > app.strict_env > False
+    effective_strict_env = False
+    if strict_env is not None:
+        effective_strict_env = strict_env
+    elif "app" in loaded and isinstance(loaded.get("app"), Mapping):
+        app_strict_env = loaded["app"].get("strict_env")
+        if isinstance(app_strict_env, bool):
+            effective_strict_env = app_strict_env
+        elif app_strict_env is not None:
+            raise TypeError("'app.strict_env' must be a boolean")
+
+    if effective_strict_env:
+        missing = _collect_env_refs(loaded)
+        if missing:
+            parts = ["strict_env: missing required environment variable(s):"]
+            for var_name in sorted(missing):
+                for field_path in missing[var_name]:
+                    parts.append(f"  - {var_name} (referenced at: {field_path})")
+            parts.append(
+                "Hint: define them in the shell, or add them to your .env file, "
+                "or provide a default with ${VAR:-default_value}."
+            )
+            raise ValueError("\n".join(parts))
+
     # Expand environment variables in the loaded config
     expanded = _expand_env_vars(loaded)
     return load_app_config(expanded, source_path=resolved_path, strict=strict)
@@ -193,7 +344,7 @@ def load_app_config(
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         task_name = _optional_string(task_config, "name")
         source = _resolve_optional_source(resources, task_config.get("source"), task_index=index)
-        emit = _resolve_optional_sinks(resources, task_config.get("emit"), field="emit", task_index=index)
+        emit = _resolve_optional_emit_routes(resources, task_config.get("emit"), field="emit", task_index=index)
         dead_letter = _resolve_optional_sinks(
             resources,
             task_config.get("dead_letter"),
@@ -233,6 +384,12 @@ def _ensure_resource_registry_loaded() -> ResourceRegistry:
     registry = default_resource_registry()
     register_builtin_resources(registry)
     load_resource_plugins(registry)
+    return registry
+
+
+def _ensure_reporter_registry_loaded() -> ReporterRegistry:
+    registry = default_reporter_registry()
+    load_reporter_plugins(registry)
     return registry
 
 
@@ -394,6 +551,59 @@ def _resolve_optional_sinks(
     return tuple(sinks)
 
 
+def _resolve_optional_emit_routes(
+    resources: Mapping[str, Any],
+    value: Any,
+    *,
+    field: str,
+    task_index: int,
+) -> tuple[EmitRoute, ...] | None:
+    if value is None:
+        return None
+    base_field = f"tasks[{task_index}].{field}"
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        entries = list(value)
+        return tuple(
+            _resolve_emit_route(resources, entry, field=f"{base_field}[{index}]")
+            for index, entry in enumerate(entries)
+        )
+    return (_resolve_emit_route(resources, value, field=base_field),)
+
+
+def _resolve_emit_route(resources: Mapping[str, Any], value: Any, *, field: str) -> EmitRoute:
+    if isinstance(value, Mapping):
+        if "when" not in value:
+            raise ValueError(f"{field}.when is required")
+        if "then" not in value:
+            raise ValueError(f"{field}.then is required")
+        predicate, predicate_ref = _resolve_callable_ref(value.get("when"), field=f"{field}.when")
+        otherwise_sinks = (
+            _resolve_emit_sinks(resources, value.get("otherwise"), field=f"{field}.otherwise")
+            if "otherwise" in value
+            else ()
+        )
+        return EmitRoute(
+            predicate=predicate,
+            predicate_ref=predicate_ref,
+            then_sinks=_resolve_emit_sinks(resources, value.get("then"), field=f"{field}.then"),
+            otherwise_sinks=otherwise_sinks,
+        )
+    return EmitRoute(then_sinks=_resolve_emit_sinks(resources, value, field=field))
+
+
+def _resolve_emit_sinks(resources: Mapping[str, Any], value: Any, *, field: str) -> tuple[Sink, ...]:
+    names = _string_list(value, field=field)
+    if not names:
+        raise ValueError(f"{field} must not be empty")
+    sinks: list[Sink] = []
+    for name in names:
+        resolved = _resolve_resource(resources, name)
+        if not isinstance(resolved, Sink):
+            raise TypeError(f"resource {name!r} cannot be used as a sink")
+        sinks.append(resolved)
+    return tuple(sinks)
+
+
 def _resolve_app_state(resources: Mapping[str, Any], value: Any) -> Any:
     name = _string_value(value, field="app.state")
     resolved = _resolve_resource(resources, name)
@@ -429,6 +639,8 @@ def validate_app_config(config: Mapping[str, Any], *, registry: ResourceRegistry
             raise TypeError("'app' must be a mapping")
         _validate_unknown_fields(app_section, _STRICT_APP_FIELDS, field="app")
         _validate_app_logging(app_section.get("logging"))
+        _validate_app_env_file(app_section.get("env_file"))
+        _validate_app_strict_env(app_section.get("strict_env"))
         legacy_fields = sorted(field for field in _LEGACY_APP_FIELDS if field in config)
         if legacy_fields:
             raise ValueError(
@@ -474,6 +686,7 @@ def _validate_tasks(raw_tasks: Any) -> None:
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         field = f"tasks[{index}]"
         _validate_unknown_fields(raw_task, _STRICT_TASK_FIELDS, field=field)
+        _validate_emit(raw_task.get("emit"), field=f"{field}.emit")
         if "handler" in raw_task:
             _validate_ref_entry(raw_task.get("handler"), field=f"{field}.handler")
         elif not _task_emit_configured(raw_task.get("emit")):
@@ -487,11 +700,15 @@ def _validate_tasks(raw_tasks: Any) -> None:
 
 
 def _validate_reporter_config(raw_reporter: Any) -> None:
-    if raw_reporter is None or raw_reporter is False or raw_reporter is True:
+    if raw_reporter is None or raw_reporter is False:
         return
+    if raw_reporter is True:
+        raw_reporter = {"type": "control_plane"}
     if not isinstance(raw_reporter, Mapping):
         raise TypeError("'reporter' must be a boolean or mapping")
-    _validate_unknown_fields(raw_reporter, _STRICT_REPORTER_FIELDS, field="reporter")
+    reporter_registry = _ensure_reporter_registry_loaded()
+    spec = {"type": "control_plane", **dict(raw_reporter)}
+    validate_reporter_spec(spec, registry=reporter_registry)
 
 
 def _validate_app_logging(raw_logging: Any) -> None:
@@ -504,6 +721,20 @@ def _validate_app_logging(raw_logging: Any) -> None:
     resolved = getattr(logging, level.strip().upper(), None)
     if not isinstance(resolved, int):
         raise ValueError(f"unsupported logging level {level!r}")
+
+
+def _validate_app_env_file(raw_env_file: Any) -> None:
+    if raw_env_file is None:
+        return
+    if not isinstance(raw_env_file, str):
+        raise TypeError("'app.env_file' must be a string")
+
+
+def _validate_app_strict_env(raw_strict_env: Any) -> None:
+    if raw_strict_env is None:
+        return
+    if not isinstance(raw_strict_env, bool):
+        raise TypeError("'app.strict_env' must be a boolean")
 
 
 def _apply_app_logging(app: OneStepApp, raw_logging: Any) -> None:
@@ -556,6 +787,41 @@ def _validate_ref_entry(raw_value: Any, *, field: str) -> None:
         raise TypeError(f"'{field}.params' must be a mapping")
 
 
+def _validate_emit(raw_emit: Any, *, field: str) -> None:
+    if raw_emit is None:
+        return
+    if isinstance(raw_emit, Mapping):
+        _validate_emit_route(raw_emit, field=field)
+        return
+    if isinstance(raw_emit, Sequence) and not isinstance(raw_emit, (str, bytes)):
+        for index, entry in enumerate(raw_emit):
+            entry_field = f"{field}[{index}]"
+            if isinstance(entry, Mapping):
+                _validate_emit_route(entry, field=entry_field)
+            else:
+                _validate_emit_sink_names(entry, field=entry_field)
+        return
+    _validate_emit_sink_names(raw_emit, field=field)
+
+
+def _validate_emit_route(raw_route: Mapping[str, Any], *, field: str) -> None:
+    _validate_unknown_fields(raw_route, _STRICT_EMIT_ROUTE_FIELDS, field=field)
+    if "when" not in raw_route:
+        raise ValueError(f"{field}.when is required")
+    if "then" not in raw_route:
+        raise ValueError(f"{field}.then is required")
+    _validate_ref_entry(raw_route.get("when"), field=f"{field}.when")
+    _validate_emit_sink_names(raw_route.get("then"), field=f"{field}.then")
+    if "otherwise" in raw_route:
+        _validate_emit_sink_names(raw_route.get("otherwise"), field=f"{field}.otherwise")
+
+
+def _validate_emit_sink_names(raw_value: Any, *, field: str) -> None:
+    names = _string_list(raw_value, field=field)
+    if not names:
+        raise ValueError(f"{field} must not be empty")
+
+
 def _validate_retry(raw_retry: Any, *, field: str) -> None:
     if raw_retry is None:
         return
@@ -606,26 +872,19 @@ def _attach_reporter(app: OneStepApp, raw_reporter: Any) -> None:
     if raw_reporter is None or raw_reporter is False:
         return
     if raw_reporter is True:
-        reporter_config = ControlPlaneReporterConfig.from_env(app_name=app.name)
+        spec = {"type": "control_plane"}
     elif isinstance(raw_reporter, Mapping):
-        _validate_unknown_fields(raw_reporter, _STRICT_REPORTER_FIELDS, field="reporter")
-        reporter_config = ControlPlaneReporterConfig.from_env(
-            app_name=app.name,
-            base_url=_optional_string(raw_reporter, "base_url"),
-            token=_optional_string(raw_reporter, "token"),
-            service_name=_optional_string(raw_reporter, "service_name"),
-        )
+        spec = {"type": "control_plane", **dict(raw_reporter)}
     else:
         raise TypeError("'reporter' must be a boolean or mapping")
 
-    app.set_reporter_summary(
-        {
-            "type": "control_plane",
-            "base_url": reporter_config.base_url,
-            "service_name": reporter_config.service_name or app.name,
-        }
-    )
-    ControlPlaneReporter(reporter_config).attach(app)
+    reporter_registry = _ensure_reporter_registry_loaded()
+    validate_reporter_spec(spec, registry=reporter_registry)
+    reporter = build_reporter(app, spec, registry=reporter_registry)
+    attach = getattr(reporter, "attach", None)
+    if not callable(attach):
+        raise TypeError(f"reporter type {spec['type']!r} did not build an attachable reporter")
+    attach(app)
 
 
 def _build_task_hooks(raw_hooks: Any, *, task_index: int) -> TaskHooks:

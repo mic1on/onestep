@@ -1,16 +1,9 @@
 from importlib.metadata import PackageNotFoundError, version as _package_version
+from importlib.util import find_spec as _find_spec
 
 from .app import OneStepApp
 from .config import load_app_config, load_yaml_app
 from .context import TaskContext
-from .control_plane_ws import (
-    AgentHelloAck,
-    AgentProtocolError,
-    ControlPlaneWsSender,
-    ControlPlaneWsTransport,
-    build_control_plane_http_base_url,
-    build_control_plane_ws_url,
-)
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
 from .identity_store import (
@@ -20,7 +13,7 @@ from .identity_store import (
     build_default_state_dir,
     derive_replica_instance_id,
 )
-from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
+from .metrics import CounterMetric, CustomMetricsRegistry, GaugeMetric, TaskMetrics
 from .resource_registry import (
     ResourceBuildContext,
     ResourceRegistry,
@@ -56,23 +49,44 @@ try:
 except PackageNotFoundError:  # pragma: no cover - local source tree before install
     __version__ = "dev"
 
-__all__ = [
+_CONTROL_PLANE_EXPORTS = {
     "AgentHelloAck",
     "AgentProtocolError",
-    "BearerAuth",
-    "CronSource",
-    "CursorStore",
     "ControlPlaneReporter",
     "ControlPlaneReporterConfig",
     "ControlPlaneWsSender",
     "ControlPlaneWsTransport",
+    "build_control_plane_http_base_url",
+    "build_control_plane_ws_url",
+}
+
+
+def __getattr__(name: str):
+    if name in _CONTROL_PLANE_EXPORTS:
+        try:
+            import onestep_control_plane
+        except ImportError as exc:
+            from .reporter_registry import missing_control_plane_plugin_error
+
+            raise missing_control_plane_plugin_error() from exc
+        return getattr(onestep_control_plane, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+_CORE_EXPORTS = [
+    "BearerAuth",
+    "CronSource",
+    "CursorStore",
     "ConnectorErrorKind",
     "ConnectorOperation",
     "ConnectorOperationError",
+    "CounterMetric",
+    "CustomMetricsRegistry",
     "Delivery",
     "Envelope",
     "FailureInfo",
     "FailureKind",
+    "GaugeMetric",
     "HttpSink",
     "HttpSinkStatusError",
     "IdentityLockError",
@@ -101,11 +115,10 @@ __all__ = [
     "TaskEvent",
     "TaskEventKind",
     "TaskContext",
+    "TaskMetrics",
     "WebhookResponse",
     "WebhookSource",
     "__version__",
-    "build_control_plane_http_base_url",
-    "build_control_plane_ws_url",
     "build_default_state_dir",
     "derive_replica_instance_id",
     "get_resource_handler",
@@ -114,3 +127,7 @@ __all__ = [
     "load_yaml_app",
     "register_resource_type",
 ]
+
+__all__ = list(_CORE_EXPORTS)
+if _find_spec("onestep_control_plane") is not None:
+    __all__.extend(sorted(_CONTROL_PLANE_EXPORTS))

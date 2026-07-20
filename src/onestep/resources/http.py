@@ -6,7 +6,9 @@ from typing import Any
 from onestep.connectors.http import HttpSink
 from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
 
-_HTTP_SINK_FIELDS = frozenset({"type", "name", "url", "method", "headers", "params", "timeout_s", "success_statuses"})
+_HTTP_SINK_FIELDS = frozenset(
+    {"type", "name", "url", "method", "headers", "params", "body", "timeout_s", "success_statuses"}
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
@@ -27,6 +29,7 @@ def _build_http_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Http
         method=spec.get("method", "POST"),
         headers=ctx.mapping_value(spec.get("headers"), field=f"{ctx.field}.headers"),
         params=ctx.mapping_value(spec.get("params"), field=f"{ctx.field}.params"),
+        body=spec.get("body"),
         timeout_s=spec.get("timeout_s", 5.0),
         success_statuses=spec.get("success_statuses"),
     )
@@ -42,6 +45,7 @@ def _validate_http_sink(ctx: ResourceValidationContext, spec: Mapping[str, Any])
     raw_params = spec.get("params")
     if raw_params is not None and not isinstance(raw_params, Mapping):
         raise TypeError(f"'{ctx.field}.params' must be a mapping")
+    _validate_json_like(spec.get("body"), field=f"{ctx.field}.body")
     ctx.validate_positive_number(spec.get("timeout_s"), field=f"{ctx.field}.timeout_s")
     raw_success_statuses = spec.get("success_statuses")
     if raw_success_statuses is not None:
@@ -54,3 +58,19 @@ def _validate_http_sink(ctx: ResourceValidationContext, spec: Mapping[str, Any])
                 raise TypeError(f"'{ctx.field}.success_statuses[{index}]' must be an integer")
             if status < 100 or status > 599:
                 raise ValueError(f"'{ctx.field}.success_statuses[{index}]' must be an HTTP status code")
+
+
+def _validate_json_like(value: Any, *, field: str) -> None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(f"'{field}' mapping keys must be strings")
+            _validate_json_like(item, field=f"{field}.{key}")
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, item in enumerate(value):
+            _validate_json_like(item, field=f"{field}[{index}]")
+        return
+    raise TypeError(f"'{field}' must be a JSON-compatible value")

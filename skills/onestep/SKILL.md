@@ -18,13 +18,14 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
 
 ## Workflow
 
-1. Identify whether the user wants a Python app, YAML task definition, connector wiring, control-plane telemetry, migration help, or tests.
+1. Identify whether the user wants a Python app, YAML task definition, connector wiring, control-plane telemetry, migration help, tests, or core/plugin runtime changes.
 2. Read only the relevant reference file:
    - New app or basic usage: `references/quickstart.md`
    - YAML worker definitions: `references/yaml-task-definition.md`
    - Python API usage: `references/python-api.md`
-   - MySQL/RabbitMQ/Redis/SQS/webhook/HTTP sink/schedule wiring: `references/connectors.md`
+   - MySQL/PostgreSQL/RabbitMQ/Redis/SQS/Kafka/webhook/HTTP sink/schedule wiring: `references/connectors.md`
    - Control-plane reporter or WebSocket telemetry: `references/control-plane.md`
+   - Core runtime, plugin API, delivery semantics, compatibility gates, or releases: `references/core-reliability.md`
    - Tests and validation commands: `references/testing.md`
    - Migration from old `step` / broker APIs: `references/migration-0.5-to-1.0.md`
 3. Make surgical changes in the user's project. Match the existing style and do not introduce speculative structure.
@@ -39,6 +40,7 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
 - Use `handler.params` for call-time arguments passed into a handler or hook.
 - Do not enable `reporter` or control-plane integration unless explicitly needed.
 - Keep generated projects minimal; `onestep init <project>` is the preferred scaffold when the CLI is available.
+- Treat delivery as at-least-once: sink sends can happen before `ack()`, so production sinks and handlers should be idempotent when duplicates matter.
 
 ## Minimal Python App
 

@@ -20,6 +20,21 @@ _MYSQL_TABLE_QUEUE_FIELDS = frozenset(
 _MYSQL_INCREMENTAL_FIELDS = frozenset(
     {"type", "connector", "table", "key", "cursor", "where", "batch_size", "poll_interval_s", "state", "state_key"}
 )
+_MYSQL_BINLOG_FIELDS = frozenset(
+    {
+        "type",
+        "connector",
+        "server_id",
+        "schemas",
+        "tables",
+        "events",
+        "batch_size",
+        "poll_interval_s",
+        "state",
+        "state_key",
+        "blocking",
+    }
+)
 _MYSQL_TABLE_SINK_FIELDS = frozenset({"type", "connector", "table", "mode", "keys"})
 
 
@@ -57,6 +72,13 @@ def register_resources(registry: ResourceRegistry) -> None:
             type="mysql_incremental",
             allowed_fields=_MYSQL_INCREMENTAL_FIELDS,
             build=_build_mysql_incremental,
+        )
+    )
+    registry.register_resource_type(
+        ResourceSpecHandler(
+            type="mysql_binlog",
+            allowed_fields=_MYSQL_BINLOG_FIELDS,
+            build=_build_mysql_binlog,
         )
     )
     registry.register_resource_type(
@@ -137,6 +159,36 @@ def _build_mysql_incremental(ctx: ResourceBuildContext, spec: Mapping[str, Any])
         poll_interval_s=spec.get("poll_interval_s", 1.0),
         state=state,
         state_key=spec.get("state_key"),
+    )
+
+
+def _build_mysql_binlog(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Any:
+    connector = ctx.resolve_dependency(spec, "connector")
+    if not hasattr(connector, "binlog"):
+        raise TypeError(f"resource {spec['connector']!r} cannot build mysql_binlog")
+    server_id = spec.get("server_id")
+    if not isinstance(server_id, int) or server_id <= 0:
+        raise ValueError("'server_id' must be a positive integer")
+    raw_state_name = spec.get("state")
+    state = None
+    if raw_state_name is not None:
+        state_name = ctx.string_value(raw_state_name, field=f"{ctx.field}.state")
+        state = ctx.resolve(state_name)
+        if not ctx.is_cursor_store(state):
+            raise TypeError(f"resource {state_name!r} cannot be used as binlog state")
+    schemas = spec.get("schemas")
+    tables = spec.get("tables")
+    events = spec.get("events")
+    return connector.binlog(
+        server_id=server_id,
+        schemas=tuple(ctx.string_list(schemas, field=f"{ctx.field}.schemas")) if schemas is not None else (),
+        tables=tuple(ctx.string_list(tables, field=f"{ctx.field}.tables")) if tables is not None else (),
+        events=tuple(ctx.string_list(events, field=f"{ctx.field}.events")) if events is not None else ("insert", "update", "delete"),
+        batch_size=spec.get("batch_size", 100),
+        poll_interval_s=spec.get("poll_interval_s", 1.0),
+        state=state,
+        state_key=spec.get("state_key"),
+        blocking=spec.get("blocking", False),
     )
 
 

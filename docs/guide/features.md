@@ -31,7 +31,9 @@ async def my_task(ctx, item):
 | RabbitMQ | 支持 | 支持 | 分布式队列 |
 | Redis Streams | 支持 | 支持 | 轻量级流队列 |
 | AWS SQS | 支持 | 支持 | 云队列 |
-| MySQL | 支持 | 支持 | 表队列/增量同步/表输出 |
+| MySQL | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出 |
+| PostgreSQL | 支持 | 支持 | 表队列/增量同步/表输出 |
+| Kafka | 支持 | 支持 | topic 消费与生产 |
 | Feishu Bitable | 支持 | 支持 | 多维表格增量同步/表输出 |
 | 自定义 | 支持 | 支持 | 任意数据源 |
 
@@ -192,6 +194,15 @@ tasks:
       max_attempts: 3
 ```
 
+### Worker 打包
+
+```bash
+onestep check --strict worker.yaml
+onestep build worker.yaml --strict --out dist/worker.zip
+```
+
+`onestep build` 会收集 YAML 入口、Python handler/hook/条件路由引用、依赖声明文件和 README/license 等元数据，生成带 `onestep-package.json` manifest 的可部署 zip。
+
 ## 高级特性
 
 ### 任务编排
@@ -256,6 +267,12 @@ async def task(ctx, item):
 
 ### Control Plane 集成
 
+先安装 control-plane reporter 插件：
+
+```bash
+pip install 'onestep[control-plane]'
+```
+
 ```python
 from onestep import ControlPlaneReporter, ControlPlaneReporterConfig
 
@@ -266,7 +283,7 @@ reporter = ControlPlaneReporter(
 reporter.attach(app)
 ```
 
-Reporter 会推送拓扑同步、心跳、指标和事件。
+Reporter 会推送拓扑同步、心跳、指标和事件，也可以接收 `pause_task`、`resume_task`、`restart_task` 等远程任务控制命令。任务处理函数可以通过 `ctx.metrics.counter(...).inc()` 和 `ctx.metrics.gauge(...).set()` 上报低基数自定义指标。
 
 ## 对比 0.5.x
 
@@ -287,4 +304,6 @@ Reporter 会推送拓扑同步、心跳、指标和事件。
 
 - [入门教程](/guide/tutorial) - 快速上手
 - [CLI 部署](/guide/deploy) - 生产环境部署
+- [Worker Runtime Image](/guide/worker-runtime-image) - 容器化 YAML worker
 - [RabbitMQ](/broker/rabbitmq) - 分布式队列
+- [核心可靠性](/core-reliability) - 运行时和插件兼容契约

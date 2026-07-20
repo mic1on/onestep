@@ -124,13 +124,19 @@ onestep check worker.yaml
 onestep run worker.yaml
 ```
 
+如果要上传给 worker agent 或控制面，可以先构建可部署 zip：
+
+```bash
+onestep build worker.yaml --strict --out dist/worker.zip
+```
+
 容器部署可以使用官方 worker runtime image。镜像会把工作区加入 `PYTHONPATH`，安装项目依赖，先执行 `onestep check`，再启动 `onestep run`：
 
 ```bash
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.4.2
+  ghcr.io/mic1on/onestep-worker:1.6.0
 ```
 
 详细说明见 [Worker Runtime Image](/guide/worker-runtime-image)。
@@ -168,4 +174,6 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 - [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
 - [Redis Streams](/broker/redis) - 轻量级消息队列
 - [MySQL](/broker/mysql) - 数据库集成
+- [PostgreSQL](/broker/postgres) - PostgreSQL 集成
+- [Kafka](/broker/kafka) - Kafka topic source/sink
 - [Worker Runtime Image](/guide/worker-runtime-image) - 容器化运行 YAML worker

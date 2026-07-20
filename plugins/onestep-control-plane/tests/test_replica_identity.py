@@ -4,8 +4,9 @@ import asyncio
 
 import pytest
 
-from onestep import ControlPlaneReporter, OneStepApp
+from onestep import OneStepApp
 from onestep.identity_store import IdentityLockError, derive_replica_instance_id
+from onestep_control_plane import ControlPlaneReporter
 
 from control_plane_testkit import SenderRecorder, make_config
 

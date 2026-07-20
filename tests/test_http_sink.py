@@ -6,8 +6,7 @@ from typing import Any
 
 import pytest
 
-from control_plane_testkit import SenderRecorder, make_config
-from onestep import ControlPlaneReporter, Envelope, HttpSink, MemoryQueue, OneStepApp
+from onestep import Envelope, HttpSink, MemoryQueue, OneStepApp
 from onestep.config import load_app_config
 from onestep.connectors.http import HttpSinkStatusError
 from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
@@ -99,6 +98,53 @@ def test_http_sink_sends_json_body_and_headers() -> None:
         assert json.loads(request["body"].decode("utf-8")) == {
             "id": 123,
             "kind": "order",
+        }
+
+    asyncio.run(scenario())
+
+
+def test_http_sink_renders_config_variables_from_envelope_values() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_http_server(status=202)
+        try:
+            sink = HttpSink(
+                "notify",
+                url=f"{base_url}/events/{{{{ body.order_id }}}}",
+                headers={"X-Trace-Id": "{{ meta.trace_id }}"},
+                params={"attempt": "{{ attempts }}"},
+                body={
+                    "order_id": "{{ body.order_id }}",
+                    "status": "order-{{ payload.status }}",
+                    "sku": "{{ body.items.0.sku }}",
+                    "trace": "{{ meta.trace_id }}",
+                    "attempts": "{{ attempts }}",
+                },
+                timeout_s=1.0,
+            )
+            await sink.send(
+                Envelope(
+                    body={
+                        "order_id": 123,
+                        "status": "created",
+                        "items": [{"sku": "sku-1"}],
+                    },
+                    meta={"trace_id": "trace-1"},
+                    attempts=2,
+                )
+            )
+        finally:
+            await _close_server(server)
+
+        assert len(requests) == 1
+        request = requests[0]
+        assert request["target"] == "/events/123?attempt=2"
+        assert request["headers"]["x-trace-id"] == "trace-1"
+        assert json.loads(request["body"].decode("utf-8")) == {
+            "order_id": 123,
+            "status": "order-created",
+            "sku": "sku-1",
+            "trace": "trace-1",
+            "attempts": 2,
         }
 
     asyncio.run(scenario())
@@ -242,6 +288,62 @@ def test_yaml_http_sink_get_accepts_params_and_emits_query_string() -> None:
     asyncio.run(scenario())
 
 
+def test_yaml_http_sink_body_emits_rendered_json() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_http_server(status=202)
+        try:
+            app = load_app_config(
+                {
+                    "apiVersion": "onestep/v1alpha1",
+                    "kind": "App",
+                    "app": {"name": "yaml-http-vars"},
+                    "resources": {
+                        "incoming": {"type": "memory", "maxsize": 100},
+                        "notify": {
+                            "type": "http_sink",
+                            "url": f"{base_url}/notify/{{{{ body.order_id }}}}",
+                            "method": "POST",
+                            "headers": {"X-Order-Status": "{{ body.status }}"},
+                            "body": {
+                                "order_id": "{{ body.order_id }}",
+                                "message": "order {{ body.order_id }} is {{ body.status }}",
+                            },
+                        },
+                    },
+                    "tasks": [
+                        {
+                            "name": "forward",
+                            "source": "incoming",
+                            "emit": "notify",
+                        }
+                    ],
+                },
+                strict=True,
+            )
+
+            await app.startup()
+            try:
+                result = await app.run_task_once(
+                    "forward",
+                    payload={"order_id": 123, "status": "created"},
+                )
+            finally:
+                await app.shutdown()
+        finally:
+            await _close_server(server)
+
+        assert result["completion"] == "complete"
+        assert len(requests) == 1
+        assert requests[0]["target"] == "/notify/123"
+        assert requests[0]["headers"]["x-order-status"] == "created"
+        assert json.loads(requests[0]["body"].decode("utf-8")) == {
+            "order_id": 123,
+            "message": "order 123 is created",
+        }
+
+    asyncio.run(scenario())
+
+
 def test_strict_yaml_rejects_passthrough_task_without_emit() -> None:
     with pytest.raises(ValueError, match=r"tasks\[0\] must define either 'handler' or 'emit'"):
         load_app_config(
@@ -262,7 +364,6 @@ def test_strict_yaml_rejects_passthrough_task_without_emit() -> None:
             strict=True,
         )
 
-
 def test_strict_yaml_rejects_unknown_http_sink_fields() -> None:
     with pytest.raises(ValueError, match="unsupported fields for resources.notify: token"):
         load_app_config(
@@ -281,52 +382,3 @@ def test_strict_yaml_rejects_unknown_http_sink_fields() -> None:
             },
             strict=True,
         )
-
-
-def test_reporter_describes_http_sink_kind_and_redacts_config() -> None:
-    recorder = SenderRecorder()
-    app = OneStepApp("billing-sync")
-    sink = HttpSink(
-        "notify",
-        url="https://user:password@example.com/hooks?token=secret-token&safe=1#fragment",
-        headers={
-            "Authorization": "Bearer secret-token",
-            "X-Api-Key": "secret-token",
-        },
-        params={"token": "secret-token"},
-        timeout_s=2.5,
-        success_statuses=[202],
-    )
-
-    @app.task(source=MemoryQueue("incoming"), emit=sink)
-    async def forward(ctx, payload):
-        return payload
-
-    reporter = ControlPlaneReporter(make_config(), sender=recorder)
-    reporter.attach(app)
-
-    async def scenario() -> None:
-        await reporter.send_sync_now()
-
-    asyncio.run(scenario())
-
-    sync_payload = next(payload for channel, payload in recorder.calls if channel == "sync")
-    emit = sync_payload["app"]["tasks"][0]["emit"][0]
-    assert emit == {
-        "kind": "http_sink",
-        "name": "notify",
-        "config": {
-            "url": "https://<redacted>@example.com/hooks",
-            "method": "POST",
-            "headers": {
-                "Authorization": "<redacted>",
-                "X-Api-Key": "<redacted>",
-            },
-            "params": {
-                "token": "<redacted>",
-            },
-            "timeout_s": 2.5,
-            "success_statuses": [202],
-        },
-    }
-    assert "secret-token" not in json.dumps(sync_payload["app"])

@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from onestep import ControlPlaneReporter, ControlPlaneWsSender, OneStepApp
+from onestep import OneStepApp
 from onestep.identity_store import IdentityStore, derive_replica_instance_id
+from onestep_control_plane import ControlPlaneReporter, ControlPlaneWsSender
 
 from control_plane_testkit import RecordingTransport, make_config
 

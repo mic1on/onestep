@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from onestep import ControlPlaneReporter, OneStepApp
+from onestep import OneStepApp
+from onestep_control_plane import ControlPlaneReporter
 
 from control_plane_testkit import SenderRecorder, make_config
 
@@ -19,7 +20,7 @@ def test_runtime_descriptor_keeps_instance_id_stable_but_refreshes_process_facts
             sender=recorder,
         )
         reporter.attach(app)
-        monkeypatch.setattr("onestep.reporter.os.getpid", lambda: pid)
+        monkeypatch.setattr("onestep_control_plane.reporter.os.getpid", lambda: pid)
         await app.startup()
         heartbeat_payload = next(payload for channel, payload in recorder.calls if channel == "heartbeat")
         await app.shutdown()

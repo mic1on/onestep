@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from onestep import ControlPlaneReporterConfig
+from onestep_control_plane import ControlPlaneReporterConfig
 
 FIXED_INSTANCE_ID = UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df")
 

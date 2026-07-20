@@ -19,9 +19,20 @@ from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 try:
     import sqlalchemy as sa
     from sqlalchemy import create_engine
+    from sqlalchemy.engine import make_url
 except ImportError:  # pragma: no cover - exercised when optional deps are missing
     sa = None
     create_engine = None
+    make_url = None
+
+try:
+    from pymysqlreplication import BinLogStreamReader
+    from pymysqlreplication.row_event import DeleteRowsEvent, UpdateRowsEvent, WriteRowsEvent
+except ImportError:  # pragma: no cover - exercised when optional deps are missing
+    BinLogStreamReader = None
+    DeleteRowsEvent = None
+    UpdateRowsEvent = None
+    WriteRowsEvent = None
 
 
 class MySQLConnector:
@@ -127,6 +138,36 @@ class MySQLConnector:
             ),
         )
 
+    def binlog(
+        self,
+        *,
+        server_id: int,
+        schemas: Sequence[str] = (),
+        tables: Sequence[str] = (),
+        events: Sequence[str] = ("insert", "update", "delete"),
+        batch_size: int = 100,
+        poll_interval_s: float = 1.0,
+        state: CursorStore | None = None,
+        state_key: str | None = None,
+        blocking: bool = False,
+    ) -> "BinlogSource":
+        return BinlogSource(
+            connector=self,
+            server_id=server_id,
+            schemas=tuple(schemas),
+            tables=tuple(tables),
+            events=tuple(events),
+            batch_size=batch_size,
+            poll_interval_s=poll_interval_s,
+            state=state or InMemoryCursorStore(),
+            state_key=state_key or _default_binlog_state_key(
+                schemas=schemas,
+                tables=tables,
+                events=events,
+            ),
+            blocking=blocking,
+        )
+
     def table_sink(
         self,
         *,
@@ -160,6 +201,18 @@ def _default_incremental_state_key(
     else:
         where_fragment = "-"
     return f"{table}:{','.join(cursor)}:key={key}:where={where_fragment}"
+
+
+def _default_binlog_state_key(
+    *,
+    schemas: Sequence[str],
+    tables: Sequence[str],
+    events: Sequence[str],
+) -> str:
+    schema_fragment = ",".join(schemas) if schemas else "*"
+    table_fragment = ",".join(tables) if tables else "*"
+    event_fragment = ",".join(events) if events else "*"
+    return f"binlog:schemas={schema_fragment}:tables={table_fragment}:events={event_fragment}"
 
 
 @dataclass
@@ -287,6 +340,255 @@ class TableQueueSource(Source):
                 .where(table.c[row_ref.key] == row_ref.key_value)
                 .values(**dict(values))
             )
+
+
+@dataclass(frozen=True)
+class _BinlogToken:
+    file: str
+    pos: int
+    row: int = 0
+    rows: int = 1
+
+
+class BinlogDelivery(Delivery):
+    def __init__(self, source: "BinlogSource", envelope: Envelope, token: _BinlogToken) -> None:
+        super().__init__(envelope)
+        self._source = source
+        self._token = token
+
+    async def ack(self) -> None:
+        await self._source.ack_token(self._token)
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        if delay_s:
+            await asyncio.sleep(delay_s)
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        return None
+
+
+class BinlogSource(Source):
+    def __init__(
+        self,
+        *,
+        connector: MySQLConnector,
+        server_id: int,
+        schemas: tuple[str, ...],
+        tables: tuple[str, ...],
+        events: tuple[str, ...],
+        batch_size: int,
+        poll_interval_s: float,
+        state: CursorStore,
+        state_key: str,
+        blocking: bool,
+    ) -> None:
+        if server_id <= 0:
+            raise ValueError("server_id must be a positive integer")
+        normalized_events = tuple(_normalize_binlog_event_name(event) for event in events)
+        if not normalized_events:
+            raise ValueError("events must contain at least one event")
+        super().__init__("mysql.binlog")
+        self.connector = connector
+        self.server_id = server_id
+        self.schemas = schemas
+        self.tables = tables
+        self.events = normalized_events
+        self.batch_size = batch_size
+        self.poll_interval_s = poll_interval_s
+        self.state = state
+        self.state_key = state_key
+        self.blocking = blocking
+        self._stream: Any | None = None
+        self._loaded = False
+        self._committed: _BinlogToken | None = None
+        self._buffered: deque[tuple[dict[str, Any], _BinlogToken]] = deque()
+        self._pending: deque[_BinlogToken] = deque()
+        self._acked: set[_BinlogToken] = set()
+        self._commit_lock: asyncio.Lock | None = None
+        self._commit_loop: asyncio.AbstractEventLoop | None = None
+
+    async def open(self) -> None:
+        if self._loaded:
+            return
+        loaded = await self.state.load(self.state_key)
+        if isinstance(loaded, Mapping):
+            file = loaded.get("file")
+            pos = loaded.get("pos")
+            if isinstance(file, str) and isinstance(pos, int):
+                self._committed = _BinlogToken(file=file, pos=pos)
+        if self._committed is None:
+            self._committed = await asyncio.to_thread(self._current_binlog_token_sync)
+            await self.state.save(self.state_key, {"file": self._committed.file, "pos": self._committed.pos})
+        self._loaded = True
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        await self.open()
+        try:
+            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+        except Exception as exc:
+            connector_error = as_mysql_connector_operation_error(
+                operation=ConnectorOperation.FETCH,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from exc
+
+        deliveries: list[Delivery] = []
+        for payload, token in rows:
+            self._pending.append(token)
+            envelope = Envelope(body=payload, meta={"source": "mysql_binlog", "binlog": dict(payload["binlog"])})
+            deliveries.append(BinlogDelivery(self, envelope, token))
+        return deliveries
+
+    async def close(self) -> None:
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            await asyncio.to_thread(stream.close)
+
+    async def ack_token(self, token: _BinlogToken) -> None:
+        lock = self._runtime_commit_lock()
+        async with lock:
+            self._acked.add(token)
+            advanced: _BinlogToken | None = None
+            while self._pending and self._pending[0] in self._acked:
+                advanced = self._pending.popleft()
+                self._acked.remove(advanced)
+            if advanced is not None and advanced.row + 1 >= advanced.rows:
+                self._committed = advanced
+                await self.state.save(self.state_key, {"file": advanced.file, "pos": advanced.pos})
+
+    def _fetch_sync(self, limit: int) -> list[tuple[dict[str, Any], _BinlogToken]]:
+        stream = self._ensure_stream()
+        rows: list[tuple[dict[str, Any], _BinlogToken]] = []
+        while self._buffered and len(rows) < limit:
+            rows.append(self._buffered.popleft())
+        while len(rows) < limit:
+            event = stream.fetchone()
+            if event is None:
+                break
+            event_name = _event_name(event)
+            if event_name is None or event_name not in self.events:
+                continue
+            file = stream.log_file
+            token_pos = getattr(stream, "log_pos", None)
+            if not isinstance(file, str) or not isinstance(token_pos, int):
+                continue
+            event_rows = list(getattr(event, "rows", []))
+            total_rows = len(event_rows)
+            for row_index, row in enumerate(event_rows):
+                token = _BinlogToken(file=file, pos=token_pos, row=row_index, rows=total_rows)
+                item = (_binlog_payload(event, row, event_name, file=file, pos=token_pos), token)
+                if len(rows) < limit:
+                    rows.append(item)
+                else:
+                    self._buffered.append(item)
+        return rows
+
+    def _ensure_stream(self) -> Any:
+        if self._stream is not None:
+            return self._stream
+        if BinLogStreamReader is None or WriteRowsEvent is None or UpdateRowsEvent is None or DeleteRowsEvent is None:
+            raise RuntimeError("BinlogSource requires mysql-replication. Install onestep-mysql with mysql-replication.")
+        self._stream = BinLogStreamReader(
+            connection_settings=_binlog_connection_settings(self.connector.dsn),
+            server_id=self.server_id,
+            resume_stream=self._committed is not None,
+            blocking=self.blocking,
+            only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
+            log_file=self._committed.file if self._committed is not None else None,
+            log_pos=self._committed.pos if self._committed is not None else None,
+            only_schemas=list(self.schemas) if self.schemas else None,
+            only_tables=list(self.tables) if self.tables else None,
+            use_column_name_cache=True,
+        )
+        return self._stream
+
+    def _current_binlog_token_sync(self) -> _BinlogToken:
+        with self.connector.engine.begin() as conn:
+            try:
+                row = conn.exec_driver_sql("SHOW BINARY LOG STATUS").mappings().first()
+            except Exception:
+                row = conn.exec_driver_sql("SHOW MASTER STATUS").mappings().first()
+        if row is None:
+            raise RuntimeError("MySQL binary log is not enabled")
+        file = row.get("File")
+        pos = row.get("Position")
+        if not isinstance(file, str) or not isinstance(pos, int):
+            raise RuntimeError("MySQL did not return a binary log file and position")
+        return _BinlogToken(file=file, pos=pos)
+
+    def _runtime_commit_lock(self) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        if self._commit_lock is None or self._commit_loop is not current_loop:
+            self._commit_lock = asyncio.Lock()
+            self._commit_loop = current_loop
+        return self._commit_lock
+
+
+def _normalize_binlog_event_name(event: str) -> str:
+    normalized = event.strip().lower()
+    aliases = {
+        "write": "insert",
+        "create": "insert",
+        "insert": "insert",
+        "update": "update",
+        "delete": "delete",
+        "remove": "delete",
+    }
+    if normalized not in aliases:
+        raise ValueError("events must contain only insert, update, or delete")
+    return aliases[normalized]
+
+
+def _event_name(event: Any) -> str | None:
+    if WriteRowsEvent is not None and isinstance(event, WriteRowsEvent):
+        return "insert"
+    if UpdateRowsEvent is not None and isinstance(event, UpdateRowsEvent):
+        return "update"
+    if DeleteRowsEvent is not None and isinstance(event, DeleteRowsEvent):
+        return "delete"
+    return None
+
+
+def _binlog_payload(event: Any, row: Mapping[str, Any], event_name: str, *, file: str, pos: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema": getattr(event, "schema", None),
+        "table": getattr(event, "table", None),
+        "event": event_name,
+        "binlog": {
+            "file": file,
+            "pos": pos,
+            "timestamp": getattr(event, "timestamp", None),
+        },
+    }
+    if event_name == "update":
+        payload["before_values"] = dict(row.get("before_values") or {})
+        payload["values"] = dict(row.get("after_values") or {})
+        return payload
+    payload["values"] = dict(row.get("values") or {})
+    return payload
+
+
+def _binlog_connection_settings(dsn: str) -> dict[str, Any]:
+    if make_url is None:
+        raise RuntimeError("BinlogSource requires SQLAlchemy. Install onestep-mysql.")
+    url = make_url(dsn)
+    settings: dict[str, Any] = {
+        "host": url.host or "localhost",
+        "port": url.port or 3306,
+        "user": url.username or "",
+        "passwd": url.password or "",
+    }
+    if url.database:
+        settings["db"] = url.database
+    for key, value in dict(url.query).items():
+        if key in {"charset", "connect_timeout", "read_timeout", "write_timeout", "ssl_ca", "ssl_cert", "ssl_key"}:
+            settings[key] = int(value) if key.endswith("_timeout") else value
+    return settings
 
 
 @dataclass

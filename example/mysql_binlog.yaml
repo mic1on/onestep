@@ -1,0 +1,42 @@
+apiVersion: onestep/v1alpha1
+kind: App
+
+app:
+  name: orders-cdc
+
+resources:
+  mysql_main:
+    type: mysql
+    dsn: "${MYSQL_DSN}"
+
+  mysql_cursor:
+    type: mysql_cursor_store
+    connector: mysql_main
+    table: onestep_cursor
+
+  order_changes:
+    type: mysql_binlog
+    connector: mysql_main
+    server_id: 18492
+    schemas: ["${MYSQL_SCHEMA:-app}"]
+    tables: [orders]
+    events: [insert, update, delete]
+    state: mysql_cursor
+    state_key: orders-cdc
+    batch_size: 100
+    poll_interval_s: 1.0
+
+  order_change_log:
+    type: mysql_table_sink
+    connector: mysql_main
+    table: order_change_log
+    mode: upsert
+    keys: [binlog_file, binlog_pos, row_event]
+
+tasks:
+  - name: record_order_change
+    source: order_changes
+    handler:
+      ref: example.mysql_binlog:record_order_change
+    emit: order_change_log
+    concurrency: 4

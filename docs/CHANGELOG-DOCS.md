@@ -1,5 +1,19 @@
 # 文档更新日志
 
+## 2026-07-20 - 同步 1.6.0 与新插件文档
+
+### 变更概述
+
+将 docs 分支同步到 `main` 的 1.6.0 代码与文档状态，并更新文档站入口、导航和连接器页面。
+
+### 更新内容
+
+- 快速开始页版本号更新为 `1.6.0`，补充 PostgreSQL、Kafka、control-plane 和 `onestep build`。
+- 连接器导航新增 PostgreSQL 与 Kafka，并补充 MySQL binlog CDC 描述。
+- 部署与 Worker Runtime Image 页面同步到 `ghcr.io/mic1on/onestep-worker:1.6.0`。
+- 新增 [PostgreSQL](/broker/postgres) 与 [Kafka](/broker/kafka) 连接器页面。
+- 导航新增 [核心可靠性](/core-reliability)，指向 at-least-once、ack/retry 和插件兼容契约。
+
 ## 2026-03-17 - 全面迁移到 1.0.0 API
 
 ### 变更概述

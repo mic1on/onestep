@@ -9,6 +9,7 @@ import pytest
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.config import load_app_config
 from onestep_mysql import (
+    BinlogSource,
     IncrementalTableSource,
     MySQLConnector,
     SQLAlchemyCursorStore,
@@ -94,6 +95,16 @@ def test_yaml_builds_mysql_resources_via_plugin_entry_point(tmp_path) -> None:
                     "cursor": ["updated_at", "id"],
                     "state": "cursor",
                 },
+                "changes": {
+                    "type": "mysql_binlog",
+                    "connector": "db",
+                    "server_id": 18491,
+                    "schemas": ["onestep"],
+                    "tables": ["users"],
+                    "events": ["insert", "update", "delete"],
+                    "state": "cursor",
+                    "state_key": "users-cdc",
+                },
                 "processed": {
                     "type": "mysql_table_sink",
                     "connector": "db",
@@ -110,6 +121,8 @@ def test_yaml_builds_mysql_resources_via_plugin_entry_point(tmp_path) -> None:
     assert isinstance(app.resources["cursor"], SQLAlchemyCursorStore)
     assert isinstance(app.resources["users"], IncrementalTableSource)
     assert app.resources["users"].state is app.resources["cursor"]
+    assert isinstance(app.resources["changes"], BinlogSource)
+    assert app.resources["changes"].state is app.resources["cursor"]
     assert isinstance(app.resources["processed"], TableSink)
     assert app.state is app.resources["app_state"]
 

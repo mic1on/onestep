@@ -20,7 +20,19 @@ except ImportError:  # pragma: no cover - optional dependency
 
 class SQSDelivery(Delivery):
     def __init__(self, queue: "SQSQueue", message: dict[str, Any]) -> None:
-        super().__init__(decode_envelope(message["Body"]))
+        envelope = decode_envelope(message["Body"])
+        existing_sqs_meta = envelope.meta.get("sqs")
+        sqs_meta = (
+            dict(existing_sqs_meta) if isinstance(existing_sqs_meta, dict) else {}
+        )
+        sqs_meta.pop("message_id", None)
+        sqs_meta.pop("attributes", None)
+        if "MessageId" in message:
+            sqs_meta["message_id"] = message["MessageId"]
+        if "Attributes" in message:
+            sqs_meta["attributes"] = dict(message["Attributes"])
+        envelope.meta["sqs"] = sqs_meta
+        super().__init__(envelope)
         self._queue = queue
         self._message = message
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -37,12 +49,7 @@ class SQSDelivery(Delivery):
     async def retry(self, *, delay_s: float | None = None) -> None:
         await self._stop_heartbeat()
         timeout = 0 if delay_s is None else max(0, int(delay_s))
-        await asyncio.to_thread(
-            self._queue.client.change_message_visibility,
-            QueueUrl=self._queue.url,
-            ReceiptHandle=self._message["ReceiptHandle"],
-            VisibilityTimeout=timeout,
-        )
+        await self._change_visibility(timeout)
 
     async def fail(self, exc: Exception | None = None) -> None:
         await self._stop_heartbeat()
@@ -50,22 +57,24 @@ class SQSDelivery(Delivery):
             await self._queue.stage_delete(self._message)
             return
         if self._queue.on_fail == "release":
-            await asyncio.to_thread(
-                self._queue.client.change_message_visibility,
-                QueueUrl=self._queue.url,
-                ReceiptHandle=self._message["ReceiptHandle"],
-                VisibilityTimeout=0,
-            )
+            await self._change_visibility(0)
+
+    async def release_unstarted(self) -> None:
+        await self._stop_heartbeat()
+        await self._change_visibility(0)
 
     async def _heartbeat_loop(self) -> None:
         while True:
             await asyncio.sleep(self._queue.heartbeat_interval_s)
-            await asyncio.to_thread(
-                self._queue.client.change_message_visibility,
-                QueueUrl=self._queue.url,
-                ReceiptHandle=self._message["ReceiptHandle"],
-                VisibilityTimeout=self._queue.heartbeat_visibility_timeout,
-            )
+            await self._change_visibility(self._queue.heartbeat_visibility_timeout)
+
+    async def _change_visibility(self, timeout: int) -> None:
+        await asyncio.to_thread(
+            self._queue.client.change_message_visibility,
+            QueueUrl=self._queue.url,
+            ReceiptHandle=self._message["ReceiptHandle"],
+            VisibilityTimeout=timeout,
+        )
 
     async def _stop_heartbeat(self) -> None:
         if self._heartbeat_task is None:
@@ -133,6 +142,8 @@ class SQSConnector:
 
 
 class SQSQueue(Source, Sink):
+    fetch_is_cancel_safe = False
+
     def __init__(
         self,
         *,

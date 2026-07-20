@@ -10,7 +10,7 @@
 YAML is responsible for:
 
 - `app`: name, global config, shutdown timeout, state store binding, framework log level
-- `reporter`: built-in control-plane telemetry wiring
+- `reporter`: optional control-plane telemetry wiring through `onestep[control-plane]`
 - `resources`: named runtime objects and their dependencies
 - `hooks`: app-level startup, shutdown, and event observers
 - `tasks`: source, emit, dead-letter, retry, timeout, concurrency, handler, task config, task hooks
@@ -18,9 +18,12 @@ YAML is responsible for:
 YAML does not define:
 
 - transform DSLs
-- conditional branches or workflow graphs
+- workflow graphs
 - expression engines
 - embedded business logic
+
+YAML may name Python predicate callables for conditional sink routing, but the
+condition logic still lives in Python.
 
 ## Strict Check
 
@@ -38,6 +41,7 @@ Strict mode is intended to catch configuration drift early:
 - invalid `apiVersion` / `kind` values when they are present
 - silent mixing of legacy top-level app fields with the `app:` section
 - invalid `app.logging.level` values when YAML opts into framework log control
+- invalid conditional `emit` route shapes
 
 ## Framework Logging
 
@@ -201,7 +205,47 @@ tasks:
       delay_s: 10
 ```
 
-### Level 4: Add Task Config
+### Level 4: Add Conditional Sink Routing
+
+`emit` entries can mix unconditional sinks with conditional route mappings.
+YAML only names the predicate callable and target sinks; Python evaluates the
+condition.
+
+```yaml
+tasks:
+  - name: route_users
+    source: users_source
+    emit:
+      - audit_sink
+      - when:
+          ref: worker.routing:is_active_user
+          params:
+            status_field: status
+        then: active_user_sink
+        otherwise: inactive_user_sink
+    handler:
+      ref: worker.tasks.users:normalize_user
+```
+
+The predicate callable may accept `ctx`, `payload`, and `result` positional
+arguments. It can also receive keyword arguments from `when.params`.
+
+```python
+def is_active_user(ctx, payload, result, *, status_field: str) -> bool:
+    return result.get(status_field) == "active"
+```
+
+Rules:
+
+- `when` is a callable ref string or a `{ref, params}` mapping.
+- `then` is a sink name or list of sink names.
+- `otherwise` is optional; when omitted, a falsy predicate skips that route.
+- separate `emit` entries are evaluated independently and in order.
+- within one route, only `then` or `otherwise` is selected.
+- predicate exceptions are task failures and use the task retry/dead-letter policy.
+- already completed sink sends are not rolled back if a later route or sink fails.
+
+### Level 5: Add Task Config
 
 Use `tasks[].config` for task definition data that should be visible at runtime through `ctx.task_config`.
 
@@ -224,7 +268,7 @@ Rule of thumb:
 - `handler.params`: call-time parameters for the Python function
 - `task.config`: task definition data the runtime and handler may inspect
 
-### Level 5: Add Hooks
+### Level 6: Add Hooks
 
 Only add hooks when task wiring or lifecycle behavior cannot live inside the main handler.
 
@@ -248,9 +292,9 @@ tasks:
         - ref: worker.task_hooks:on_sync_users_failed
 ```
 
-### Level 6: Add Built-In Reporter
+### Level 7: Add Control-Plane Reporter
 
-Use the built-in reporter only when you need control-plane telemetry. Start with the smallest shape:
+Use the control-plane reporter plugin only when you need control-plane telemetry. Start with the smallest shape:
 
 ```bash
 pip install 'onestep[control-plane]'
@@ -262,7 +306,7 @@ reporter: true
 
 That means:
 
-- enable `ControlPlaneReporter`
+- load the `onestep-control-plane` reporter plugin
 - resolve `base_url` and `token` from env
 - default `service_name` to `app.name`
 
@@ -275,7 +319,7 @@ reporter:
   service_name: billing-sync-worker
 ```
 
-### Level 7: Full Wiring Example
+### Level 8: Full Wiring Example
 
 ```yaml
 apiVersion: onestep/v1alpha1
@@ -454,6 +498,7 @@ Hook `params` are passed as keyword arguments after the runtime arguments.
 
 - `before` runs after the delivery starts processing and after the `started` event is emitted.
 - `after_success` runs after the handler returns successfully, before emitting to sinks and before `ack()`.
+- conditional `emit.when` predicates run after `after_success`, before sink sends and before `ack()`.
 - `on_failure` runs for task failures before retry or dead-letter decisions are applied.
 - failures inside `on_failure` hooks are logged and do not replace the original task failure.
 - `timeout_s` currently applies to the async handler body itself; task hooks remain outside that timeout.
@@ -477,13 +522,23 @@ long-lived YAML workers from creating unbounded in-process queues by accident.
 Scheduled `interval` and `cron` resources accept `max_queued_runs` for
 `overlap: queue`, defaulting to `1000`.
 
+`http_sink` sends task results as JSON by default. Configure `body` only when
+the outbound payload should be reshaped. `url`, `headers`, `params`, and
+configured `body` values can reference `body`, `payload`, `meta`, and
+`attempts` with `&#123;&#123; ... &#125;&#125;` variables.
+
 Plugin resource types:
 
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-kafka`: `kafka`, `kafka_topic`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+
+`kafka_topic` can be used as a source, sink, or both. When used as a source,
+set `group_id`; the plugin disables Kafka auto commit and commits offsets only
+after onestep reaches `ack()` or terminal `fail()`.
 
 `feishu_bitable_incremental` accepts `fallback_scan_page_limit` to bound the
 fallback scan used when Feishu rejects cursor sorting. The default is `100`

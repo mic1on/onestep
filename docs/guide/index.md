@@ -7,7 +7,7 @@ outline: deep
 
 onestep 是一个轻量级 Python 异步任务运行时。它围绕 `OneStepApp`、`Source`、`Sink` 和任务处理函数组织代码，适合队列消费、定时同步、Webhook 接入和多阶段数据处理。
 
-当前包版本为 `1.4.2`。文档站使用仓库锁定的 VitePress `1.6.4`。
+当前包版本为 `1.6.0`。文档站使用仓库锁定的 VitePress `1.6.4`。
 
 ## 安装
 
@@ -39,6 +39,10 @@ pip install 'onestep[yaml]'
 pip install onestep-mysql
 ```
 
+```bash [PostgreSQL]
+pip install onestep-postgres
+```
+
 ```bash [RabbitMQ]
 pip install onestep-mq
 ```
@@ -51,6 +55,14 @@ pip install onestep-redis
 pip install onestep-sqs
 ```
 
+```bash [Kafka]
+pip install onestep-kafka
+```
+
+```bash [Control Plane]
+pip install 'onestep[control-plane]'
+```
+
 ```bash [Feishu Bitable]
 pip install onestep-feishu-bitable
 ```
@@ -61,7 +73,7 @@ pip install 'onestep[all]'
 
 :::
 
-`onestep[all]` 安装常用队列和数据库插件；Feishu Bitable 仍单独安装。
+`onestep[all]` 安装常用队列、数据库、Kafka、YAML 和 control-plane 依赖；Feishu Bitable 仍单独安装。
 
 ## 第一个任务
 
@@ -134,7 +146,7 @@ async def main():
 asyncio.run(main())
 ```
 
-真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL、Feishu Bitable，或把结果发送到 HTTP Sink。
+真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL、PostgreSQL、Kafka、Feishu Bitable，或把结果发送到 HTTP Sink。
 
 ## 使用外部连接器
 
@@ -189,6 +201,12 @@ onestep run worker.yaml
 
 `resources` 是推荐写法。旧的 `connectors`、`sources` 和 `sinks` 仍可读取，但新文档统一使用 `resources`。
 
+需要交给 worker agent 或控制面上传时，可以把 YAML worker 工程打包成 zip：
+
+```bash
+onestep build worker.yaml --strict --out dist/worker.zip
+```
+
 YAML 也支持把消息直接转发到 Sink。下面的任务没有 `handler`，运行时会把 `incoming` 的 payload 原样发送到 HTTP 端点：
 
 ```yaml
@@ -208,6 +226,8 @@ tasks:
 ## 下一步
 
 - [入门教程](/guide/tutorial) 通过几个完整例子串起核心概念。
-- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS 或 MySQL。
+- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS、MySQL、PostgreSQL 或 Kafka。
 - [YAML 任务定义](/yaml-task-definition) 说明完整配置字段和严格校验。
 - [生产部署](/guide/deploy) 介绍 CLI、systemd 和持久化状态。
+- [Worker Runtime Image](/guide/worker-runtime-image) 介绍容器化运行 YAML worker。
+- [核心可靠性](/core-reliability) 说明 at-least-once、ack、retry 和插件兼容契约。

@@ -1,5 +1,69 @@
 # Changelog
 
+## 1.6.0
+
+- Adds the `onestep build` command for packaging YAML worker projects into deployable zip archives with an `onestep-package.json` manifest.
+- Includes conditional `emit.when` predicate modules, pyproject-referenced README/license metadata, and common packaging metadata files in worker packages.
+- Resets interval and cron schedule sources after task resume so paused tasks do not backfill stale ticks.
+- Keeps control-plane reporter event IDs unique across same-instance restarts.
+
+## 1.5.1
+
+- Moves control-plane reporter and WebSocket command integration into the new `onestep-control-plane` 0.1.0 plugin package.
+- Keeps YAML `reporter: true` and legacy control-plane import paths working when `onestep[control-plane]` is installed, with a clear install hint when the plugin is missing.
+- Adds the `onestep.reporters` entry-point registry so future reporters can be installed without becoming core dependencies.
+
+## 1.4.7
+
+- Adds task-scoped custom metrics via `ctx.metrics.counter(...).inc()` and `ctx.metrics.gauge(...).set()`, with top-level exports for the custom metric helpers.
+- Includes custom metrics in control-plane metrics telemetry when the worker and plane negotiate `telemetry.custom_metrics`.
+- Sends an immediate control-plane heartbeat after `pause_task` and `resume_task` commands truly complete, so dashboards can observe task-control state without waiting for the scheduled heartbeat interval.
+- Adds a MySQL-backed control-plane demo app target for exercising interval -> handler -> MySQL sink telemetry locally.
+
+## 1.4.6
+
+- Adds true task-level restart for controllable source tasks via `OneStepApp.restart_task_runner()`, cancelling and respawning a single task runner without restarting the whole process.
+- Advertises and handles the control-plane `restart_task` WebSocket command, returning the restarted task's fresh control snapshot.
+- Keeps per-task restart from closing resources shared by other tasks and adds contract coverage for private and shared task resources.
+- Coordinates the new remote command through capability and task-support checks so older runtimes and planes remain forward-compatible.
+
+## 1.4.5
+
+- Adds the `onestep[kafka]` extra for installing the Kafka connector plugin on Python 3.10 and newer.
+- Documents the core reliability contract, including stable API tiers, at-least-once delivery semantics, plugin compatibility checks, and core release governance.
+- Adds a local reliability check command for core and plugin compatibility verification.
+
+## onestep-kafka 0.1.0
+
+- Adds the `onestep-kafka` plugin package with Kafka topic source and sink support backed by `aiokafka`.
+- Registers YAML resource types for `kafka` and `kafka_topic`.
+- Uses manual Kafka offset commits with per-partition contiguous ack tracking to preserve onestep at-least-once semantics.
+- Adds focused unit tests, runtime shutdown contract tests, package validation, and live Redpanda integration coverage.
+
+## 1.4.4
+
+- Adds `HttpSink` variable replacement for configured URLs, headers, params, and request bodies.
+- Adds the YAML `http_sink.body` field for reshaping outbound JSON while keeping default task-result forwarding unchanged.
+- Redacts configured HTTP request bodies in control-plane topology descriptors.
+
+## 1.4.3
+
+- Adds YAML conditional sink routing with `when` / `then` / `otherwise` emit entries while preserving legacy fan-out emit behavior.
+- Keeps CLI, app description, and control-plane topology output on the existing flattened `emit` sink list.
+- Publishes core package releases from GitHub Actions through PyPI Trusted Publishing.
+
+## onestep-postgres 0.1.0
+
+- Adds the `onestep-postgres` plugin package with PostgreSQL table queues, incremental polling sources, table sinks, and SQLAlchemy-backed state/cursor stores.
+- Supports YAML resource registration for `postgres`, `postgres_state_store`, `postgres_cursor_store`, `postgres_table_queue`, `postgres_incremental`, and `postgres_table_sink`.
+- Adds focused unit tests and live PostgreSQL integration coverage gated by `ONESTEP_POSTGRES_DSN`.
+
+## onestep-mysql 0.3.0
+
+- Adds the `mysql_binlog` source for row-based MySQL binlog CDC.
+- Supports YAML and Python wiring for insert/update/delete row events with durable file/position cursor state.
+- Adds MySQL binlog examples and live MySQL 8.4 coverage for insert, update, and delete events.
+
 ## 1.4.2
 
 - Requires strict YAML `memory` resources to set a bounded `maxsize`.

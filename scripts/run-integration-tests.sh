@@ -31,7 +31,8 @@ for path in \
   plugins/onestep-rabbitmq/tests/integration \
   plugins/onestep-redis/tests/integration \
   plugins/onestep-mysql/tests/integration \
-  plugins/onestep-sqs/tests/integration
+  plugins/onestep-sqs/tests/integration \
+  plugins/onestep-kafka/tests/integration
 do
   if find "$ROOT_DIR/$path" -maxdepth 1 -type f -name 'test_*.py' | grep -q .; then
     test_paths+=("$path")

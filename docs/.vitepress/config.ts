@@ -13,7 +13,7 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#303f9f' }],
     ['meta', {
       name: 'keywords',
-      content: 'onestep, python, async task, queue, schedule, cron, webhook, http sink, rabbitmq, redis, sqs, mysql'
+      content: 'onestep, python, async task, queue, schedule, cron, webhook, http sink, rabbitmq, redis, sqs, mysql, postgresql, kafka'
     }],
     ['link', { rel: 'icon', href: '/favicon.ico' }],
     ['meta', { property: 'og:title', content: 'OneStep' }],
@@ -96,6 +96,8 @@ export default defineConfig({
           { text: 'Redis Streams', link: '/broker/redis' },
           { text: 'AWS SQS', link: '/broker/sqs' },
           { text: 'MySQL', link: '/broker/mysql' },
+          { text: 'PostgreSQL', link: '/broker/postgres' },
+          { text: 'Kafka', link: '/broker/kafka' },
           { text: 'Feishu Bitable', link: '/broker/feishu-bitable' },
           { text: '自定义 Source/Sink', link: '/broker/custom' },
         ],
@@ -105,6 +107,7 @@ export default defineConfig({
         items: [
           { text: 'YAML 任务定义', link: '/yaml-task-definition' },
           { text: 'SKILL', link: '/skill/' },
+          { text: '核心可靠性', link: '/core-reliability' },
           { text: '稳定实例身份', link: '/stable-instance-identity' },
           { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
           { text: 'Control Plane', link: '/control-plane/' },

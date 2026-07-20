@@ -20,7 +20,7 @@ onestep 提供官方 worker runtime image，适合以 YAML 为入口运行 worke
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.4.2
+  ghcr.io/mic1on/onestep-worker:1.6.0
 ```
 
 启动流程：
@@ -31,12 +31,12 @@ docker run --rm \
 4. 运行 `onestep check "$ONESTEP_TARGET"`
 5. 运行 `onestep run "$ONESTEP_TARGET"`
 
-镜像内置 `onestep[all]`、`onestep-mq`、`onestep-mysql`、`onestep-redis` 和 `onestep-sqs`。如果 YAML 使用额外插件资源类型，确保 `requirements.txt` 或 `pyproject.toml` 包含对应插件，例如 `onestep-feishu-bitable`。
+镜像内置 `onestep[all]`，并安装常用插件包，包括 RabbitMQ、Redis、MySQL、PostgreSQL、SQS、Kafka 和 control-plane reporter。若 YAML 使用额外插件资源类型，确保 `requirements.txt` 或 `pyproject.toml` 包含对应插件，例如 `onestep-feishu-bitable`。
 
 ## 派生镜像
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.4.2
+FROM ghcr.io/mic1on/onestep-worker:1.6.0
 
 WORKDIR /workspace
 COPY . /workspace

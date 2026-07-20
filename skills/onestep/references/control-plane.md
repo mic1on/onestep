@@ -16,7 +16,7 @@ The smallest YAML reporter config is:
 reporter: true
 ```
 
-This enables the built-in `ControlPlaneReporter` and resolves connection details from environment variables.
+This loads the `onestep-control-plane` reporter plugin and resolves connection details from environment variables.
 
 Use explicit config when the deployment should pin service metadata:
 
@@ -28,6 +28,22 @@ reporter:
 ```
 
 Do not add reporter config to local examples unless the user asks for control-plane integration.
+
+## Custom Handler Metrics
+
+Handlers can report low-cardinality counters and gauges through `ctx.metrics`.
+The runtime batches them into control-plane `metrics` telemetry when the plane
+accepts the `telemetry.custom_metrics` capability.
+
+```python
+async def handle_batch(ctx, payload):
+    ctx.metrics.counter("rows_success").inc(42)
+    ctx.metrics.counter("rows_failed", labels={"reason": "validation"}).inc(3)
+    ctx.metrics.gauge("batch_size").set(45)
+```
+
+Keep names and labels stable. Do not use IDs, emails, order numbers, trace IDs,
+or other high-cardinality values as labels.
 
 ## Topology Descriptors
 
@@ -55,7 +71,10 @@ Relevant areas in the onestep source tree:
 
 - `src/onestep/reporter.py`
 - `src/onestep/control_plane_ws.py`
+- `src/onestep/reporter_registry.py`
+- `plugins/onestep-control-plane/src/onestep_control_plane/reporter.py`
+- `plugins/onestep-control-plane/src/onestep_control_plane/ws.py`
 - `src/onestep/identity_store.py`
-- `tests/test_control_plane_reporter.py`
-- `tests/test_control_plane_ws.py`
-- `tests/test_runtime_identity.py`
+- `plugins/onestep-control-plane/tests/test_control_plane_reporter.py`
+- `plugins/onestep-control-plane/tests/test_control_plane_ws.py`
+- `plugins/onestep-control-plane/tests/test_runtime_identity.py`

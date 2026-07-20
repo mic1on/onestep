@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from onestep import (
     ConnectorErrorKind,
@@ -11,6 +15,7 @@ from onestep import (
     FailureKind,
     InMemoryMetrics,
     InMemoryStateStore,
+    IntervalSource,
     MaxAttempts,
     MemoryQueue,
     NoRetry,
@@ -22,6 +27,7 @@ from onestep import (
 )
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
+from onestep.task import EmitRoute
 
 
 class _StubDelivery(Delivery):
@@ -104,6 +110,112 @@ class _ManagedSource(Source):
         self.closed = True
 
 
+class _AckFailsOnceDelivery(Delivery):
+    def __init__(self, source: "_AckFailsOnceSource", envelope: Envelope) -> None:
+        super().__init__(envelope)
+        self._source = source
+
+    async def ack(self) -> None:
+        self._source.ack_calls += 1
+        if self.envelope.attempts == 0:
+            raise RuntimeError("ack failed after sink send")
+        self._source.acked_attempts.append(self.envelope.attempts)
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self._source.retry_calls += 1
+        if delay_s:
+            await asyncio.sleep(delay_s)
+        await self._source.put(
+            Envelope(
+                body=self.envelope.body,
+                meta=dict(self.envelope.meta),
+                attempts=self.envelope.attempts + 1,
+            )
+        )
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self._source.fail_calls += 1
+
+
+class _AckFailsOnceSource(Source):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.poll_interval_s = 0.01
+        self._queue: asyncio.Queue[Envelope] = asyncio.Queue()
+        self.ack_calls = 0
+        self.retry_calls = 0
+        self.fail_calls = 0
+        self.acked_attempts: list[int] = []
+
+    async def put(self, envelope: Envelope) -> None:
+        await self._queue.put(envelope)
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        try:
+            envelope = await asyncio.wait_for(self._queue.get(), timeout=self.poll_interval_s)
+        except asyncio.TimeoutError:
+            return []
+        return [_AckFailsOnceDelivery(self, envelope)]
+
+
+class _AlwaysFailSink(Sink):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.calls = 0
+
+    async def send(self, envelope: Envelope) -> None:
+        self.calls += 1
+        raise RuntimeError("sink failed after previous sink succeeded")
+
+
+class _ReleaseTrackingDelivery(Delivery):
+    def __init__(self, envelope: Envelope) -> None:
+        super().__init__(envelope)
+        self.released = False
+        self.acked = False
+        self.retried = False
+        self.failed = False
+
+    async def release_unstarted(self) -> None:
+        self.released = True
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self.retried = True
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self.failed = True
+
+
+class _NonCancelSafeSource(Source):
+    fetch_is_cancel_safe = False
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.poll_interval_s = 0.01
+        self.fetch_started = asyncio.Event()
+        self.release_fetch = asyncio.Event()
+        self.delivery = _ReleaseTrackingDelivery(Envelope(body={"value": 1}))
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        self.fetch_started.set()
+        await self.release_fetch.wait()
+        return [self.delivery]
+
+
+class _FakeClock:
+    def __init__(self, current: datetime) -> None:
+        self.current = current
+
+    def __call__(self) -> datetime:
+        return self.current
+
+    def advance(self, **kwargs) -> None:
+        self.current += timedelta(**kwargs)
+
+
 def test_return_value_publishes_to_default_sink_contract() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming")
@@ -179,6 +291,39 @@ def test_retryable_sink_send_error_retries_and_succeeds_contract() -> None:
 
         assert sink.calls == 2
         assert sink.items == [{"value": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_ack_failure_after_sink_send_retries_and_may_duplicate_output_contract() -> None:
+    async def scenario() -> None:
+        source = _AckFailsOnceSource("ack-fails")
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("ack-failure-contract")
+        attempts: list[int] = []
+
+        @app.task(source=source, emit=sink, retry=MaxAttempts(2, delay_s=0))
+        async def consume(ctx, item):
+            attempts.append(ctx.current.attempts)
+            if ctx.current.attempts == 1:
+                ctx.app.request_shutdown()
+            return {"value": item["value"], "attempt": ctx.current.attempts}
+
+        await source.put(Envelope(body={"value": 3}))
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        first = await sink.fetch(1)
+        second = await sink.fetch(1)
+
+        assert attempts == [0, 1]
+        assert source.ack_calls == 2
+        assert source.retry_calls == 1
+        assert source.fail_calls == 0
+        assert source.acked_attempts == [1]
+        assert [delivery.payload for delivery in [*first, *second]] == [
+            {"value": 3, "attempt": 0},
+            {"value": 3, "attempt": 1},
+        ]
 
     asyncio.run(scenario())
 
@@ -357,6 +502,36 @@ def test_drain_stops_new_fetch_and_waits_for_inflight_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_non_cancel_safe_fetch_releases_unstarted_deliveries_on_drain_contract() -> None:
+    async def scenario() -> None:
+        source = _NonCancelSafeSource("non-cancel-safe")
+        app = OneStepApp("non-cancel-safe-contract")
+        seen: list[dict[str, int]] = []
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            seen.append(item)
+
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(source.fetch_started.wait(), timeout=1.0)
+
+        app.request_drain()
+        source.release_fetch.set()
+        drain_status = await asyncio.wait_for(app.wait_for_drain(), timeout=1.0)
+
+        assert drain_status["drained"] is True
+        assert seen == []
+        assert source.delivery.released is True
+        assert source.delivery.acked is False
+        assert source.delivery.retried is False
+        assert source.delivery.failed is False
+
+        app.request_shutdown()
+        await asyncio.wait_for(serve_task, timeout=1.0)
+
+    asyncio.run(scenario())
+
+
 def test_task_pause_and_resume_control_intake_contract() -> None:
     async def scenario() -> None:
         source = MemoryQueue("task-control.incoming", batch_size=1, poll_interval_s=0.01)
@@ -427,6 +602,208 @@ def test_task_pause_and_resume_control_intake_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_interval_task_resume_does_not_backfill_paused_ticks_contract() -> None:
+    async def scenario() -> None:
+        tz = ZoneInfo("Asia/Shanghai")
+        clock = _FakeClock(datetime(2026, 3, 7, 10, 0, tzinfo=tz))
+        source = IntervalSource.every(
+            seconds=5,
+            immediate=True,
+            timezone=tz,
+            clock=clock,
+            poll_interval_s=0.01,
+        )
+        app = OneStepApp("interval-resume-contract")
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        scheduled_runs: list[str] = []
+
+        @app.task(source=source, concurrency=1)
+        async def tick(ctx, item):
+            scheduled_runs.append(ctx.current.meta["scheduled_at"])
+            if len(scheduled_runs) == 1:
+                first_started.set()
+            if len(scheduled_runs) == 2:
+                second_started.set()
+
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+        app.request_task_pause("tick")
+        pause_status = await asyncio.wait_for(app.wait_for_task_pause("tick"), timeout=1.0)
+        assert pause_status["paused"] is True
+
+        clock.advance(seconds=13)
+        app.request_task_resume("tick")
+        resume_status = await asyncio.wait_for(app.wait_for_task_resume("tick"), timeout=1.0)
+        assert resume_status["accepting_new_work"] is True
+
+        await asyncio.sleep(0.05)
+        assert scheduled_runs == ["2026-03-07T10:00:00+08:00"]
+
+        clock.advance(seconds=4)
+        await asyncio.sleep(0.05)
+        assert scheduled_runs == ["2026-03-07T10:00:00+08:00"]
+
+        clock.advance(seconds=1)
+        await asyncio.wait_for(second_started.wait(), timeout=1.0)
+        assert scheduled_runs == [
+            "2026-03-07T10:00:00+08:00",
+            "2026-03-07T10:00:18+08:00",
+        ]
+
+        app.request_shutdown()
+        await asyncio.wait_for(serve_task, timeout=1.0)
+
+    asyncio.run(scenario())
+
+
+def test_task_restart_runner_resets_one_task_without_disturbing_others_contract() -> None:
+    """restart_task_runner tears down and respawns a single task's runner
+    (cancel coroutine, close+reopen private source, spawn fresh coroutine) while
+    another task on the same app keeps running. Pause+resume never actually
+    restarts; this is the real primitive."""
+
+    async def scenario() -> None:
+        # Private sources per task so close/reopen is observable and safe.
+        restart_source = MemoryQueue("restart.incoming", batch_size=1, poll_interval_s=0.01)
+        restart_sink = MemoryQueue("restart.processed", batch_size=1, poll_interval_s=0.01)
+        other_source = MemoryQueue("other.incoming", batch_size=1, poll_interval_s=0.01)
+        other_sink = MemoryQueue("other.processed", batch_size=1, poll_interval_s=0.01)
+        app = OneStepApp("task-restart-contract")
+
+        other_seen: list[int] = []
+        restart_seen: list[int] = []
+
+        @app.task(name="other", source=other_source, emit=other_sink, concurrency=1)
+        async def other(ctx, item):
+            other_seen.append(item["value"])
+            if item["value"] == 99:
+                ctx.app.request_shutdown()
+            return {"value": item["value"]}
+
+        @app.task(name="restartable", source=restart_source, emit=restart_sink, concurrency=1)
+        async def restartable(ctx, item):
+            restart_seen.append(item["value"])
+            return {"value": item["value"]}
+
+        await other_source.publish({"value": 1})
+        serve_task = asyncio.create_task(app.serve())
+        # Let the other task process its first item so we know runners are live.
+        for _ in range(100):
+            if other_seen:
+                break
+            await asyncio.sleep(0.005)
+        assert other_seen == [1]
+
+        # Sanity: both runners are registered and have task handles.
+        assert len(app._runners) == 2
+        assert set(app._runner_tasks) == {"other", "restartable"}
+        original_handle = app._runner_tasks["restartable"]
+        other_handle_before = app._runner_tasks["other"]
+
+        # Restart the "restartable" task. (Closing/reopening the private source
+        # discards any in-queue deliveries, so publish AFTER restart to verify
+        # the fresh runner consumes from the reopened source.)
+        status = await asyncio.wait_for(app.restart_task_runner("restartable"), timeout=2.0)
+
+        # restart_task_runner returns the task_control_snapshot of the fresh runner.
+        assert status["task_name"] == "restartable"
+        assert status["runner_count"] == 1
+        assert status["pause_requested"] is False
+        # Fresh runner: a new asyncio.Task handle, the old one cancelled.
+        assert original_handle.done()
+        assert app._runner_tasks["restartable"] is not original_handle
+        assert not app._runner_tasks["restartable"].done()
+        # The other task's handle was untouched.
+        assert app._runner_tasks["other"] is other_handle_before
+        assert not other_handle_before.done()
+        # Both runners still present.
+        assert len(app._runners) == 2
+
+        # The restarted runner consumes from its reopened private source.
+        await restart_source.publish({"value": 7})
+        for _ in range(200):
+            if restart_seen:
+                break
+            await asyncio.sleep(0.005)
+        assert restart_seen == [7]
+
+        # Shut down cleanly.
+        await other_source.publish({"value": 99})
+        await asyncio.wait_for(serve_task, timeout=2.0)
+
+    asyncio.run(scenario())
+
+
+def test_task_restart_runner_does_not_close_shared_source_contract() -> None:
+    """When two tasks share one source instance, restarting one must NOT close
+    the source out from under the other (shared-resource safety). MemoryQueue is
+    a competing-consumer source, so the two tasks race for messages; we assert
+    safety by checking the non-restarted runner's handle stays alive and keeps
+    consuming after the restart, and that the shared source object is the same
+    instance on both tasks before and after."""
+
+    async def scenario() -> None:
+        shared_source = MemoryQueue("shared.incoming", batch_size=1, poll_interval_s=0.01)
+        sink_a = MemoryQueue("a.processed", batch_size=1, poll_interval_s=0.01)
+        sink_b = MemoryQueue("b.processed", batch_size=1, poll_interval_s=0.01)
+        app = OneStepApp("shared-restart-contract")
+
+        b_seen: list[int] = []
+
+        @app.task(name="task_a", source=shared_source, emit=sink_a, concurrency=1)
+        async def task_a(ctx, item):
+            if item["value"] == 99:
+                ctx.app.request_shutdown()
+            return {"value": item["value"]}
+
+        @app.task(name="task_b", source=shared_source, emit=sink_b, concurrency=1)
+        async def task_b(ctx, item):
+            b_seen.append(item["value"])
+            if item["value"] == 99:
+                ctx.app.request_shutdown()
+            return {"value": item["value"]}
+
+        serve_task = asyncio.create_task(app.serve())
+        # Let runners spawn.
+        for _ in range(100):
+            if len(app._runners) == 2:
+                break
+            await asyncio.sleep(0.005)
+        assert len(app._runner_tasks) == 2
+        task_b_handle_before = app._runner_tasks["task_b"]
+        assert not task_b_handle_before.done()
+
+        # Restart task_a. The shared source must NOT be closed (task_b still
+        # references it), and task_b's runner must keep running.
+        await asyncio.wait_for(app.restart_task_runner("task_a"), timeout=2.0)
+        assert len(app._runners) == 2
+        # task_b's handle survived the restart of task_a.
+        assert app._runner_tasks["task_b"] is task_b_handle_before
+        assert not task_b_handle_before.done()
+        # The shared source object identity is unchanged on both tasks.
+        task_a_spec = next(t for t in app._tasks if t.name == "task_a")
+        task_b_spec = next(t for t in app._tasks if t.name == "task_b")
+        assert task_a_spec.source is shared_source
+        assert task_b_spec.source is shared_source
+
+        # task_b can still consume a freshly published item from the (still-open)
+        # shared source. Publish several since task_a also competes for them.
+        for value in (1, 2, 3, 4, 5, 6, 7, 8):
+            await shared_source.publish({"value": value})
+        for _ in range(300):
+            if b_seen:
+                break
+            await asyncio.sleep(0.005)
+        assert b_seen, "task_b could not consume after task_a was restarted; shared source likely closed"
+
+        await shared_source.publish({"value": 99})
+        await asyncio.wait_for(serve_task, timeout=2.0)
+
+    asyncio.run(scenario())
+
+
 def test_ctx_emit_and_return_follow_separate_contracts() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming")
@@ -449,6 +826,178 @@ def test_ctx_emit_and_return_follow_separate_contracts() -> None:
         assert len(explicit_batch) == 1
         assert default_batch[0].payload == {"kind": "main", "value": 6}
         assert explicit_batch[0].payload == {"kind": "side", "value": 3}
+
+    asyncio.run(scenario())
+
+
+def test_multi_sink_send_is_not_transactional_when_later_sink_fails_contract() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        first_sink = MemoryQueue("first", poll_interval_s=0.01)
+        failing_sink = _AlwaysFailSink("second")
+        app = OneStepApp("multi-sink-contract")
+
+        @app.task(source=source, emit=[first_sink, failing_sink], retry=NoRetry())
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        await source.publish({"value": 1})
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        first_batch = await first_sink.fetch(1)
+        assert failing_sink.calls == 1
+        assert [delivery.payload for delivery in first_batch] == [{"value": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_task_spec_normalizes_unconditional_sink_to_emit_route() -> None:
+    source = MemoryQueue("incoming")
+    sink = MemoryQueue("processed")
+    app = OneStepApp("emit-route-model")
+
+    @app.task(source=source, emit=sink)
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.sinks == (sink,)
+    assert task.emit_routes == (EmitRoute(then_sinks=(sink,)),)
+
+
+def test_task_spec_flattens_conditional_route_sinks_for_compatibility() -> None:
+    source = MemoryQueue("incoming")
+    active = MemoryQueue("active")
+    inactive = MemoryQueue("inactive")
+    app = OneStepApp("emit-route-flatten")
+
+    def is_active(ctx, payload, result):
+        return True
+
+    route = EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))
+
+    @app.task(source=source, emit=[route])
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.emit_routes == (route,)
+    assert task.sinks == (active, inactive)
+
+
+def test_conditional_emit_routes_select_then_and_otherwise_sinks() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        active = MemoryQueue("active", poll_interval_s=0.01)
+        inactive = MemoryQueue("inactive", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit")
+        seen: list[int] = []
+
+        def is_active(ctx, payload, result):
+            return result["active"]
+
+        @app.task(
+            source=source,
+            emit=[EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))],
+        )
+        async def consume(ctx, item):
+            seen.append(item["id"])
+            if len(seen) == 2:
+                ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"id": 1, "active": True})
+        await source.publish({"id": 2, "active": False})
+        await app.serve()
+
+        active_batch = await active.fetch(1)
+        inactive_batch = await inactive.fetch(1)
+        assert [delivery.payload for delivery in active_batch] == [{"id": 1, "active": True}]
+        assert [delivery.payload for delivery in inactive_batch] == [{"id": 2, "active": False}]
+
+    asyncio.run(scenario())
+
+
+def test_conditional_emit_route_without_otherwise_skips_false_result() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-skip")
+
+        @app.task(
+            source=source,
+            emit=[EmitRoute(predicate=lambda ctx, payload, result: False, then_sinks=(sink,))],
+        )
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"value": 1})
+        await app.serve()
+
+        assert await sink.fetch(1) == []
+
+    asyncio.run(scenario())
+
+
+def test_conditional_emit_route_awaits_async_predicate() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-async")
+
+        async def should_emit(ctx, payload, result):
+            await asyncio.sleep(0)
+            return result["value"] == 3
+
+        @app.task(source=source, emit=[EmitRoute(predicate=should_emit, then_sinks=(sink,))])
+        async def consume(ctx, item):
+            ctx.app.request_shutdown()
+            return {"value": item["value"] + 1}
+
+        await source.publish({"value": 2})
+        await app.serve()
+
+        batch = await sink.fetch(1)
+        assert [delivery.payload for delivery in batch] == [{"value": 3}]
+
+    asyncio.run(scenario())
+
+
+def test_conditional_emit_predicate_failure_uses_retry_policy() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        sink = MemoryQueue("processed", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-retry")
+        attempts: list[int] = []
+        predicate_calls = 0
+
+        def flaky_predicate(ctx, payload, result):
+            nonlocal predicate_calls
+            predicate_calls += 1
+            if predicate_calls == 1:
+                raise RuntimeError("predicate failed")
+            return True
+
+        @app.task(
+            source=source,
+            emit=[EmitRoute(predicate=flaky_predicate, then_sinks=(sink,))],
+            retry=MaxAttempts(2, delay_s=0),
+        )
+        async def consume(ctx, item):
+            attempts.append(ctx.current.attempts)
+            if len(attempts) == 2:
+                ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"value": 1})
+        await app.serve()
+
+        batch = await sink.fetch(1)
+        assert attempts == [0, 1]
+        assert predicate_calls == 2
+        assert [delivery.payload for delivery in batch] == [{"value": 1}]
 
     asyncio.run(scenario())
 
@@ -758,6 +1307,62 @@ def test_succeeded_event_includes_notification_metadata_when_task_returns_it() -
         }
 
     asyncio.run(scenario())
+
+
+def test_task_context_records_custom_metrics_from_handler() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        app = OneStepApp("custom-metrics-app")
+
+        @app.on_startup
+        async def seed(app):
+            await source.publish({"rows": [1, 2, 3, 4, 5]})
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            rows = item["rows"]
+            ctx.metrics.counter("rows_success").inc(3)
+            ctx.metrics.counter("rows_failed", labels={"reason": "validation"}).inc(2)
+            ctx.metrics.gauge("batch_size").set(len(rows))
+            ctx.metrics.gauge("batch_size").set(len(rows) + 1)
+            ctx.app.request_shutdown()
+
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+        return app.custom_metrics.rotate_task("consume")
+
+    samples = asyncio.run(scenario())
+
+    assert samples == [
+        {"name": "batch_size", "kind": "gauge", "value": 6, "labels": {}},
+        {
+            "name": "rows_failed",
+            "kind": "counter",
+            "value": 2,
+            "labels": {"reason": "validation"},
+        },
+        {"name": "rows_success", "kind": "counter", "value": 3, "labels": {}},
+    ]
+
+
+def test_custom_metrics_reject_invalid_series() -> None:
+    app = OneStepApp("custom-metrics-validation")
+    metrics = app.custom_metrics.for_task("consume")
+
+    with pytest.raises(ValueError, match="invalid custom metric name"):
+        metrics.counter("bad metric").inc()
+
+    with pytest.raises(ValueError, match="reserved"):
+        metrics.counter("rows_success", labels={"service": "billing"}).inc()
+
+    with pytest.raises(ValueError, match="counter increment must be >= 0"):
+        metrics.counter("rows_success").inc(-1)
+
+    with pytest.raises(ValueError, match="finite"):
+        metrics.gauge("batch_size").set(float("nan"))
+
+    metrics.counter("same_name").inc()
+    with pytest.raises(ValueError, match="already exists as counter"):
+        metrics.gauge("same_name").set(1)
 
 
 def test_succeeded_event_ignores_or_sanitizes_invalid_notification_payload() -> None:

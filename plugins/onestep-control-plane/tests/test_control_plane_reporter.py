@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from onestep import (
-    ControlPlaneReporter,
-    ControlPlaneReporterConfig,
     FailureInfo,
     FailureKind,
     IntervalSource,
@@ -17,6 +15,8 @@ from onestep import (
     TaskEvent,
     TaskEventKind,
 )
+from onestep.task import EmitRoute
+from onestep_control_plane import ControlPlaneReporter, ControlPlaneReporterConfig
 
 
 @dataclass
@@ -160,6 +160,38 @@ def test_reporter_sync_payload_includes_task_topology() -> None:
     ]
 
 
+def test_reporter_sync_payload_flattens_conditional_emit_routes() -> None:
+    recorder = SenderRecorder()
+    source = MemoryQueue("incoming")
+    active = MemoryQueue("active")
+    inactive = MemoryQueue("inactive")
+    app = OneStepApp("billing-sync")
+
+    def is_active(ctx, payload, result):
+        return True
+
+    @app.task(
+        source=source,
+        emit=[EmitRoute(predicate=is_active, then_sinks=(active,), otherwise_sinks=(inactive,))],
+    )
+    async def sync_users(ctx, payload):
+        return payload
+
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_payload = [payload for channel, payload in recorder.calls if channel == "sync"][0]
+    emit = sync_payload["app"]["tasks"][0]["emit"]
+    assert [entry["name"] for entry in emit] == ["active", "inactive"]
+    assert all("when_ref" not in entry for entry in emit)
+
+
 def test_reporter_sync_payload_uses_tz_environment_name_for_schedule_timezone(monkeypatch) -> None:
     monkeypatch.setenv("TZ", "Asia/Shanghai")
     recorder = SenderRecorder()
@@ -211,6 +243,7 @@ def test_reporter_heartbeat_includes_task_control_states() -> None:
             "supported_commands": [
                 "pause_task",
                 "resume_task",
+                "restart_task",
                 "run_task_once",
             ],
             "pause_requested": True,
@@ -327,6 +360,137 @@ def test_reporter_flushes_metrics_and_events() -> None:
     assert event_payload["event_id"].startswith("8f9f0d7c4b4a4a588a6f52d6735f44df-")
 
     assert heartbeat_calls[-1]["health"]["status"] == "degraded"
+
+
+def test_reporter_event_ids_stay_unique_after_same_instance_restarts() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def emit_one_event() -> None:
+        await app.startup()
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.STARTED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=0,
+            )
+        )
+        await reporter.flush_events_now()
+        await app.shutdown()
+
+    async def scenario() -> None:
+        await emit_one_event()
+        await emit_one_event()
+
+    asyncio.run(scenario())
+
+    event_ids = [
+        event["event_id"]
+        for channel, payload in recorder.calls
+        if channel == "events"
+        for event in payload["events"]
+    ]
+    assert len(event_ids) == 2
+    assert len(set(event_ids)) == 2
+    assert all(
+        event_id.startswith("8f9f0d7c4b4a4a588a6f52d6735f44df-")
+        for event_id in event_ids
+    )
+
+
+def test_reporter_includes_custom_metrics_when_sender_supports_them() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        task_metrics = app.custom_metrics.for_task("sync_users")
+        task_metrics.counter("rows_success").inc(7)
+        task_metrics.counter("rows_failed", labels={"reason": "validation"}).inc(2)
+        task_metrics.gauge("batch_size").set(10)
+        task_metrics.gauge("batch_size").set(12)
+        reporter._rotate_metrics_window(datetime(2026, 3, 8, 17, 31, 0, tzinfo=timezone.utc))
+        await reporter._flush_metric_batches()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    metrics_payload = next(payload for channel, payload in recorder.calls if channel == "metrics")
+    assert metrics_payload["tasks"] == [
+        {
+            "task_name": "sync_users",
+            "window_id": metrics_payload["tasks"][0]["window_id"],
+            "fetched": 0,
+            "started": 0,
+            "succeeded": 0,
+            "retried": 0,
+            "failed": 0,
+            "dead_lettered": 0,
+            "cancelled": 0,
+            "timeouts": 0,
+            "inflight": 0,
+            "avg_duration_ms": None,
+            "p95_duration_ms": None,
+            "custom_metrics": [
+                {
+                    "name": "batch_size",
+                    "kind": "gauge",
+                    "value": 12,
+                    "labels": {},
+                },
+                {
+                    "name": "rows_failed",
+                    "kind": "counter",
+                    "value": 2,
+                    "labels": {"reason": "validation"},
+                },
+                {
+                    "name": "rows_success",
+                    "kind": "counter",
+                    "value": 7,
+                    "labels": {},
+                },
+            ],
+        }
+    ]
+
+
+def test_reporter_omits_custom_metrics_when_sender_does_not_support_them() -> None:
+    class UnsupportedCustomMetricSender(SenderRecorder):
+        def supports_custom_metrics(self) -> bool:
+            return False
+
+    recorder = UnsupportedCustomMetricSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        app.custom_metrics.for_task("sync_users").counter("rows_success").inc(7)
+        await app.emit_event(
+            TaskEvent(
+                kind=TaskEventKind.FETCHED,
+                app=app.name,
+                task="sync_users",
+                source="interval:3600s",
+                attempts=0,
+            )
+        )
+        reporter._rotate_metrics_window(datetime(2026, 3, 8, 17, 31, 0, tzinfo=timezone.utc))
+        await reporter._flush_metric_batches()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    metrics_payload = next(payload for channel, payload in recorder.calls if channel == "metrics")
+    assert "custom_metrics" not in metrics_payload["tasks"][0]
 
 
 def test_reporter_drops_oldest_events_when_pending_buffer_overflows() -> None:
@@ -521,6 +685,44 @@ def test_reporter_send_sync_now_waits_for_sender_delivery() -> None:
     asyncio.run(scenario())
 
     assert any(kind == "wait" and channel == "sync" for kind, channel, _ in sender.calls)
+
+
+def test_reporter_send_heartbeat_now_waits_for_sender_delivery() -> None:
+    class WaitableSender:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict]] = []
+            self.started: asyncio.Event | None = None
+            self.release: asyncio.Event | None = None
+
+        async def __call__(self, channel: str, payload: dict) -> None:
+            self.calls.append(("enqueue", channel, payload))
+
+        async def send_and_wait(self, channel: str, payload: dict) -> None:
+            self.calls.append(("wait", channel, payload))
+            assert self.started is not None
+            assert self.release is not None
+            self.started.set()
+            await self.release.wait()
+
+    sender = WaitableSender()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        sender.started = asyncio.Event()
+        sender.release = asyncio.Event()
+        await app.startup()
+        wait_task = asyncio.create_task(reporter.send_heartbeat_now())
+        await asyncio.wait_for(sender.started.wait(), timeout=0.1)
+        assert wait_task.done() is False
+        sender.release.set()
+        await asyncio.wait_for(wait_task, timeout=0.1)
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    assert any(kind == "wait" and channel == "heartbeat" for kind, channel, _ in sender.calls)
 
 
 def test_reporter_flush_metrics_now_waits_for_sender_delivery() -> None:

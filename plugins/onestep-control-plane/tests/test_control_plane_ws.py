@@ -11,16 +11,18 @@ from uuid import UUID
 import pytest
 
 from onestep import (
+    MemoryQueue,
+    OneStepApp,
+)
+from onestep_control_plane import (
     ControlPlaneReporter,
     ControlPlaneReporterConfig,
     ControlPlaneWsSender,
     ControlPlaneWsTransport,
-    MemoryQueue,
-    OneStepApp,
     build_control_plane_http_base_url,
     build_control_plane_ws_url,
 )
-from onestep.control_plane_ws import _default_connect_factory
+from onestep_control_plane.ws import _default_connect_factory
 
 
 def _make_config() -> ControlPlaneReporterConfig:
@@ -186,6 +188,7 @@ def test_ws_transport_connect_sends_hello_and_parses_hello_ack() -> None:
     assert connection.sent_messages[0]["type"] == "hello"
     assert connection.sent_messages[0]["payload"]["protocol_version"] == "1"
     assert connection.sent_messages[0]["payload"]["service"]["name"] == "billing-sync"
+    assert "telemetry.custom_metrics" in connection.sent_messages[0]["payload"]["capabilities"]
     assert hello_ack.session_id == "sess_server_1"
     assert hello_ack.protocol_version == "1"
     assert hello_ack.heartbeat_interval_s == 30
@@ -207,6 +210,27 @@ class FakeTransport:
     async def close(self) -> None:
         self.connected = False
         self.calls.append(("close", None, None))
+
+
+def test_ws_sender_supports_custom_metrics_only_when_server_accepts_capability() -> None:
+    fake_transport = FakeTransport()
+    sender = ControlPlaneWsSender(_make_config(), transport=fake_transport)
+
+    assert sender.supports_custom_metrics() is False
+
+    fake_transport.hello_ack = type(
+        "Ack",
+        (),
+        {"accepted_capabilities": ["telemetry.metrics"]},
+    )()
+    assert sender.supports_custom_metrics() is False
+
+    fake_transport.hello_ack = type(
+        "Ack",
+        (),
+        {"accepted_capabilities": ["telemetry.metrics", "telemetry.custom_metrics"]},
+    )()
+    assert sender.supports_custom_metrics() is True
 
 
 def test_ws_sender_buffers_initial_heartbeat_until_sync() -> None:
@@ -254,6 +278,7 @@ def test_ws_sender_advertises_restart_and_drain_only_after_binding_runtime() -> 
                         "command.drain",
                         "command.pause_task",
                         "command.resume_task",
+                        "command.restart_task",
                         "command.sync_now",
                         "command.flush_metrics",
                         "command.flush_events",
@@ -290,6 +315,7 @@ def test_ws_sender_advertises_restart_and_drain_only_after_binding_runtime() -> 
     assert "command.drain" in capabilities
     assert "command.pause_task" in capabilities
     assert "command.resume_task" in capabilities
+    assert "command.restart_task" in capabilities
     assert "command.discard_dead_letters" not in capabilities
     assert "command.replay_dead_letters" not in capabilities
 
@@ -760,6 +786,140 @@ def test_ws_sender_executes_pause_task_and_resume_task_commands() -> None:
     assert resume_result["payload"]["result"]["accepting_new_work"] is True
     assert resume_result["payload"]["result"]["runner_count"] == 1
     assert resume_result["payload"]["result"]["parked_runner_count"] == 0
+
+    pause_result_index = connection.sent_messages.index(pause_result)
+    resume_result_index = connection.sent_messages.index(resume_result)
+    heartbeat_messages = [
+        (index, message)
+        for index, message in enumerate(connection.sent_messages)
+        if message["type"] == "telemetry"
+        and message["payload"]["channel"] == "heartbeat"
+    ]
+
+    assert any(
+        index < pause_result_index
+        and message["payload"]["body"]["health"]["task_controls"][0]["paused"] is True
+        and message["payload"]["body"]["health"]["task_controls"][0]["accepting_new_work"] is False
+        for index, message in heartbeat_messages
+    )
+    assert any(
+        pause_result_index < index < resume_result_index
+        and message["payload"]["body"]["health"]["task_controls"][0]["paused"] is False
+        and message["payload"]["body"]["health"]["task_controls"][0]["accepting_new_work"] is True
+        for index, message in heartbeat_messages
+    )
+
+
+def test_ws_sender_executes_restart_task_command() -> None:
+    """restart_task tears down and respawns a single task's runner via the WS
+    command channel, returns a task_control_snapshot, and leaves the app running
+    for further commands (unlike the whole-process `restart`)."""
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "command.pause_task",
+                        "command.resume_task",
+                        "command.restart_task",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    app = OneStepApp("billing-sync")
+    source = MemoryQueue("sync-users.incoming", batch_size=1, poll_interval_s=0.01)
+    sink = MemoryQueue("sync-users.processed", batch_size=1, poll_interval_s=0.01)
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+    started: asyncio.Event | None = None
+
+    @app.task(name="sync_users", source=source, emit=sink, concurrency=1)
+    async def sync_users(ctx, item):
+        assert started is not None
+        started.set()
+        if item["value"] == 99:
+            ctx.app.request_shutdown()
+        return {"value": item["value"]}
+
+    async def scenario() -> None:
+        nonlocal started
+        started = asyncio.Event()
+        await source.publish({"value": 1})
+        serve_task = asyncio.create_task(app.serve())
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        original_runner_handle = app._runner_tasks["sync_users"]
+
+        connection.queue_message(
+            {
+                "type": "command",
+                "message_id": "msg_command_restart_task",
+                "sent_at": "2026-03-17T12:00:04Z",
+                "payload": {
+                    "command_id": "cmd_restart_task",
+                    "kind": "restart_task",
+                    "args": {"task_name": "sync_users"},
+                    "timeout_s": 30,
+                    "created_at": "2026-03-17T12:00:04Z",
+                },
+            }
+        )
+        # Allow the command to be processed. The runner is idle (no pending
+        # delivery), so restart cancels a parked/sleeping coroutine and spawns
+        # a fresh one. Poll for the command_result.
+        for _ in range(200):
+            if any(
+                message["type"] == "command_result"
+                and message["payload"]["command_id"] == "cmd_restart_task"
+                for message in connection.sent_messages
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("restart_task command_result was not sent")
+
+        # The old runner handle must be done (cancelled); a new one is spawned.
+        assert original_runner_handle.done()
+        assert app._runner_tasks["sync_users"] is not original_runner_handle
+        assert not app._runner_tasks["sync_users"].done()
+
+        # Publish a shutdown sentinel and let serve exit cleanly.
+        await source.publish({"value": 99})
+        await asyncio.wait_for(serve_task, timeout=2.0)
+
+    asyncio.run(scenario())
+
+    restart_result = next(
+        message
+        for message in connection.sent_messages
+        if message["type"] == "command_result"
+        and message["payload"]["command_id"] == "cmd_restart_task"
+    )
+    assert restart_result["payload"]["status"] == "succeeded"
+    result = restart_result["payload"]["result"]
+    assert result["task_name"] == "sync_users"
+    assert result["runner_count"] == 1
+    assert result["pause_requested"] is False
+    assert "restart_task" in result["supported_commands"]
 
 
 def test_ws_sender_executes_replay_dead_letters_command() -> None:
@@ -1356,7 +1516,7 @@ def test_ws_sender_reconnect_backoff_saturates_for_large_attempt_counts(monkeypa
     sender = ControlPlaneWsSender(_make_config(), transport=transport)
     sender._reconnect_attempts = 10**6
 
-    monkeypatch.setattr("onestep.control_plane_ws.random.random", lambda: 1.0)
+    monkeypatch.setattr("onestep_control_plane.ws.random.random", lambda: 1.0)
 
     assert sender._next_reconnect_delay_s() == pytest.approx(
         sender._config.reconnect_max_delay_s

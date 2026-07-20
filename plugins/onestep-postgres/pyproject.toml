@@ -1,0 +1,33 @@
+[project]
+name = "onestep-postgres"
+version = "0.1.0"
+description = "PostgreSQL connector plugin for onestep."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "onestep>=1.4.2",
+    "SQLAlchemy>=2.0.0",
+    "psycopg[binary]>=3.2.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.entry-points."onestep.resources"]
+postgres = "onestep_postgres:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onestep_postgres"]
+
+[tool.uv.sources]
+onestep = { workspace = true }

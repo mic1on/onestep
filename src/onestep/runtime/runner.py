@@ -19,7 +19,7 @@ from onestep.task import TaskSpec
 
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
-    from onestep.connectors.base import Delivery
+    from onestep.connectors.base import Delivery, Sink
 
 
 _INVALID_NOTIFICATION_VALUE = object()
@@ -81,7 +81,10 @@ class TaskRunner:
                         continue
                     break
 
+                resumed_from_pause = self._pause_parked
                 self._set_drain_parked(False)
+                if resumed_from_pause:
+                    await self._resume_source_after_pause()
                 self._set_pause_parked(False)
                 available = self.task.concurrency - len(self._inflight)
                 if available <= 0:
@@ -124,11 +127,12 @@ class TaskRunner:
         self._set_fetching(True)
         fetch_task = asyncio.create_task(self.task.source.fetch(limit))
         stop_fetching_task = asyncio.create_task(self.app.wait_for_stop_fetching(self.task.name))
-        done, pending = await asyncio.wait(
-            {fetch_task, stop_fetching_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        pending: set[asyncio.Task[Any]] = {fetch_task, stop_fetching_task}
         try:
+            done, pending = await asyncio.wait(
+                pending,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
             if stop_fetching_task in done:
                 if self.task.source.fetch_is_cancel_safe:
                     fetch_task.cancel()
@@ -146,6 +150,9 @@ class TaskRunner:
             fetch_task.cancel()
             await asyncio.gather(fetch_task, return_exceptions=True)
             return []
+        except asyncio.CancelledError:
+            await self._cancel_or_release_fetch(fetch_task)
+            raise
         finally:
             self._set_fetching(False)
             for pending_task in pending:
@@ -160,6 +167,15 @@ class TaskRunner:
                 raise
             await self._handle_source_fetch_error(exc)
             return []
+
+    async def _cancel_or_release_fetch(self, fetch_task: asyncio.Task[list["Delivery"]]) -> None:
+        assert self.task.source is not None
+        if not fetch_task.done() and self.task.source.fetch_is_cancel_safe:
+            fetch_task.cancel()
+            await asyncio.gather(fetch_task, return_exceptions=True)
+            return
+        deliveries = await self._resolve_fetch_task(fetch_task)
+        await self._release_unstarted_deliveries(deliveries)
 
     async def _release_unstarted_deliveries(self, deliveries: list["Delivery"]) -> None:
         for delivery in deliveries:
@@ -194,6 +210,16 @@ class TaskRunner:
             return
         self._pause_parked = value
         self.app.notify_runner_state_changed()
+
+    async def _resume_source_after_pause(self) -> None:
+        if self.task.source is None:
+            return
+        hook = getattr(self.task.source, "resume_after_pause", None)
+        if not callable(hook):
+            return
+        result = hook()
+        if inspect.isawaitable(result):
+            await result
 
     async def _handle_source_fetch_error(self, exc: ConnectorOperationError) -> None:
         fallback_s = self.task.source.poll_interval_s if self.task.source is not None else 1.0
@@ -263,9 +289,9 @@ class TaskRunner:
             await self._run_task_hooks(self.task.hooks.before, ctx, delivery.payload)
             result = await self._invoke_handler(ctx, delivery)
             await self._run_task_hooks(self.task.hooks.after_success, ctx, delivery.payload, result)
-            if result is not None and self.task.sinks:
+            if result is not None and self.task.emit_routes:
                 envelope = Envelope(body=result)
-                for sink in self.task.sinks:
+                for sink in await self._select_emit_sinks(ctx, delivery.payload, result):
                     await self._send_to_sink(sink, envelope)
             await delivery.ack()
             event_meta = self._build_succeeded_event_meta(delivery, result)
@@ -317,6 +343,21 @@ class TaskRunner:
                 return await asyncio.wait_for(result, timeout=self.task.timeout_s)
             return await result
         return result
+
+    async def _select_emit_sinks(self, ctx: TaskContext, payload: Any, result: Any) -> tuple["Sink", ...]:
+        sinks: list["Sink"] = []
+        for route in self.task.emit_routes:
+            if route.predicate is None:
+                sinks.extend(route.then_sinks)
+                continue
+            predicate_result = invoke_callback(route.predicate, ctx, payload, result)
+            if inspect.isawaitable(predicate_result):
+                predicate_result = await predicate_result
+            if predicate_result:
+                sinks.extend(route.then_sinks)
+            else:
+                sinks.extend(route.otherwise_sinks)
+        return tuple(sinks)
 
     async def _handle_failure(
         self,

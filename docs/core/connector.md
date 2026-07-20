@@ -81,10 +81,12 @@ async def process(ctx, item):
 | `RabbitMQConnector` (`onestep-mq`) | RabbitMQ | 支持 | 支持 |
 | `RedisConnector` (`onestep-redis`) | Redis Streams | 支持 | 支持 |
 | `SQSConnector` (`onestep-sqs`) | AWS SQS | 支持 | 支持 |
-| `MySQLConnector` (`onestep-mysql`) | MySQL 表队列/增量同步/表输出 | 支持 | 支持 |
+| `MySQLConnector` (`onestep-mysql`) | MySQL 表队列/增量同步/binlog CDC/表输出 | 支持 | 支持 |
+| `PostgresConnector` (`onestep-postgres`) | PostgreSQL 表队列/增量同步/表输出 | 支持 | 支持 |
+| `KafkaConnector` (`onestep-kafka`) | Kafka topic 消费与生产 | 支持 | 支持 |
 | `FeishuBitableConnector` (`onestep-feishu-bitable`) | 飞书多维表格增量同步/表输出 | 支持 | 支持 |
 
-`onestep` 核心包内置内存、定时器、Webhook 和 HTTP Sink。RabbitMQ、Redis Streams、AWS SQS、MySQL 和 Feishu Bitable 需要安装对应插件包，并从插件模块导入 Python API。
+`onestep` 核心包内置内存、定时器、Webhook 和 HTTP Sink。RabbitMQ、Redis Streams、AWS SQS、MySQL、PostgreSQL、Kafka 和 Feishu Bitable 需要安装对应插件包，并从插件模块导入 Python API。
 
 ## 混合使用
 

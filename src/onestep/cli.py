@@ -7,6 +7,7 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 
 from .app import OneStepApp
+from .build import BuildOptions, BuildResult, build_worker_package
 from .config import is_yaml_target, load_yaml_app
 from .init_project import init_project
 
@@ -24,6 +25,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     run_parser = subparsers.add_parser("run", help="Load and run a OneStepApp target or YAML config")
     run_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
+    run_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        default=None,
+        help="Path to a .env file to load environment variables from (YAML targets only)",
+    )
+    run_parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        dest="strict_env",
+        default=None,
+        help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
+    )
 
     check_parser = subparsers.add_parser("check", help="Load a target or YAML config and print its task summary")
     check_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
@@ -33,6 +47,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Validate YAML targets against the strict config contract before printing the summary",
     )
+    check_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        default=None,
+        help="Path to a .env file to load environment variables from (YAML targets only)",
+    )
+    check_parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        dest="strict_env",
+        default=None,
+        help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
+    )
 
     init_parser = subparsers.add_parser("init", help="Create a minimal OneStep YAML project scaffold")
     init_parser.add_argument("path", nargs="?", default=".", help="Directory to initialize")
@@ -40,6 +67,63 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force",
         action="store_true",
         help="Overwrite scaffold files when they already exist",
+    )
+
+    build_parser = subparsers.add_parser("build", help="Build a deployable YAML worker package")
+    build_parser.add_argument(
+        "target",
+        help="Path to worker.yaml, or a project directory with worker.yaml / [tool.onestep.build].entrypoint",
+    )
+    build_parser.add_argument(
+        "--out",
+        default="dist/worker.zip",
+        help="Output zip path (default: dist/worker.zip)",
+    )
+    build_parser.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        help="Additional file or glob pattern to include; may be repeated",
+    )
+    build_parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Additional file or glob pattern to exclude; may be repeated",
+    )
+    build_parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Optional build manifest path (pyproject.toml, *.toml, or *.json)",
+    )
+    build_parser.add_argument(
+        "--no-check",
+        action="store_true",
+        help="Skip the pre-build onestep check",
+    )
+    build_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Run the pre-build check with strict YAML validation",
+    )
+    build_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        default=None,
+        help="Path to a .env file to load environment variables from during the pre-build check",
+    )
+    build_parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        dest="strict_env",
+        default=None,
+        help="Check that all ${VAR} references resolve during the pre-build check",
+    )
+    build_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit the build report as JSON",
     )
 
     return parser.parse_args(_normalize_argv(argv))
@@ -56,10 +140,42 @@ def main(argv: list[str] | None = None) -> int:
         _print_init_summary(result)
         return 0
 
+    if args.command == "build":
+        try:
+            result = build_worker_package(
+                BuildOptions(
+                    target=args.target,
+                    output=args.out,
+                    include=tuple(args.include),
+                    exclude=tuple(args.exclude),
+                    manifest=args.manifest,
+                    check=not args.no_check,
+                    strict=args.strict,
+                    env_file=args.env_file,
+                    strict_env=args.strict_env,
+                )
+            )
+        except Exception as exc:
+            print(f"onestep: failed to build {args.target}: {exc}", file=sys.stderr)
+            return 2
+        _print_build_summary(result, as_json=getattr(args, "as_json", False))
+        return 0
+
     _ensure_local_import_paths(args.target)
     try:
         if args.command == "check" and getattr(args, "strict", False) and is_yaml_target(args.target):
-            app = load_yaml_app(args.target, strict=True)
+            app = load_yaml_app(
+                args.target,
+                strict=True,
+                env_file=getattr(args, "env_file", None),
+                strict_env=getattr(args, "strict_env", None),
+            )
+        elif is_yaml_target(args.target):
+            app = load_yaml_app(
+                args.target,
+                env_file=getattr(args, "env_file", None),
+                strict_env=getattr(args, "strict_env", None),
+            )
         else:
             app = OneStepApp.load(args.target)
     except Exception as exc:
@@ -160,7 +276,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
         argv = sys.argv[1:]
     if not argv:
         return argv
-    if argv[0].startswith("-") or argv[0] in {"run", "check", "init"}:
+    if argv[0].startswith("-") or argv[0] in {"run", "check", "init", "build"}:
         return argv
     return ["run", *argv]
 
@@ -203,6 +319,29 @@ def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:
         details = _format_task_details(task)
         if details:
             print(f"  {details}")
+
+
+def _print_build_summary(result: BuildResult, *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    print(f"Built: {result.output}")
+    print(f"Target: {result.target}")
+    print(f"Entrypoint: {result.entrypoint}")
+    print(f"Project root: {result.project_root}")
+    print(f"Files: {len(result.files)}")
+    print(f"Dependency mode: {result.dependency_mode}")
+    print(f"Checksum: sha256:{result.checksum_sha256}")
+    print(f"Size: {result.size_bytes} bytes")
+    check_label = "skipped" if not result.check_ran else "strict" if result.strict else "yes"
+    print(f"Check: {check_label}")
+    if result.manifest_path is not None:
+        print(f"Manifest: {result.manifest_path}")
+    if result.warnings:
+        print("Warnings:")
+        for warning in result.warnings:
+            print(f"- {warning}")
 
 
 def _format_timeout(value: float | None) -> str:
