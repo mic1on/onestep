@@ -24,6 +24,9 @@ Current scope:
 - design-time Pipeline Builder routes and UI for validating and exporting worker definitions
 - `frontend` monitoring console scaffold for service, task, and instance views
 
+When a saved Worker has a description, the Worker Builder emits it into the
+generated runtime YAML as `reporter.service_description`.
+
 ## Data model
 
 `backend` now defines these core tables:
@@ -35,6 +38,10 @@ Current scope:
 - `task_events`: discrete task lifecycle events with idempotent `event_id`
 - `agent_sessions`: active and historical WS sessions per runtime instance
 - `agent_commands`: control commands and lifecycle state per runtime instance
+
+`services.description` stores optional service-level descriptions reported by
+runtimes. Missing reporter fields leave the existing value unchanged; explicit
+`null` or blank values clear it.
 
 Production database configuration is supplied via `ONESTEP_CP_DATABASE_URL`, for example:
 
@@ -399,6 +406,9 @@ Query API endpoints:
 `GET /api/v1/services/{service_name}/tasks` now returns both runtime aggregates and the
 latest service-level topology snapshot from `task_definitions`. `GET /api/v1/services/{service_name}/dashboard`
 also exposes `topology_hashes` and `topology_consistent` to surface instance drift.
+Service list, detail, and dashboard summaries include `description`; the
+monitoring console displays it in the service list/detail views and includes it
+in service-list search.
 
 Run tests:
 

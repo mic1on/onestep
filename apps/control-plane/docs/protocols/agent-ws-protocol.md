@@ -127,6 +127,8 @@ Required payload fields:
 Identity rule:
 
 - `service.instance_id` is the stable runtime instance identity for session ownership
+- `service.description` is optional service-level metadata. Missing fields leave
+  the stored service description unchanged; explicit `null` or blank strings clear it.
 
 ## 11. `hello_ack`
 
