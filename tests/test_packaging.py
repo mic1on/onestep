@@ -49,9 +49,9 @@ def test_control_plane_is_plugin_optional_dependency_only() -> None:
     test_extra = _read_array("[project.optional-dependencies]", "test")
 
     assert all("websockets" not in dependency for dependency in dependencies)
-    assert control_plane == ["onestep-control-plane>=0.1.0"]
-    assert "onestep-control-plane>=0.1.0" in all_extra
-    assert "onestep-control-plane>=0.1.0" in dev_extra
+    assert control_plane == ["onestep-control-plane>=0.1.1"]
+    assert "onestep-control-plane>=0.1.1" in all_extra
+    assert "onestep-control-plane>=0.1.1" in dev_extra
     assert "websockets>=12.0" not in control_plane
     assert "websockets>=12.0" not in all_extra
     assert "websockets>=12.0" not in dev_extra

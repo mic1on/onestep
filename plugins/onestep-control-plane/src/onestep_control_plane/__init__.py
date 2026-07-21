@@ -25,7 +25,9 @@ try:
 except PackageNotFoundError:  # pragma: no cover - local source tree before install
     __version__ = "dev"
 
-_CONTROL_PLANE_REPORTER_FIELDS = frozenset({"type", "base_url", "token", "service_name"})
+_CONTROL_PLANE_REPORTER_FIELDS = frozenset(
+    {"type", "base_url", "token", "service_name", "service_description"}
+)
 
 
 def register(registry: ReporterRegistry) -> None:
@@ -47,6 +49,7 @@ def _build_control_plane_reporter(
         base_url=ctx.optional_string(spec, "base_url"),
         token=ctx.optional_string(spec, "token"),
         service_name=ctx.optional_string(spec, "service_name"),
+        service_description=ctx.optional_string(spec, "service_description"),
     )
     return ControlPlaneReporter(config)
 

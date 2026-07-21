@@ -20,7 +20,7 @@ onestep 提供官方 worker runtime image，适合以 YAML 为入口运行 worke
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.6.0
+  ghcr.io/mic1on/onestep-worker:1.7.1
 ```
 
 启动流程：
@@ -36,7 +36,7 @@ docker run --rm \
 ## 派生镜像
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.6.0
+FROM ghcr.io/mic1on/onestep-worker:1.7.1
 
 WORKDIR /workspace
 COPY . /workspace

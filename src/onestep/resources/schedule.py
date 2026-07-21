@@ -5,6 +5,8 @@ from typing import Any
 
 from onestep.connectors.schedule import DEFAULT_MAX_QUEUED_RUNS, CronSource, IntervalSource
 from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
     ResourceBuildContext,
     ResourceRegistry,
     ResourceSpecHandler,
@@ -42,12 +44,50 @@ _CRON_FIELDS = frozenset(
         "max_queued_runs",
     }
 )
+_INTERVAL_CATALOG = ResourceCatalogEntry(
+    type="interval",
+    roles=("source",),
+    label="Interval",
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("days", "number", default=0),
+        ResourceCatalogField("hours", "number", default=0),
+        ResourceCatalogField("minutes", "number", default=0),
+        ResourceCatalogField("seconds", "number", default=0),
+        ResourceCatalogField("payload", "json"),
+        ResourceCatalogField("immediate", "boolean", default=False),
+        ResourceCatalogField("overlap", "string", default="allow", options=("allow", "skip")),
+        ResourceCatalogField("timezone", "json"),
+        ResourceCatalogField("timezone_name", "string"),
+        ResourceCatalogField("poll_interval_s", "number"),
+        ResourceCatalogField("max_queued_runs", "integer", default=DEFAULT_MAX_QUEUED_RUNS),
+    ),
+    topology_fields=("days", "hours", "minutes", "seconds", "timezone_name", "poll_interval_s"),
+)
+_CRON_CATALOG = ResourceCatalogEntry(
+    type="cron",
+    roles=("source",),
+    label="Cron",
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("expression", "string", required=True),
+        ResourceCatalogField("payload", "json"),
+        ResourceCatalogField("immediate", "boolean", default=False),
+        ResourceCatalogField("overlap", "string", default="allow", options=("allow", "skip")),
+        ResourceCatalogField("timezone", "json"),
+        ResourceCatalogField("timezone_name", "string"),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("max_queued_runs", "integer", default=DEFAULT_MAX_QUEUED_RUNS),
+    ),
+    topology_fields=("expression", "timezone_name", "poll_interval_s"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="interval",
+            catalog=_INTERVAL_CATALOG,
             allowed_fields=_INTERVAL_FIELDS,
             build=_build_interval,
             validate=_validate_schedule,
@@ -56,6 +96,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="cron",
+            catalog=_CRON_CATALOG,
             allowed_fields=_CRON_FIELDS,
             build=_build_cron,
             validate=_validate_schedule,

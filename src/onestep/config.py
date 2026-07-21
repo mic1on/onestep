@@ -21,6 +21,7 @@ from .reporter_registry import (
     validate_reporter_spec,
 )
 from .resource_registry import (
+    ResourceCatalogEntry,
     ResourceBuildContext,
     ResourceRegistry,
     ResourceValidationContext,
@@ -385,6 +386,10 @@ def _ensure_resource_registry_loaded() -> ResourceRegistry:
     register_builtin_resources(registry)
     load_resource_plugins(registry)
     return registry
+
+
+def load_resource_catalog(*, role: str | None = None) -> tuple[ResourceCatalogEntry, ...]:
+    return _ensure_resource_registry_loaded().catalog_entries(role)
 
 
 def _ensure_reporter_registry_loaded() -> ReporterRegistry:

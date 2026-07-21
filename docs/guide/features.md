@@ -278,11 +278,15 @@ from onestep import ControlPlaneReporter, ControlPlaneReporterConfig
 
 app = OneStepApp("my-app")
 reporter = ControlPlaneReporter(
-    ControlPlaneReporterConfig.from_env(app_name=app.name)
+    ControlPlaneReporterConfig.from_env(
+        app_name=app.name,
+        service_description="同步计费数据到数仓",
+    )
 )
 reporter.attach(app)
 ```
 
+也可以继续使用 `reporter: true`，再通过 `ONESTEP_SERVICE_DESCRIPTION` 注入服务级描述。
 Reporter 会推送拓扑同步、心跳、指标和事件，也可以接收 `pause_task`、`resume_task`、`restart_task` 等远程任务控制命令。任务处理函数可以通过 `ctx.metrics.counter(...).inc()` 和 `ctx.metrics.gauge(...).set()` 上报低基数自定义指标。
 
 ## 对比 0.5.x

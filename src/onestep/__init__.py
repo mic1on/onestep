@@ -2,7 +2,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from importlib.util import find_spec as _find_spec
 
 from .app import OneStepApp
-from .config import load_app_config, load_yaml_app
+from .config import load_app_config, load_resource_catalog, load_yaml_app
 from .context import TaskContext
 from .envelope import Envelope
 from .events import InMemoryMetrics, StructuredEventLogger, TaskEvent, TaskEventKind
@@ -15,10 +15,15 @@ from .identity_store import (
 )
 from .metrics import CounterMetric, CustomMetricsRegistry, GaugeMetric, TaskMetrics
 from .resource_registry import (
+    CATALOG_FIELD_TYPES,
+    CATALOG_ROLES,
+    ResourceCatalogEntry,
+    ResourceCatalogField,
     ResourceBuildContext,
     ResourceRegistry,
     ResourceSpecHandler,
     ResourceValidationContext,
+    get_resource_catalog_entry,
     get_resource_handler,
     load_resource_plugins,
     register_resource_type,
@@ -100,7 +105,11 @@ _CORE_EXPORTS = [
     "MemoryQueue",
     "NoRetry",
     "OneStepApp",
+    "CATALOG_FIELD_TYPES",
+    "CATALOG_ROLES",
     "ResourceBuildContext",
+    "ResourceCatalogEntry",
+    "ResourceCatalogField",
     "ResourceRegistry",
     "ResourceSpecHandler",
     "ResourceValidationContext",
@@ -121,8 +130,10 @@ _CORE_EXPORTS = [
     "__version__",
     "build_default_state_dir",
     "derive_replica_instance_id",
+    "get_resource_catalog_entry",
     "get_resource_handler",
     "load_app_config",
+    "load_resource_catalog",
     "load_resource_plugins",
     "load_yaml_app",
     "register_resource_type",

@@ -24,6 +24,8 @@ COPY plugins/onestep-postgres/pyproject.toml plugins/onestep-postgres/README.md 
 COPY plugins/onestep-postgres/src/onestep_postgres /tmp/onestep/plugins/onestep-postgres/src/onestep_postgres
 COPY plugins/onestep-sqs/pyproject.toml plugins/onestep-sqs/README.md /tmp/onestep/plugins/onestep-sqs/
 COPY plugins/onestep-sqs/src/onestep_sqs /tmp/onestep/plugins/onestep-sqs/src/onestep_sqs
+COPY plugins/onestep-kafka/pyproject.toml plugins/onestep-kafka/README.md /tmp/onestep/plugins/onestep-kafka/
+COPY plugins/onestep-kafka/src/onestep_kafka /tmp/onestep/plugins/onestep-kafka/src/onestep_kafka
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install \
@@ -34,6 +36,7 @@ RUN python -m pip install --upgrade pip \
         /tmp/onestep/plugins/onestep-mysql \
         /tmp/onestep/plugins/onestep-postgres \
         /tmp/onestep/plugins/onestep-sqs \
+        /tmp/onestep/plugins/onestep-kafka \
     && rm -rf /tmp/onestep
 
 COPY docker/worker/entrypoint.sh /usr/local/bin/onestep-worker-entrypoint

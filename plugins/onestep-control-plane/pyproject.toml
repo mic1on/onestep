@@ -1,12 +1,12 @@
 [project]
 name = "onestep-control-plane"
-version = "0.1.0"
+version = "0.1.1"
 description = "Control-plane reporter and WebSocket integration plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
-    "onestep>=1.5.1",
+    "onestep>=1.6.1",
     "websockets>=12.0",
 ]
 

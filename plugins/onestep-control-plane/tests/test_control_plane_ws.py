@@ -31,6 +31,7 @@ def _make_config() -> ControlPlaneReporterConfig:
         token="secret-token",
         environment="prod",
         service_name="billing-sync",
+        service_description="Synchronizes billing data.",
         node_name="vm-prod-3",
         deployment_version="1.0.0+c435c99",
         instance_id=UUID("8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"),
@@ -256,6 +257,9 @@ def test_ws_sender_buffers_initial_heartbeat_until_sync() -> None:
     assert isinstance(sync_body, dict)
     assert isinstance(heartbeat_body, dict)
     assert sync_body["app"]["name"] == "billing-sync"
+    assert fake_transport.calls[0][1]["description"] == "Synchronizes billing data."
+    assert sync_body["service"]["description"] == "Synchronizes billing data."
+    assert heartbeat_body["service"]["description"] == "Synchronizes billing data."
     assert heartbeat_body["health"]["status"] == "ok"
 
 

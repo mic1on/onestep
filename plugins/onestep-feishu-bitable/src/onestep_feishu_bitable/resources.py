@@ -3,7 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler, ResourceValidationContext
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+    ResourceValidationContext,
+)
 
 from .connector import DEFAULT_FALLBACK_SCAN_PAGE_LIMIT, FeishuBitableConnector
 
@@ -27,12 +34,58 @@ _FEISHU_TABLE_SINK_FIELDS = frozenset(
     {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type"}
 )
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
+_FEISHU_BITABLE_CATALOG = ResourceCatalogEntry(
+    type="feishu_bitable",
+    roles=("connector",),
+    label="Feishu Bitable",
+    fields=(
+        ResourceCatalogField("app_id", "string", required=True),
+        ResourceCatalogField("app_secret", "string", required=True, secret=True),
+        ResourceCatalogField("base_url", "string", default="https://open.feishu.cn"),
+        ResourceCatalogField("timeout_s", "number", default=10.0),
+    ),
+)
+_FEISHU_INCREMENTAL_CATALOG = ResourceCatalogEntry(
+    type="feishu_bitable_incremental",
+    roles=("source",),
+    label="Feishu Bitable Incremental",
+    connector_types=("feishu_bitable",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("app_token", "string", required=True, secret=True),
+        ResourceCatalogField("table_id", "string", required=True),
+        ResourceCatalogField("cursor_field", "string", required=True),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("fallback_scan_page_limit", "integer", default=DEFAULT_FALLBACK_SCAN_PAGE_LIMIT),
+        ResourceCatalogField("state", "ref"),
+        ResourceCatalogField("state_key", "string"),
+        ResourceCatalogField("user_id_type", "string", options=tuple(sorted(_USER_ID_TYPES))),
+    ),
+    topology_fields=("app_token", "table_id", "cursor_field", "batch_size", "poll_interval_s"),
+)
+_FEISHU_TABLE_SINK_CATALOG = ResourceCatalogEntry(
+    type="feishu_bitable_table_sink",
+    roles=("sink",),
+    label="Feishu Bitable Table Sink",
+    connector_types=("feishu_bitable",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("app_token", "string", required=True, secret=True),
+        ResourceCatalogField("table_id", "string", required=True),
+        ResourceCatalogField("mode", "string", default="upsert", options=("upsert", "create", "update")),
+        ResourceCatalogField("match_fields", "string_list", required=True),
+        ResourceCatalogField("user_id_type", "string", options=tuple(sorted(_USER_ID_TYPES))),
+    ),
+    topology_fields=("app_token", "table_id", "mode", "match_fields"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="feishu_bitable",
+            catalog=_FEISHU_BITABLE_CATALOG,
             allowed_fields=_FEISHU_BITABLE_FIELDS,
             build=_build_feishu_bitable,
             validate=_validate_feishu_bitable,
@@ -41,6 +94,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="feishu_bitable_incremental",
+            catalog=_FEISHU_INCREMENTAL_CATALOG,
             allowed_fields=_FEISHU_INCREMENTAL_FIELDS,
             build=_build_feishu_bitable_incremental,
             validate=_validate_feishu_bitable_incremental,
@@ -49,6 +103,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="feishu_bitable_table_sink",
+            catalog=_FEISHU_TABLE_SINK_CATALOG,
             allowed_fields=_FEISHU_TABLE_SINK_FIELDS,
             build=_build_feishu_bitable_table_sink,
             validate=_validate_feishu_bitable_table_sink,

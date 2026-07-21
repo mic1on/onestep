@@ -5,6 +5,8 @@ from typing import Any
 
 from onestep.connectors.memory import MemoryQueue
 from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
     ResourceBuildContext,
     ResourceRegistry,
     ResourceSpecHandler,
@@ -12,12 +14,25 @@ from onestep.resource_registry import (
 )
 
 _MEMORY_FIELDS = frozenset({"type", "name", "maxsize", "batch_size", "poll_interval_s"})
+_MEMORY_CATALOG = ResourceCatalogEntry(
+    type="memory",
+    roles=("source", "sink"),
+    label="Memory Queue",
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("maxsize", "integer", required=True, default=0),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=0.1),
+    ),
+    topology_fields=("maxsize", "batch_size", "poll_interval_s"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="memory",
+            catalog=_MEMORY_CATALOG,
             allowed_fields=_MEMORY_FIELDS,
             build=_build_memory,
             validate=_validate_memory,

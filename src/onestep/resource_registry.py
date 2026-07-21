@@ -7,17 +7,124 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 _ENTRY_POINT_GROUP = "onestep.resources"
+CATALOG_ROLES = frozenset({"connector", "source", "sink", "state_store", "cursor_store"})
+CATALOG_FIELD_TYPES = frozenset(
+    {"string", "string_list", "integer", "number", "boolean", "mapping", "json", "ref"}
+)
+
+
+@dataclass(frozen=True)
+class ResourceCatalogField:
+    name: str
+    type: str
+    required: bool = False
+    default: Any = None
+    secret: bool = False
+    label: str | None = None
+    options: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", normalize_resource_type(require_non_empty_string(self.name, field="field.name")))
+        normalized_type = normalize_resource_type(require_non_empty_string(self.type, field=f"{self.name}.type"))
+        if normalized_type not in CATALOG_FIELD_TYPES:
+            raise ValueError(f"unsupported catalog field type {normalized_type!r} for {self.name!r}")
+        object.__setattr__(self, "type", normalized_type)
+        object.__setattr__(self, "required", bool(self.required))
+        object.__setattr__(self, "secret", bool(self.secret))
+        if self.label is not None:
+            object.__setattr__(self, "label", require_non_empty_string(self.label, field=f"{self.name}.label"))
+        object.__setattr__(
+            self,
+            "options",
+            tuple(require_non_empty_string(option, field=f"{self.name}.options") for option in self.options),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "name": self.name,
+            "type": self.type,
+            "required": self.required,
+            "secret": self.secret,
+        }
+        if self.default is not None:
+            result["default"] = self.default
+        if self.label is not None:
+            result["label"] = self.label
+        if self.options:
+            result["options"] = list(self.options)
+        return result
+
+
+@dataclass(frozen=True)
+class ResourceCatalogEntry:
+    type: str
+    roles: tuple[str, ...]
+    fields: tuple[ResourceCatalogField, ...] = ()
+    connector_types: tuple[str, ...] = ()
+    topology_fields: tuple[str, ...] = ()
+    label: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "type", normalize_resource_type(require_non_empty_string(self.type, field="type")))
+        roles = tuple(normalize_resource_type(require_non_empty_string(role, field=f"{self.type}.roles")) for role in self.roles)
+        if not roles:
+            raise ValueError(f"catalog entry {self.type!r} must define at least one role")
+        unknown_roles = sorted(role for role in roles if role not in CATALOG_ROLES)
+        if unknown_roles:
+            raise ValueError(f"unsupported catalog role(s) for {self.type!r}: {', '.join(unknown_roles)}")
+        if len(set(roles)) != len(roles):
+            raise ValueError(f"catalog entry {self.type!r} must not contain duplicate roles")
+        object.__setattr__(self, "roles", roles)
+        object.__setattr__(self, "fields", tuple(self.fields))
+        field_names = [field.name for field in self.fields]
+        if len(set(field_names)) != len(field_names):
+            raise ValueError(f"catalog entry {self.type!r} must not contain duplicate fields")
+        object.__setattr__(
+            self,
+            "connector_types",
+            tuple(normalize_resource_type(require_non_empty_string(item, field=f"{self.type}.connector_types")) for item in self.connector_types),
+        )
+        object.__setattr__(
+            self,
+            "topology_fields",
+            tuple(normalize_resource_type(require_non_empty_string(item, field=f"{self.type}.topology_fields")) for item in self.topology_fields),
+        )
+        unknown_topology_fields = sorted(set(self.topology_fields) - set(field_names))
+        if unknown_topology_fields:
+            raise ValueError(
+                f"catalog entry {self.type!r} references unknown topology field(s): "
+                + ", ".join(unknown_topology_fields)
+            )
+        if self.label is not None:
+            object.__setattr__(self, "label", require_non_empty_string(self.label, field=f"{self.type}.label"))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "roles": list(self.roles),
+            "label": self.label or self.type,
+            "connector_types": list(self.connector_types),
+            "fields": [field.as_dict() for field in self.fields],
+            "topology_fields": list(self.topology_fields),
+        }
 
 
 @dataclass(frozen=True)
 class ResourceSpecHandler:
     type: str
+    catalog: ResourceCatalogEntry
     allowed_fields: frozenset[str] | None
     build: Callable[["ResourceBuildContext", Mapping[str, Any]], Any]
     validate: Callable[["ResourceValidationContext", Mapping[str, Any]], None] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "type", normalize_resource_type(require_non_empty_string(self.type, field="type")))
+        if not isinstance(self.catalog, ResourceCatalogEntry):
+            raise TypeError("ResourceSpecHandler.catalog must be a ResourceCatalogEntry")
+        if self.catalog.type != self.type:
+            raise ValueError(
+                f"resource handler type {self.type!r} must match catalog type {self.catalog.type!r}"
+            )
         if self.allowed_fields is not None:
             object.__setattr__(self, "allowed_fields", frozenset(self.allowed_fields))
 
@@ -38,6 +145,22 @@ class ResourceRegistry:
 
     def get_resource_handler(self, resource_type: str) -> ResourceSpecHandler | None:
         return self._handlers.get(normalize_resource_type(resource_type))
+
+    def get_resource_catalog_entry(self, resource_type: str) -> ResourceCatalogEntry | None:
+        handler = self.get_resource_handler(resource_type)
+        return None if handler is None else handler.catalog
+
+    def catalog_entries(self, role: str | None = None) -> tuple[ResourceCatalogEntry, ...]:
+        if role is None:
+            return tuple(handler.catalog for _, handler in sorted(self._handlers.items()))
+        normalized_role = normalize_resource_type(role)
+        if normalized_role not in CATALOG_ROLES:
+            raise ValueError(f"unsupported catalog role {normalized_role!r}")
+        return tuple(
+            handler.catalog
+            for _, handler in sorted(self._handlers.items())
+            if normalized_role in handler.catalog.roles
+        )
 
     def handlers(self) -> Mapping[str, ResourceSpecHandler]:
         return dict(self._handlers)
@@ -134,6 +257,10 @@ def register_resource_type(handler: ResourceSpecHandler) -> None:
 
 def get_resource_handler(resource_type: str) -> ResourceSpecHandler | None:
     return default_resource_registry().get_resource_handler(resource_type)
+
+
+def get_resource_catalog_entry(resource_type: str) -> ResourceCatalogEntry | None:
+    return default_resource_registry().get_resource_catalog_entry(resource_type)
 
 
 def load_resource_plugins(registry: ResourceRegistry | None = None) -> None:

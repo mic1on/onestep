@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from onestep.resource_registry import ResourceBuildContext, ResourceRegistry, ResourceSpecHandler
+from onestep.resource_registry import (
+    ResourceCatalogEntry,
+    ResourceCatalogField,
+    ResourceBuildContext,
+    ResourceRegistry,
+    ResourceSpecHandler,
+)
 
 from .connector import PostgresConnector
 
@@ -21,12 +27,106 @@ _POSTGRES_INCREMENTAL_FIELDS = frozenset(
     {"type", "connector", "table", "key", "cursor", "where", "batch_size", "poll_interval_s", "state", "state_key"}
 )
 _POSTGRES_TABLE_SINK_FIELDS = frozenset({"type", "connector", "table", "mode", "keys"})
+_POSTGRES_CATALOG = ResourceCatalogEntry(
+    type="postgres",
+    roles=("connector",),
+    label="Postgres",
+    fields=(
+        ResourceCatalogField("dsn", "string", required=True, secret=True),
+        ResourceCatalogField("engine_options", "mapping"),
+        ResourceCatalogField("host", "string"),
+        ResourceCatalogField("port", "string"),
+        ResourceCatalogField("database", "string"),
+        ResourceCatalogField("username", "string"),
+        ResourceCatalogField("password", "string", secret=True),
+    ),
+)
+_POSTGRES_STATE_STORE_CATALOG = ResourceCatalogEntry(
+    type="postgres_state_store",
+    roles=("state_store",),
+    label="Postgres State Store",
+    connector_types=("postgres",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", default="onestep_state"),
+        ResourceCatalogField("key_column", "string", default="state_key"),
+        ResourceCatalogField("value_column", "string", default="state_value"),
+        ResourceCatalogField("updated_at_column", "string", default="updated_at"),
+        ResourceCatalogField("auto_create", "boolean", default=True),
+    ),
+    topology_fields=("table", "key_column"),
+)
+_POSTGRES_CURSOR_STORE_CATALOG = ResourceCatalogEntry(
+    type="postgres_cursor_store",
+    roles=("cursor_store",),
+    label="Postgres Cursor Store",
+    connector_types=("postgres",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", default="onestep_cursor"),
+        ResourceCatalogField("key_column", "string", default="cursor_key"),
+        ResourceCatalogField("value_column", "string", default="cursor_value"),
+        ResourceCatalogField("updated_at_column", "string", default="updated_at"),
+        ResourceCatalogField("auto_create", "boolean", default=True),
+    ),
+    topology_fields=("table", "key_column"),
+)
+_POSTGRES_TABLE_QUEUE_CATALOG = ResourceCatalogEntry(
+    type="postgres_table_queue",
+    roles=("source",),
+    label="Postgres Table Queue",
+    connector_types=("postgres",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", required=True),
+        ResourceCatalogField("key", "string", required=True),
+        ResourceCatalogField("where", "string", required=True),
+        ResourceCatalogField("claim", "mapping", required=True),
+        ResourceCatalogField("ack", "mapping", required=True),
+        ResourceCatalogField("nack", "mapping"),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+    ),
+    topology_fields=("table", "key", "batch_size", "poll_interval_s"),
+)
+_POSTGRES_INCREMENTAL_CATALOG = ResourceCatalogEntry(
+    type="postgres_incremental",
+    roles=("source",),
+    label="Postgres Incremental",
+    connector_types=("postgres",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", required=True),
+        ResourceCatalogField("key", "string", required=True),
+        ResourceCatalogField("cursor", "string_list", required=True),
+        ResourceCatalogField("where", "string"),
+        ResourceCatalogField("batch_size", "integer", default=1000),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("state", "ref"),
+        ResourceCatalogField("state_key", "string"),
+    ),
+    topology_fields=("table", "key", "cursor", "batch_size", "poll_interval_s"),
+)
+_POSTGRES_TABLE_SINK_CATALOG = ResourceCatalogEntry(
+    type="postgres_table_sink",
+    roles=("sink",),
+    label="Postgres Table Sink",
+    connector_types=("postgres",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("table", "string", required=True),
+        ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert")),
+        ResourceCatalogField("keys", "string_list"),
+    ),
+    topology_fields=("table", "mode", "keys"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="postgres",
+            catalog=_POSTGRES_CATALOG,
             allowed_fields=_POSTGRES_FIELDS,
             build=_build_postgres,
         )
@@ -34,6 +134,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="postgres_state_store",
+            catalog=_POSTGRES_STATE_STORE_CATALOG,
             allowed_fields=_POSTGRES_STATE_STORE_FIELDS,
             build=_build_postgres_state_store,
         )
@@ -41,6 +142,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="postgres_cursor_store",
+            catalog=_POSTGRES_CURSOR_STORE_CATALOG,
             allowed_fields=_POSTGRES_CURSOR_STORE_FIELDS,
             build=_build_postgres_cursor_store,
         )
@@ -48,6 +150,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="postgres_table_queue",
+            catalog=_POSTGRES_TABLE_QUEUE_CATALOG,
             allowed_fields=_POSTGRES_TABLE_QUEUE_FIELDS,
             build=_build_postgres_table_queue,
         )
@@ -55,6 +158,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="postgres_incremental",
+            catalog=_POSTGRES_INCREMENTAL_CATALOG,
             allowed_fields=_POSTGRES_INCREMENTAL_FIELDS,
             build=_build_postgres_incremental,
         )
@@ -62,6 +166,7 @@ def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
             type="postgres_table_sink",
+            catalog=_POSTGRES_TABLE_SINK_CATALOG,
             allowed_fields=_POSTGRES_TABLE_SINK_FIELDS,
             build=_build_postgres_table_sink,
         )

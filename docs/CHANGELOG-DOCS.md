@@ -1,5 +1,19 @@
 # 文档更新日志
 
+## 2026-07-21 - 同步 1.7.1 与服务描述文档
+
+### 变更概述
+
+将 docs 分支同步到 `main` 的 1.7.1 代码与文档状态，并补充 Control Plane 服务级描述的配置说明。
+
+### 更新内容
+
+- 快速开始页版本号更新为 `1.7.1`。
+- 部署与 Worker Runtime Image 示例同步到 `ghcr.io/mic1on/onestep-worker:1.7.1`。
+- YAML 任务定义文档补充 `reporter.service_description`、`ONESTEP_SERVICE_DESCRIPTION` 和 `tasks[].description` 的边界。
+- Control Plane 页面补充服务描述配置、环境变量和 `reporter: true` 的兼容说明。
+- 合入 resource catalog、control-plane reporter plugin 发布和插件拓扑字段更新。
+
 ## 2026-07-20 - 同步 1.6.0 与新插件文档
 
 ### 变更概述

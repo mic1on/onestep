@@ -91,13 +91,26 @@ YAML 也可以直接启用：
 reporter: true
 ```
 
+`reporter: true` 仍然是推荐的最小配置，会从环境变量读取连接信息。
+如果要把服务描述固定在配置文件里，可以改成 mapping：
+
+```yaml
+reporter:
+  service_description: Synchronizes billing data into the warehouse
+```
+
 环境变量配置：
 
 | 变量 | 说明 | 示例 |
 |---|---|---|
 | `ONESTEP_CONTROL_PLANE_URL` | Control Plane 服务地址 | `http://192.168.1.100:8080` |
+| `ONESTEP_CONTROL_PLANE_TOKEN` | Worker 上报认证 Token | `my-token` |
 | `ONESTEP_CONTROL_PLANE_ENVIRONMENT` | 部署环境标签 | `prod` / `staging` |
-| `ONESTEP_INGEST_TOKEN` | 认证 Token | `my-token` |
+| `ONESTEP_SERVICE_NAME` | 服务名；未设置时默认使用 `app.name` | `billing-sync` |
+| `ONESTEP_SERVICE_DESCRIPTION` | 服务级描述；会展示在服务目录和服务详情中 | `同步计费数据到数仓` |
+
+`reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` 是服务级元数据，
+和 `tasks[].description` 这种任务级描述相互独立。
 
 更多配置项请参考 `ControlPlaneReporterConfig` 的 `from_env` 方法。
 

@@ -5,7 +5,8 @@ from typing import Any
 
 from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
-from onestep_sqs import SQSConnector, SQSQueue
+from onestep.resource_registry import ResourceRegistry
+from onestep_sqs import SQSConnector, SQSQueue, register
 from onestep_sqs.resilience import as_sqs_connector_operation_error, classify_sqs_error
 
 
@@ -17,6 +18,21 @@ def test_package_exposes_onestep_resource_entry_point() -> None:
         and entry_point.value == "onestep_sqs:register"
         for entry_point in entry_points
     )
+
+
+def test_sqs_plugin_registers_catalog_metadata() -> None:
+    registry = ResourceRegistry()
+    register(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    connector_fields = {field.name: field for field in catalog["sqs"].fields}
+    queue_fields = {field.name: field for field in catalog["sqs_queue"].fields}
+
+    assert catalog["sqs"].roles == ("connector",)
+    assert connector_fields["options"].secret is True
+    assert catalog["sqs_queue"].roles == ("source", "sink")
+    assert catalog["sqs_queue"].connector_types == ("sqs",)
+    assert queue_fields["url"].required is True
+    assert queue_fields["url"].secret is True
 
 
 def test_yaml_builds_sqs_resources_via_plugin_entry_point() -> None:

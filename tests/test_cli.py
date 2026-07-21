@@ -54,13 +54,14 @@ def install_fake_control_plane_reporter(monkeypatch, created: list[object]) -> N
 
         def attach(self, app):
             self.app = app
-            app.set_reporter_summary(
-                {
-                    "type": "control_plane",
-                    "base_url": self.config.base_url,
-                    "service_name": self.config.service_name or app.name,
-                }
-            )
+            summary = {
+                "type": "control_plane",
+                "base_url": self.config.base_url,
+                "service_name": self.config.service_name or app.name,
+            }
+            if getattr(self.config, "service_description", None):
+                summary["service_description"] = self.config.service_description
+            app.set_reporter_summary(summary)
             app.on_startup(lambda: None)
             app.on_shutdown(lambda: None)
             app.on_event(lambda event: None)
@@ -81,13 +82,16 @@ def install_fake_control_plane_reporter(monkeypatch, created: list[object]) -> N
             base_url=base_url,
             token=token,
             service_name=spec.get("service_name") or ctx.app.name,
+            service_description=spec.get("service_description"),
         )
         return FakeReporter(config)
 
     registry.register_reporter_type(
         config_module.ReporterSpecHandler(
             type="control_plane",
-            allowed_fields=frozenset({"type", "base_url", "token", "service_name"}),
+            allowed_fields=frozenset(
+                {"type", "base_url", "token", "service_name", "service_description"}
+            ),
             build=build,
         )
     )
@@ -169,6 +173,23 @@ def test_cli_invalid_target_returns_non_zero(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "failed to load testsupport_missing_module:app" in captured.err
+
+
+def test_cli_catalog_json_outputs_installed_resources(capsys) -> None:
+    exit_code = main(["catalog", "--json"])
+
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+    resources = {item["type"]: item for item in body["resources"]}
+    assert exit_code == 0
+    assert set(resources) >= {"memory", "interval", "cron", "webhook", "http_sink"}
+    assert resources["memory"]["roles"] == ["source", "sink"]
+    assert resources["http_sink"]["fields"][1] == {
+        "name": "url",
+        "type": "string",
+        "required": True,
+        "secret": True,
+    }
 
 
 def test_cli_init_creates_minimal_project(tmp_path, monkeypatch, capsys) -> None:
@@ -1375,6 +1396,33 @@ def test_yaml_target_reporter_mapping_overrides_env_defaults(monkeypatch, tmp_pa
     assert created[0].config.service_name == "billing-sync-worker"
 
 
+def test_yaml_target_reporter_mapping_accepts_service_description(monkeypatch, tmp_path) -> None:
+    config_path = tmp_path / "reporter-description.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "yaml-reporter",
+                "reporter": {
+                    "base_url": "https://yaml-control-plane.example.com",
+                    "service_name": "billing-sync-worker",
+                    "service_description": "Synchronizes billing data.",
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ONESTEP_CONTROL_TOKEN", "env-token")
+    created = []
+    install_fake_control_plane_reporter(monkeypatch, created)
+
+    with registered_yaml_module():
+        app = OneStepApp.load(str(config_path))
+
+    assert created[0].config.service_description == "Synchronizes billing data."
+    assert app.describe()["reporter"]["service_description"] == "Synchronizes billing data."
+
+
 def test_cli_check_prints_reporter_summary_for_yaml_target(monkeypatch, tmp_path, capsys) -> None:
     config_path = tmp_path / "reporter-summary.yaml"
     config_path.write_text(
@@ -1384,6 +1432,7 @@ def test_cli_check_prints_reporter_summary_for_yaml_target(monkeypatch, tmp_path
                 "reporter": {
                     "base_url": "https://yaml-control-plane.example.com",
                     "service_name": "billing-sync-worker",
+                    "service_description": "Synchronizes billing data.",
                 },
                 "tasks": [],
             }
@@ -1400,5 +1449,6 @@ def test_cli_check_prints_reporter_summary_for_yaml_target(monkeypatch, tmp_path
     assert exit_code == 0
     assert (
         "Reporter: control_plane service=billing-sync-worker "
-        "base_url=https://yaml-control-plane.example.com"
+        "base_url=https://yaml-control-plane.example.com "
+        "description='Synchronizes billing data.'"
     ) in captured.out

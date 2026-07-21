@@ -317,7 +317,12 @@ reporter:
   base_url: https://control-plane.example.com
   token: ${ONESTEP_CONTROL_PLANE_TOKEN}
   service_name: billing-sync-worker
+  service_description: Synchronizes billing data into the warehouse
 ```
+
+- `service_description` is optional service-level metadata shown by the control plane.
+- It can also be supplied with `ONESTEP_SERVICE_DESCRIPTION`.
+- Task-level `tasks[].description` remains separate and describes an individual task.
 
 ### Level 8: Full Wiring Example
 

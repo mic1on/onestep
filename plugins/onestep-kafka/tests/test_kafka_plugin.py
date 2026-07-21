@@ -7,7 +7,8 @@ import pytest
 
 from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
-from onestep_kafka import KafkaConnector, KafkaTopic
+from onestep.resource_registry import ResourceRegistry
+from onestep_kafka import KafkaConnector, KafkaTopic, register
 from onestep_kafka.resilience import as_kafka_connector_operation_error, classify_kafka_error
 
 
@@ -19,6 +20,19 @@ def test_package_exposes_onestep_resource_entry_point() -> None:
         and entry_point.value == "onestep_kafka:register"
         for entry_point in entry_points
     )
+
+
+def test_kafka_plugin_registers_catalog_metadata() -> None:
+    registry = ResourceRegistry()
+    register(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    connector_fields = {field.name: field for field in catalog["kafka"].fields}
+
+    assert catalog["kafka"].roles == ("connector",)
+    assert connector_fields["bootstrap_servers"].required is True
+    assert connector_fields["options"].secret is True
+    assert catalog["kafka_topic"].roles == ("source", "sink")
+    assert catalog["kafka_topic"].connector_types == ("kafka",)
 
 
 def test_yaml_builds_kafka_resources_via_plugin_entry_point() -> None:

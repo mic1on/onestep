@@ -201,7 +201,7 @@ entrypoint。使用 `--json` 可以输出适合自动化流程消费的构建报
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.6.0
+    ghcr.io/mic1on/onestep-worker:1.7.1
   ```
   详见 [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md)。
 - **嵌入 Web 应用** —— FastAPI/Django 的推荐形态，见
@@ -221,6 +221,8 @@ reporter: true
 ```
 
 必需环境变量：`ONESTEP_CONTROL_PLANE_URL`、`ONESTEP_CONTROL_PLANE_TOKEN`。
+可选：设置 `reporter.service_description` 或 `ONESTEP_SERVICE_DESCRIPTION` 后，
+Control Plane 会在服务目录展示服务描述。
 
 身份解析、多副本指引、环境变量、本地 demo，见
 [`docs/stable-instance-identity.md`](docs/stable-instance-identity.md)。
