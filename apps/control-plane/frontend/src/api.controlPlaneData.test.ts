@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  dispatchTaskManualRun,
   getFanoutCommandIds,
   loadControlPlaneData,
+  loadTaskManualRunTargets,
   loadTaskEventLogs,
   loadTaskMetricWindows,
+  parseManualRunPayload,
   pollTaskCommandCompletion,
 } from './api';
 import type { Task } from './types';
@@ -13,6 +16,10 @@ function jsonResponse(body: unknown, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function calledUrl(call: unknown[]) {
+  return new URL(String(call[0]));
 }
 
 const serviceSummary = {
@@ -47,6 +54,7 @@ const taskFixture: Task = {
   environment: 'dev',
   serviceId: 'control-plane-demo:dev',
   name: 'inspect_dead_letter',
+  description: null,
   viewStatus: 'running',
   supportedCommands: ['pause_task', 'resume_task', 'restart_task'],
   pipelineSource: 'memory_queue',
@@ -110,7 +118,7 @@ describe('loadControlPlaneData', () => {
           items: [
             {
               task_name: 'inspect_dead_letter',
-              description: null,
+              description: 'Synchronizes order rows into the audit table',
               source_name: 'memory_queue',
               source_kind: 'memory_queue',
               source_config: { queue: 'control-plane-demo.dead-letter' },
@@ -211,7 +219,7 @@ describe('loadControlPlaneData', () => {
           items: [
             {
               task_name: 'sync_orders',
-              description: null,
+              description: 'Synchronizes order rows into the audit table',
               source_name: 'mysql.orders',
               source_kind: 'mysql_incremental',
               source_config: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
@@ -270,6 +278,7 @@ describe('loadControlPlaneData', () => {
     expect(data.tasks[0]).toEqual(
       expect.objectContaining({
         sourceKind: 'mysql_incremental',
+        description: 'Synchronizes order rows into the audit table',
         sourceName: 'mysql.orders',
         sourceConfig: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
         sinkKind: 'mysql_table_sink',
@@ -779,5 +788,134 @@ describe('loadControlPlaneData', () => {
     });
 
     expect(result).toEqual({ completed: true, failed: true });
+  });
+});
+
+describe('manual task runs', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('parses only JSON object payloads', () => {
+    expect(parseManualRunPayload('{"source":"manual"}')).toEqual({ source: 'manual' });
+    expect(() => parseManualRunPayload('["not-object"]')).toThrow('Payload must be a JSON object.');
+  });
+
+  it('loads only online manual-run-capable targets', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        service: serviceSummary,
+        task_name: 'inspect_dead_letter',
+        lookback_minutes: 60,
+        lookback_started_at: '2026-07-16T07:00:00Z',
+        summary: {},
+        task_control: {
+          task_name: 'inspect_dead_letter',
+          instances: [
+            {
+              instance_id: 'inst-manual',
+              node_name: 'worker-a',
+              connectivity: 'online',
+              status: 'ok',
+              last_seen_at: '2026-07-16T08:00:00Z',
+              supported_commands: ['run_task_once'],
+              state_known: true,
+              pause_requested: false,
+              paused: false,
+              accepting_new_work: true,
+              runner_count: 1,
+              parked_runner_count: 0,
+              fetching_runner_count: 1,
+              inflight_task_count: 0,
+            },
+            {
+              instance_id: 'inst-no-command',
+              node_name: 'worker-b',
+              connectivity: 'online',
+              status: 'ok',
+              last_seen_at: '2026-07-16T08:00:00Z',
+              supported_commands: ['pause_task'],
+              state_known: true,
+              pause_requested: false,
+              paused: false,
+              accepting_new_work: true,
+              runner_count: 1,
+              parked_runner_count: 0,
+              fetching_runner_count: 1,
+              inflight_task_count: 0,
+            },
+            {
+              instance_id: 'inst-offline',
+              node_name: 'worker-c',
+              connectivity: 'offline',
+              status: 'ok',
+              last_seen_at: '2026-07-16T08:00:00Z',
+              supported_commands: ['run_task_once'],
+              state_known: true,
+              pause_requested: false,
+              paused: false,
+              accepting_new_work: true,
+              runner_count: 1,
+              parked_runner_count: 0,
+              fetching_runner_count: 1,
+              inflight_task_count: 0,
+            },
+          ],
+        },
+        recent_metric_windows: [],
+        recent_events: [],
+      }),
+    );
+
+    await expect(loadTaskManualRunTargets(taskFixture)).resolves.toEqual([
+      {
+        instanceId: 'inst-manual',
+        nodeName: 'worker-a',
+        runnerCount: 1,
+        inflightTaskCount: 0,
+        acceptingNewWork: true,
+      },
+    ]);
+    expect(calledUrl(fetchMock.mock.calls[0]).pathname).toBe(
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter',
+    );
+  });
+
+  it('dispatches run_task_once with selected targets and payload', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        kind: 'run_task_once',
+        target_mode: 'selected_instances',
+        offline_behavior: 'skip',
+        noop_reason_code: null,
+        noop_reason_message: null,
+        counts: { dispatched: 1, queued: 0, skipped: 0, rejected: 0, total: 1 },
+        dispatched: [],
+        queued: [],
+        skipped: [],
+        rejected: [],
+      }),
+    );
+
+    await dispatchTaskManualRun(taskFixture, {
+      targetInstanceIds: ['inst-manual'],
+      payload: { source: 'manual', dry_run: true },
+      reason: 'Verify the manual run path',
+    });
+
+    const url = calledUrl(fetchMock.mock.calls[0]);
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(url.pathname).toBe('/api/v1/services/control-plane-demo/tasks/inspect_dead_letter/commands');
+    expect(url.searchParams.get('environment')).toBe('dev');
+    expect(request).toEqual(expect.objectContaining({ method: 'POST' }));
+    expect(JSON.parse(String(request.body))).toEqual({
+      kind: 'run_task_once',
+      args: { payload: { source: 'manual', dry_run: true } },
+      timeout_s: 120,
+      reason: 'Verify the manual run path',
+      target_mode: 'selected_instances',
+      target_instance_ids: ['inst-manual'],
+      offline_behavior: 'skip',
+    });
   });
 });

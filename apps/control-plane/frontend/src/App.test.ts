@@ -17,6 +17,7 @@ function task(viewStatus: Task['viewStatus'], supportedCommands: TaskCommandKind
     id: `service:prod:${viewStatus}`,
     serviceId: 'service:prod',
     name: `${viewStatus}_task`,
+    description: null,
     viewStatus,
     supportedCommands,
     pipelineSource: 'cron',

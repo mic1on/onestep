@@ -11,6 +11,7 @@ const baseTask: Task = {
   environment: 'prod',
   serviceId: 'ceegic:prod',
   name: 'sync_user_record',
+  description: null,
   viewStatus: 'idle',
   supportedCommands: [],
   pipelineSource: 'cron',

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   dispatchInstanceCommand,
   dispatchServiceCommand,
+  dispatchTaskManualRun,
   dispatchTaskCommand,
   formatRelativeTime,
   getFanoutCommandIds,
@@ -9,18 +10,22 @@ import {
   getResourceCatalog,
   isAuthRequiredError,
   loadControlPlaneData,
+  loadTaskManualRunTargets,
   loadTaskEventLogs,
   loadTaskMetricWindows,
   logoutConsole,
+  parseManualRunPayload,
   pollTaskCommandCompletion,
   pollTaskPauseRequested,
   DEFAULT_TASK_EVENT_LOOKBACK_MINUTES,
   DEFAULT_TASK_EVENT_PAGE_SIZE,
   DEFAULT_TASK_METRIC_LOOKBACK_MINUTES,
   type Environment,
+  type JsonObject,
   type ServiceCommandFanoutResponse,
   type ServiceSummaryStats,
   type ResourceCatalogEntry,
+  type TaskManualRunTarget,
   type TaskMetricChartPointSummary,
 } from './api';
 import {
@@ -62,6 +67,7 @@ import {
   ArrowLeft,
   Globe,
   Check,
+  X,
 } from 'lucide-react';
 
 const EMPTY_SERVICE: Service = {
@@ -161,6 +167,14 @@ export default function App() {
   // dispatched, polling pause_requested until it reflects the new state or times
   // out). Drives the Loading state on the toggle button for that task.
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  const [manualRunTaskId, setManualRunTaskId] = useState<string | null>(null);
+  const [manualRunTargets, setManualRunTargets] = useState<TaskManualRunTarget[]>([]);
+  const [manualRunTargetIds, setManualRunTargetIds] = useState<string[]>([]);
+  const [manualRunPayloadText, setManualRunPayloadText] = useState('{}');
+  const [manualRunReason, setManualRunReason] = useState('');
+  const [manualRunError, setManualRunError] = useState<string | null>(null);
+  const [isManualRunLoadingTargets, setIsManualRunLoadingTargets] = useState(false);
+  const [isManualRunSubmitting, setIsManualRunSubmitting] = useState(false);
 
   // --- Toast Notifications ---
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'info' | 'warn' }[]>([]);
@@ -425,12 +439,17 @@ export default function App() {
     if (!selectedTaskId) return null;
     return tasks.find((t) => t.id === selectedTaskId) || null;
   }, [tasks, selectedTaskId]);
+  const manualRunTask = useMemo(() => {
+    if (!manualRunTaskId) return null;
+    return tasks.find((t) => t.id === manualRunTaskId) || null;
+  }, [manualRunTaskId, tasks]);
   const serviceHasOnlineInstances = selectedService.activeInstances > 0;
   const selectedTaskIsOffline = selectedTask?.viewStatus === 'offline' || !serviceHasOnlineInstances;
   const selectedTaskToggleCommand = getTaskToggleCommand(selectedTask);
   const selectedTaskToggleIsPause = selectedTaskToggleCommand === 'pause_task';
   const selectedTaskCanToggle = isTaskToggleSupported(selectedTask);
   const selectedTaskCanRestart = taskSupportsCommand(selectedTask, 'restart_task');
+  const selectedTaskCanRunOnce = taskSupportsCommand(selectedTask, 'run_task_once');
   const isPendingTaskToggle = !!selectedTask && pendingTaskId === selectedTask.id;
   const headerStatus = getHeaderStatus(selectedService.viewStatus, selectedTask?.viewStatus, tr);
   const handleTaskEventLookbackMinutesChange = useCallback((minutes: number) => {
@@ -708,6 +727,109 @@ export default function App() {
     addToast(tr('toast.serviceCommandNoTargets', { name: task?.name ?? taskId }), 'warn');
   };
 
+  const closeManualRunDialog = (force = false) => {
+    if (isManualRunSubmitting && !force) return;
+    setManualRunTaskId(null);
+    setManualRunTargets([]);
+    setManualRunTargetIds([]);
+    setManualRunPayloadText('{}');
+    setManualRunReason('');
+    setManualRunError(null);
+    setIsManualRunLoadingTargets(false);
+  };
+
+  const handleOpenManualRun = async (taskId: string) => {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task?.apiName) {
+      addToast(tr('toast.serviceCommandNoTargets', { name: task?.name ?? taskId }), 'warn');
+      return;
+    }
+    if (!apiConnected) {
+      addToast(tr('toast.serviceCommandNoTargets', { name: task.name }), 'warn');
+      return;
+    }
+    if (!taskSupportsCommand(task, 'run_task_once')) {
+      addToast(tr('toast.taskCommandUnsupported', { name: task.name }), 'warn');
+      return;
+    }
+
+    setManualRunTaskId(task.id);
+    setManualRunTargets([]);
+    setManualRunTargetIds([]);
+    setManualRunPayloadText('{}');
+    setManualRunReason('');
+    setManualRunError(null);
+    setIsManualRunLoadingTargets(true);
+    addToast(tr('toast.taskManualRunDispatch', { name: task.name }), 'info');
+
+    try {
+      const targets = await loadTaskManualRunTargets(task);
+      setManualRunTargets(targets);
+      setManualRunTargetIds(targets.map((target) => target.instanceId));
+    } catch (error) {
+      if (isAuthRequiredError(error)) {
+        redirectToLogin();
+        return;
+      }
+      setManualRunError(getApiErrorMessage(error));
+    } finally {
+      setIsManualRunLoadingTargets(false);
+    }
+  };
+
+  const toggleManualRunTarget = (instanceId: string) => {
+    setManualRunTargetIds((current) =>
+      current.includes(instanceId)
+        ? current.filter((targetId) => targetId !== instanceId)
+        : [...current, instanceId],
+    );
+  };
+
+  const handleManualRunSubmit = async () => {
+    if (!manualRunTask) return;
+    setManualRunError(null);
+
+    if (manualRunTargetIds.length === 0) {
+      setManualRunError(tr('manualRun.selectTargetError'));
+      return;
+    }
+    const trimmedReason = manualRunReason.trim();
+    if (!trimmedReason) {
+      setManualRunError(tr('manualRun.reasonRequired'));
+      return;
+    }
+
+    let payload: JsonObject;
+    try {
+      payload = parseManualRunPayload(manualRunPayloadText);
+    } catch {
+      setManualRunError(tr('manualRun.payloadObjectError'));
+      return;
+    }
+
+    setIsManualRunSubmitting(true);
+    try {
+      const response = await dispatchTaskManualRun(manualRunTask, {
+        targetInstanceIds: manualRunTargetIds,
+        payload,
+        reason: trimmedReason,
+      });
+      const accepted = handleFanoutResponse(
+        response,
+        manualRunTask.name,
+        tr('toast.taskManualRunAccepted', { name: manualRunTask.name }),
+      );
+      if (accepted) {
+        closeManualRunDialog(true);
+        await refreshControlPlaneData(manualRunTask.serviceId, true);
+      }
+    } catch (error) {
+      handleApiActionError(error, tr('error.taskManualRunFailed'));
+    } finally {
+      setIsManualRunSubmitting(false);
+    }
+  };
+
   // Restart Instance
   const handleRestartInstance = async (uuid: string) => {
     const instance = instances.find((item) => item.uuid === uuid);
@@ -963,17 +1085,33 @@ export default function App() {
                       {headerStatus.label}
                     </span>
                   </div>
-                  {!selectedTask && selectedService.description && (
+                  {selectedTask?.description ? (
+                    <p className="ml-10 mt-1 max-w-3xl text-sm font-medium text-slate-500">
+                      {selectedTask.description}
+                    </p>
+                  ) : !selectedTask && selectedService.description ? (
                     <p className="ml-10 mt-1 max-w-3xl text-sm font-medium text-slate-500">
                       {selectedService.description}
                     </p>
-                  )}
+                  ) : null}
                 </div>
 
                 {/* Main Action Triggers */}
                 <div className="flex gap-2 self-start sm:self-center">
                   {selectedTask ? (
                     <>
+                      <button
+                        onClick={() => handleOpenManualRun(selectedTask.id)}
+                        disabled={selectedTaskIsOffline || !selectedTaskCanRunOnce || !apiConnected || isPendingTaskToggle || isManualRunSubmitting}
+                        className="flex items-center gap-1.5 px-4 py-2 border border-emerald-200 rounded-lg text-emerald-700 hover:bg-emerald-50 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isManualRunSubmitting && manualRunTaskId === selectedTask.id ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Play className="w-4 h-4" />
+                        )}
+                        <span>{tr('button.runOnce')}</span>
+                      </button>
                       <button
                         onClick={() => handleRestartTask(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanRestart || !apiConnected || isPendingTaskToggle}
@@ -985,11 +1123,7 @@ export default function App() {
                           <RotateCcw className="w-4 h-4" />
                         )}
                         <span>
-                          {isPendingTaskToggle
-                            ? tr('button.processing')
-                            : selectedTaskCanRestart
-                            ? tr('button.restart')
-                            : tr('button.unavailable')}
+                          {isPendingTaskToggle ? tr('button.processing') : tr('button.restart')}
                         </span>
                       </button>
                       <button
@@ -1014,11 +1148,7 @@ export default function App() {
                         ) : (
                           <>
                             <Play className="w-4 h-4" />
-                            <span>
-                              {selectedTask.viewStatus === 'paused'
-                                ? tr('button.resumeTask')
-                                : tr('button.unavailable')}
-                            </span>
+                            <span>{selectedTask.viewStatus === 'paused' ? tr('button.resumeTask') : tr('button.stopTask')}</span>
                           </>
                         )}
                       </button>
@@ -1283,6 +1413,163 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {manualRunTask && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center px-4 py-6">
+          <button
+            aria-label={tr('manualRun.cancel')}
+            className="absolute inset-0 bg-slate-950/35"
+            onClick={() => closeManualRunDialog()}
+            type="button"
+          />
+          <div
+            aria-modal="true"
+            className="relative z-10 flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+            role="dialog"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">{tr('manualRun.title')}</h3>
+                <p className="mt-1 text-xs font-medium text-slate-500">
+                  {tr('manualRun.subtitle', { name: manualRunTask.name })}
+                </p>
+              </div>
+              <button
+                aria-label={tr('manualRun.cancel')}
+                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isManualRunSubmitting}
+                onClick={() => closeManualRunDialog()}
+                type="button"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 overflow-y-auto px-5 py-4">
+              <section className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    {tr('manualRun.targets')}
+                  </span>
+                  {manualRunTargets.length > 0 && (
+                    <div className="flex items-center gap-3 text-xs font-bold">
+                      <button
+                        className="text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+                        disabled={isManualRunSubmitting}
+                        onClick={() => setManualRunTargetIds(manualRunTargets.map((target) => target.instanceId))}
+                        type="button"
+                      >
+                        {tr('manualRun.selectAll')}
+                      </button>
+                      <button
+                        className="text-slate-500 hover:text-slate-800 disabled:opacity-50"
+                        disabled={isManualRunSubmitting}
+                        onClick={() => setManualRunTargetIds([])}
+                        type="button"
+                      >
+                        {tr('manualRun.clear')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {isManualRunLoadingTargets ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+                    {tr('manualRun.loadingTargets')}
+                  </div>
+                ) : manualRunTargets.length === 0 ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-500">
+                    {tr('manualRun.noTargets')}
+                  </div>
+                ) : (
+                  <div className="grid gap-2">
+                    {manualRunTargets.map((target) => {
+                      const checked = manualRunTargetIds.includes(target.instanceId);
+                      return (
+                        <label
+                          className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${
+                            checked
+                              ? 'border-indigo-200 bg-indigo-50'
+                              : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                          }`}
+                          key={target.instanceId}
+                        >
+                          <input
+                            checked={checked}
+                            className="h-4 w-4 rounded border-slate-300 text-indigo-600"
+                            disabled={isManualRunSubmitting}
+                            onChange={() => toggleManualRunTarget(target.instanceId)}
+                            type="checkbox"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <strong className="block truncate text-sm text-slate-800">{target.nodeName}</strong>
+                            <span className="mt-0.5 block text-[11px] font-semibold text-slate-500">
+                              {target.runnerCount ?? 0} runners · {target.inflightTaskCount ?? 0} inflight
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <label className="block space-y-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  {tr('manualRun.payloadLabel')}
+                </span>
+                <textarea
+                  className="h-48 w-full resize-y rounded-lg border border-slate-200 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100 outline-hidden focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
+                  disabled={isManualRunSubmitting}
+                  onChange={(event) => setManualRunPayloadText(event.target.value)}
+                  placeholder={tr('manualRun.payloadPlaceholder')}
+                  spellCheck={false}
+                  value={manualRunPayloadText}
+                />
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  {tr('manualRun.reasonLabel')}
+                </span>
+                <textarea
+                  className="h-20 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-700 outline-hidden focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
+                  disabled={isManualRunSubmitting}
+                  onChange={(event) => setManualRunReason(event.target.value)}
+                  placeholder={tr('manualRun.reasonPlaceholder')}
+                  value={manualRunReason}
+                />
+              </label>
+
+              {manualRunError && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
+                  {manualRunError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
+              <button
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isManualRunSubmitting}
+                onClick={() => closeManualRunDialog()}
+                type="button"
+              >
+                {tr('manualRun.cancel')}
+              </button>
+              <button
+                className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={isManualRunSubmitting || isManualRunLoadingTargets}
+                onClick={() => void handleManualRunSubmit()}
+                type="button"
+              >
+                {isManualRunSubmitting && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                <span>{isManualRunSubmitting ? tr('manualRun.dispatching') : tr('manualRun.dispatch')}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- Floating Dismissible Toast Notification System --- */}
       <div className="fixed bottom-6 right-6 z-50 space-y-2.5 max-w-sm">

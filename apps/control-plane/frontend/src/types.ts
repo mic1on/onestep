@@ -44,6 +44,7 @@ export interface Task {
   environment?: 'dev' | 'staging' | 'prod';
   serviceId: string;
   name: string;
+  description: string | null;
   /** Derived by the plane from online state, pause_requested, error_count, activity. */
   viewStatus: 'running' | 'idle' | 'failed' | 'paused' | 'offline';
   /** Commands currently supported by at least one online runtime target. */

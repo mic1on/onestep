@@ -147,14 +147,12 @@ export default function TasksList({
                         ) : isPauseToggle ? (
                           <>
                             <Square className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{isToggleSupported ? t('button.stopTask') : t('button.unavailable')}</span>
+                            <span>{t('button.stopTask')}</span>
                           </>
                         ) : (
                           <>
                             <Play className="w-3.5 h-3.5 text-slate-400" />
-                            <span>
-                              {isPaused && isToggleSupported ? t('button.resumeTask') : t('button.unavailable')}
-                            </span>
+                            <span>{isPaused ? t('button.resumeTask') : t('button.stopTask')}</span>
                           </>
                         )}
                       </button>
@@ -173,11 +171,7 @@ export default function TasksList({
                           <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
                         )}
                         <span>
-                          {isPending
-                            ? t('button.processing')
-                            : isRestartSupported
-                            ? t('button.restartTask')
-                            : t('button.unavailable')}
+                          {isPending ? t('button.processing') : t('button.restartTask')}
                         </span>
                       </button>
                     </div>

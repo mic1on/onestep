@@ -11,6 +11,7 @@ const baseTask: Task = {
   environment: 'dev',
   serviceId: 'svc:dev',
   name: 'produce_and_store',
+  description: null,
   viewStatus: 'running',
   supportedCommands: [],
   pipelineSource: 'interval',

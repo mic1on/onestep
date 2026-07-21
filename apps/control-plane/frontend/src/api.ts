@@ -38,7 +38,7 @@ type AgentCommandKind =
   | 'flush_metrics'
   | 'flush_events';
 
-type JsonObject = Record<string, unknown>;
+export type JsonObject = Record<string, unknown>;
 type QueryValue = string | number | undefined | null;
 
 interface ConnectorDescriptor {
@@ -249,8 +249,19 @@ export interface TaskMetricChartPointSummary {
 
 interface TaskInstanceControlState {
   instance_id: string;
+  node_name: string | null;
+  connectivity: InstanceConnectivity;
+  status: HealthStatus;
+  last_seen_at: string | null;
+  supported_commands: TaskCommandKind[];
+  state_known: boolean;
   pause_requested: boolean | null;
   paused: boolean | null;
+  accepting_new_work: boolean | null;
+  runner_count: number | null;
+  parked_runner_count: number | null;
+  fetching_runner_count: number | null;
+  inflight_task_count: number | null;
 }
 
 interface TaskControlStateSummary {
@@ -364,6 +375,14 @@ export interface ServiceCommandFanoutResponse {
   queued: ServiceCommandFanoutTargetSummary[];
   skipped: ServiceCommandFanoutTargetSummary[];
   rejected: ServiceCommandFanoutTargetSummary[];
+}
+
+export interface TaskManualRunTarget {
+  instanceId: string;
+  nodeName: string;
+  runnerCount: number | null;
+  inflightTaskCount: number | null;
+  acceptingNewWork: boolean | null;
 }
 
 interface AgentCommandSummary {
@@ -729,6 +748,7 @@ function mapTask(service: ServiceSummary, task: TaskDashboardSummary): Task {
     environment: service.environment,
     serviceId: serviceId(service),
     name: task.task_name,
+    description: task.description,
     viewStatus: task.view_status,
     supportedCommands: task.supported_commands ?? [],
     pipelineSource: task.source_kind ?? task.source_name ?? 'Source',
@@ -1062,6 +1082,42 @@ export async function loadTaskPauseRequested(task: Task): Promise<boolean | null
   return aggregatePauseRequested(response.task_control);
 }
 
+export function parseManualRunPayload(text: string): JsonObject {
+  const parsed = JSON.parse(text) as unknown;
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Payload must be a JSON object.');
+  }
+  return parsed as JsonObject;
+}
+
+export async function loadTaskManualRunTargets(task: Task): Promise<TaskManualRunTarget[]> {
+  if (!task.apiServiceName || !task.apiName || !task.environment) {
+    return [];
+  }
+
+  const response = await request<TaskDetailResponse>(
+    `/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}`,
+    {
+      query: {
+        environment: task.environment,
+        lookback_minutes: DEFAULT_LOOKBACK_MINUTES,
+        metric_window_limit: 1,
+        event_limit: 1,
+      },
+    },
+  );
+
+  return response.task_control.instances
+    .filter((instance) => instance.connectivity === 'online' && instance.supported_commands.includes('run_task_once'))
+    .map((instance) => ({
+      instanceId: instance.instance_id,
+      nodeName: instance.node_name ?? instance.instance_id,
+      runnerCount: instance.runner_count,
+      inflightTaskCount: instance.inflight_task_count,
+      acceptingNewWork: instance.accepting_new_work,
+    }));
+}
+
 function aggregatePauseRequested(taskControl: TaskControlStateSummary | undefined): boolean | null {
   const instances = taskControl?.instances ?? [];
   if (instances.length === 0) return null;
@@ -1253,6 +1309,35 @@ export async function dispatchTaskCommand(task: Task, kind: TaskCommandKind) {
       reason: `Triggered from OneStep dashboard: ${kind}`,
       target_mode: 'all_online',
       target_instance_ids: [],
+      offline_behavior: 'skip',
+    },
+  });
+}
+
+export async function dispatchTaskManualRun(
+  task: Task,
+  input: {
+    targetInstanceIds: string[];
+    payload: JsonObject;
+    reason: string;
+  },
+) {
+  if (!task.apiServiceName || !task.apiName || !task.environment) {
+    throw new ApiError('Selected task is not backed by an API record', 400);
+  }
+
+  return request<ServiceCommandFanoutResponse>(`/api/v1/services/${encodeURIComponent(task.apiServiceName)}/tasks/${encodeURIComponent(task.apiName)}/commands`, {
+    method: 'POST',
+    query: {
+      environment: task.environment,
+    },
+    body: {
+      kind: 'run_task_once',
+      args: { payload: input.payload },
+      timeout_s: 120,
+      reason: input.reason,
+      target_mode: 'selected_instances',
+      target_instance_ids: input.targetInstanceIds,
       offline_behavior: 'skip',
     },
   });
