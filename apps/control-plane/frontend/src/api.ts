@@ -120,6 +120,7 @@ interface TaskEventSummary {
   message: string | null;
   traceback: string | null;
   meta: JsonObject;
+  source_label?: string | null;
   received_at: string;
   created_at: string;
   level: EventLogLevel;
@@ -140,6 +141,7 @@ interface TaskEventHistoryItemSummary {
   failure_kind: string | null;
   exception_type: string | null;
   traceback: string | null;
+  source_label?: string | null;
   command_id: string | null;
   command_status: AgentCommandStatus | null;
   ack_status: AgentCommandAckStatus | null;
@@ -765,7 +767,12 @@ function mapInstance(service: ServiceSummary, instance: InstanceSummary): Instan
 
 function mapLog(event: TaskEventSummary): LogEntry {
   const failureParts = [event.exception_type, event.message].filter(Boolean);
-  const sourceDetail = typeof event.meta.source === 'string' ? event.meta.source : null;
+  const sourceDetail =
+    typeof event.source_label === 'string' && event.source_label.trim()
+      ? event.source_label
+      : typeof event.meta.source === 'string'
+      ? event.meta.source
+      : null;
   const fallbackMessage =
     failureParts.length > 0
       ? failureParts.join(': ')
@@ -788,7 +795,12 @@ function mapLog(event: TaskEventSummary): LogEntry {
 
 function mapTaskEventHistoryLog(event: TaskEventHistoryItemSummary): LogEntry {
   const failureParts = [event.exception_type, event.message].filter(Boolean);
-  const sourceDetail = typeof event.meta.source === 'string' ? event.meta.source : null;
+  const sourceDetail =
+    typeof event.source_label === 'string' && event.source_label.trim()
+      ? event.source_label
+      : typeof event.meta.source === 'string'
+      ? event.meta.source
+      : null;
   const fallbackMessage =
     failureParts.length > 0
       ? failureParts.join(': ')

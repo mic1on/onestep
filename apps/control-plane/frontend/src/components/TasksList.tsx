@@ -2,6 +2,7 @@ import { useState, MouseEvent } from 'react';
 import { Play, Square, RotateCcw, Edit3, Eye, MoreVertical, Database, ArrowRight, Layers, HelpCircle, CheckCircle, RefreshCw } from 'lucide-react';
 import { Task, type TaskCommandKind } from '../types';
 import { useI18n } from '../i18n';
+import { getTopologySourceLabel } from './TopologyFlow';
 
 interface TasksListProps {
   tasks: Task[];
@@ -53,6 +54,7 @@ export default function TasksList({
         const isRestartSupported = taskSupportsCommand(task, 'restart_task');
         const isPending = pendingTaskId === task.id;
         const isMenuOpen = openMenuId === task.id;
+        const sourceLabel = getTopologySourceLabel(task);
 
         return (
           <div
@@ -191,7 +193,7 @@ export default function TasksList({
                 <div className="flex items-center gap-2.5">
                   <div className="flex flex-col">
                     <span className="text-xs font-bold text-slate-700">{task.pipelineSource}</span>
-                    <span className="font-mono text-[10px] text-slate-400">{task.pipelineSourceLabel}</span>
+                    <span className="font-mono text-[10px] text-slate-400">{sourceLabel}</span>
                   </div>
                   <ArrowRight className="w-4 h-4 text-slate-300 shrink-0" />
                   <div className="flex flex-col">

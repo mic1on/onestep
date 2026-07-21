@@ -1423,6 +1423,7 @@ class TaskEventSummary(APIModel):
     message: str | None = None
     traceback: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
+    source_label: str | None = None
     received_at: datetime
     created_at: datetime
     # Derived log level mapped from kind (failed/dead_lettered -> error,
@@ -1452,6 +1453,7 @@ class TaskEventHistoryItem(APIModel):
     failure_kind: str | None = None
     exception_type: str | None = None
     traceback: str | None = None
+    source_label: str | None = None
     command_id: str | None = None
     command_status: AgentCommandStatus | None = None
     ack_status: AgentCommandAckStatus | None = None

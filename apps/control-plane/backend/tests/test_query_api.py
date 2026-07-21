@@ -224,6 +224,7 @@ def seed_task_event(
     task_name: str,
     kind: str,
     occurred_at: datetime,
+    meta_json: dict[str, object] | None = None,
 ) -> TaskEvent:
     task_event = TaskEvent(
         event_id=event_id,
@@ -242,7 +243,7 @@ def seed_task_event(
             if kind == "failed"
             else None
         ),
-        meta_json={"source": "interval:3600s"},
+        meta_json=meta_json or {"source": "interval:3600s"},
         received_at=occurred_at + timedelta(seconds=1),
     )
     db_session.add(task_event)
@@ -3885,6 +3886,56 @@ def test_list_service_task_events_merges_runtime_events_and_control_commands(
         "command:cmd_pause_sync_users",
         "runtime:evt_started",
     ]
+
+
+def test_task_event_history_returns_display_source_label_for_sqs_url(client, db_session) -> None:
+    now = datetime.now(UTC)
+    sqs_url = "https://sqs.cn-northwest-1.amazonaws.com.cn/928507961548/ceegic-bidding-signup.fifo"
+    service = seed_service(db_session, name="bidding-worker", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-online",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="extract_tender",
+        source_name=sqs_url,
+        source_kind="sqs_queue",
+        source_config_json={"url": sqs_url},
+    )
+    seed_task_event(
+        db_session,
+        service,
+        instance,
+        event_id="evt_sqs_succeeded",
+        task_name="extract_tender",
+        kind="succeeded",
+        occurred_at=now - timedelta(minutes=1),
+        meta_json={"source": sqs_url},
+    )
+    db_session.commit()
+
+    history = client.get(
+        "/api/v1/services/bidding-worker/tasks/extract_tender/events",
+        params={"environment": "prod", "lookback_minutes": 15},
+    )
+    detail = client.get(
+        "/api/v1/services/bidding-worker/tasks/extract_tender",
+        params={"environment": "prod", "lookback_minutes": 15},
+    )
+
+    assert history.status_code == 200
+    assert detail.status_code == 200
+    history_event = history.json()["items"][0]
+    detail_event = detail.json()["recent_events"][0]
+    assert history_event["meta"]["source"] == sqs_url
+    assert history_event["source_label"] == "ceegic-bidding-signup.fifo"
+    assert detail_event["meta"]["source"] == sqs_url
+    assert detail_event["source_label"] == "ceegic-bidding-signup.fifo"
 
 
 def test_get_service_task_detail_returns_404_for_unknown_task(client, db_session) -> None:

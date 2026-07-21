@@ -66,6 +66,13 @@ describe('ServicesList filters', () => {
     expect(screen.queryByText('billing-sync / prod')).toBeNull();
   });
 
+  it('does not render the redundant service id line', () => {
+    renderServicesList([service({ id: 'billing-sync:prod', name: 'billing-sync / prod' })]);
+
+    expect(screen.getByText('billing-sync / prod')).toBeTruthy();
+    expect(screen.queryByText('billing-sync:prod')).toBeNull();
+  });
+
   it('renders and searches service descriptions', async () => {
     const user = userEvent.setup();
     renderServicesList([

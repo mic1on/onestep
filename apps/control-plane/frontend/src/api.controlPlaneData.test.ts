@@ -418,6 +418,7 @@ describe('loadControlPlaneData', () => {
               message: 'boom',
               traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
               meta: { source: 'interval:5s' },
+              source_label: 'interval:5s-display',
               received_at: '2026-07-16T08:00:01Z',
               created_at: '2026-07-16T08:00:01Z',
               level: 'error',
@@ -448,7 +449,7 @@ describe('loadControlPlaneData', () => {
         attempts: 1,
         durationMs: 42,
         instanceId: '11111111-1111-4111-8111-111111111111',
-        sourceDetail: 'interval:5s',
+        sourceDetail: 'interval:5s-display',
         exceptionType: 'RuntimeError',
         failureKind: 'error',
         traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
@@ -633,7 +634,11 @@ describe('loadControlPlaneData', () => {
             occurred_at: '2026-07-16T08:00:00Z',
             level: 'error',
             message: 'boom',
-            meta: { source: 'interval:5s' },
+            meta: {
+              source:
+                'https://sqs.cn-northwest-1.amazonaws.com.cn/928507961548/ceegic-bidding-signup.fifo',
+            },
+            source_label: 'ceegic-bidding-signup.fifo',
             attempts: 1,
             duration_ms: 42,
             failure_kind: 'error',
@@ -681,7 +686,7 @@ describe('loadControlPlaneData', () => {
         attempts: 1,
         durationMs: 42,
         instanceId: '11111111-1111-4111-8111-111111111111',
-        sourceDetail: 'interval:5s',
+        sourceDetail: 'ceegic-bidding-signup.fifo',
         traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
       }),
     ]);

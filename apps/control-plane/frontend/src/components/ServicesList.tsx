@@ -187,7 +187,6 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                           </div>
                           <div className="min-w-0">
                             <div className="font-bold text-slate-900 truncate">{svc.name}</div>
-                            <div className="text-[11px] text-slate-400 font-mono truncate">{svc.id}</div>
                             {svc.description && (
                               <div className="mt-0.5 max-w-sm truncate text-[11px] font-medium text-slate-500">
                                 {svc.description}

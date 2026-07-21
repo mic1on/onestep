@@ -571,7 +571,10 @@ def get_service_task_detail(
         recent_metric_windows=[
             build_metric_window_summary(metric_window) for metric_window in recent_metric_windows
         ],
-        recent_events=[build_task_event_summary(event) for event in recent_events],
+        recent_events=[
+            build_task_event_summary(event, source_kind=summary.source_kind)
+            for event in recent_events
+        ],
     )
 
 

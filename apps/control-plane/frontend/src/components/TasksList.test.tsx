@@ -63,4 +63,20 @@ describe('TasksList status colors', () => {
 
     expect(screen.getByText('Failed').className).toContain('text-amber-600');
   });
+
+  it('shows only the core queue name for SQS URLs in pipeline cards', () => {
+    const sqsUrl = 'https://sqs.cn-northwest-1.amazonaws.com.cn/928507961548/ceegic-bidding-signup.fifo';
+
+    renderTasksList({
+      ...baseTask,
+      pipelineSource: 'sqs_queue',
+      pipelineSourceLabel: sqsUrl,
+      sourceKind: 'sqs_queue',
+      sourceConfig: { url: sqsUrl },
+      sourceName: sqsUrl,
+    });
+
+    expect(screen.getByText('ceegic-bidding-signup.fifo')).toBeTruthy();
+    expect(screen.queryByText(sqsUrl)).toBeNull();
+  });
 });

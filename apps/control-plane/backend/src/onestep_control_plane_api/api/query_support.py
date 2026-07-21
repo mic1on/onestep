@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -407,14 +408,49 @@ def _first_non_empty_str(config: dict[str, Any] | None, keys: tuple[str, ...]) -
     return None
 
 
+def _last_path_segment(value: str) -> str:
+    trimmed = value.strip()
+    parsed = urlparse(trimmed)
+    path = parsed.path or trimmed
+    label = path.rstrip("/").rsplit("/", 1)[-1].strip()
+    return label or trimmed
+
+
+def _looks_like_sqs_queue_url(value: str) -> bool:
+    parsed = urlparse(value.strip())
+    hostname = parsed.hostname or ""
+    return parsed.scheme in {"http", "https"} and hostname.startswith("sqs.")
+
+
 def extract_source_label(
     *,
+    source_kind: str | None,
     source_name: str | None,
     source_config: dict[str, Any] | None,
 ) -> str | None:
-    if source_name:
-        return source_name
-    return _first_non_empty_str(source_config, SOURCE_LABEL_CONFIG_KEYS)
+    label = source_name or _first_non_empty_str(source_config, SOURCE_LABEL_CONFIG_KEYS)
+    if label is None:
+        return None
+    if source_kind == "sqs_queue" or _looks_like_sqs_queue_url(label):
+        return _last_path_segment(label)
+    return label
+
+
+def extract_event_source_label(
+    *,
+    meta: dict[str, Any] | None,
+    source_kind: str | None = None,
+) -> str | None:
+    if not meta:
+        return None
+    source = meta.get("source")
+    if not isinstance(source, str) or source.strip() == "":
+        return None
+    return extract_source_label(
+        source_kind=source_kind,
+        source_name=source,
+        source_config=None,
+    )
 
 
 def extract_sink_label(emit: list[ConnectorDescriptor]) -> str | None:
@@ -1147,7 +1183,11 @@ def build_task_supported_commands_map(
     }
 
 
-def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
+def build_task_event_summary(
+    event: TaskEvent,
+    *,
+    source_kind: str | None = None,
+) -> TaskEventSummary:
     return TaskEventSummary(
         event_id=event.event_id,
         instance_id=event.instance_id,
@@ -1161,6 +1201,7 @@ def build_task_event_summary(event: TaskEvent) -> TaskEventSummary:
         message=event.message,
         traceback=event.traceback,
         meta=event.meta_json,
+        source_label=extract_event_source_label(meta=event.meta_json, source_kind=source_kind),
         received_at=event.received_at,
         created_at=event.created_at,
         level=derive_event_level(event.kind),
@@ -1200,6 +1241,7 @@ def build_task_runtime_history_item(event: TaskEvent) -> TaskEventHistoryItem:
         failure_kind=event.failure_kind,
         exception_type=event.exception_type,
         traceback=event.traceback,
+        source_label=extract_event_source_label(meta=event.meta_json),
         created_at=event.created_at,
         updated_at=event.created_at,
     )
@@ -1721,6 +1763,7 @@ def finalize_task_summary(
     )
     summary.retry_attempts = extract_retry_attempts(summary.retry_policy)
     summary.source_label = extract_source_label(
+        source_kind=summary.source_kind,
         source_name=summary.source_name,
         source_config=summary.source_config,
     )
