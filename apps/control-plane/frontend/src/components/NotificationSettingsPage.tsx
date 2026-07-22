@@ -194,6 +194,8 @@ export default function NotificationSettingsPage({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [enabledToggleId, setEnabledToggleId] = useState<string | null>(null);
+  const [testingChannelId, setTestingChannelId] = useState<string | null>(null);
+  const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openVariablePicker, setOpenVariablePicker] = useState<string | null>(null);
 
@@ -330,6 +332,7 @@ export default function NotificationSettingsPage({
 
   async function runTest(channel: NotificationChannel) {
     setError(null);
+    setTestingChannelId(channel.id);
     try {
       const response = await testNotificationChannel(channel.id);
       onNotify(t('notifications.testAccepted', { provider: providerLabel(response.provider, t), name: channel.name }), 'success');
@@ -341,6 +344,8 @@ export default function NotificationSettingsPage({
       const message = getApiErrorMessage(testError);
       setError(message);
       onNotify(t('notifications.testFailed', { message }), 'warn');
+    } finally {
+      setTestingChannelId((current) => (current === channel.id ? null : current));
     }
   }
 
@@ -374,6 +379,7 @@ export default function NotificationSettingsPage({
   async function removeChannel(channel: NotificationChannel) {
     if (!window.confirm(t('notifications.deleteConfirm', { name: channel.name }))) return;
     setError(null);
+    setDeletingChannelId(channel.id);
     try {
       await deleteNotificationChannel(channel.id);
       onNotify(t('notifications.deleted', { name: channel.name }), 'success');
@@ -389,6 +395,8 @@ export default function NotificationSettingsPage({
       const message = getApiErrorMessage(deleteError);
       setError(message);
       onNotify(t('notifications.deleteFailed', { message }), 'warn');
+    } finally {
+      setDeletingChannelId((current) => (current === channel.id ? null : current));
     }
   }
 
@@ -452,7 +460,7 @@ export default function NotificationSettingsPage({
                       <button
                         aria-expanded={openVariablePicker === pickerId}
                         aria-label={t('notifications.insertField')}
-                        className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
+                        className="ui-pressable absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
                         onClick={() =>
                           setOpenVariablePicker((current) =>
                             current === pickerId ? null : pickerId,
@@ -464,10 +472,10 @@ export default function NotificationSettingsPage({
                         <Braces className="h-4 w-4" />
                       </button>
                       {openVariablePicker === pickerId ? (
-                        <div className="absolute right-0 top-10 z-20 max-h-64 w-full min-w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                        <div className="ui-popover-enter absolute right-0 top-10 z-20 max-h-64 w-full min-w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
                           {CUSTOM_VARIABLES.map((variableName) => (
                             <button
-                              className="block w-full rounded-md px-2.5 py-2 text-left font-mono text-xs font-semibold text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-700"
+                              className="ui-pressable block w-full rounded-md px-2.5 py-2 text-left font-mono text-xs font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700"
                               key={variableName}
                               onClick={() => {
                                 setParams(insertVariable(params, index, variableName));
@@ -484,7 +492,7 @@ export default function NotificationSettingsPage({
                   </div>
                   <button
                     aria-label={t('notifications.deleteParam', { index: index + 1 })}
-                    className="grid h-9 w-9 place-items-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                    className="ui-pressable grid h-9 w-9 place-items-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                     onClick={() => {
                       setParams(params.filter((_, itemIndex) => itemIndex !== index));
                       setOpenVariablePicker(null);
@@ -499,7 +507,7 @@ export default function NotificationSettingsPage({
             );
           })}
           <button
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+            className="ui-pressable flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-bold text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
             onClick={() => setParams([...params, { key: '', value: '' }])}
             type="button"
           >
@@ -518,7 +526,7 @@ export default function NotificationSettingsPage({
     !isSaving;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-fadeIn">
+    <div className="ui-page-enter mx-auto max-w-7xl space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-indigo-700">
@@ -532,15 +540,17 @@ export default function NotificationSettingsPage({
         </div>
         <div className="flex gap-2">
           <button
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xs transition-colors hover:bg-slate-50 disabled:opacity-50"
+            aria-busy={isLoading}
+            className="ui-pressable flex min-w-[104px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-50 disabled:cursor-wait disabled:opacity-50"
             disabled={isLoading}
             onClick={() => void loadNotifications()}
+            type="button"
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             <span>{isLoading ? t('button.refreshing') : t('button.refresh')}</span>
           </button>
           <button
-            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-indigo-800"
+            className="ui-pressable flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-800"
             onClick={() => setForm(EMPTY_FORM)}
           >
             <Plus className="h-4 w-4" />
@@ -550,7 +560,10 @@ export default function NotificationSettingsPage({
       </div>
 
       {error ? (
-        <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-900">
+        <div
+          className="ui-panel-state-enter flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-900"
+          role="alert"
+        >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{error}</span>
         </div>
@@ -592,7 +605,8 @@ export default function NotificationSettingsPage({
                             name: channel.name,
                           })}
                           aria-pressed={channel.enabled}
-                          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-bold transition-colors disabled:cursor-wait disabled:opacity-70 ${
+                          aria-busy={enabledToggleId === channel.id}
+                          className={`ui-pressable inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-bold disabled:cursor-wait disabled:opacity-70 ${
                             channel.enabled
                               ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                               : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
@@ -655,16 +669,22 @@ export default function NotificationSettingsPage({
                     <div className="flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-xs lg:justify-self-end">
                       <button
                         aria-label={t('notifications.testTitle', { name: channel.name })}
-                        className="grid h-8 w-8 place-items-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                        aria-busy={testingChannelId === channel.id}
+                        className="ui-pressable grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 disabled:cursor-wait disabled:opacity-60"
+                        disabled={testingChannelId === channel.id}
                         onClick={() => void runTest(channel)}
                         title={t('notifications.testTitle', { name: channel.name })}
                         type="button"
                       >
-                        <Send className="h-4 w-4" />
+                        {testingChannelId === channel.id ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
                       </button>
                       <button
                         aria-label={t('notifications.editTitle', { name: channel.name })}
-                        className="grid h-8 w-8 place-items-center rounded-md text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                        className="ui-pressable grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"
                         onClick={() => setForm(channelToForm(channel))}
                         title={t('notifications.editTitle', { name: channel.name })}
                         type="button"
@@ -673,12 +693,18 @@ export default function NotificationSettingsPage({
                       </button>
                       <button
                         aria-label={t('notifications.deleteTitle', { name: channel.name })}
-                        className="grid h-8 w-8 place-items-center rounded-md text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                        aria-busy={deletingChannelId === channel.id}
+                        className="ui-pressable grid h-8 w-8 place-items-center rounded-md text-slate-500 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-wait disabled:opacity-60"
+                        disabled={deletingChannelId === channel.id}
                         onClick={() => void removeChannel(channel)}
                         title={t('notifications.deleteTitle', { name: channel.name })}
                         type="button"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        {deletingChannelId === channel.id ? (
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
                       </button>
                     </div>
                   </article>
@@ -713,7 +739,7 @@ export default function NotificationSettingsPage({
               </div>
               {isEditing ? (
                 <button
-                  className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                  className="ui-pressable rounded-lg p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-700"
                   onClick={() => setForm(EMPTY_FORM)}
                   title={t('notifications.clearFormTitle')}
                   type="button"
@@ -743,7 +769,7 @@ export default function NotificationSettingsPage({
                   return (
                     <button
                       aria-pressed={active}
-                      className={`rounded-md px-3 py-2 text-sm font-bold transition-all ${
+                      className={`ui-pressable rounded-md px-3 py-2 text-sm font-bold ${
                         active
                           ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-indigo-100'
                           : 'text-slate-500 hover:bg-white/70 hover:text-slate-800'
@@ -785,7 +811,7 @@ export default function NotificationSettingsPage({
                       return (
                         <button
                           aria-pressed={active}
-                          className={`rounded-md px-3 py-2 text-xs font-bold transition-all ${
+                          className={`ui-pressable rounded-md px-3 py-2 text-xs font-bold ${
                             active
                               ? 'bg-indigo-50 text-indigo-700 shadow-xs ring-1 ring-indigo-100'
                               : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
@@ -912,7 +938,8 @@ export default function NotificationSettingsPage({
             </div>
 
             <button
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-busy={isSaving}
+              className="ui-pressable flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!canSubmit}
               type="submit"
             >

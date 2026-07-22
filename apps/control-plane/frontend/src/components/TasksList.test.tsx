@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../i18n';
-import type { Task } from '../types';
+import type { Task, TaskCommandKind } from '../types';
 import TasksList from './TasksList';
 
 const baseTask: Task = {
@@ -34,13 +34,18 @@ const baseTask: Task = {
 };
 
 function renderTasksList(task: Task) {
+  return renderTasks([task]);
+}
+
+function renderTasks(tasks: Task[], pendingTaskId: string | null = null) {
   return render(
     <I18nProvider initialLocale="en">
       <TasksList
-        tasks={[task]}
+        tasks={tasks}
         onTaskSelect={vi.fn()}
         onRestartTask={vi.fn()}
         onToggleTaskStatus={vi.fn()}
+        pendingTaskId={pendingTaskId}
       />
     </I18nProvider>,
   );
@@ -88,5 +93,32 @@ describe('TasksList status colors', () => {
 
     expect(screen.getByText('ceegic-bidding-signup.fifo')).toBeTruthy();
     expect(screen.queryByText(sqsUrl)).toBeNull();
+  });
+
+  it('keeps pending actions local and restores focus after Escape', () => {
+    const first = {
+      ...baseTask,
+      id: 'service:prod:first',
+      name: 'first',
+      viewStatus: 'running' as const,
+      supportedCommands: ['pause_task', 'restart_task'] as TaskCommandKind[],
+    };
+    const second = {
+      ...first,
+      id: 'service:prod:second',
+      name: 'second',
+    };
+    renderTasks([first, second], 'service:prod:first');
+
+    const triggers = screen.getAllByRole('button', { name: /More actions for/ });
+    fireEvent.click(triggers[0]);
+    expect(screen.getAllByText('Processing...').length).toBeGreaterThan(0);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.activeElement).toBe(triggers[0]);
+
+    fireEvent.click(triggers[1]);
+    expect(screen.queryByText('Processing...')).toBeNull();
+    const pause = screen.getByRole('menuitem', { name: 'Pause' }) as HTMLButtonElement;
+    expect(pause.disabled).toBe(false);
   });
 });

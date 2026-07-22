@@ -1,4 +1,5 @@
 import { Server, Activity, TrendingUp } from 'lucide-react';
+import { type CSSProperties } from 'react';
 import { Service } from '../types';
 import { useI18n } from '../i18n';
 
@@ -34,8 +35,9 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
         <div>
           <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
             <div
-              className="h-full bg-indigo-600 rounded-full transition-all duration-500"
-              style={{ width: `${activePercent}%` }}
+              aria-hidden="true"
+              className="ui-progress-fill h-full rounded-full bg-indigo-600"
+              style={{ '--ui-progress': activePercent / 100 } as CSSProperties}
             />
           </div>
           <div className="flex justify-between items-center text-[11px] text-slate-500 font-semibold mt-2">
@@ -77,7 +79,7 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
             </span>
           ) : (
             <span className="text-amber-600 flex items-center gap-1.5 font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
               {t('telemetry.degradedHealth')}
             </span>
           )}

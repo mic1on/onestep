@@ -25,10 +25,13 @@ function service(overrides: Partial<Service>): Service {
   };
 }
 
-function renderServicesList(services: Service[]) {
+function renderServicesList(
+  services: Service[],
+  onSelectService: (serviceId: string) => void = vi.fn(),
+) {
   return render(
     <I18nProvider initialLocale="en">
-      <ServicesList services={services} onSelectService={vi.fn()} />
+      <ServicesList services={services} onSelectService={onSelectService} />
     </I18nProvider>,
   );
 }
@@ -43,6 +46,19 @@ describe('ServicesList filters', () => {
 
     expect(screen.getByRole('heading', { name: 'Service Directory' })).toBeTruthy();
     expect(screen.queryByText('Services')).toBeNull();
+  });
+
+  it('labels service detail destinations without changing row selection', async () => {
+    const user = userEvent.setup();
+    const onSelectService = vi.fn();
+    renderServicesList([service({})], onSelectService);
+
+    expect(screen.getByText('Service Detail')).toBeTruthy();
+    expect(screen.queryByText('View Task Details')).toBeNull();
+
+    await user.click(screen.getByText('Service Detail'));
+
+    expect(onSelectService).toHaveBeenCalledWith('billing-sync:prod');
   });
 
   it('filters services by display status', async () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, type CSSProperties } from 'react';
 import {
   dispatchInstanceCommand,
   dispatchServiceCommand,
@@ -48,6 +48,8 @@ import TaskEventDiagnostics from './components/TaskEventDiagnostics';
 import LoginPage from './components/LoginPage';
 import NotificationSettingsPage from './components/NotificationSettingsPage';
 import LocaleSwitcher from './components/LocaleSwitcher';
+import ToastViewport, { type ToastMessage, type ToastType } from './components/ToastViewport';
+import useDismissibleMenu from './components/useDismissibleMenu';
 import {
   createAppRoutePath,
   parseAppRoute,
@@ -113,6 +115,48 @@ export function isTaskToggleSupported(task: Task | null | undefined): boolean {
   return command !== null && taskSupportsCommand(task, command);
 }
 
+export function getControlPlaneLoadingMode(isLoading: boolean, serviceCount: number) {
+  if (isLoading && serviceCount === 0) return 'initial' as const;
+  if (isLoading) return 'refresh' as const;
+  return 'settled' as const;
+}
+
+function ControlPlaneSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      aria-label={label}
+      className="mx-auto max-w-7xl space-y-6"
+      data-testid="control-plane-skeleton"
+      role="status"
+    >
+      <h2 className="sr-only">{label}</h2>
+      <div aria-hidden="true" className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {[0, 1, 2, 3].map((item) => (
+          <div className="h-24 rounded-lg border border-slate-200 bg-white p-4" key={item}>
+            <div className="ui-skeleton h-3 w-20 rounded" />
+            <div className="ui-skeleton mt-5 h-7 w-14 rounded" />
+          </div>
+        ))}
+      </div>
+      <div aria-hidden="true" className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 p-4">
+          <div className="ui-skeleton h-8 w-64 max-w-full rounded" />
+        </div>
+        {[0, 1, 2, 3].map((item) => (
+          <div
+            className="grid grid-cols-[2fr_1fr_1fr] gap-4 border-b border-slate-100 p-4 last:border-0"
+            key={item}
+          >
+            <div className="ui-skeleton h-4 rounded" />
+            <div className="ui-skeleton h-4 rounded" />
+            <div className="ui-skeleton h-4 rounded" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const SERVICE_TABS: ServiceTab[] = ['Tasks', 'Instances', 'Logs'];
 
 export default function App() {
@@ -151,6 +195,11 @@ export default function App() {
   // --- Global Environment Filter ---
   const [environmentFilter, setEnvironmentFilter] = useState<EnvironmentFilter>(() => readEnvironmentFilter());
   const [isEnvMenuOpen, setIsEnvMenuOpen] = useState(false);
+  const closeEnvironmentMenu = useCallback(() => setIsEnvMenuOpen(false), []);
+  const { menuRef: environmentMenuRef, triggerRef: environmentMenuTriggerRef } = useDismissibleMenu({
+    onClose: closeEnvironmentMenu,
+    open: isEnvMenuOpen,
+  });
   // Tracks the previously seen environment filter so the reset effect below only
   // fires when the user *changes* the filter — not on initial mount. Without this
   // guard, refreshing a deep-linked service/task detail page (where
@@ -163,6 +212,7 @@ export default function App() {
   const [isDeploying, setIsDeploying] = useState(false);
   const [isLogoutPending, setIsLogoutPending] = useState(false);
   const [deploymentProgress, setDeploymentProgress] = useState(0);
+  const [refreshFeedbackKey, setRefreshFeedbackKey] = useState(0);
   // Task id currently awaiting a pause/resume outcome from the worker (command
   // dispatched, polling pause_requested until it reflects the new state or times
   // out). Drives the Loading state on the toggle button for that task.
@@ -175,9 +225,11 @@ export default function App() {
   const [manualRunError, setManualRunError] = useState<string | null>(null);
   const [isManualRunLoadingTargets, setIsManualRunLoadingTargets] = useState(false);
   const [isManualRunSubmitting, setIsManualRunSubmitting] = useState(false);
+  const manualRunDialogRef = useRef<HTMLDivElement>(null);
+  const manualRunReturnFocusRef = useRef<HTMLElement | null>(null);
 
   // --- Toast Notifications ---
-  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'info' | 'warn' }[]>([]);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   useEffect(() => {
     const handlePopState = () => setRoutePath(`${window.location.pathname}${window.location.search}`);
@@ -273,12 +325,13 @@ export default function App() {
     replaceRoute(`/login?next=${encodeURIComponent(nextPath)}`);
   }, [replaceRoute]);
 
-  const addToast = (message: string, type: 'success' | 'info' | 'warn' = 'success') => {
-    const id = Math.random().toString(36).substr(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+  const dismissToast = useCallback((id: string) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  const addToast = (message: string, type: ToastType = 'success') => {
+    const id = Math.random().toString(36).slice(2, 11);
+    setToasts((current) => [...current, { id, message, type }]);
   };
 
   const refreshControlPlaneData = async (
@@ -312,6 +365,7 @@ export default function App() {
         setSelectedServiceId(data.selectedServiceId);
       }
       if (!silent) {
+        setRefreshFeedbackKey((current) => current + 1);
         addToast(tr('toast.controlPlaneRefreshed'), 'success');
       }
     } catch (error) {
@@ -452,6 +506,7 @@ export default function App() {
   const selectedTaskCanRunOnce = taskSupportsCommand(selectedTask, 'run_task_once');
   const isPendingTaskToggle = !!selectedTask && pendingTaskId === selectedTask.id;
   const headerStatus = getHeaderStatus(selectedService.viewStatus, selectedTask?.viewStatus, tr);
+  const loadingMode = getControlPlaneLoadingMode(isLoadingApi, services.length);
   const handleTaskEventLookbackMinutesChange = useCallback((minutes: number) => {
     setTaskEventLookbackMinutes(minutes);
     setTaskEventOffset(0);
@@ -727,7 +782,7 @@ export default function App() {
     addToast(tr('toast.serviceCommandNoTargets', { name: task?.name ?? taskId }), 'warn');
   };
 
-  const closeManualRunDialog = (force = false) => {
+  const closeManualRunDialog = useCallback((force = false) => {
     if (isManualRunSubmitting && !force) return;
     setManualRunTaskId(null);
     setManualRunTargets([]);
@@ -736,7 +791,48 @@ export default function App() {
     setManualRunReason('');
     setManualRunError(null);
     setIsManualRunLoadingTargets(false);
-  };
+    window.setTimeout(() => manualRunReturnFocusRef.current?.focus(), 0);
+  }, [isManualRunSubmitting]);
+
+  useEffect(() => {
+    const dialog = manualRunDialogRef.current;
+    if (!manualRunTask || !dialog) return;
+
+    const focusableSelector = [
+      'button:not(:disabled)',
+      'input:not(:disabled)',
+      'textarea:not(:disabled)',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',');
+    const initialFocus = dialog.querySelector<HTMLElement>('[data-autofocus="true"]');
+    initialFocus?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isManualRunSubmitting) {
+        event.preventDefault();
+        closeManualRunDialog();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [closeManualRunDialog, isManualRunSubmitting, manualRunTask]);
 
   const handleOpenManualRun = async (taskId: string) => {
     const task = tasks.find((item) => item.id === taskId);
@@ -753,6 +849,7 @@ export default function App() {
       return;
     }
 
+    manualRunReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setManualRunTaskId(task.id);
     setManualRunTargets([]);
     setManualRunTargetIds([]);
@@ -899,11 +996,11 @@ export default function App() {
       />
 
       {/* --- Main Content Panel --- */}
-      <div className="flex-1 flex flex-col ml-[240px] h-screen overflow-hidden">
+      <div className="ml-16 flex h-screen min-w-0 flex-1 flex-col overflow-hidden sm:ml-[240px]">
         {/* --- Core Content Stage Canvas --- */}
-        <main className="flex-1 overflow-y-auto p-6 bg-slate-50">
-          <div className="max-w-7xl mx-auto mb-4 flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-xs">
-            <div className="flex items-center gap-3">
+        <main className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-6">
+          <div className="mx-auto mb-4 flex max-w-7xl flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-xs sm:px-4">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
               <div className="flex items-center gap-2">
                 <span
                   className={`h-2 w-2 rounded-full ${
@@ -924,10 +1021,12 @@ export default function App() {
               {/* Global Environment Filter */}
               <div className="relative">
                 <button
+                  ref={environmentMenuTriggerRef}
                   onClick={() => setIsEnvMenuOpen((open) => !open)}
-                  className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-700 transition-colors hover:bg-slate-100"
+                  className="ui-pressable flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-700 hover:bg-slate-100"
                   aria-haspopup="listbox"
                   aria-expanded={isEnvMenuOpen}
+                  type="button"
                 >
                   <Globe className="h-3 w-3 text-indigo-600" />
                   <span>{tr('top.environment')}</span>
@@ -936,15 +1035,10 @@ export default function App() {
                   </span>
                 </button>
                 {isEnvMenuOpen && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-30"
-                      onClick={() => setIsEnvMenuOpen(false)}
-                      aria-hidden="true"
-                    />
                     <ul
+                      ref={environmentMenuRef}
                       role="listbox"
-                      className="absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg font-medium text-xs"
+                      className="ui-popover-enter absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-xs font-medium shadow-lg"
                     >
                       {ENVIRONMENT_FILTER_ORDER.map((value) => {
                         const active = value === environmentFilter;
@@ -956,9 +1050,10 @@ export default function App() {
                               onClick={() => {
                                 setEnvironmentFilter(value);
                                 writeEnvironmentFilter(value);
-                                setIsEnvMenuOpen(false);
+                                closeEnvironmentMenu();
+                                environmentMenuTriggerRef.current?.focus();
                               }}
-                              className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors ${
+                              className={`ui-pressable flex w-full items-center justify-between px-3 py-1.5 text-left ${
                                 active
                                   ? 'bg-indigo-50 font-bold text-indigo-700'
                                   : 'text-slate-700 hover:bg-slate-50'
@@ -971,16 +1066,17 @@ export default function App() {
                         );
                       })}
                     </ul>
-                  </>
                 )}
               </div>
             </div>
             <div className="flex items-center gap-2">
               <LocaleSwitcher />
               <button
+                aria-busy={loadingMode === 'refresh'}
                 onClick={() => void refreshControlPlaneData(selectedServiceId)}
                 disabled={isLoadingApi}
-                className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                className="ui-pressable flex min-w-[92px] items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60"
+                type="button"
               >
                 <RefreshCw className={`h-3 w-3 ${isLoadingApi ? 'animate-spin' : ''}`} />
                 <span>{isLoadingApi ? tr('button.refreshing') : tr('button.refresh')}</span>
@@ -988,18 +1084,18 @@ export default function App() {
             </div>
           </div>
 
-          {services.length === 0 ? (
-            <div className="max-w-7xl mx-auto rounded-xl border border-slate-200 bg-white p-8 text-center shadow-xs">
-              <RefreshCw className={`mx-auto mb-3 h-5 w-5 text-slate-400 ${isLoadingApi ? 'animate-spin' : ''}`} />
-              <h2 className="text-sm font-bold text-slate-800">
-                {isLoadingApi ? tr('api.connecting') : tr('api.noServices')}
-              </h2>
+          {loadingMode === 'initial' ? (
+            <ControlPlaneSkeleton label={tr('api.connecting')} />
+          ) : services.length === 0 ? (
+            <div className="mx-auto max-w-7xl rounded-lg border border-slate-200 bg-white p-8 text-center shadow-xs">
+              <h2 className="text-sm font-bold text-slate-800">{tr('api.noServices')}</h2>
               <p className="mt-1 text-xs font-medium text-slate-500">
                 {apiError ? tr('api.noServicesHint', { error: apiError }) : tr('api.waitingForServices')}
               </p>
             </div>
           ) : (
-            <>
+            <div className="relative">
+          {refreshFeedbackKey > 0 && <span className="ui-refresh-ack" key={refreshFeedbackKey} />}
           {/* --- VIEW: Global Overview (if selected) --- */}
           {currentView === 'overview' && (
             <OverviewPage
@@ -1026,9 +1122,12 @@ export default function App() {
 
           {/* --- VIEW: Service Detail --- */}
           {currentView === 'services' && (
-            <div className="max-w-7xl mx-auto space-y-6">
+            <div
+              className="ui-page-enter mx-auto max-w-7xl space-y-6"
+              key={`${selectedServiceId}:${activeTab}:${selectedTaskId ?? 'service'}`}
+            >
               {/* Breadcrumb navigator under Command Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-fadeIn">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <nav aria-label="Breadcrumb" className="flex items-center text-slate-400 font-medium text-xs mb-1">
                     <button
@@ -1045,10 +1144,10 @@ export default function App() {
                         onClick={() => navigateToService(selectedServiceId)}
                         className="rounded-sm text-slate-800 font-bold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
                       >
-                        {selectedService.name.split(' ')[0]}
+                        {selectedService.name}
                       </button>
                     ) : (
-                      <span className="text-slate-800 font-bold">{selectedService.name.split(' ')[0]}</span>
+                      <span className="text-slate-800 font-bold">{selectedService.name}</span>
                     )}
                     {selectedTask && (
                       <>
@@ -1069,14 +1168,15 @@ export default function App() {
                   <div className="flex items-center gap-3 mt-1.5">
                     <button
                       onClick={navigateToServicesList}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-slate-100 transition-colors"
+                      className="ui-pressable rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"
                       title={tr('nav.services')}
                       aria-label={tr('nav.services')}
+                      type="button"
                     >
                       <ArrowLeft className="w-4 h-4" />
                     </button>
                     <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight font-sans">
-                      {selectedTask ? selectedTask.name : tr('service.detail')}
+                      {selectedTask ? selectedTask.name : selectedService.name}
                     </h2>
                     <span
                       className={`${headerStatus.className} px-2 py-0.5 rounded-md font-bold tracking-wide text-[10px] flex items-center gap-1 border`}
@@ -1097,13 +1197,15 @@ export default function App() {
                 </div>
 
                 {/* Main Action Triggers */}
-                <div className="flex gap-2 self-start sm:self-center">
+                <div className="flex flex-wrap gap-2 self-start sm:self-center">
                   {selectedTask ? (
                     <>
                       <button
+                        aria-busy={isManualRunSubmitting && manualRunTaskId === selectedTask.id}
                         onClick={() => handleOpenManualRun(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanRunOnce || !apiConnected || isPendingTaskToggle || isManualRunSubmitting}
-                        className="flex items-center gap-1.5 px-4 py-2 border border-emerald-200 rounded-lg text-emerald-700 hover:bg-emerald-50 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        className="ui-pressable flex min-w-[108px] items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-4 py-2 text-xs font-bold text-emerald-700 shadow-xs hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
                       >
                         {isManualRunSubmitting && manualRunTaskId === selectedTask.id ? (
                           <RefreshCw className="w-4 h-4 animate-spin" />
@@ -1113,9 +1215,11 @@ export default function App() {
                         <span>{tr('button.runOnce')}</span>
                       </button>
                       <button
+                        aria-busy={isPendingTaskToggle}
                         onClick={() => handleRestartTask(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanRestart || !apiConnected || isPendingTaskToggle}
-                        className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-indigo-600 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        className="ui-pressable flex min-w-[112px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-indigo-600 shadow-xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
                       >
                         {isPendingTaskToggle ? (
                           <RefreshCw className="w-4 h-4 animate-spin" />
@@ -1127,13 +1231,15 @@ export default function App() {
                         </span>
                       </button>
                       <button
+                        aria-busy={isPendingTaskToggle}
                         onClick={() => handleToggleTaskStatus(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanToggle || !apiConnected || isPendingTaskToggle}
-                        className={`flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg transition-colors text-xs font-bold bg-white shadow-xs ${
+                        className={`ui-pressable flex min-w-[112px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold shadow-xs ${
                           selectedTaskToggleIsPause
                             ? 'text-rose-600 hover:bg-rose-50 border-rose-200'
                             : 'text-emerald-600 hover:bg-emerald-50 border-emerald-200'
                         } disabled:cursor-not-allowed disabled:opacity-50`}
+                        type="button"
                       >
                         {isPendingTaskToggle ? (
                           <>
@@ -1156,17 +1262,21 @@ export default function App() {
                   ) : (
                     <>
                       <button
+                        aria-busy={isRestartingAll}
                         onClick={handleRestartAll}
                         disabled={isRestartingAll || !serviceHasOnlineInstances || !apiConnected}
-                        className="flex items-center gap-1.5 px-4 py-2 border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 transition-colors text-xs font-bold bg-white shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        className="ui-pressable flex min-w-[120px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
                       >
                         <RefreshCw className={`w-4 h-4 ${isRestartingAll ? 'animate-spin' : ''}`} />
                         <span>{isRestartingAll ? tr('button.restarting') : tr('button.restartAll')}</span>
                       </button>
                       <button
+                        aria-busy={isDeploying}
                         onClick={handleDeployUpdate}
                         disabled={isDeploying || !serviceHasOnlineInstances || !apiConnected}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-800 transition-colors text-xs font-bold shadow-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        className="ui-pressable flex min-w-[128px] items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        type="button"
                       >
                         <Workflow className="w-4 h-4" />
                         <span>{isDeploying ? tr('button.deploying') : tr('button.deployUpdate')}</span>
@@ -1178,15 +1288,23 @@ export default function App() {
 
               {/* Deploy rolling progress indicator */}
               {isDeploying && (
-                <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl space-y-2 animate-fadeIn font-medium">
+                <div className="ui-panel-state-enter space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-4 font-medium">
                   <div className="flex justify-between items-center text-xs text-blue-700 font-bold">
                     <span>{tr('service.deployProgress')}</span>
                     <span>{deploymentProgress}%</span>
                   </div>
-                  <div className="w-full h-2 bg-indigo-100 rounded-full overflow-hidden">
+                  <div
+                    aria-label={tr('service.deployProgress')}
+                    aria-valuemax={100}
+                    aria-valuemin={0}
+                    aria-valuenow={deploymentProgress}
+                    className="h-2 w-full overflow-hidden rounded-full bg-indigo-100"
+                    role="progressbar"
+                  >
                     <div
-                      className="h-full bg-indigo-600 transition-all duration-300"
-                      style={{ width: `${deploymentProgress}%` }}
+                      aria-hidden="true"
+                      className="ui-progress-fill h-full rounded-full bg-indigo-600"
+                      style={{ '--ui-progress': deploymentProgress / 100 } as CSSProperties}
                     />
                   </div>
                 </div>
@@ -1194,7 +1312,7 @@ export default function App() {
 
               {/* Global Reboot loading indicator */}
               {isRestartingAll && (
-                <div className="bg-slate-900 text-white rounded-xl p-5 flex items-center gap-4 animate-pulse">
+                <div className="ui-panel-state-enter flex items-center gap-4 rounded-lg bg-slate-900 p-5 text-white">
                   <RefreshCw className="w-6 h-6 animate-spin text-blue-400" />
                   <div>
                     <h4 className="font-bold text-sm">{tr('service.restartInitialized')}</h4>
@@ -1205,7 +1323,7 @@ export default function App() {
 
               {/* --- STAGE: Task Detail Screen (drill down) --- */}
               {selectedTask ? (
-                <div className="space-y-6 animate-fadeIn">
+                <div className="space-y-6">
                   {/* Stats Bento Grid for Selected Task */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
                     {/* Stat: Last run */}
@@ -1230,8 +1348,9 @@ export default function App() {
                       </div>
                       <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-indigo-600 rounded-full"
-                          style={{ width: `${(selectedTask.concurrency / 12) * 100}%` }}
+                          aria-hidden="true"
+                          className="ui-progress-fill h-full rounded-full bg-indigo-600"
+                          style={{ '--ui-progress': selectedTask.concurrency / 12 } as CSSProperties}
                         />
                       </div>
                     </div>
@@ -1299,7 +1418,7 @@ export default function App() {
                       <button
                         key={tab}
                         onClick={() => navigateToServiceTab(tab)}
-                        className={`rounded-md px-3 py-1.5 text-xs font-bold transition-colors ${
+                        className={`ui-pressable rounded-md px-3 py-1.5 text-xs font-bold ${
                           activeTab === tab
                             ? 'bg-indigo-600 text-white shadow-xs'
                             : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
@@ -1315,7 +1434,7 @@ export default function App() {
 
                   {/* Render based on selected Tab */}
                   {activeTab === 'Tasks' && (
-                    <div className="animate-fadeIn">
+                    <div className="ui-panel-state-enter">
                       <div className="flex justify-between items-center mb-4">
                         <h3 className="text-md font-bold text-slate-800">{tr('service.tasksTitle')}</h3>
                         <span className="text-xs text-slate-500 font-medium">{tr('service.taskHint')}</span>
@@ -1331,7 +1450,7 @@ export default function App() {
                   )}
 
                   {activeTab === 'Instances' && (
-                    <div className="animate-fadeIn">
+                    <div className="ui-panel-state-enter">
                       <div className="flex justify-between items-center mb-4">
                         <h3 className="text-md font-bold text-slate-800">{tr('service.instancesTitle')}</h3>
                         <span className="text-xs text-slate-500 font-medium">{tr('service.instancesHint')}</span>
@@ -1345,7 +1464,7 @@ export default function App() {
                   )}
 
                   {activeTab === 'Logs' && (
-                    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs animate-fadeIn flex flex-col h-[400px]">
+                    <div className="ui-panel-state-enter flex h-[400px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs">
                       {/* Log view top toolbar */}
                       <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -1354,7 +1473,8 @@ export default function App() {
                         </div>
                         <button
                           onClick={() => setLogs([])}
-                          className="text-xs font-bold text-indigo-600 hover:underline"
+                          className="ui-pressable rounded-sm text-xs font-bold text-indigo-600 hover:underline"
+                          type="button"
                         >
                           {tr('button.clearStream')}
                         </button>
@@ -1409,7 +1529,7 @@ export default function App() {
               )}
             </div>
           )}
-            </>
+            </div>
           )}
         </main>
       </div>
@@ -1418,25 +1538,30 @@ export default function App() {
         <div className="fixed inset-0 z-40 flex items-center justify-center px-4 py-6">
           <button
             aria-label={tr('manualRun.cancel')}
-            className="absolute inset-0 bg-slate-950/35"
+            className="ui-dialog-backdrop absolute inset-0 bg-slate-950/35"
             onClick={() => closeManualRunDialog()}
             type="button"
           />
           <div
+            ref={manualRunDialogRef}
+            aria-busy={isManualRunSubmitting}
+            aria-labelledby="manual-run-dialog-title"
             aria-modal="true"
-            className="relative z-10 flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+            className="ui-dialog-enter relative z-10 flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl"
             role="dialog"
           >
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
               <div>
-                <h3 className="text-base font-extrabold text-slate-900">{tr('manualRun.title')}</h3>
+                <h3 className="text-base font-extrabold text-slate-900" id="manual-run-dialog-title">
+                  {tr('manualRun.title')}
+                </h3>
                 <p className="mt-1 text-xs font-medium text-slate-500">
                   {tr('manualRun.subtitle', { name: manualRunTask.name })}
                 </p>
               </div>
               <button
                 aria-label={tr('manualRun.cancel')}
-                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className="ui-pressable rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isManualRunSubmitting}
                 onClick={() => closeManualRunDialog()}
                 type="button"
@@ -1520,6 +1645,7 @@ export default function App() {
                 </span>
                 <textarea
                   className="h-48 w-full resize-y rounded-lg border border-slate-200 bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100 outline-hidden focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
+                  data-autofocus="true"
                   disabled={isManualRunSubmitting}
                   onChange={(event) => setManualRunPayloadText(event.target.value)}
                   placeholder={tr('manualRun.payloadPlaceholder')}
@@ -1550,7 +1676,7 @@ export default function App() {
 
             <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4">
               <button
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                className="ui-pressable rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isManualRunSubmitting}
                 onClick={() => closeManualRunDialog()}
                 type="button"
@@ -1558,7 +1684,8 @@ export default function App() {
                 {tr('manualRun.cancel')}
               </button>
               <button
-                className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-busy={isManualRunSubmitting}
+                className="ui-pressable flex min-w-[104px] items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isManualRunSubmitting || isManualRunLoadingTargets}
                 onClick={() => void handleManualRunSubmit()}
                 type="button"
@@ -1571,37 +1698,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- Floating Dismissible Toast Notification System --- */}
-      <div className="fixed bottom-6 right-6 z-50 space-y-2.5 max-w-sm">
-        {toasts.map((toast) => {
-          let bg = 'bg-white border-slate-200 text-slate-800';
-          let indicatorColor = 'bg-indigo-600';
-
-          if (toast.type === 'info') {
-            bg = 'bg-[#1a1c24] border-slate-700/60 text-white';
-            indicatorColor = 'bg-indigo-600';
-          } else if (toast.type === 'warn') {
-            bg = 'bg-rose-50 border-rose-200 text-rose-900';
-            indicatorColor = 'bg-rose-500';
-          }
-
-          return (
-            <div
-              key={toast.id}
-              className={`border p-4 rounded-xl shadow-lg flex items-center gap-3 animate-slideIn ${bg} font-medium text-xs`}
-            >
-              <div className={`w-2 h-2 rounded-full ${indicatorColor} animate-pulse shrink-0`} />
-              <span className="flex-1 leading-relaxed font-semibold">{toast.message}</span>
-              <button
-                onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
-                className="text-slate-400 hover:text-slate-600 font-bold shrink-0 p-1"
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      <ToastViewport dismissLabel={tr('toast.dismiss')} onDismiss={dismissToast} toasts={toasts} />
     </div>
   );
 }
@@ -1635,7 +1732,14 @@ export function getHeaderStatus(
       dotClassName: 'bg-slate-400',
     };
   }
-  if (resolvedStatus === 'failed' || resolvedStatus === 'degraded') {
+  if (resolvedStatus === 'failed') {
+    return {
+      label: t('status.failed'),
+      className: 'bg-amber-50 text-amber-700 border-amber-200',
+      dotClassName: 'bg-amber-500',
+    };
+  }
+  if (resolvedStatus === 'degraded') {
     return {
       label: t('common.degraded'),
       className: 'bg-amber-50 text-amber-700 border-amber-200',

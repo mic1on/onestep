@@ -83,7 +83,7 @@ export default function ServicesList({ services, onSelectService }: ServicesList
   const statusFilters: ServiceStatusFilter[] = ['all', 'running', 'degraded', 'offline'];
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-fadeIn">
+    <div className="ui-page-enter mx-auto max-w-7xl space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -116,7 +116,7 @@ export default function ServicesList({ services, onSelectService }: ServicesList
               aria-haspopup="true"
               aria-expanded={isStatusFilterOpen}
               onClick={() => setIsStatusFilterOpen((isOpen) => !isOpen)}
-              className="flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 focus:outline-hidden focus:ring-1 focus:ring-indigo-600 focus:border-indigo-600"
+              className="ui-pressable flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 focus:border-indigo-600 focus:outline-hidden focus:ring-1 focus:ring-indigo-600"
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
               <span>
@@ -127,7 +127,7 @@ export default function ServicesList({ services, onSelectService }: ServicesList
             </button>
 
             {isStatusFilterOpen && (
-              <div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-slate-200 bg-white py-1 text-xs font-medium shadow-lg">
+              <div className="ui-popover-enter absolute right-0 z-30 mt-1 w-40 rounded-lg border border-slate-200 bg-white py-1 text-xs font-medium shadow-lg">
                 {statusFilters.map((filter) => (
                   <button
                     key={filter}
@@ -136,7 +136,7 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                       setStatusFilter(filter);
                       setIsStatusFilterOpen(false);
                     }}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-slate-700 transition-colors hover:bg-slate-50 focus:outline-hidden focus:bg-slate-50"
+                    className="ui-pressable flex w-full items-center justify-between px-3 py-2 text-left text-slate-700 hover:bg-slate-50 focus:bg-slate-50 focus:outline-hidden"
                   >
                     <span>{getStatusFilterLabel(filter, t)}</span>
                     {statusFilter === filter && <Check className="w-3.5 h-3.5 text-indigo-600" />}
@@ -178,7 +178,7 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                     <tr
                       key={svc.id}
                       onClick={() => onSelectService(svc.id)}
-                      className="hover:bg-slate-50/55 transition-colors font-medium text-slate-700 cursor-pointer group"
+                      className="ui-pressable cursor-pointer font-medium text-slate-700 hover:bg-slate-50/55"
                     >
                       <td className="p-4">
                         <div className="flex items-center gap-3">
@@ -249,8 +249,8 @@ export default function ServicesList({ services, onSelectService }: ServicesList
                         </div>
                       </td>
                       <td className="p-4 text-right">
-                        <span className="inline-flex items-center gap-1 text-indigo-600 font-bold text-[11px] group-hover:gap-1.5 transition-all">
-                          {t('button.viewTaskDetails')}
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600">
+                          {t('service.detail')}
                           <ChevronRight className="w-3.5 h-3.5" />
                         </span>
                       </td>

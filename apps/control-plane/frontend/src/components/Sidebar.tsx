@@ -23,13 +23,13 @@ export default function Sidebar({
   const isServicesActive = currentView === 'servicesList' || currentView === 'services';
 
   return (
-    <nav className="bg-white border-r border-slate-200 fixed left-0 top-0 h-full w-[240px] flex flex-col p-4 z-20 shadow-xs">
+    <nav className="fixed left-0 top-0 z-20 flex h-full w-16 flex-col border-r border-slate-200 bg-white p-2 shadow-xs sm:w-[240px] sm:p-4">
       <div className="mb-8">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
+        <div className="flex items-center justify-center gap-3 sm:justify-start">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
             <BrandLogo className="h-8 w-7" decorative />
           </div>
-          <div>
+          <div className="hidden sm:block">
             <h1 className="font-sans text-lg font-bold text-slate-900 tracking-tight">OneStep</h1>
             <p className="font-sans text-xs text-slate-500 font-medium">{t('common.controlPlane')} v2.4.0</p>
           </div>
@@ -39,72 +39,79 @@ export default function Sidebar({
       <ul className="flex-1 space-y-1">
         <li>
           <button
+            aria-label={t('nav.globalOverview')}
             onClick={() => onViewChange('overview')}
-            className={`w-full flex items-center gap-3 p-2.5 text-sm transition-colors rounded-lg font-medium ${
+            className={`ui-pressable flex w-full items-center justify-center rounded-lg p-2.5 text-sm font-medium sm:justify-start sm:gap-3 ${
               currentView === 'overview'
                 ? 'bg-slate-100 text-slate-900 font-semibold'
                 : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
             }`}
           >
             <LayoutDashboard className="w-4 h-4 text-slate-500" />
-            <span>{t('nav.globalOverview')}</span>
+            <span className="hidden sm:inline">{t('nav.globalOverview')}</span>
           </button>
         </li>
         <li>
           <button
+            aria-label={t('nav.services')}
             onClick={() => onViewChange('servicesList')}
-            className={`w-full flex items-center gap-3 p-2.5 text-sm transition-colors rounded-lg font-medium ${
+            className={`ui-pressable flex w-full items-center justify-center rounded-lg p-2.5 text-sm font-medium sm:justify-start sm:gap-3 ${
               isServicesActive
                 ? 'bg-indigo-50 text-indigo-700 font-bold'
                 : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
             }`}
           >
             <Server className={`w-4 h-4 ${isServicesActive ? 'text-indigo-600' : 'text-slate-500'}`} />
-            <span>{t('nav.services')}</span>
+            <span className="hidden sm:inline">{t('nav.services')}</span>
           </button>
         </li>
         <li>
           <button
+            aria-label={t('nav.notifications')}
             onClick={() => onViewChange('notifications')}
-            className={`w-full flex items-center gap-3 p-2.5 text-sm transition-colors rounded-lg font-medium ${
+            className={`ui-pressable flex w-full items-center justify-center rounded-lg p-2.5 text-sm font-medium sm:justify-start sm:gap-3 ${
               currentView === 'notifications'
                 ? 'bg-indigo-50 text-indigo-700 font-bold'
                 : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
             }`}
           >
             <Bell className={`w-4 h-4 ${currentView === 'notifications' ? 'text-indigo-600' : 'text-slate-500'}`} />
-            <span>{t('nav.notifications')}</span>
+            <span className="hidden sm:inline">{t('nav.notifications')}</span>
           </button>
         </li>
       </ul>
 
       <div className="border-t border-slate-200 pt-3">
         <a
-          className="flex w-full items-center gap-3 rounded-lg p-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          aria-label={t('nav.docs')}
+          className="ui-pressable flex w-full items-center justify-center rounded-lg p-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 sm:justify-start sm:gap-3"
           href="https://onestep.code05.com/"
           rel="noreferrer"
           target="_blank"
         >
           <BookOpen className="h-4 w-4 text-slate-500" />
-          <span>{t('nav.docs')}</span>
+          <span className="hidden sm:inline">{t('nav.docs')}</span>
         </a>
         <a
-          className="flex w-full items-center gap-3 rounded-lg p-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+          aria-label={t('nav.github')}
+          className="ui-pressable flex w-full items-center justify-center rounded-lg p-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 sm:justify-start sm:gap-3"
           href="https://github.com/mic1on/onestep"
           rel="noreferrer"
           target="_blank"
         >
           <Github className="h-4 w-4 text-slate-500" />
-          <span>{t('nav.github')}</span>
+          <span className="hidden sm:inline">{t('nav.github')}</span>
         </a>
         <button
-          className="flex w-full items-center gap-3 rounded-lg p-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+          aria-label={isLogoutPending ? t('button.signingOut') : t('button.signOut')}
+          aria-busy={isLogoutPending}
+          className="ui-pressable flex w-full items-center justify-center rounded-lg p-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60 sm:justify-start sm:gap-3"
           disabled={isLogoutPending}
           onClick={onLogout}
           type="button"
         >
           <LogOut className="h-4 w-4 text-slate-500" />
-          <span>{isLogoutPending ? t('button.signingOut') : t('button.signOut')}</span>
+          <span className="hidden sm:inline">{isLogoutPending ? t('button.signingOut') : t('button.signOut')}</span>
         </button>
       </div>
     </nav>

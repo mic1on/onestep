@@ -120,14 +120,22 @@ export default function TaskEventDiagnostics({
 
       <div className="p-4 space-y-3">
         {isLoading ? (
-          <div className="text-xs font-semibold text-slate-500">{t('task.loadingEvents')}</div>
+          <div
+            aria-live="polite"
+            className="ui-panel-state-enter text-xs font-semibold text-slate-500"
+            role="status"
+          >
+            {t('task.loadingEvents')}
+          </div>
         ) : error ? (
-          <div className="flex items-center gap-2 text-xs font-semibold text-rose-600">
+          <div className="ui-panel-state-enter flex items-center gap-2 text-xs font-semibold text-rose-600" role="alert">
             <AlertTriangle className="h-4 w-4" />
             <span>{error}</span>
           </div>
         ) : logs.length === 0 ? (
-          <div className="text-xs font-semibold text-slate-500">{t('task.noEvents')}</div>
+          <div className="ui-panel-state-enter text-xs font-semibold text-slate-500" role="status">
+            {t('task.noEvents')}
+          </div>
         ) : (
           logs.map((log, index) => {
             const isWarn = log.level === 'warn';

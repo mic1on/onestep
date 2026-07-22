@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { getHeaderStatus, getTaskToggleCommand, isTaskToggleSupported } from './App';
+import {
+  getControlPlaneLoadingMode,
+  getHeaderStatus,
+  getTaskToggleCommand,
+  isTaskToggleSupported,
+} from './App';
 import type { Task, TaskCommandKind } from './types';
 
 const labels: Record<string, string> = {
   'common.running': 'RUNNING',
   'common.degraded': 'DEGRADED',
   'common.offline': 'OFFLINE',
+  'status.failed': 'Failed',
   'status.idle': 'Idle',
   'status.paused': 'Paused',
 };
@@ -41,6 +47,10 @@ function task(viewStatus: Task['viewStatus'], supportedCommands: TaskCommandKind
 }
 
 describe('getHeaderStatus', () => {
+  it('labels failed task detail pages as failed instead of degraded', () => {
+    expect(getHeaderStatus('running', 'failed', t).label).toBe('Failed');
+  });
+
   it('labels idle task detail pages as idle instead of offline', () => {
     expect(getHeaderStatus('running', 'idle', t).label).toBe('Idle');
   });
@@ -69,5 +79,13 @@ describe('task toggle command mapping', () => {
     expect(isTaskToggleSupported(pausedTask)).toBe(true);
     expect(getTaskToggleCommand(offlineTask)).toBeNull();
     expect(isTaskToggleSupported(offlineTask)).toBe(false);
+  });
+});
+
+describe('control plane loading mode', () => {
+  it('uses a skeleton only when the initial API request has no content', () => {
+    expect(getControlPlaneLoadingMode(true, 0)).toBe('initial');
+    expect(getControlPlaneLoadingMode(true, 2)).toBe('refresh');
+    expect(getControlPlaneLoadingMode(false, 0)).toBe('settled');
   });
 });

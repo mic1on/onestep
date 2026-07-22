@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskMetricChartPointSummary } from '../api';
 import { I18nProvider } from '../i18n';
@@ -115,5 +115,21 @@ describe('ResourceChart', () => {
     const tooltipStyle = tooltip.getAttribute('style') ?? '';
     expect(tooltipStyle).toContain('top:');
     expect(tooltipStyle).not.toContain('bottom: 40px');
+  });
+
+  it('announces metric loading without changing the chart frame', () => {
+    render(
+      <I18nProvider initialLocale="en">
+        <ResourceChart
+          error={null}
+          isLoading
+          lookbackMinutes={15}
+          onLookbackMinutesChange={vi.fn()}
+          windows={[]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole('status').textContent).toContain('Loading task metrics...');
   });
 });

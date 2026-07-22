@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Check, Globe } from 'lucide-react';
 import { useI18n, type Locale } from '../i18n';
+import useDismissibleMenu from './useDismissibleMenu';
 
 // Native names are shown as each language refers to itself — standard practice
 // for locale pickers, so a user who doesn't read the current UI can still find
@@ -13,31 +14,29 @@ const LOCALE_OPTIONS: Array<{ value: Locale; label: string; short: string }> = [
 export default function LocaleSwitcher() {
   const { locale, setLocale } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
+  const closeMenu = useCallback(() => setIsOpen(false), []);
+  const { menuRef, triggerRef } = useDismissibleMenu({ onClose: closeMenu, open: isOpen });
   const current = LOCALE_OPTIONS.find((option) => option.value === locale) ?? LOCALE_OPTIONS[0];
 
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         onClick={() => setIsOpen((open) => !open)}
-        className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+        className="ui-pressable flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         title="Language"
+        type="button"
       >
         <Globe className="w-4 h-4" />
         <span>{current.short}</span>
       </button>
       {isOpen && (
-        <>
-          {/* Click-away overlay: same pattern as the environment filter in App.tsx. */}
-          <div
-            className="fixed inset-0 z-30"
-            onClick={() => setIsOpen(false)}
-            aria-hidden="true"
-          />
           <ul
+            ref={menuRef}
             role="listbox"
-            className="absolute right-0 z-40 mt-1 w-40 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg font-medium text-xs"
+            className="ui-popover-enter absolute right-0 z-40 mt-1 w-40 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-xs font-medium shadow-lg"
           >
             {LOCALE_OPTIONS.map((option) => {
               const active = option.value === locale;
@@ -48,9 +47,10 @@ export default function LocaleSwitcher() {
                     aria-selected={active}
                     onClick={() => {
                       setLocale(option.value);
-                      setIsOpen(false);
+                      closeMenu();
+                      triggerRef.current?.focus();
                     }}
-                    className={`flex w-full items-center justify-between px-3 py-1.5 text-left transition-colors ${
+                    className={`ui-pressable flex w-full items-center justify-between px-3 py-1.5 text-left ${
                       active
                         ? 'bg-indigo-50 font-bold text-indigo-700'
                         : 'text-slate-700 hover:bg-slate-50'
@@ -63,7 +63,6 @@ export default function LocaleSwitcher() {
               );
             })}
           </ul>
-        </>
       )}
     </div>
   );

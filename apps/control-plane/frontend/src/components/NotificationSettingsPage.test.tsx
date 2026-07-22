@@ -120,4 +120,14 @@ describe('NotificationSettingsPage custom webhooks', () => {
       { key: 'service_environment', value: '{{ service_environment }}' },
     ]);
   });
+
+  it('marks notification refresh as busy while requests are pending', async () => {
+    const pending = new Promise<Response>(() => undefined);
+    vi.spyOn(window, 'fetch').mockReturnValue(pending);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Refreshing' }).getAttribute('aria-busy')).toBe('true');
+    });
+  });
 });

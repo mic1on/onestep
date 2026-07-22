@@ -161,7 +161,7 @@ export default function OverviewPage({
   const sourceKinds = Object.entries(sourceKindCounts).sort((a, b) => b[1] - a[1]);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 animate-fadeIn">
+    <div className="ui-page-enter mx-auto max-w-7xl space-y-6">
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>

@@ -355,13 +355,20 @@ export default function ResourceChart({
 
       <div className="flex-1 min-h-0 p-5 relative flex items-end justify-center select-none bg-white">
         {isLoading && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 text-xs font-bold text-slate-500">
+          <div
+            aria-live="polite"
+            className="ui-panel-state-enter absolute inset-0 z-20 flex items-center justify-center bg-white/80 text-xs font-bold text-slate-500"
+            role="status"
+          >
             {t('chart.loadingMetrics')}
           </div>
         )}
 
         {!isLoading && error && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white px-6 text-center">
+          <div
+            className="ui-panel-state-enter absolute inset-0 z-20 flex items-center justify-center bg-white px-6 text-center"
+            role="alert"
+          >
             <div>
               <AlertCircle className="mx-auto mb-2 h-5 w-5 text-amber-500" />
               <div className="text-xs font-bold text-slate-700">{t('chart.metricsUnavailable')}</div>
@@ -371,7 +378,10 @@ export default function ResourceChart({
         )}
 
         {!isLoading && !error && !hasData && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white px-6 text-center">
+          <div
+            className="ui-panel-state-enter absolute inset-0 z-20 flex items-center justify-center bg-white px-6 text-center"
+            role="status"
+          >
             <div>
               <Activity className="mx-auto mb-2 h-5 w-5 text-slate-300" />
               <div className="text-xs font-bold text-slate-700">{t('chart.noMetrics')}</div>

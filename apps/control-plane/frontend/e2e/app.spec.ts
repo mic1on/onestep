@@ -550,7 +550,8 @@ test("renders the control plane dashboard", async ({ page }) => {
   // The landing view is the services list; open a service to reach its detail.
   await expect(page.getByText("Synchronizes billing records into downstream systems.")).toBeVisible();
   await page.getByText("billing-sync").first().click();
-  await expect(page.getByText("Service Detail")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "billing-sync / prod" })).toBeVisible();
+  await page.screenshot({ path: "/tmp/onestep-plane-tablet.png", fullPage: true });
   await expect(page.getByText("billing-sync").first()).toBeVisible();
   await expect(page.getByText("Synchronizes billing records into downstream systems.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Restart All" })).toBeVisible();
@@ -576,27 +577,108 @@ test("shows support links in nav bottom and signs out", async ({ page }) => {
 });
 
 test("does not render demo services while the initial API load is pending", async ({ page }) => {
+  await installApiMocks(page);
   let releaseApi: () => void = () => {};
   const apiPending = new Promise<void>((resolve) => {
     releaseApi = resolve;
   });
 
-  await page.route("**/api/v1/**", async (route) => {
+  await page.route((url) => url.pathname === "/api/v1/services", async (route) => {
     await apiPending;
-    await route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ detail: "test intentionally released pending API" }),
-    });
+    await route.fallback();
   });
 
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Connecting to API" })).toBeVisible();
+  await expect(page.getByTestId("control-plane-skeleton")).toBeVisible();
   await expect(page.getByText("user-auth-service")).toHaveCount(0);
   await expect(page.getByText("Ingest-Logs")).toHaveCount(0);
 
   releaseApi();
+  await expect(page.getByText("billing-sync").first()).toBeVisible();
+  await expect(page.getByTestId("control-plane-skeleton")).toHaveCount(0);
+});
+
+test("preserves service content during a background refresh", async ({ page }) => {
+  await installApiMocks(page);
+  let delayNextServiceList = false;
+  let releaseRefresh: () => void = () => {};
+  const refreshPending = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+
+  await page.route((url) => url.pathname === "/api/v1/services", async (route) => {
+    if (delayNextServiceList) {
+      delayNextServiceList = false;
+      await refreshPending;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("billing-sync").first()).toBeVisible();
+
+  delayNextServiceList = true;
+  await page.getByRole("button", { name: "Refresh" }).click();
+
+  await expect(page.getByRole("button", { name: "Refreshing" })).toHaveAttribute("aria-busy", "true");
+  await expect(page.getByText("billing-sync").first()).toBeVisible();
+  await expect(page.getByTestId("control-plane-skeleton")).toHaveCount(0);
+
+  releaseRefresh();
+  await expect(page.getByText("Control plane data refreshed from API.")).toBeVisible();
+});
+
+test("restores focus after dismissing menus and the manual-run dialog", async ({ page }) => {
+  await installApiMocks(page);
+  await page.goto("/");
+  await expect(page.getByText("billing-sync").first()).toBeVisible();
+
+  const environmentTrigger = page.getByRole("button", { name: /Environment/ });
+  await environmentTrigger.click();
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(environmentTrigger).toBeFocused();
+
+  await page.getByText("billing-sync").first().click();
+  await page.getByText("orders_to_ledger").first().click();
+  const runOnceButton = page.getByRole("button", { name: "Run once" });
+  await runOnceButton.click();
+
+  await expect(page.getByRole("dialog", { name: "Run task once" })).toBeVisible();
+  await expect(page.getByLabel("JSON payload")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Run task once" })).toHaveCount(0);
+  await expect(runOnceButton).toBeFocused();
+});
+
+test("reduces topology motion when the user prefers reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await installApiMocks(page);
+  await page.goto("/");
+  await page.getByText("billing-sync").first().click();
+  await page.getByText("orders_to_ledger").first().click();
+
+  const duration = await page.getByTestId("topology-flow-diagram").evaluate((element) =>
+    getComputedStyle(element.querySelector('[data-testid="topology-flow-packet"]')!).animationDuration,
+  );
+  const durationMs = duration.endsWith("ms") ? Number.parseFloat(duration) : Number.parseFloat(duration) * 1000;
+  expect(durationMs).toBeCloseTo(0.01, 5);
+});
+
+test("keeps the services view usable without page overflow on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApiMocks(page);
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Service Directory" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Services" })).toBeVisible();
+  const hasPageOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasPageOverflow).toBe(false);
 });
 
 test("loads API-backed service, task, instance, topology, config, and log views", async ({ page }) => {
@@ -609,7 +691,7 @@ test("loads API-backed service, task, instance, topology, config, and log views"
 
   // Open the billing-sync service to reach its detail (tasks/instances/topology).
   await page.getByText("billing-sync").first().click();
-  await expect(page.getByText("Service Detail")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "billing-sync / prod" })).toBeVisible();
   await expect(page.getByText("orders_to_ledger").first()).toBeVisible();
   await expect(page.getByText("redis_stream")).toBeVisible();
   await expect(page.getByText("ledger-api")).toBeVisible();
@@ -627,7 +709,7 @@ test("loads API-backed service, task, instance, topology, config, and log views"
   await expect(page.getByText("orders_to_ledger").first()).toBeVisible();
 
   await page.getByText("orders_to_ledger").first().click();
-  await page.getByLabel("Breadcrumb").getByRole("button", { name: "billing-sync" }).click();
+  await page.getByLabel("Breadcrumb").getByRole("button", { name: "billing-sync / prod" }).click();
   await expect(page).toHaveURL(/\/services\/billing-sync%3Aprod$/);
   await page.getByText("orders_to_ledger").first().click();
 

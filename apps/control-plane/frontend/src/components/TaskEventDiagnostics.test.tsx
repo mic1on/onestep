@@ -158,4 +158,24 @@ describe('TaskEventDiagnostics', () => {
     expect(handlePageChange).toHaveBeenCalledWith(0);
     expect(handlePageChange).toHaveBeenCalledWith(40);
   });
+
+  it('announces task event loading', () => {
+    render(
+      <I18nProvider initialLocale="en">
+        <TaskEventDiagnostics
+          error={null}
+          isLoading
+          limit={20}
+          logs={[]}
+          lookbackMinutes={15}
+          offset={0}
+          onLookbackMinutesChange={vi.fn()}
+          onPageChange={vi.fn()}
+          total={0}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole('status').textContent).toContain('Loading task events...');
+  });
 });

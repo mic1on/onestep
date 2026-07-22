@@ -61,15 +61,15 @@ const topologyFlowStyles = `
 }
 
 .topology-flow-node-source-active {
-  animation: topology-flow-source-glow var(--topology-stage-duration) ease-in-out infinite;
+  animation: topology-flow-source-glow var(--topology-stage-duration) var(--ease-move) infinite;
 }
 
 .topology-flow-node-handler-active {
-  animation: topology-flow-handler-breathe var(--topology-stage-duration) ease-in-out infinite;
+  animation: topology-flow-handler-breathe var(--topology-stage-duration) var(--ease-move) infinite;
 }
 
 .topology-flow-node-sink-active {
-  animation: topology-flow-sink-glow var(--topology-stage-duration) ease-in-out infinite;
+  animation: topology-flow-sink-glow var(--topology-stage-duration) var(--ease-move) infinite;
   animation-delay: 0.22s;
 }
 
@@ -90,14 +90,6 @@ const topologyFlowStyles = `
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .topology-flow-track-active::after,
-  .topology-flow-packet,
-  .topology-flow-node-source-active,
-  .topology-flow-node-handler-active,
-  .topology-flow-node-sink-active {
-    animation: none !important;
-  }
-
   .topology-flow-packet {
     display: none;
   }
@@ -366,12 +358,12 @@ export default function TopologyFlow({ task, resourceCatalog }: TopologyFlowProp
                   : 'border-indigo-600/80 group-hover:border-indigo-600 group-hover:shadow-md'
               } ${isFlowing ? 'topology-flow-node-handler-active' : ''}`}
             >
-              <Cpu className={`w-8 h-8 text-indigo-600 ${isRunning && !isFlowing ? 'animate-pulse' : ''}`} />
+              <Cpu className="w-8 h-8 text-indigo-600" />
               {/* Pulsing status dot */}
               <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
                 <span
-                  className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                    isRunning ? 'bg-emerald-400' : 'bg-slate-300 animate-none'
+                  className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    isFlowing ? 'animate-ping bg-emerald-400' : isRunning ? 'bg-emerald-400' : 'bg-slate-300'
                   }`}
                 />
                 <span
@@ -417,7 +409,7 @@ export default function TopologyFlow({ task, resourceCatalog }: TopologyFlowProp
 
         {/* Node detail slide-over or collapsible info block */}
         {activeDetails && (
-          <div className="w-full mt-6 bg-indigo-50/40 border border-indigo-100/80 rounded-xl p-4 transition-all animate-fadeIn">
+          <div className="ui-panel-state-enter mt-6 w-full rounded-lg border border-indigo-100/80 bg-indigo-50/40 p-4">
             <div className="flex items-center gap-2 mb-3 border-b border-indigo-100/50 pb-2">
               <Info className="w-4 h-4 text-indigo-600" />
               <h4 className="font-sans text-xs font-bold text-indigo-900">{activeDetails.title}</h4>
