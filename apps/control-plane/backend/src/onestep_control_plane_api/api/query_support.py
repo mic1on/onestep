@@ -1093,6 +1093,7 @@ def build_task_pause_requested_map(
     db: Session,
     *,
     service_id: UUID,
+    as_of: datetime | None = None,
 ) -> dict[str, bool]:
     """Aggregate per-task ``pause_requested`` across a service's instances.
 
@@ -1104,8 +1105,13 @@ def build_task_pause_requested_map(
     ``task_control_states`` shape used by the per-instance detail path, so the
     semantics match ``_coerce_bool``.
     """
+    cutoff = online_cutoff(as_of or utcnow())
     snapshot_rows = db.execute(
-        select(Instance.app_snapshot_json).where(Instance.service_id == service_id)
+        select(Instance.app_snapshot_json).where(
+            Instance.service_id == service_id,
+            Instance.last_seen_at.is_not(None),
+            Instance.last_seen_at >= cutoff,
+        )
     ).all()
 
     result: dict[str, bool] = {}
@@ -1503,6 +1509,14 @@ def service_has_task_data(
     if task_definition is not None:
         return True
 
+    has_task_definitions = db.scalar(
+        select(TaskDefinition.id)
+        .where(TaskDefinition.service_id == service_id)
+        .limit(1)
+    )
+    if has_task_definitions is not None:
+        return task_name in build_online_task_snapshot_name_set(db, service_id=service_id)
+
     metric_task = db.scalar(
         select(TaskMetricWindow.id)
         .where(
@@ -1525,6 +1539,44 @@ def service_has_task_data(
     return event_task is not None
 
 
+def extract_task_names_from_snapshot(app_snapshot_json: dict[str, object] | None) -> set[str]:
+    if not isinstance(app_snapshot_json, dict):
+        return set()
+    task_control_states = app_snapshot_json.get("task_control_states")
+    if not isinstance(task_control_states, list):
+        return set()
+
+    task_names: set[str] = set()
+    for value in task_control_states:
+        if not isinstance(value, dict):
+            continue
+        task_name = value.get("task_name")
+        if isinstance(task_name, str):
+            task_names.add(task_name)
+    return task_names
+
+
+def build_online_task_snapshot_name_set(
+    db: Session,
+    *,
+    service_id: UUID,
+    as_of: datetime | None = None,
+) -> set[str]:
+    cutoff = online_cutoff(as_of or utcnow())
+    snapshot_rows = db.execute(
+        select(Instance.app_snapshot_json).where(
+            Instance.service_id == service_id,
+            Instance.last_seen_at.is_not(None),
+            Instance.last_seen_at >= cutoff,
+        )
+    ).all()
+
+    task_names: set[str] = set()
+    for (app_snapshot_json,) in snapshot_rows:
+        task_names.update(extract_task_names_from_snapshot(app_snapshot_json))
+    return task_names
+
+
 def build_task_summary_map(
     db: Session,
     *,
@@ -1533,6 +1585,7 @@ def build_task_summary_map(
     lookback_minutes: int = 1,
     online_instance_count: int = 0,
 ) -> dict[str, TaskDashboardSummary]:
+    now = utcnow()
     task_definitions = db.scalars(
         select(TaskDefinition)
         .where(TaskDefinition.service_id == service_id)
@@ -1547,6 +1600,27 @@ def build_task_summary_map(
     }
     for task_definition in task_definitions:
         apply_task_definition_to_summary(summaries[task_definition.task_name], task_definition)
+
+    task_definition_names = set(summaries)
+    online_snapshot_task_names = build_online_task_snapshot_name_set(
+        db,
+        service_id=service_id,
+        as_of=now,
+    )
+    allowed_task_names = (
+        None
+        if not task_definition_names
+        else task_definition_names | online_snapshot_task_names
+    )
+    if task_definition_names:
+        for task_name in sorted(online_snapshot_task_names - task_definition_names):
+            summaries[task_name] = TaskDashboardSummary(
+                task_name=task_name,
+                event_counts=TaskEventCounts(),
+            )
+
+    def should_include_task(task_name: str) -> bool:
+        return allowed_task_names is None or task_name in allowed_task_names
 
     weighted_avg_duration_ms = (
         func.sum(func.coalesce(TaskMetricWindow.avg_duration_ms, 0.0) * TaskMetricWindow.started)
@@ -1594,6 +1668,8 @@ def build_task_summary_map(
     ) in metric_rows:
         summary = summaries.get(task_name)
         if summary is None:
+            if not should_include_task(task_name):
+                continue
             summary = TaskDashboardSummary(
                 task_name=task_name,
                 event_counts=TaskEventCounts(),
@@ -1638,6 +1714,8 @@ def build_task_summary_map(
         }
         summary = summaries.get(task_name)
         if summary is None:
+            if not should_include_task(task_name):
+                continue
             summary = TaskDashboardSummary(
                 task_name=task_name,
                 event_counts=build_task_event_counts(counts_by_kind=counts_by_kind),
@@ -1652,18 +1730,22 @@ def build_task_summary_map(
     # Aggregate pause_requested across this service's instances so the dashboard
     # list can surface a "paused" status without hitting the per-instance detail
     # path. Tasks absent from the map keep summary.pause_requested=None (unknown).
-    pause_requested_map = build_task_pause_requested_map(db, service_id=service_id)
+    pause_requested_map = build_task_pause_requested_map(db, service_id=service_id, as_of=now)
     for task_name, pause_requested in pause_requested_map.items():
         summary = summaries.get(task_name)
         if summary is None:
+            if not should_include_task(task_name):
+                continue
             summary = TaskDashboardSummary(task_name=task_name, event_counts=TaskEventCounts())
             summaries[task_name] = summary
         summary.pause_requested = pause_requested
 
-    supported_commands_map = build_task_supported_commands_map(db, service_id=service_id)
+    supported_commands_map = build_task_supported_commands_map(db, service_id=service_id, as_of=now)
     for task_name, supported_commands in supported_commands_map.items():
         summary = summaries.get(task_name)
         if summary is None:
+            if not should_include_task(task_name):
+                continue
             summary = TaskDashboardSummary(task_name=task_name, event_counts=TaskEventCounts())
             summaries[task_name] = summary
         summary.supported_commands = supported_commands

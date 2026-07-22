@@ -3461,6 +3461,135 @@ def test_list_service_tasks_aggregates_metrics_and_events(client, db_session) ->
     assert filtered.json()["items"][0]["task_name"] == "cleanup_orphans"
 
 
+def test_list_service_tasks_hides_removed_task_history_when_topology_is_known(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(
+        db_session,
+        name="billing-sync",
+        environment="prod",
+        latest_topology_hash="sha256:topology-renamed",
+        latest_sync_at=now,
+    )
+    offline_old_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-old",
+        status="ok",
+        last_seen_at=now - timedelta(minutes=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {"task_name": "sync_users"},
+            ],
+        },
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_accounts",
+        source_name="interval:3600s",
+        source_kind="interval",
+    )
+    seed_metric_window(
+        db_session,
+        service,
+        offline_old_instance,
+        task_name="sync_users",
+        window_id="sync_users:before-rename",
+        window_started_at=now - timedelta(minutes=5),
+        window_ended_at=now - timedelta(minutes=4),
+        succeeded=10,
+    )
+    seed_task_event(
+        db_session,
+        service,
+        offline_old_instance,
+        event_id="evt_sync_users_before_rename",
+        task_name="sync_users",
+        kind="succeeded",
+        occurred_at=now - timedelta(minutes=3),
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/billing-sync/tasks",
+        params={"environment": "prod", "lookback_minutes": 60},
+    )
+
+    assert response.status_code == 200
+    assert [item["task_name"] for item in response.json()["items"]] == ["sync_accounts"]
+
+    removed_detail = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users",
+        params={"environment": "prod", "lookback_minutes": 60},
+    )
+    assert removed_detail.status_code == 404
+
+
+def test_list_service_tasks_keeps_removed_task_while_online_instance_reports_it(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(
+        db_session,
+        name="billing-sync",
+        environment="prod",
+        latest_topology_hash="sha256:topology-renamed",
+        latest_sync_at=now,
+    )
+    online_old_instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-old",
+        status="ok",
+        last_seen_at=now - timedelta(seconds=10),
+        app_snapshot_json={
+            "name": "billing-sync",
+            "task_control_states": [
+                {"task_name": "sync_users"},
+            ],
+        },
+    )
+    seed_task_definition(
+        db_session,
+        service,
+        task_name="sync_accounts",
+        source_name="interval:3600s",
+        source_kind="interval",
+    )
+    seed_metric_window(
+        db_session,
+        service,
+        online_old_instance,
+        task_name="sync_users",
+        window_id="sync_users:during-rename",
+        window_started_at=now - timedelta(minutes=5),
+        window_ended_at=now - timedelta(minutes=4),
+        succeeded=10,
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/services/billing-sync/tasks",
+        params={"environment": "prod", "lookback_minutes": 60},
+    )
+
+    assert response.status_code == 200
+    by_task_name = {item["task_name"]: item for item in response.json()["items"]}
+    assert set(by_task_name) == {"sync_accounts", "sync_users"}
+    assert by_task_name["sync_users"]["metric_window_count"] == 1
+
+    removed_detail = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users",
+        params={"environment": "prod", "lookback_minutes": 60},
+    )
+    assert removed_detail.status_code == 200
+
+
 def test_list_service_tasks_exposes_online_supported_commands(client, db_session) -> None:
     now = datetime.now(UTC)
     service = seed_service(db_session, name="billing-sync", environment="prod")

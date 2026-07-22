@@ -302,11 +302,36 @@ def _task_control_states_from_snapshot(
     return normalized
 
 
+def _task_names_from_snapshot_tasks(app_snapshot_json: dict[str, object] | None) -> set[str] | None:
+    if not isinstance(app_snapshot_json, dict):
+        return None
+    tasks = app_snapshot_json.get("tasks")
+    if not isinstance(tasks, list):
+        return None
+
+    task_names: set[str] = set()
+    for value in tasks:
+        if not isinstance(value, dict):
+            continue
+        task_name = value.get("name")
+        if isinstance(task_name, str):
+            task_names.add(task_name)
+    return task_names
+
+
 def _merge_task_control_states(
     app_snapshot_json: dict[str, object] | None,
     task_control_states: list[dict[str, object]],
 ) -> dict[str, object]:
     merged_snapshot = dict(app_snapshot_json) if isinstance(app_snapshot_json, dict) else {}
+    current_task_names = _task_names_from_snapshot_tasks(merged_snapshot)
+    if current_task_names is not None:
+        task_control_states = [
+            state
+            for state in task_control_states
+            if isinstance(state.get("task_name"), str)
+            and state["task_name"] in current_task_names
+        ]
     merged_snapshot["task_control_states"] = task_control_states
     return merged_snapshot
 

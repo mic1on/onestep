@@ -59,6 +59,15 @@ describe('TasksList status colors', () => {
     expect(idleLabel.className).not.toContain('text-amber-600');
   });
 
+  it('renders task descriptions when present', () => {
+    renderTasksList({
+      ...baseTask,
+      description: 'Forwards approved records into the HTTP sink.',
+    });
+
+    expect(screen.getByText('Forwards approved records into the HTTP sink.')).toBeTruthy();
+  });
+
   it('keeps failed tasks in the amber attention tone', () => {
     renderTasksList({ ...baseTask, id: 'ceegic:prod:sync_failed', viewStatus: 'failed' });
 

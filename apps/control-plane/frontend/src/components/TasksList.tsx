@@ -55,6 +55,7 @@ export default function TasksList({
         const isPending = pendingTaskId === task.id;
         const isMenuOpen = openMenuId === task.id;
         const sourceLabel = getTopologySourceLabel(task);
+        const description = task.description?.trim();
 
         return (
           <div
@@ -65,12 +66,12 @@ export default function TasksList({
             <div>
               {/* Header section inside card */}
               <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center text-indigo-600">
                     <Database className="w-5 h-5" />
                   </div>
-                  <div>
-                    <h4 className="font-sans text-md font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                  <div className="min-w-0">
+                    <h4 className="font-sans text-md font-bold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
                       {task.name}
                     </h4>
                     <div className="flex items-center gap-1.5 mt-0.5">
@@ -106,6 +107,14 @@ export default function TasksList({
                         </span>
                       </span>
                     </div>
+                    {description && (
+                      <p
+                        className="mt-1.5 line-clamp-2 max-w-md break-words text-xs font-medium leading-5 text-slate-500"
+                        title={description}
+                      >
+                        {description}
+                      </p>
+                    )}
                   </div>
                 </div>
 

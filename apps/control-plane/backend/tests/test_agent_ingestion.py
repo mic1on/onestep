@@ -348,6 +348,47 @@ def test_heartbeat_task_controls_merge_into_instance_snapshot(db_session) -> Non
     ]
 
 
+def test_sync_drops_task_control_states_for_removed_tasks(db_session) -> None:
+    ingest_sync(db_session, make_sync_payload())
+    ingest_heartbeat(
+        db_session,
+        make_heartbeat_payload(
+            task_controls=[
+                {
+                    "task_name": "sync_users",
+                    "pause_requested": True,
+                    "paused": True,
+                    "accepting_new_work": False,
+                    "runner_count": 2,
+                    "parked_runner_count": 2,
+                    "fetching_runner_count": 0,
+                    "inflight_task_count": 0,
+                }
+            ]
+        ),
+    )
+
+    renamed_payload = make_sync_payload(
+        topology_hash="sha256:renamed-topology",
+        tasks=[{"name": "sync_accounts"}],
+    )
+    renamed_payload["sent_at"] = "2026-03-08T17:31:06Z"
+    renamed_payload["sequence"] = 6
+    ingest_sync(db_session, renamed_payload)
+    db_session.expire_all()
+
+    instance = db_session.scalar(select(Instance))
+    task_definitions = db_session.scalars(select(TaskDefinition)).all()
+
+    assert instance is not None
+    assert instance.app_snapshot_json is not None
+    assert instance.app_snapshot_json["topology_hash"] == "sha256:renamed-topology"
+    assert instance.app_snapshot_json["task_control_states"] == []
+    assert [task_definition.task_name for task_definition in task_definitions] == [
+        "sync_accounts"
+    ]
+
+
 def test_conflicting_service_cannot_reuse_existing_instance_id(db_session) -> None:
     ingest_heartbeat(
         db_session,
