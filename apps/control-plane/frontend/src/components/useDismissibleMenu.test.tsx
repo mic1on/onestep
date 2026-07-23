@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import useDismissibleMenu from './useDismissibleMenu';
 
-function MenuHarness({ onClose }: { onClose: () => void }) {
+function MenuHarness({ onClose, trapFocus = false }: { onClose: () => void; trapFocus?: boolean }) {
   const [open, setOpen] = useState(false);
   const { menuRef, triggerRef } = useDismissibleMenu({
     onClose: () => {
@@ -11,6 +11,7 @@ function MenuHarness({ onClose }: { onClose: () => void }) {
       onClose();
     },
     open,
+    trapFocus,
   });
   return (
     <div>
@@ -20,6 +21,7 @@ function MenuHarness({ onClose }: { onClose: () => void }) {
       {open && (
         <div ref={menuRef}>
           <button>First action</button>
+          <button>Last action</button>
         </div>
       )}
       <button>Outside</button>
@@ -51,5 +53,21 @@ describe('useDismissibleMenu', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'First action' })).toBeNull();
+  });
+
+  it('loops Tab focus within an opted-in modal menu', () => {
+    const onClose = vi.fn();
+    render(<MenuHarness onClose={onClose} trapFocus />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    const firstAction = screen.getByRole('button', { name: 'First action' });
+    const lastAction = screen.getByRole('button', { name: 'Last action' });
+
+    lastAction.focus();
+    fireEvent.keyDown(lastAction, { key: 'Tab' });
+    expect(document.activeElement).toBe(firstAction);
+
+    fireEvent.keyDown(firstAction, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(lastAction);
   });
 });

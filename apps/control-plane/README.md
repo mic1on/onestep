@@ -108,6 +108,10 @@ Docker Compose files, deploy flow, and `scripts/start-local.sh`.
 | `ONESTEP_CP_CONSOLE_AUTH_USERNAME` | Backend auth | empty | Shared username for the monitoring console. Must be set together with `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. |
 | `ONESTEP_CP_CONSOLE_AUTH_PASSWORD` | Backend auth | empty | Shared password for the monitoring console. Must be set together with `ONESTEP_CP_CONSOLE_AUTH_USERNAME`. |
 | `ONESTEP_CP_CONSOLE_AUTH_SESSION_TTL_S` | Backend auth | `604800` | Console session lifetime in seconds. Advanced option for login cookie expiry. |
+| `ONESTEP_CP_CONSOLE_LOGIN_MAX_FAILURES` | Backend auth | `5` | Failed console logins allowed for one username before a temporary lockout. |
+| `ONESTEP_CP_CONSOLE_LOGIN_FAILURE_WINDOW_S` | Backend auth | `900` | Time window in seconds used to count failed console logins. |
+| `ONESTEP_CP_CONSOLE_LOGIN_LOCKOUT_S` | Backend auth | `900` | Temporary console-login lockout duration in seconds after reaching the failure limit. |
+| `ONESTEP_CP_PROMETHEUS_CACHE_TTL_S` | Backend metrics | `15` | Maximum in-process cache lifetime in seconds for the Prometheus scrape response. Set to `0` to disable caching. |
 | `ONESTEP_CP_CONSOLE_BASE_URL` | Backend notifications | empty / `https://cp.example.com` | Optional public base URL for the monitoring console. When set, webhook notifications render clickable absolute detail links instead of relative paths. |
 | `ONESTEP_CP_PIPELINE_CREDENTIALS_FERNET_KEY` | Backend pipeline builder | empty | Fernet key used to encrypt Pipeline Builder credentials. Required for production persistence across restarts and replicas. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
 | `ONESTEP_CP_CORS_ALLOW_ORIGINS` | Backend CORS | empty | Browser origins allowed to call the query API. Use explicit origins instead of `*` when console auth is enabled across origins. |
@@ -165,7 +169,10 @@ If port `5432` is already occupied locally, change `ONESTEP_CP_POSTGRES_PORT` an
 ## Docker Compose
 
 The repository includes a multi-stage `Dockerfile` and a full `docker-compose.yml`
-for `postgres`, `plane`, and `migrate`.
+for `postgres`, `plane`, and `migrate`. This is a local development stack: both
+published host ports bind to `127.0.0.1`, and the supplied `.env.example` enables
+development authentication behavior. Use `.env.deploy.example` with
+`docker-compose.deploy.yml` for a reachable deployment.
 
 Bring the full stack up:
 

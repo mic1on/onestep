@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from onestep_control_plane_api.auth.passwords import hash_password, verify_password
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
+    ConsoleLoginThrottle,
     ConsoleSession,
     LocalRole,
     LocalUser,
@@ -139,6 +140,56 @@ class LocalAuthService:
         if not verify_password(password, user.password_hash):
             return None
         return self.build_identity(user)
+
+    def is_console_login_locked(self, username: str) -> bool:
+        normalized_username = _normalize_username(username)
+        throttle = self._db.get(ConsoleLoginThrottle, normalized_username)
+        if throttle is None or throttle.locked_until is None:
+            return False
+        if throttle.locked_until > utcnow():
+            return True
+        self._db.delete(throttle)
+        self._db.commit()
+        return False
+
+    def record_console_login_failure(self, username: str) -> None:
+        normalized_username = _normalize_username(username)
+        now = utcnow()
+        throttle = self._db.get(ConsoleLoginThrottle, normalized_username)
+        failure_window_ends_at = (
+            throttle.window_started_at
+            + timedelta(seconds=settings.console_login_failure_window_s)
+            if throttle is not None
+            else None
+        )
+        if (
+            throttle is None
+            or failure_window_ends_at is None
+            or failure_window_ends_at <= now
+        ):
+            if throttle is None:
+                throttle = ConsoleLoginThrottle(
+                    username=normalized_username,
+                    failure_count=0,
+                    window_started_at=now,
+                )
+                self._db.add(throttle)
+            else:
+                throttle.failure_count = 0
+                throttle.window_started_at = now
+                throttle.locked_until = None
+        throttle.failure_count += 1
+        if throttle.failure_count >= settings.console_login_max_failures:
+            throttle.locked_until = now + timedelta(seconds=settings.console_login_lockout_s)
+        self._db.commit()
+
+    def clear_console_login_failures(self, username: str) -> None:
+        normalized_username = _normalize_username(username)
+        throttle = self._db.get(ConsoleLoginThrottle, normalized_username)
+        if throttle is None:
+            return
+        self._db.delete(throttle)
+        self._db.commit()
 
     def create_console_session(self, identity: LocalIdentity) -> LocalConsoleSession:
         token = secrets.token_urlsafe(32)

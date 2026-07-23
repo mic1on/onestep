@@ -96,17 +96,26 @@ def login_console(
             detail="local admin bootstrap is required before console login",
         )
 
+    local_auth = LocalAuthService(db)
+    if local_auth.is_console_login_locked(request.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="invalid username or password",
+        )
+
     identity = authenticate_console_login(
         db,
         username=request.username,
         password=request.password,
     )
     if identity is None:
+        local_auth.record_console_login_failure(request.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid username or password",
         )
 
+    local_auth.clear_console_login_failures(request.username)
     if identity.user_id == "dev-shared":
         set_console_auth_cookie(response, session_token=identity.username)
         return _build_console_session_response(
@@ -116,7 +125,7 @@ def login_console(
             roles=identity.roles,
         )
 
-    session = LocalAuthService(db).create_console_session(identity)
+    session = local_auth.create_console_session(identity)
     set_console_auth_cookie(response, session_token=session.token)
     return _build_console_session_response(
         auth_configured=True,

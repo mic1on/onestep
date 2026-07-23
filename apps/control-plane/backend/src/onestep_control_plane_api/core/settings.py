@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     console_auth_password: str = ""
     console_auth_session_ttl_s: int = Field(default=60 * 60 * 24 * 7, ge=60)
     console_sensitive_auth_window_s: int = Field(default=15 * 60, ge=60)
+    console_login_max_failures: int = Field(default=5, ge=1)
+    console_login_failure_window_s: int = Field(default=15 * 60, ge=60)
+    console_login_lockout_s: int = Field(default=15 * 60, ge=60)
+    prometheus_cache_ttl_s: float = Field(default=15.0, ge=0)
     console_base_url: str = ""
     ui_dist_dir: str = "frontend/dist"
     ui_api_base_url: str = "/"

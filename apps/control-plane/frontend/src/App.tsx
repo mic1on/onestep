@@ -61,7 +61,7 @@ import {
 import { useI18n } from './i18n';
 import {
   Play,
-  Square,
+  Pause,
   RotateCcw,
   RefreshCw,
   Workflow,
@@ -1264,7 +1264,7 @@ export default function App() {
                           </>
                         ) : selectedTaskToggleIsPause ? (
                           <>
-                            <Square className="w-4 h-4" />
+                            <Pause className="w-4 h-4" />
                             <span>{tr('button.stopTask')}</span>
                           </>
                         ) : (
@@ -1318,7 +1318,7 @@ export default function App() {
                               role="menuitem"
                               type="button"
                             >
-                              <Square className="h-4 w-4" />
+                              {selectedTaskToggleIsPause ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                               {selectedTask.viewStatus === 'paused' ? tr('button.resumeTask') : tr('button.stopTask')}
                             </button>
                           </div>

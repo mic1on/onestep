@@ -3,9 +3,16 @@ import { useCallback, useEffect, useRef } from 'react';
 interface DismissibleMenuOptions {
   onClose: () => void;
   open: boolean;
+  trapFocus?: boolean;
 }
 
-export default function useDismissibleMenu({ onClose, open }: DismissibleMenuOptions) {
+const focusableSelector = 'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+export default function useDismissibleMenu({
+  onClose,
+  open,
+  trapFocus = false,
+}: DismissibleMenuOptions) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuElementRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -28,6 +35,22 @@ export default function useDismissibleMenu({ onClose, open }: DismissibleMenuOpt
       triggerRef.current?.focus();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (trapFocus && event.key === 'Tab') {
+        const focusableItems = Array.from(
+          menuElementRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
+        );
+        const firstFocusableItem = focusableItems[0];
+        const lastFocusableItem = focusableItems.at(-1);
+        if (!firstFocusableItem || !lastFocusableItem) return;
+
+        if (event.shiftKey && document.activeElement === firstFocusableItem) {
+          event.preventDefault();
+          lastFocusableItem.focus();
+        } else if (!event.shiftKey && document.activeElement === lastFocusableItem) {
+          event.preventDefault();
+          firstFocusableItem.focus();
+        }
+      }
       if (event.key === 'Escape') {
         event.preventDefault();
         closeAndRestoreFocus();
@@ -46,7 +69,7 @@ export default function useDismissibleMenu({ onClose, open }: DismissibleMenuOpt
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('pointerdown', handlePointerDown);
     };
-  }, [open]);
+  }, [open, trapFocus]);
 
   return { menuRef, triggerRef };
 }

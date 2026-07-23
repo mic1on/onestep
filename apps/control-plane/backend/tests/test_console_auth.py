@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import timedelta
 
 import pytest
-from onestep_control_plane_api.auth.service import LocalAuthService
+from onestep_control_plane_api.auth.service import LocalAuthService, utcnow
 from onestep_control_plane_api.core.settings import settings
+from onestep_control_plane_api.db.models import ConsoleLoginThrottle
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +15,9 @@ def restore_console_auth_settings() -> Generator[None, None, None]:
     original_password = settings.console_auth_password
     original_ttl = settings.console_auth_session_ttl_s
     original_sensitive_window = settings.console_sensitive_auth_window_s
+    original_login_max_failures = settings.console_login_max_failures
+    original_login_failure_window = settings.console_login_failure_window_s
+    original_login_lockout = settings.console_login_lockout_s
     original_env = settings.app_env
     try:
         yield
@@ -21,6 +26,9 @@ def restore_console_auth_settings() -> Generator[None, None, None]:
         settings.console_auth_password = original_password
         settings.console_auth_session_ttl_s = original_ttl
         settings.console_sensitive_auth_window_s = original_sensitive_window
+        settings.console_login_max_failures = original_login_max_failures
+        settings.console_login_failure_window_s = original_login_failure_window
+        settings.console_login_lockout_s = original_login_lockout
         settings.app_env = original_env
 
 
@@ -138,6 +146,66 @@ def test_local_console_login_rotates_existing_session(client, db_session) -> Non
     assert first_token != second_token
     assert service.authenticate_console_session(first_token) is None
     assert service.authenticate_console_session(second_token) is not None
+
+
+def test_local_console_login_is_throttled_and_expired_lockout_allows_retry(
+    client, db_session
+) -> None:
+    LocalAuthService(db_session).create_user(
+        username="admin",
+        password="secret-pass",
+        role_names=["admin"],
+    )
+    settings.console_login_max_failures = 2
+    settings.console_login_lockout_s = 60
+
+    for _ in range(2):
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "wrong-pass"},
+        )
+        assert response.status_code == 401
+
+    locked = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "secret-pass"},
+    )
+    assert locked.status_code == 429
+    assert locked.json()["detail"] == "invalid username or password"
+
+    throttle = db_session.get(ConsoleLoginThrottle, "admin")
+    assert throttle is not None
+    throttle.locked_until = utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    unlocked = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "secret-pass"},
+    )
+    assert unlocked.status_code == 200
+    assert db_session.get(ConsoleLoginThrottle, "admin") is None
+
+
+def test_successful_local_console_login_clears_prior_failures(client, db_session) -> None:
+    LocalAuthService(db_session).create_user(
+        username="admin",
+        password="secret-pass",
+        role_names=["admin"],
+    )
+
+    failed = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "wrong-pass"},
+    )
+    assert failed.status_code == 401
+    assert db_session.get(ConsoleLoginThrottle, "admin") is not None
+
+    succeeded = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "secret-pass"},
+    )
+    assert succeeded.status_code == 200
+    assert db_session.get(ConsoleLoginThrottle, "admin") is None
 
 
 def test_logout_all_revokes_current_console_session(client, db_session) -> None:

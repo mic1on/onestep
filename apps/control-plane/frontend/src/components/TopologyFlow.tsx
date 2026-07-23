@@ -320,7 +320,7 @@ export default function TopologyFlow({ task, resourceCatalog }: TopologyFlowProp
           {/* Source node */}
           <button
             onClick={() => setSelectedNode('source')}
-            className={`flex flex-col items-center gap-2 group focus:outline-hidden transition-all ${
+            className={`group flex flex-col items-center gap-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 ${
               selectedNode === 'source' ? 'scale-105' : ''
             }`}
           >
@@ -347,7 +347,7 @@ export default function TopologyFlow({ task, resourceCatalog }: TopologyFlowProp
           {/* Current Node (Focus) */}
           <button
             onClick={() => setSelectedNode('task')}
-            className={`flex flex-col items-center gap-2 group focus:outline-hidden transition-all ${
+            className={`group flex flex-col items-center gap-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 ${
               selectedNode === 'task' ? 'scale-105' : ''
             }`}
           >
@@ -385,7 +385,7 @@ export default function TopologyFlow({ task, resourceCatalog }: TopologyFlowProp
           {/* Sink node */}
           <button
             onClick={() => setSelectedNode('sink')}
-            className={`flex flex-col items-center gap-2 group focus:outline-hidden transition-all ${
+            className={`group flex flex-col items-center gap-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 ${
               selectedNode === 'sink' ? 'scale-105' : ''
             }`}
           >

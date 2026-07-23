@@ -21,7 +21,11 @@ export default function MobileNavigation({
   const { t } = useI18n();
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const closeMore = useCallback(() => setIsMoreOpen(false), []);
-  const { menuRef, triggerRef } = useDismissibleMenu({ onClose: closeMore, open: isMoreOpen });
+  const { menuRef, triggerRef } = useDismissibleMenu({
+    onClose: closeMore,
+    open: isMoreOpen,
+    trapFocus: true,
+  });
   const servicesActive = currentView === 'servicesList' || currentView === 'services';
 
   const navigate = (view: ControlPlaneView) => {

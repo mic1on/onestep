@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202607200001"
+HEAD_REVISION = "202607230001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -33,6 +33,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "instances",
         "services",
         "alembic_version",
+        "console_login_throttles",
         "console_sessions",
         "local_roles",
         "local_user_roles",
@@ -301,6 +302,14 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "revoked_at",
         "created_at",
     }
+    assert {column["name"] for column in inspector.get_columns("console_login_throttles")} == {
+        "username",
+        "failure_count",
+        "window_started_at",
+        "locked_until",
+        "created_at",
+        "updated_at",
+    }
     assert {column["name"] for column in inspector.get_columns("task_definitions")} == {
         "id",
         "service_id",
@@ -493,6 +502,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
     assert {index["name"] for index in inspector.get_indexes("console_sessions")} == {
         "ix_console_sessions_user_id_expires_at",
+    }
+    assert {index["name"] for index in inspector.get_indexes("console_login_throttles")} == {
+        "ix_console_login_throttles_locked_until",
     }
     assert {index["name"] for index in inspector.get_indexes("task_metric_windows")} == {
         "ix_task_metric_windows_service_id_task_name_window_ended_at",

@@ -192,6 +192,9 @@ def ingest_metrics_request(
             )
 
     db.commit()
+    from onestep_control_plane_api.api.routers.prometheus import reset_prometheus_metrics_cache
+
+    reset_prometheus_metrics_cache()
     return MetricsAcceptedResponse(received_at=received_at, ingested_count=inserted_count)
 
 

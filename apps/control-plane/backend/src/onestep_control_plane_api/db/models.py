@@ -158,6 +158,23 @@ class ConsoleSession(Base):
     user: Mapped[LocalUser] = relationship(back_populates="console_sessions")
 
 
+class ConsoleLoginThrottle(Base):
+    __tablename__ = "console_login_throttles"
+    __table_args__ = (sa.Index("ix_console_login_throttles_locked_until", "locked_until"),)
+
+    username: Mapped[str] = mapped_column(sa.String(255), primary_key=True)
+    failure_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+
 class NotificationChannel(Base):
     __tablename__ = "notification_channels"
     __table_args__ = (sa.UniqueConstraint("name", name="uq_notification_channels_name"),)

@@ -119,6 +119,20 @@ describe('topology flow motion', () => {
     expect(screen.getByTestId('topology-source-connector').dataset.flowing).toBe('false');
     expect(screen.queryAllByTestId('topology-flow-packet')).toHaveLength(0);
   });
+
+  it('shows a visible focus treatment for topology node controls', () => {
+    renderTopology();
+
+    for (const name of [
+      /^interval interval:5s$/,
+      /^produce_and_store Task Processing$/,
+      /^mysql_table_sink mysql\.table_sink:cp_demo_events$/,
+    ]) {
+      const control = screen.getByRole('button', { name });
+      expect(control.className).toContain('focus-visible:ring-2');
+      expect(control.className).toContain('focus-visible:ring-indigo-500');
+    }
+  });
 });
 
 describe('topology source label', () => {
