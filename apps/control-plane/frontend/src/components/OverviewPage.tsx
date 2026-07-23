@@ -181,7 +181,7 @@ export default function OverviewPage({
       </div>
 
       {/* Stats bento cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
         {/* Services */}
         <StatCard
           icon={<Server className="w-4 h-4 text-indigo-600" />}
@@ -259,7 +259,7 @@ export default function OverviewPage({
       </div>
 
       {/* Two-column: services list + activity feed */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
         {/* Left: services list */}
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-6 shadow-xs">
           <h3 className="font-bold text-slate-900 text-sm mb-4">{t('overview.registry')}</h3>
@@ -373,7 +373,7 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, subValue, footer }: StatCardProps) {
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col justify-between h-32 shadow-xs">
+    <div className="flex min-h-[84px] flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 shadow-xs lg:h-32 lg:p-4">
       <div className="flex justify-between items-start">
         <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">{label}</span>
         <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center">{icon}</div>

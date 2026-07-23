@@ -58,7 +58,7 @@ function ToastItem({ dismissLabel, onDismiss, toast }: ToastItemProps) {
 
 export default function ToastViewport({ dismissLabel, onDismiss, toasts }: ToastViewportProps) {
   return (
-    <div className="fixed inset-x-4 bottom-4 z-50 ml-auto max-w-sm space-y-2.5 sm:inset-x-auto sm:bottom-6 sm:right-6 sm:w-full">
+    <div className="fixed inset-x-4 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-50 space-y-2.5 sm:bottom-6 sm:right-6 sm:left-auto sm:w-full sm:max-w-sm">
       {toasts.map((toast) => (
         <ToastItem dismissLabel={dismissLabel} key={toast.id} onDismiss={onDismiss} toast={toast} />
       ))}

@@ -66,7 +66,7 @@ export default function ResourceChart({
   error = null,
 }: ResourceChartProps) {
   const { t } = useI18n();
-  const chartSvgRef = useRef<SVGSVGElement | null>(null);
+  const chartFrameRef = useRef<HTMLDivElement | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [activeMetric, setActiveMetric] = useState<'all' | 'fetched' | 'failed'>('all');
   const [customLookbackValue, setCustomLookbackValue] = useState(String(lookbackMinutes));
@@ -77,7 +77,7 @@ export default function ResourceChart({
   }, [lookbackMinutes]);
 
   useEffect(() => {
-    const element = chartSvgRef.current;
+    const element = chartFrameRef.current;
     if (!element) return;
 
     const updateSize = () => {
@@ -234,7 +234,7 @@ export default function ResourceChart({
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl flex flex-col h-[400px] shadow-xs relative overflow-hidden">
+    <div className="relative flex h-[400px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
       <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-xl shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
@@ -353,7 +353,7 @@ export default function ResourceChart({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 p-5 relative flex items-end justify-center select-none bg-white">
+      <div ref={chartFrameRef} data-testid="task-metrics-chart-frame" className="relative min-h-0 flex-1 select-none bg-white p-5">
         {isLoading && (
           <div
             aria-live="polite"
@@ -391,9 +391,9 @@ export default function ResourceChart({
         )}
 
         <svg
-          ref={chartSvgRef}
+          data-testid="task-metrics-chart"
           viewBox={`0 0 ${width} ${height}`}
-          className={`w-full h-full ${hasData ? '' : 'opacity-20'}`}
+          className={`block h-full w-full ${hasData ? '' : 'opacity-20'}`}
           onMouseLeave={() => setHoveredIndex(null)}
         >
           <defs>

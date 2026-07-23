@@ -48,7 +48,7 @@ export default function TasksList({
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:gap-6">
       {tasks.map((task) => {
         const isRunning = task.viewStatus === 'running';
         const isPaused = task.viewStatus === 'paused';
@@ -125,7 +125,7 @@ export default function TasksList({
                   </div>
                 </div>
 
-                <div className="relative">
+                <div className="relative hidden lg:block">
                   <button
                     onClick={(e) => toggleMenu(task.id, e)}
                     aria-expanded={isMenuOpen}

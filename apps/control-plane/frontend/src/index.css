@@ -51,6 +51,32 @@
   transform: translateY(1px);
 }
 
+.ui-mobile-nav-item {
+  display: flex;
+  min-width: 44px;
+  min-height: 44px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  transition: color var(--motion-micro) var(--ease-enter), background-color var(--motion-micro) var(--ease-enter), transform var(--motion-micro) var(--ease-enter);
+}
+
+.ui-mobile-nav-item[aria-current="page"] {
+  color: #4f46e5;
+}
+
+@media (max-width: 1023px) {
+  .ui-pressable:active:not(:disabled),
+  .ui-mobile-nav-item:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+}
+
 .ui-page-enter {
   animation: ui-page-enter var(--motion-small) var(--ease-enter) both;
 }

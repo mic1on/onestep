@@ -36,6 +36,7 @@ import {
 } from './initialData';
 import { Service, Task, Instance, LogEntry, type TaskCommandKind } from './types';
 import Sidebar from './components/Sidebar';
+import MobileNavigation from './components/MobileNavigation';
 import ServicesList from './components/ServicesList';
 import OverviewPage from './components/OverviewPage';
 import TelemetryStats from './components/TelemetryStats';
@@ -70,6 +71,7 @@ import {
   Globe,
   Check,
   X,
+  MoreHorizontal,
 } from 'lucide-react';
 
 const EMPTY_SERVICE: Service = {
@@ -199,6 +201,12 @@ export default function App() {
   const { menuRef: environmentMenuRef, triggerRef: environmentMenuTriggerRef } = useDismissibleMenu({
     onClose: closeEnvironmentMenu,
     open: isEnvMenuOpen,
+  });
+  const [isTaskActionMenuOpen, setIsTaskActionMenuOpen] = useState(false);
+  const closeTaskActionMenu = useCallback(() => setIsTaskActionMenuOpen(false), []);
+  const { menuRef: taskActionMenuRef, triggerRef: taskActionMenuTriggerRef } = useDismissibleMenu({
+    onClose: closeTaskActionMenu,
+    open: isTaskActionMenuOpen,
   });
   // Tracks the previously seen environment filter so the reset effect below only
   // fires when the user *changes* the filter — not on initial mount. Without this
@@ -986,7 +994,7 @@ export default function App() {
   }
 
   return (
-    <div className="bg-slate-50 text-slate-800 font-sans min-h-screen flex overflow-hidden">
+    <div className="flex min-h-[100dvh] overflow-x-hidden bg-slate-50 font-sans text-slate-800">
       {/* --- Sidebar Navigator panel --- */}
       <Sidebar
         currentView={currentView}
@@ -994,11 +1002,17 @@ export default function App() {
         onLogout={() => void handleLogout()}
         onViewChange={navigateToView}
       />
+      <MobileNavigation
+        currentView={currentView}
+        isLogoutPending={isLogoutPending}
+        onLogout={() => void handleLogout()}
+        onViewChange={navigateToView}
+      />
 
       {/* --- Main Content Panel --- */}
-      <div className="ml-16 flex h-screen min-w-0 flex-1 flex-col overflow-hidden sm:ml-[240px]">
+      <div className="flex h-[100dvh] min-w-0 flex-1 flex-col overflow-hidden lg:ml-[240px]">
         {/* --- Core Content Stage Canvas --- */}
-        <main className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-6">
+        <main className="flex-1 overflow-y-auto bg-slate-50 p-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:p-5 sm:pb-[calc(5.5rem+env(safe-area-inset-bottom))] lg:p-6 lg:pb-6">
           <div className="mx-auto mb-4 flex max-w-7xl flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-xs sm:px-4">
             <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
               <div className="flex items-center gap-2">
@@ -1070,16 +1084,17 @@ export default function App() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <LocaleSwitcher />
+              <div className="hidden lg:block"><LocaleSwitcher /></div>
               <button
                 aria-busy={loadingMode === 'refresh'}
                 onClick={() => void refreshControlPlaneData(selectedServiceId)}
                 disabled={isLoadingApi}
-                className="ui-pressable flex min-w-[92px] items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60"
+                aria-label={isLoadingApi ? tr('button.refreshing') : tr('button.refresh')}
+                className="ui-pressable grid h-11 w-11 place-items-center rounded-md border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 disabled:cursor-wait disabled:opacity-60 lg:flex lg:h-auto lg:w-auto lg:min-w-[92px] lg:gap-1 lg:px-2 lg:py-1"
                 type="button"
               >
-                <RefreshCw className={`h-3 w-3 ${isLoadingApi ? 'animate-spin' : ''}`} />
-                <span>{isLoadingApi ? tr('button.refreshing') : tr('button.refresh')}</span>
+                <RefreshCw className={`h-4 w-4 lg:h-3 lg:w-3 ${isLoadingApi ? 'animate-spin' : ''}`} />
+                <span className="hidden lg:inline">{isLoadingApi ? tr('button.refreshing') : tr('button.refresh')}</span>
               </button>
             </div>
           </div>
@@ -1204,7 +1219,8 @@ export default function App() {
                         aria-busy={isManualRunSubmitting && manualRunTaskId === selectedTask.id}
                         onClick={() => handleOpenManualRun(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanRunOnce || !apiConnected || isPendingTaskToggle || isManualRunSubmitting}
-                        className="ui-pressable flex min-w-[108px] items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-4 py-2 text-xs font-bold text-emerald-700 shadow-xs hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={tr('button.runOnce')}
+                        className="ui-pressable grid h-11 w-11 place-items-center rounded-md text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 lg:flex lg:h-auto lg:w-auto lg:min-w-[108px] lg:gap-1.5 lg:rounded-lg lg:border lg:border-emerald-200 lg:bg-white lg:px-4 lg:py-2 lg:text-xs lg:font-bold lg:shadow-xs"
                         type="button"
                       >
                         {isManualRunSubmitting && manualRunTaskId === selectedTask.id ? (
@@ -1212,13 +1228,13 @@ export default function App() {
                         ) : (
                           <Play className="w-4 h-4" />
                         )}
-                        <span>{tr('button.runOnce')}</span>
+                        <span className="hidden lg:inline">{tr('button.runOnce')}</span>
                       </button>
                       <button
                         aria-busy={isPendingTaskToggle}
                         onClick={() => handleRestartTask(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanRestart || !apiConnected || isPendingTaskToggle}
-                        className="ui-pressable flex min-w-[112px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-indigo-600 shadow-xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="ui-pressable hidden min-w-[112px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-indigo-600 shadow-xs hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 lg:flex"
                         type="button"
                       >
                         {isPendingTaskToggle ? (
@@ -1234,7 +1250,7 @@ export default function App() {
                         aria-busy={isPendingTaskToggle}
                         onClick={() => handleToggleTaskStatus(selectedTask.id)}
                         disabled={selectedTaskIsOffline || !selectedTaskCanToggle || !apiConnected || isPendingTaskToggle}
-                        className={`ui-pressable flex min-w-[112px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold shadow-xs ${
+                        className={`ui-pressable hidden min-w-[112px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-bold shadow-xs lg:flex ${
                           selectedTaskToggleIsPause
                             ? 'text-rose-600 hover:bg-rose-50 border-rose-200'
                             : 'text-emerald-600 hover:bg-emerald-50 border-emerald-200'
@@ -1258,6 +1274,56 @@ export default function App() {
                           </>
                         )}
                       </button>
+                      <div className="relative isolate overflow-visible lg:hidden">
+                        <button
+                          ref={taskActionMenuTriggerRef}
+                          aria-expanded={isTaskActionMenuOpen}
+                          aria-haspopup="menu"
+                          aria-label={tr('button.moreActions', { name: selectedTask.name })}
+                          className="ui-pressable grid h-11 w-11 place-items-center rounded-md text-slate-500 hover:bg-slate-100"
+                          onClick={() => setIsTaskActionMenuOpen((open) => !open)}
+                          type="button"
+                        >
+                          <MoreHorizontal className="h-5 w-5" />
+                        </button>
+                        {isTaskActionMenuOpen && (
+                          <div
+                            ref={taskActionMenuRef}
+                            aria-label={tr('button.moreActions', { name: selectedTask.name })}
+                            className="ui-popover-enter absolute left-0 top-full z-40 mt-1 min-w-40 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-xs font-semibold shadow-lg"
+                            role="menu"
+                          >
+                            <button
+                              aria-busy={isPendingTaskToggle}
+                              className="ui-pressable flex min-h-11 w-full items-center gap-2 px-3 text-left text-indigo-600 hover:bg-slate-50 disabled:opacity-50"
+                              disabled={selectedTaskIsOffline || !selectedTaskCanRestart || !apiConnected || isPendingTaskToggle}
+                              onClick={() => {
+                                closeTaskActionMenu();
+                                void handleRestartTask(selectedTask.id);
+                              }}
+                              role="menuitem"
+                              type="button"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                              {tr('button.restart')}
+                            </button>
+                            <button
+                              aria-busy={isPendingTaskToggle}
+                              className={`ui-pressable flex min-h-11 w-full items-center gap-2 px-3 text-left hover:bg-slate-50 disabled:opacity-50 ${selectedTaskToggleIsPause ? 'text-rose-600' : 'text-emerald-600'}`}
+                              disabled={selectedTaskIsOffline || !selectedTaskCanToggle || !apiConnected || isPendingTaskToggle}
+                              onClick={() => {
+                                closeTaskActionMenu();
+                                void handleToggleTaskStatus(selectedTask.id);
+                              }}
+                              role="menuitem"
+                              type="button"
+                            >
+                              <Square className="h-4 w-4" />
+                              {selectedTask.viewStatus === 'paused' ? tr('button.resumeTask') : tr('button.stopTask')}
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </>
                   ) : (
                     <>
@@ -1325,28 +1391,28 @@ export default function App() {
               {selectedTask ? (
                 <div className="space-y-6">
                   {/* Stats Bento Grid for Selected Task */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
+                  <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 lg:gap-6">
                     {/* Stat: Last run */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-28 shadow-xs">
+                    <div className="flex min-h-[52px] min-w-0 items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xs lg:h-28 lg:flex-col lg:items-start lg:justify-between lg:p-5">
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
                         {tr('common.lastRun')}
                       </span>
-                      <div className="text-2xl font-bold text-slate-900 mt-2">
+                      <div className="shrink-0 text-lg font-bold text-slate-900 lg:mt-2 lg:text-2xl">
                         {formatRelativeTime(selectedTask.uptimeReferenceAt, tr)}
                       </div>
-                      <span className="text-[10px] text-slate-500 font-medium">{tr('task.latestActivity')}</span>
+                      <span className="hidden text-[10px] font-medium text-slate-500 lg:block">{tr('task.latestActivity')}</span>
                     </div>
 
                     {/* Stat: Throughput */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-28 shadow-xs">
+                    <div className="flex min-h-[52px] min-w-0 items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xs lg:h-28 lg:flex-col lg:items-start lg:justify-between lg:p-5">
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
                         {tr('common.throughput')}
                       </span>
-                      <div className="text-2xl font-bold text-slate-900 mt-2">
+                      <div className="shrink-0 text-lg font-bold text-slate-900 lg:mt-2 lg:text-2xl">
                         {selectedTask.throughputPerMin}{' '}
                         <span className="text-xs text-slate-500 font-normal">/min</span>
                       </div>
-                      <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="hidden h-1 w-full overflow-hidden rounded-full bg-slate-100 lg:block">
                         <div
                           aria-hidden="true"
                           className="ui-progress-fill h-full rounded-full bg-indigo-600"
@@ -1356,23 +1422,23 @@ export default function App() {
                     </div>
 
                     {/* Stat: Success Rate */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-28 shadow-xs">
+                    <div className="flex min-h-[52px] min-w-0 items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xs lg:h-28 lg:flex-col lg:items-start lg:justify-between lg:p-5">
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
                         {tr('task.successRate')}
                       </span>
-                      <div className="text-2xl font-bold text-emerald-600 mt-2">
+                      <div className="shrink-0 text-lg font-bold text-emerald-600 lg:mt-2 lg:text-2xl">
                         {selectedTask.successRate}%
                       </div>
-                      <span className="text-[10px] text-emerald-500 font-medium">{tr('task.withinSla')}</span>
+                      <span className="hidden text-[10px] font-medium text-emerald-500 lg:block">{tr('task.withinSla')}</span>
                     </div>
 
                     {/* Stat: Error Count */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-28 shadow-xs group relative overflow-hidden">
+                    <div className="group relative flex min-h-[52px] min-w-0 items-center justify-between overflow-hidden rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xs lg:h-28 lg:flex-col lg:items-start lg:justify-between lg:p-5">
                       <div className="absolute inset-0 bg-rose-50/20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                       <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
                         {tr('task.errorCount15m')}
                       </span>
-                      <div className="text-2xl font-bold text-rose-600 mt-2">{selectedTask.errorCount}</div>
+                      <div className="shrink-0 text-lg font-bold text-rose-600 lg:mt-2 lg:text-2xl">{selectedTask.errorCount}</div>
                     </div>
                   </div>
 

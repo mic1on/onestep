@@ -16,7 +16,7 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
   const hasTraffic = !isOffline && service.throughputPerMin > 0;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 lg:gap-6">
       {/* Total Instances */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-40 shadow-xs relative overflow-hidden">
         <div>

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test.use({ viewport: { width: 1280, height: 900 } });
+
 const ISO_NOW = "2026-07-16T08:00:00Z";
 const LOOKBACK_MINUTES = 15;
 const RESOURCE_CATALOG_RESPONSE = { resources: [] };
@@ -681,6 +683,49 @@ test("keeps the services view usable without page overflow on mobile", async ({ 
   expect(hasPageOverflow).toBe(false);
 });
 
+test("anchors mobile task actions to the right of the trigger", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApiMocks(page);
+  await page.goto("/");
+
+  await page.getByText("billing-sync").first().click();
+  await page.getByText("orders_to_ledger").first().click();
+
+  const trigger = page.getByRole("button", { name: "More actions for orders_to_ledger" });
+  await trigger.click();
+
+  const menu = page.getByRole("menu", { name: "More actions for orders_to_ledger" });
+  await expect(menu).toBeVisible();
+  const [triggerBox, menuBox] = await Promise.all([trigger.boundingBox(), menu.boundingBox()]);
+  expect(triggerBox).not.toBeNull();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(triggerBox!.x);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(390);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test("fills the mobile task metric chart frame", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApiMocks(page);
+  await page.goto("/");
+
+  await page.getByText("billing-sync").first().click();
+  await page.getByText("orders_to_ledger").first().click();
+
+  const frame = page.getByTestId("task-metrics-chart-frame");
+  const chart = page.getByTestId("task-metrics-chart");
+  await expect(chart).toBeVisible();
+  const [frameBox, chartBox] = await Promise.all([frame.boundingBox(), chart.boundingBox()]);
+  expect(frameBox).not.toBeNull();
+  expect(chartBox).not.toBeNull();
+  expect(chartBox!.width).toBeGreaterThan(280);
+  expect(chartBox!.width).toBeCloseTo(frameBox!.width - 40, 0);
+  expect(chartBox!.height).toBeGreaterThan(80);
+});
+
 test("loads API-backed service, task, instance, topology, config, and log views", async ({ page }) => {
   await installApiMocks(page);
   await page.goto("/");
@@ -725,16 +770,17 @@ test("loads API-backed service, task, instance, topology, config, and log views"
 
   await page.goto("/services/billing-sync%3Aprod?tab=instances");
   await page.getByRole("button", { name: "Instances" }).click();
-  await expect(page.getByText("worker-a.local")).toBeVisible();
+  const instanceTable = page.locator("tbody");
+  await expect(instanceTable.getByText("worker-a.local")).toBeVisible();
   await page.getByPlaceholder("Filter instances...").fill("worker-b");
-  await expect(page.getByText("worker-b.local")).toBeVisible();
-  await expect(page.getByText("worker-a.local")).toHaveCount(0);
+  await expect(instanceTable.getByText("worker-b.local")).toBeVisible();
+  await expect(instanceTable.getByText("worker-a.local")).toHaveCount(0);
   await page.getByPlaceholder("Filter instances...").fill("");
 
   await page.getByRole("button", { name: "Status: All" }).click();
   await page.getByRole("button", { name: "Failed" }).click();
-  await expect(page.getByText("worker-b.local")).toBeVisible();
-  await expect(page.getByText("worker-a.local")).toHaveCount(0);
+  await expect(instanceTable.getByText("worker-b.local")).toBeVisible();
+  await expect(instanceTable.getByText("worker-a.local")).toHaveCount(0);
 
   await page.goto("/services/billing-sync%3Aprod?tab=logs");
   await page.getByRole("button", { name: "Logs" }).click();

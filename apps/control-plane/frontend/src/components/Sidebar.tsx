@@ -23,7 +23,7 @@ export default function Sidebar({
   const isServicesActive = currentView === 'servicesList' || currentView === 'services';
 
   return (
-    <nav className="fixed left-0 top-0 z-20 flex h-full w-16 flex-col border-r border-slate-200 bg-white p-2 shadow-xs sm:w-[240px] sm:p-4">
+    <nav className="fixed left-0 top-0 z-20 hidden h-full w-[240px] flex-col border-r border-slate-200 bg-white p-4 shadow-xs lg:flex">
       <div className="mb-8">
         <div className="flex items-center justify-center gap-3 sm:justify-start">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">

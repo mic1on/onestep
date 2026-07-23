@@ -123,7 +123,7 @@ export default function InstancesTable({
 
       {/* Bulk Action Panel */}
       {selectedUuids.length > 0 && (
-        <div className="bg-indigo-50 px-6 py-2 border-b border-slate-200 flex items-center justify-between text-xs font-bold text-indigo-900">
+        <div className="hidden border-b border-slate-200 bg-indigo-50 px-6 py-2 text-xs font-bold text-indigo-900 lg:flex lg:items-center lg:justify-between">
           <span>{t('instances.selected', { count: selectedUuids.length })}</span>
           <div className="flex gap-2">
             <button
@@ -148,8 +148,30 @@ export default function InstancesTable({
         </div>
       )}
 
+      <div className="space-y-2 p-3 lg:hidden">
+        {paginatedInstances.length === 0 ? (
+          <p className="py-8 text-center text-xs font-medium text-slate-400">{t('instances.empty')}</p>
+        ) : paginatedInstances.map((inst) => {
+          const statusClass = inst.viewStatus === 'running' ? 'bg-emerald-500' : inst.viewStatus === 'starting' ? 'bg-amber-500' : inst.viewStatus === 'failed' ? 'bg-rose-500' : 'bg-slate-400';
+          return (
+            <article className="rounded-xl border border-slate-200 bg-white p-3 shadow-xs" data-testid={`mobile-instance-record-${inst.uuid}`} key={inst.uuid}>
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <code className="min-w-0 break-all text-xs font-bold text-slate-900">{inst.uuid}</code>
+                <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-600"><span className={`h-1.5 w-1.5 rounded-full ${statusClass}`} />{getStatusLabel(inst.viewStatus)}</span>
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
+                <div><dt className="text-[10px] font-bold text-slate-400">{t('instances.hostname')}</dt><dd className="mt-0.5 break-words font-semibold text-slate-700">{inst.hostname}</dd></div>
+                <div><dt className="text-[10px] font-bold text-slate-400">{t('instances.nodeName')}</dt><dd className="mt-0.5 break-words font-semibold text-slate-700">{inst.nodeName}</dd></div>
+                <div><dt className="text-[10px] font-bold text-slate-400">{t('instances.pid')}</dt><dd className="mt-0.5 font-mono font-semibold text-slate-700">{inst.pid}</dd></div>
+                <div><dt className="text-[10px] font-bold text-slate-400">{t('instances.version')}</dt><dd className="mt-0.5 font-semibold text-slate-700">{inst.version}</dd></div>
+              </dl>
+            </article>
+          );
+        })}
+      </div>
+
       {/* Main Table */}
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto lg:block">
         <table className="w-full text-left border-collapse text-xs">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider">
@@ -262,7 +284,7 @@ export default function InstancesTable({
       </div>
 
       {/* Pagination Footer */}
-      <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-semibold">
+      <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-6 lg:py-4">
         <span>
           {t('instances.pagination', {
             start: startIndex + 1,
@@ -275,7 +297,7 @@ export default function InstancesTable({
           <button
             onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
             disabled={currentPage === 1}
-            className="p-1.5 border border-slate-200 rounded-md bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+            className="h-11 w-11 rounded-md border border-slate-200 bg-white text-slate-400 hover:bg-slate-50 hover:text-slate-700 disabled:pointer-events-none disabled:opacity-50 lg:h-auto lg:w-auto lg:p-1.5"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
           </button>
@@ -284,7 +306,7 @@ export default function InstancesTable({
             <button
               key={page}
               onClick={() => setCurrentPage(page)}
-              className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
+              className={`min-h-11 px-3 py-1 rounded-md text-xs font-bold transition-all lg:min-h-0 lg:px-2.5 ${
                   currentPage === page
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
@@ -297,7 +319,7 @@ export default function InstancesTable({
           <button
             onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
             disabled={currentPage === totalPages}
-            className="p-1.5 border border-slate-200 rounded-md bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+            className="h-11 w-11 rounded-md border border-slate-200 bg-white text-slate-400 hover:bg-slate-50 hover:text-slate-700 disabled:pointer-events-none disabled:opacity-50 lg:h-auto lg:w-auto lg:p-1.5"
           >
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
