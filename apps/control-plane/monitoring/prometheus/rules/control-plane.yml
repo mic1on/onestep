@@ -1,0 +1,78 @@
+groups:
+  - name: onestep-control-plane-availability
+    rules:
+      - alert: OneStepControlPlaneApiDown
+        expr: up{job="onestep-control-plane"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: OneStep control plane API target is down
+          description: Prometheus has not been able to scrape the API target for 2 minutes.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplaneapidown
+
+      - alert: OneStepControlPlaneReadyzFailing
+        expr: probe_success{job="onestep-control-plane-readyz"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: OneStep control plane readiness probe is failing
+          description: The blackbox probe for /readyz has been failing for 5 minutes.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanereadyzfailing
+
+      - alert: OneStepControlPlanePostgresDown
+        expr: pg_up{job="onestep-control-plane-postgres"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: OneStep control plane PostgreSQL exporter reports the database is down
+          description: PostgreSQL is unreachable from the exporter for more than 2 minutes.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanepostgresdown
+
+  - name: onestep-control-plane-runtime
+    rules:
+      - alert: OneStepControlPlaneUiWsDisconnectSpike
+        expr: increase(onestep_control_plane_ui_ws_disconnects_total[15m]) > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: UI websocket disconnect rate is elevated
+          description: UI websocket disconnects have spiked above the expected baseline in the last 15 minutes.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplaneuiwsdisconnectspike
+
+      - alert: OneStepControlPlaneCommandFailureRateHigh
+        expr: |
+          (
+            sum(increase(onestep_control_plane_agent_commands_total{status=~"failed|timeout|cancelled|rejected|expired"}[15m]))
+            /
+            clamp_min(
+              sum(increase(onestep_control_plane_agent_commands_total{status=~"succeeded|failed|timeout|cancelled|rejected|expired"}[15m])),
+              1
+            )
+          ) > 0.20
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane command failure rate is high
+          description: More than 20% of terminal command executions have been failing over the last 15 minutes.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanecommandfailureratehigh
+
+      - alert: OneStepControlPlaneNotificationDeliveryFailures
+        expr: sum(increase(onestep_control_plane_notification_deliveries_total{status="failed"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Notification delivery failures detected
+          description: Notification webhook deliveries have failed in the last 15 minutes.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationdeliveryfailures

@@ -1,0 +1,41 @@
+<h2>Custom Webhook Form Shape</h2>
+<p class="subtitle">Final proposed layout for the existing notification settings side panel.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Right Panel: New Channel / Edit Channel</div>
+  <div class="mockup-body">
+    <div class="label">Channel</div>
+    <div class="mock-input">Name: Ops Custom Webhook</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:8px 0 16px">
+      <button class="mock-button" style="opacity:.6">Feishu</button>
+      <button class="mock-button" style="opacity:.6">WeCom</button>
+      <button class="mock-button">Custom</button>
+    </div>
+
+    <div class="label">Destination</div>
+    <div style="display:grid;grid-template-columns:90px 1fr;gap:8px;margin-bottom:8px">
+      <div class="mock-input">POST</div>
+      <div class="mock-input">https://api.example.com/notify</div>
+    </div>
+
+    <div class="label">Query Parameters</div>
+    <div class="placeholder">service = {{ service_name }} <span style="float:right">trash</span></div>
+    <div class="placeholder">event = {{ event_type }} <span style="float:right">trash</span></div>
+    <button class="mock-button">Add Query Param</button>
+
+    <div style="height:16px"></div>
+    <div class="label">JSON Body Parameters</div>
+    <div class="placeholder">task = {{ task_name }} <span style="float:right">trash</span></div>
+    <div class="placeholder">detail_url = {{ console_url }} <span style="float:right">trash</span></div>
+    <button class="mock-button">Add Body Param</button>
+
+    <div style="height:16px"></div>
+    <div class="placeholder">Events checkboxes, missed-start grace, service scope stay below</div>
+    <button class="mock-button">Save Channel</button>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Interaction Notes</h3>
+  <p>Body Parameters only appear for POST. Each value field gets an Insert Field menu for approved variables such as service_name, event_type, task_name, and console_url.</p>
+</div>
