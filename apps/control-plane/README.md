@@ -1,6 +1,7 @@
 # OneStep Control Plane
 
-Monorepo for the OneStep control plane. This repository will host:
+Deployable control-plane application in the OneStep monorepo. From the repository root,
+enter this component with `cd apps/control-plane`. It contains:
 
 - `backend`: agent WS ingress and query API for the monitoring console
 - `frontend`: web console
@@ -208,7 +209,8 @@ also serves the login page and enforces console auth.
 The local `migrate` service reuses the same `onestep-control-plane:latest` image as the
 `plane` service, so rebuilding `plane` also refreshes the migration runner.
 
-To create database-backed local console users, use the helper scripts from the repo root:
+To create database-backed local console users, run the helper scripts from the
+control-plane directory:
 
 ```bash
 uv run python scripts/create_local_admin.py --username admin
@@ -233,7 +235,7 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm \
 
 The API now runs retention cleanup automatically in the background every
 `ONESTEP_CP_RETENTION_RUN_INTERVAL_S` seconds. Manual runs remain available from the
-repo root for dry-run review or one-off forced execution:
+control-plane directory for dry-run review or one-off forced execution:
 
 ```bash
 uv run python scripts/run-retention.py --dry-run
@@ -243,7 +245,7 @@ uv run python scripts/run-retention.py --execute
 `--dry-run` is the default safe mode. Use `--batch-size` if you need to override
 `ONESTEP_CP_RETENTION_DELETE_BATCH_SIZE` for a one-off cleanup run.
 
-PostgreSQL backup and restore helpers are also available from the repo root:
+PostgreSQL backup and restore helpers are also available from the control-plane directory:
 
 ```bash
 bash scripts/backup-postgres.sh --env-file .env.deploy
@@ -255,10 +257,10 @@ bash scripts/restore-postgres.sh --env-file .env.deploy --input backups/<file>.d
 If you have already pushed the control plane image to a registry, use
 `docker-compose.deploy.yml` instead of rebuilding from source on the server.
 
-The `CI` workflow publishes the unified image to GitHub Container Registry as a multi-architecture
+The `Control Plane` workflow publishes the unified image to GitHub Container Registry as a multi-architecture
 image for `linux/amd64` and `linux/arm64` after a successful `push` to `main`. If you need to
 republish a `main` revision without creating a new merge commit, open GitHub Actions and manually
-run the `CI` workflow with `workflow_dispatch` against `main`.
+run the `Control Plane` workflow with `workflow_dispatch` against `main`.
 
 Prepare the deployment env file:
 

@@ -19,7 +19,7 @@ plain PostgreSQL URLs before calling `pg_dump` or `pg_restore`.
 
 ## 1. Create A Backup
 
-From the repo root:
+From the control-plane directory (`apps/control-plane`):
 
 ```bash
 bash scripts/backup-postgres.sh --env-file .env.deploy

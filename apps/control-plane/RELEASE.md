@@ -6,7 +6,7 @@
 
 ### 1. 检查并提交代码
 ```bash
-cd /Users/miclon/development/onestep-control-plane
+cd apps/control-plane
 git status
 git add .
 git commit -m "..."
@@ -87,7 +87,7 @@ IMAGE_REPOSITORY=xxx BUILDX_BUILDER=my-builder make docker-build-multi-arch
 
 ```bash
 # 完整发版流程
-cd /Users/miclon/development/onestep-control-plane
+cd apps/control-plane
 git add . && git commit -m "..." && git push
 IMAGE_REPOSITORY=registry.cn-shanghai.aliyuncs.com/ceeg IMAGE_TAG=$(date +%Y.%m.%d) make docker-build-multi-arch
 IMAGE_REPOSITORY=registry.cn-shanghai.aliyuncs.com/ceeg IMAGE_TAG=latest make docker-build-multi-arch

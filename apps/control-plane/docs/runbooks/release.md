@@ -4,15 +4,15 @@ This runbook assumes the control plane image no longer runs Alembic automaticall
 
 ## Preconditions
 
-- A release candidate commit passed `.github/workflows/ci.yml`.
-- `.github/workflows/ci.yml` publishes the multi-architecture `onestep-control-plane` image
+- A release candidate commit passed `.github/workflows/control-plane.yml`.
+- `.github/workflows/control-plane.yml` publishes the multi-architecture `onestep-control-plane` image
   to `ghcr.io` for `linux/amd64` and `linux/arm64` after a successful `push` to `main`.
 - Target host has Docker Engine with the Compose plugin.
 - Registry credentials are available on the target host.
 - Release operator has prepared `.env.deploy` from `.env.deploy.example`.
 
 If a `main` revision needs to be republished without creating a fresh merge commit, manually run
-the `CI` workflow from GitHub Actions with `workflow_dispatch` and select the `main` ref.
+the `Control Plane` workflow from GitHub Actions with `workflow_dispatch` and select the `main` ref.
 
 ## 1. Preflight
 

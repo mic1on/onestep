@@ -217,7 +217,7 @@ Use `--json` to emit the build report for automation.
 ## Control plane
 
 `onestep` can push runtime telemetry (heartbeat, topology, metrics, events) to
-[`onestep-control-plane`](../onestep-control-plane) over a single WebSocket and
+the [`onestep-control-plane`](apps/control-plane) application over a single WebSocket and
 accept remote commands — with no connector or task-code changes.
 
 Install the reporter plugin first:

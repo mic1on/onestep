@@ -210,7 +210,7 @@ entrypoint。使用 `--json` 可以输出适合自动化流程消费的构建报
 ## 控制面
 
 `onestep` 可通过单条 WebSocket 长连接向
-[`onestep-control-plane`](../onestep-control-plane) 上报运行时遥测（心跳、
+[`onestep-control-plane`](apps/control-plane) 应用上报运行时遥测（心跳、
 拓扑、指标、事件），并接收远程命令 —— 无需新增连接器或改动任务代码。
 
 ```yaml
