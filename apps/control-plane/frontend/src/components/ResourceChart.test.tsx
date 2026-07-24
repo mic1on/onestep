@@ -95,14 +95,32 @@ describe('ResourceChart', () => {
     expect(handleLookbackChange).toHaveBeenCalledWith(30);
   });
 
-  it('changes the metric lookback from the custom minutes input', () => {
+  it('reveals and retains the custom minutes editor only in custom mode', () => {
     const handleLookbackChange = vi.fn();
-    const { getByLabelText, getByRole } = renderChart(zeroFailureWindows, 15, handleLookbackChange);
+    const { getByLabelText, getByRole, queryByLabelText, queryByRole } = renderChart(
+      zeroFailureWindows,
+      15,
+      handleLookbackChange,
+    );
+
+    expect(queryByLabelText('Lookback minutes')).toBeNull();
+    expect(queryByRole('button', { name: 'Apply' })).toBeNull();
+
+    fireEvent.click(getByRole('button', { name: 'Custom' }));
+    expect(getByRole('button', { name: 'Custom' }).getAttribute('aria-pressed')).toBe('true');
 
     fireEvent.change(getByLabelText('Lookback minutes'), { target: { value: '45' } });
     fireEvent.click(getByRole('button', { name: 'Apply' }));
 
     expect(handleLookbackChange).toHaveBeenCalledWith(45);
+    expect(getByLabelText('Lookback minutes')).not.toBeNull();
+
+    fireEvent.click(getByRole('button', { name: '30m' }));
+    expect(handleLookbackChange).toHaveBeenCalledWith(30);
+    expect(queryByLabelText('Lookback minutes')).toBeNull();
+
+    fireEvent.click(getByRole('button', { name: 'Custom' }));
+    expect((getByLabelText('Lookback minutes') as HTMLInputElement).value).toBe('45');
   });
 
   it('keeps the hover tooltip inside the chart instead of pinning it to the card bottom', () => {

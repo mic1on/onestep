@@ -869,7 +869,14 @@ test("loads API-backed service, task, instance, topology, config, and log views"
   await expect(page.getByRole("heading", { name: "orders_to_ledger" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Task Metrics" })).toBeVisible();
   const taskMetricsLookback = page.getByRole("group", { name: "Task Metrics Lookback minutes" });
+  const taskMetricsLookbackControls = taskMetricsLookback.locator("xpath=..");
   await expect(taskMetricsLookback.getByRole("button", { name: "15m", pressed: true })).toBeVisible();
+  await expect(taskMetricsLookback.getByRole("button", { name: "Custom", pressed: false })).toBeVisible();
+  await expect(taskMetricsLookbackControls.getByRole("spinbutton", { name: "Lookback minutes" })).toHaveCount(0);
+  await taskMetricsLookback.getByRole("button", { name: "Custom" }).click();
+  await expect(taskMetricsLookbackControls.getByRole("spinbutton", { name: "Lookback minutes" })).toBeVisible();
+  await taskMetricsLookback.getByRole("button", { name: "30m" }).click();
+  await expect(taskMetricsLookbackControls.getByRole("spinbutton", { name: "Lookback minutes" })).toHaveCount(0);
   await expect(page.getByText("1020")).toBeVisible();
   await expect(page.getByRole("button", { name: "Failures" })).toBeVisible();
 

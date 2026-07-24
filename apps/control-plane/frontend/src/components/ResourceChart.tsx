@@ -69,12 +69,9 @@ export default function ResourceChart({
   const chartFrameRef = useRef<HTMLDivElement | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [activeMetric, setActiveMetric] = useState<'all' | 'fetched' | 'failed'>('all');
+  const [isCustomLookbackOpen, setIsCustomLookbackOpen] = useState(false);
   const [customLookbackValue, setCustomLookbackValue] = useState(String(lookbackMinutes));
   const [chartSize, setChartSize] = useState(DEFAULT_CHART_SIZE);
-
-  useEffect(() => {
-    setCustomLookbackValue(String(lookbackMinutes));
-  }, [lookbackMinutes]);
 
   useEffect(() => {
     const element = chartFrameRef.current;
@@ -228,6 +225,12 @@ export default function ResourceChart({
       onLookbackMinutesChange(next);
     }
   };
+  const applyPresetLookback = (minutes: number) => {
+    setIsCustomLookbackOpen(false);
+    if (minutes !== lookbackMinutes) {
+      onLookbackMinutesChange(minutes);
+    }
+  };
   const handleCustomLookbackSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     applyLookbackMinutes(Number(customLookbackValue));
@@ -253,10 +256,10 @@ export default function ResourceChart({
                   <button
                     key={minutes}
                     type="button"
-                    aria-pressed={lookbackMinutes === minutes}
-                    onClick={() => applyLookbackMinutes(minutes)}
+                    aria-pressed={!isCustomLookbackOpen && lookbackMinutes === minutes}
+                    onClick={() => applyPresetLookback(minutes)}
                     className={`h-6 rounded px-2 transition-colors ${
-                      lookbackMinutes === minutes
+                      !isCustomLookbackOpen && lookbackMinutes === minutes
                         ? 'bg-indigo-50 text-indigo-600'
                         : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
                     }`}
@@ -264,27 +267,40 @@ export default function ResourceChart({
                     {minutes}m
                   </button>
                 ))}
+                <button
+                  type="button"
+                  aria-pressed={isCustomLookbackOpen}
+                  onClick={() => setIsCustomLookbackOpen(true)}
+                  className={`h-6 rounded px-2 transition-colors ${
+                    isCustomLookbackOpen
+                      ? 'bg-indigo-50 text-indigo-600'
+                      : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                  }`}
+                >
+                  {t('chart.customLookback')}
+                </button>
               </div>
 
-              <form onSubmit={handleCustomLookbackSubmit} className="flex items-center gap-1.5">
-                <span className="text-slate-400">{t('chart.customLookback')}</span>
-                <input
-                  aria-label={t('chart.lookbackMinutes')}
-                  type="number"
-                  min={1}
-                  max={MAX_TASK_METRIC_LOOKBACK_MINUTES}
-                  value={customLookbackValue}
-                  onChange={(event) => setCustomLookbackValue(event.target.value)}
-                  className="h-7 w-14 rounded-md border border-slate-200 bg-white px-2 text-right font-mono text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                />
-                <span className="text-slate-400">{t('chart.minutesUnit')}</span>
-                <button
-                  type="submit"
-                  className="h-7 rounded-md border border-slate-200 bg-white px-2 text-slate-600 transition-colors hover:bg-slate-100"
-                >
-                  {t('chart.applyLookback')}
-                </button>
-              </form>
+              {isCustomLookbackOpen && (
+                <form onSubmit={handleCustomLookbackSubmit} className="flex items-center gap-1.5">
+                  <input
+                    aria-label={t('chart.lookbackMinutes')}
+                    type="number"
+                    min={1}
+                    max={MAX_TASK_METRIC_LOOKBACK_MINUTES}
+                    value={customLookbackValue}
+                    onChange={(event) => setCustomLookbackValue(event.target.value)}
+                    className="h-7 w-14 rounded-md border border-slate-200 bg-white px-2 text-right font-mono text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  />
+                  <span className="text-slate-400">{t('chart.minutesUnit')}</span>
+                  <button
+                    type="submit"
+                    className="h-7 rounded-md border border-slate-200 bg-white px-2 text-slate-600 transition-colors hover:bg-slate-100"
+                  >
+                    {t('chart.applyLookback')}
+                  </button>
+                </form>
+              )}
             </div>
           </div>
 
