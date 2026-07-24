@@ -1,19 +1,32 @@
-name: CI
+name: Control Plane
 
 on:
   workflow_dispatch:
   pull_request:
+    paths:
+      - ".github/workflows/control-plane.yml"
+      - "apps/control-plane/**"
   push:
     branches:
       - main
       - feat/**
+    paths:
+      - ".github/workflows/control-plane.yml"
+      - "apps/control-plane/**"
 
 permissions:
   contents: read
 
+concurrency:
+  group: control-plane-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/control-plane
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
@@ -22,8 +35,9 @@ jobs:
         with:
           python-version: "3.11"
           enable-cache: true
+          cache-dependency-glob: apps/control-plane/uv.lock
       - name: Install backend dependencies
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
       - name: Ruff
         run: uv run ruff check
       - name: Pytest
@@ -31,6 +45,9 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/control-plane
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4.1.0
@@ -40,16 +57,11 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          cache-dependency-path: apps/control-plane/pnpm-lock.yaml
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
       - name: Frontend tests
-        run: |
-          if node -e "process.exit(require('./frontend/package.json').scripts?.test ? 0 : 1)"; then
-            pnpm --dir frontend run test --run
-          else
-            echo "frontend/package.json has no test script on this branch; skipping."
-          fi
+        run: pnpm --dir frontend run test --run
       - name: Frontend build
         run: pnpm ui:build
       - name: Install Playwright browser
@@ -62,7 +74,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
       - name: Build control plane image
-        run: docker build --target plane -t onestep-control-plane:ci .
+        run: >-
+          docker build --target plane -t onestep-control-plane:ci
+          apps/control-plane
 
   smoke:
     runs-on: ubuntu-latest
@@ -70,6 +84,9 @@ jobs:
       - backend
       - frontend
       - docker
+    defaults:
+      run:
+        working-directory: apps/control-plane
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
       - name: Prepare env
@@ -90,7 +107,7 @@ jobs:
       packages: write
     needs:
       - smoke
-    if: >
+    if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
@@ -121,8 +138,8 @@ jobs:
       - name: Build and push control plane image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.18.0
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./apps/control-plane
+          file: ./apps/control-plane/Dockerfile
           target: plane
           platforms: linux/amd64,linux/arm64
           push: true
