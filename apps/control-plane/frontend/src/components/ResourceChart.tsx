@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle2, Clock3, Database, Timer } from 'lucide-react';
 import {
   MAX_TASK_METRIC_LOOKBACK_MINUTES,
@@ -6,6 +6,7 @@ import {
   type TaskMetricChartPointSummary,
 } from '../api';
 import { useI18n } from '../i18n';
+import LookbackControl from './LookbackControl';
 
 interface ResourceChartProps {
   windows: TaskMetricChartPointSummary[];
@@ -53,11 +54,6 @@ function formatDuration(value: number | null) {
   return `${Math.round(value)}ms`;
 }
 
-function normalizeLookbackMinutes(value: number) {
-  if (!Number.isFinite(value)) return null;
-  return Math.min(MAX_TASK_METRIC_LOOKBACK_MINUTES, Math.max(1, Math.trunc(value)));
-}
-
 export default function ResourceChart({
   windows,
   lookbackMinutes,
@@ -69,8 +65,6 @@ export default function ResourceChart({
   const chartFrameRef = useRef<HTMLDivElement | null>(null);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [activeMetric, setActiveMetric] = useState<'all' | 'fetched' | 'failed'>('all');
-  const [isCustomLookbackOpen, setIsCustomLookbackOpen] = useState(false);
-  const [customLookbackValue, setCustomLookbackValue] = useState(String(lookbackMinutes));
   const [chartSize, setChartSize] = useState(DEFAULT_CHART_SIZE);
 
   useEffect(() => {
@@ -214,28 +208,6 @@ export default function ResourceChart({
       bottom: `${Math.min(((height - y) / height) * 100 + 8, 68)}%`,
     };
   })();
-  const applyLookbackMinutes = (minutes: number) => {
-    const next = normalizeLookbackMinutes(minutes);
-    if (next === null) {
-      setCustomLookbackValue(String(lookbackMinutes));
-      return;
-    }
-    setCustomLookbackValue(String(next));
-    if (next !== lookbackMinutes) {
-      onLookbackMinutesChange(next);
-    }
-  };
-  const applyPresetLookback = (minutes: number) => {
-    setIsCustomLookbackOpen(false);
-    if (minutes !== lookbackMinutes) {
-      onLookbackMinutesChange(minutes);
-    }
-  };
-  const handleCustomLookbackSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    applyLookbackMinutes(Number(customLookbackValue));
-  };
-
   return (
     <div className="relative flex h-[400px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
       <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-xl shrink-0">
@@ -246,62 +218,13 @@ export default function ResourceChart({
               <span>{t('chart.taskMetrics')}</span>
             </h3>
 
-            <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
-              <div
-                role="group"
-                aria-label={`${t('chart.taskMetrics')} ${t('chart.lookbackMinutes')}`}
-                className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-1"
-              >
-                {TASK_METRIC_LOOKBACK_PRESETS.map((minutes) => (
-                  <button
-                    key={minutes}
-                    type="button"
-                    aria-pressed={!isCustomLookbackOpen && lookbackMinutes === minutes}
-                    onClick={() => applyPresetLookback(minutes)}
-                    className={`h-6 rounded px-2 transition-colors ${
-                      !isCustomLookbackOpen && lookbackMinutes === minutes
-                        ? 'bg-indigo-50 text-indigo-600'
-                        : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                    }`}
-                  >
-                    {minutes}m
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  aria-pressed={isCustomLookbackOpen}
-                  onClick={() => setIsCustomLookbackOpen(true)}
-                  className={`h-6 rounded px-2 transition-colors ${
-                    isCustomLookbackOpen
-                      ? 'bg-indigo-50 text-indigo-600'
-                      : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                  }`}
-                >
-                  {t('chart.customLookback')}
-                </button>
-              </div>
-
-              {isCustomLookbackOpen && (
-                <form onSubmit={handleCustomLookbackSubmit} className="flex items-center gap-1.5">
-                  <input
-                    aria-label={t('chart.lookbackMinutes')}
-                    type="number"
-                    min={1}
-                    max={MAX_TASK_METRIC_LOOKBACK_MINUTES}
-                    value={customLookbackValue}
-                    onChange={(event) => setCustomLookbackValue(event.target.value)}
-                    className="h-7 w-14 rounded-md border border-slate-200 bg-white px-2 text-right font-mono text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                  />
-                  <span className="text-slate-400">{t('chart.minutesUnit')}</span>
-                  <button
-                    type="submit"
-                    className="h-7 rounded-md border border-slate-200 bg-white px-2 text-slate-600 transition-colors hover:bg-slate-100"
-                  >
-                    {t('chart.applyLookback')}
-                  </button>
-                </form>
-              )}
-            </div>
+            <LookbackControl
+              ariaLabel={`${t('chart.taskMetrics')} ${t('chart.lookbackMinutes')}`}
+              lookbackMinutes={lookbackMinutes}
+              maxLookbackMinutes={MAX_TASK_METRIC_LOOKBACK_MINUTES}
+              presets={TASK_METRIC_LOOKBACK_PRESETS}
+              onLookbackMinutesChange={onLookbackMinutesChange}
+            />
           </div>
 
           <div className="flex gap-2 items-center shrink-0 text-[10px] font-bold">

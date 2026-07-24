@@ -127,19 +127,27 @@ describe('TaskEventDiagnostics', () => {
     expect(screen.getByText('实例：b1b097c9')).toBeTruthy();
   });
 
-  it('changes the event lookback from preset and custom controls', () => {
+  it('reveals and retains the custom event lookback editor only in custom mode', () => {
     const handleLookbackChange = vi.fn();
     renderDiagnostics([firstAttemptSuccessLog], {
       lookbackMinutes: 15,
       onLookbackMinutesChange: handleLookbackChange,
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '30m' }));
+    expect(screen.queryByLabelText('Lookback minutes')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
     fireEvent.change(screen.getByLabelText('Lookback minutes'), { target: { value: '45' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
 
-    expect(handleLookbackChange).toHaveBeenCalledWith(30);
     expect(handleLookbackChange).toHaveBeenCalledWith(45);
+
+    fireEvent.click(screen.getByRole('button', { name: '30m' }));
+    expect(handleLookbackChange).toHaveBeenCalledWith(30);
+    expect(screen.queryByLabelText('Lookback minutes')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Custom' }));
+    expect((screen.getByLabelText('Lookback minutes') as HTMLInputElement).value).toBe('45');
   });
 
   it('changes pages with server offsets', () => {

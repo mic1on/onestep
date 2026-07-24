@@ -880,6 +880,15 @@ test("loads API-backed service, task, instance, topology, config, and log views"
   await expect(page.getByText("1020")).toBeVisible();
   await expect(page.getByRole("button", { name: "Failures" })).toBeVisible();
 
+  const taskEventsLookback = page.getByRole("group", { name: "Task Events Lookback minutes" });
+  const taskEventsLookbackControls = taskEventsLookback.locator("xpath=..");
+  await expect(taskEventsLookback.getByRole("button", { name: "Custom", pressed: false })).toBeVisible();
+  await expect(taskEventsLookbackControls.getByRole("spinbutton", { name: "Lookback minutes" })).toHaveCount(0);
+  await taskEventsLookback.getByRole("button", { name: "Custom" }).click();
+  await expect(taskEventsLookbackControls.getByRole("spinbutton", { name: "Lookback minutes" })).toBeVisible();
+  await taskEventsLookback.getByRole("button", { name: "30m" }).click();
+  await expect(taskEventsLookbackControls.getByRole("spinbutton", { name: "Lookback minutes" })).toHaveCount(0);
+
   await page.getByLabel("Breadcrumb").getByRole("button", { name: "Tasks" }).click();
   await expect(page).toHaveURL(/\/services\/billing-sync%3Aprod$/);
   await expect(page.getByText("orders_to_ledger").first()).toBeVisible();

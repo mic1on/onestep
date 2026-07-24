@@ -1,4 +1,3 @@
-import { useEffect, useState, type FormEvent } from 'react';
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, Terminal } from 'lucide-react';
 import {
   MAX_TASK_EVENT_LOOKBACK_MINUTES,
@@ -6,6 +5,7 @@ import {
 } from '../api';
 import type { LogEntry } from '../types';
 import { useI18n, type MessageKey } from '../i18n';
+import LookbackControl from './LookbackControl';
 
 interface TaskEventDiagnosticsProps {
   logs: LogEntry[];
@@ -17,11 +17,6 @@ interface TaskEventDiagnosticsProps {
   limit: number;
   offset: number;
   onPageChange: (offset: number) => void;
-}
-
-function normalizeLookbackMinutes(value: number) {
-  if (!Number.isFinite(value)) return null;
-  return Math.min(MAX_TASK_EVENT_LOOKBACK_MINUTES, Math.max(1, Math.trunc(value)));
 }
 
 export default function TaskEventDiagnostics({
@@ -36,32 +31,10 @@ export default function TaskEventDiagnostics({
   onPageChange,
 }: TaskEventDiagnosticsProps) {
   const { t } = useI18n();
-  const [customLookbackValue, setCustomLookbackValue] = useState(String(lookbackMinutes));
   const start = total === 0 ? 0 : offset + 1;
   const end = Math.min(offset + limit, total);
   const canGoPrevious = offset > 0;
   const canGoNext = offset + limit < total;
-
-  useEffect(() => {
-    setCustomLookbackValue(String(lookbackMinutes));
-  }, [lookbackMinutes]);
-
-  const applyLookbackMinutes = (minutes: number) => {
-    const next = normalizeLookbackMinutes(minutes);
-    if (next === null) {
-      setCustomLookbackValue(String(lookbackMinutes));
-      return;
-    }
-    setCustomLookbackValue(String(next));
-    if (next !== lookbackMinutes) {
-      onLookbackMinutesChange(next);
-    }
-  };
-
-  const handleCustomLookbackSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    applyLookbackMinutes(Number(customLookbackValue));
-  };
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
@@ -72,49 +45,13 @@ export default function TaskEventDiagnostics({
             <span>{t('task.events')}</span>
           </h3>
 
-          <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
-            <div
-              role="group"
-              aria-label={`${t('task.events')} ${t('chart.lookbackMinutes')}`}
-              className="flex items-center gap-1 rounded-md border border-slate-200 bg-white p-1"
-            >
-              {TASK_EVENT_LOOKBACK_PRESETS.map((minutes) => (
-                <button
-                  key={minutes}
-                  type="button"
-                  aria-pressed={lookbackMinutes === minutes}
-                  onClick={() => applyLookbackMinutes(minutes)}
-                  className={`h-6 rounded px-2 transition-colors ${
-                    lookbackMinutes === minutes
-                      ? 'bg-indigo-50 text-indigo-600'
-                      : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                  }`}
-                >
-                  {minutes}m
-                </button>
-              ))}
-            </div>
-
-            <form onSubmit={handleCustomLookbackSubmit} className="flex items-center gap-1.5">
-              <span className="text-slate-400">{t('chart.customLookback')}</span>
-              <input
-                aria-label={t('chart.lookbackMinutes')}
-                type="number"
-                min={1}
-                max={MAX_TASK_EVENT_LOOKBACK_MINUTES}
-                value={customLookbackValue}
-                onChange={(event) => setCustomLookbackValue(event.target.value)}
-                className="h-7 w-14 rounded-md border border-slate-200 bg-white px-2 text-right font-mono text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-              />
-              <span className="text-slate-400">{t('chart.minutesUnit')}</span>
-              <button
-                type="submit"
-                className="h-7 rounded-md border border-slate-200 bg-white px-2 text-slate-600 transition-colors hover:bg-slate-100"
-              >
-                {t('chart.applyLookback')}
-              </button>
-            </form>
-          </div>
+          <LookbackControl
+            ariaLabel={`${t('task.events')} ${t('chart.lookbackMinutes')}`}
+            lookbackMinutes={lookbackMinutes}
+            maxLookbackMinutes={MAX_TASK_EVENT_LOOKBACK_MINUTES}
+            presets={TASK_EVENT_LOOKBACK_PRESETS}
+            onLookbackMinutesChange={onLookbackMinutesChange}
+          />
         </div>
       </div>
 
