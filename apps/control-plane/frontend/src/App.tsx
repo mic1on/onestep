@@ -1013,7 +1013,10 @@ export default function App() {
       <div className="flex h-[100dvh] min-w-0 flex-1 flex-col overflow-hidden lg:ml-[240px]">
         {/* --- Core Content Stage Canvas --- */}
         <main className="flex-1 overflow-y-auto bg-slate-50 p-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:p-5 sm:pb-[calc(5.5rem+env(safe-area-inset-bottom))] lg:p-6 lg:pb-6">
-          <div className="mx-auto mb-4 flex max-w-7xl flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-xs sm:px-4">
+          <div
+            data-testid="global-context-bar"
+            className="mx-auto mb-3 flex max-w-7xl flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-xs sm:mb-4 sm:px-4"
+          >
             <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
               <div className="flex items-center gap-2">
                 <span
@@ -1143,39 +1146,50 @@ export default function App() {
             >
               {/* Breadcrumb navigator under Command Bar */}
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <nav aria-label="Breadcrumb" className="flex items-center text-slate-400 font-medium text-xs mb-1">
+                <div className="min-w-0">
+                  <nav aria-label="Breadcrumb" className="flex w-full min-w-0 items-center overflow-hidden whitespace-nowrap text-slate-400 font-medium text-xs mb-1">
                     <button
                       type="button"
                       onClick={navigateToServicesList}
-                      className="rounded-sm hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
+                      className="shrink-0 rounded-sm hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
                     >
                       {tr('nav.services')}
                     </button>
-                    <ChevronRight className="w-3.5 h-3.5 mx-1" />
+                    <ChevronRight className="w-3.5 h-3.5 mx-1 shrink-0" />
                     {selectedTask ? (
                       <button
                         type="button"
                         onClick={() => navigateToService(selectedServiceId)}
-                        className="rounded-sm text-slate-800 font-bold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
+                        title={selectedService.name}
+                        className="min-w-0 max-w-[45%] truncate rounded-sm text-slate-800 font-bold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors sm:max-w-none"
                       >
                         {selectedService.name}
                       </button>
                     ) : (
-                      <span className="text-slate-800 font-bold">{selectedService.name}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span data-testid="service-breadcrumb-name" className="min-w-0 truncate text-slate-800 font-bold">
+                          {selectedService.name}
+                        </span>
+                        <span data-testid="mobile-service-status" title={headerStatus.label} className="inline-flex shrink-0 sm:hidden">
+                          <span aria-hidden="true" className={`h-2 w-2 rounded-full ${headerStatus.dotClassName}`} />
+                          <span className="sr-only">{headerStatus.label}</span>
+                        </span>
+                      </span>
                     )}
                     {selectedTask && (
                       <>
-                        <ChevronRight className="w-3.5 h-3.5 mx-1" />
+                        <ChevronRight className="w-3.5 h-3.5 mx-1 shrink-0" />
                         <button
                           type="button"
                           onClick={() => navigateToServiceTab('Tasks')}
-                          className="rounded-sm text-slate-500 font-semibold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
+                          className="shrink-0 rounded-sm text-slate-500 font-semibold hover:text-indigo-600 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
                         >
                           {tr('tabs.tasks')}
                         </button>
-                        <ChevronRight className="w-3.5 h-3.5 mx-1" />
-                        <span className="text-slate-900 font-bold">{selectedTask.name}</span>
+                        <ChevronRight className="w-3.5 h-3.5 mx-1 shrink-0" />
+                        <span title={selectedTask.name} className="min-w-0 truncate text-slate-900 font-bold">
+                          {selectedTask.name}
+                        </span>
                       </>
                     )}
                   </nav>
@@ -1190,11 +1204,12 @@ export default function App() {
                     >
                       <ArrowLeft className="w-4 h-4" />
                     </button>
-                    <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight font-sans">
+                    <h2 className="min-w-0 break-words text-2xl font-extrabold text-slate-900 tracking-tight font-sans">
                       {selectedTask ? selectedTask.name : selectedService.name}
                     </h2>
                     <span
-                      className={`${headerStatus.className} px-2 py-0.5 rounded-md font-bold tracking-wide text-[10px] flex items-center gap-1 border`}
+                      data-testid="service-header-status"
+                      className={`${headerStatus.className} ${selectedTask ? 'flex' : 'hidden sm:flex'} items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-bold tracking-wide`}
                     >
                       <span className={`w-1.5 h-1.5 rounded-full ${headerStatus.dotClassName}`} />
                       {headerStatus.label}
@@ -1480,19 +1495,33 @@ export default function App() {
                 /* --- STAGE: Service tabs (Instances / Tasks / Config / Logs) --- */
                 <div className="space-y-6">
                   <div className="flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
-                    {SERVICE_TABS.map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => navigateToServiceTab(tab)}
-                        className={`ui-pressable rounded-md px-3 py-1.5 text-xs font-bold ${
-                          activeTab === tab
-                            ? 'bg-indigo-600 text-white shadow-xs'
-                            : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-                        }`}
-                      >
-                        {serviceTabLabel(tab, tr)}
-                      </button>
-                    ))}
+                    {SERVICE_TABS.map((tab) => {
+                      const count = tab === 'Tasks' ? selectedService.totalTaskCount : tab === 'Instances' ? selectedService.totalInstances : null;
+                      const isActive = activeTab === tab;
+
+                      return (
+                        <button
+                          key={tab}
+                          onClick={() => navigateToServiceTab(tab)}
+                          className={`ui-pressable inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold ${
+                            isActive
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                          }`}
+                        >
+                          <span>{serviceTabLabel(tab, tr)}</span>
+                          {count !== null && (
+                            <span
+                              className={`min-w-4 rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                                isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {count}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Telemetry Stats cards block */}

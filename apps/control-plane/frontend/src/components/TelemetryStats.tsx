@@ -18,7 +18,10 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 lg:gap-6">
       {/* Total Instances */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-40 shadow-xs relative overflow-hidden">
+      <div
+        data-testid="telemetry-total-instances"
+        className="relative hidden h-32 flex-col justify-between overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-xs sm:flex sm:h-40 sm:p-5"
+      >
         <div>
           <div className="flex justify-between items-start text-slate-400">
             <span className="text-xs uppercase font-bold tracking-wider">{t('telemetry.totalInstances')}</span>
@@ -48,25 +51,28 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
       </div>
 
       {/* Task Health */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-40 shadow-xs relative overflow-hidden">
+      <div
+        data-testid="telemetry-health"
+        className="relative flex h-32 flex-col justify-between overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-xs sm:h-40 sm:p-5"
+      >
         <div>
           <div className="flex justify-between items-start text-slate-400">
-            <span className="text-xs uppercase font-bold tracking-wider">{t('common.health')}</span>
-            <Activity className={`w-5 h-5 ${isHealthy ? 'text-emerald-500' : 'text-amber-500'}`} />
+            <span className="text-[10px] uppercase font-bold tracking-wider sm:text-xs">{t('common.health')}</span>
+            <Activity className={`w-4 h-4 sm:w-5 sm:h-5 ${isHealthy ? 'text-emerald-500' : 'text-amber-500'}`} />
           </div>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-4xl font-extrabold text-slate-900 font-sans tracking-tight">
+          <div className="flex items-center gap-2 mt-1.5 sm:mt-2">
+            <span className="text-3xl font-extrabold text-slate-900 font-sans tracking-tight sm:text-4xl">
               {service.successRate}%
             </span>
             {service.failingTaskCount > 0 && (
-              <span className="flex items-center gap-0.5 text-xs font-bold px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600">
+              <span className="flex items-center gap-0.5 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-600 sm:text-xs">
                 {service.failingTaskCount} {t('servicesList.failing')}
               </span>
             )}
           </div>
         </div>
 
-        <div className="text-xs text-slate-500 font-medium">
+        <div className="text-[11px] text-slate-500 font-medium sm:text-xs">
           {isOffline ? (
             <span className="text-slate-500 flex items-center gap-1.5 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
@@ -87,7 +93,10 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
       </div>
 
       {/* Telemetry Throughput */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between h-40 shadow-xs relative overflow-hidden group">
+      <div
+        data-testid="telemetry-throughput"
+        className="group relative flex h-32 flex-col justify-between overflow-hidden rounded-xl border border-slate-200 bg-white p-3 shadow-xs sm:h-40 sm:p-5"
+      >
         {/* SVG Area Chart Wave Underlay */}
         <div className="absolute inset-x-0 bottom-0 h-16 pointer-events-none select-none opacity-30 group-hover:opacity-40 transition-opacity">
           <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 100 100">
@@ -112,19 +121,19 @@ export default function TelemetryStats({ service }: TelemetryStatsProps) {
 
         <div className="z-10">
           <div className="flex justify-between items-start text-slate-400">
-            <span className="text-xs uppercase font-bold tracking-wider">{t('common.throughput')}</span>
-            <TrendingUp className="w-5 h-5 text-indigo-600" />
+            <span className="text-[10px] uppercase font-bold tracking-wider sm:text-xs">{t('common.throughput')}</span>
+            <TrendingUp className="w-4 h-4 text-indigo-600 sm:w-5 sm:h-5" />
           </div>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-4xl font-extrabold text-slate-900 font-sans tracking-tight">
+          <div className="flex items-baseline gap-2 mt-1.5 sm:mt-2">
+            <span className="text-3xl font-extrabold text-slate-900 font-sans tracking-tight sm:text-4xl">
               {service.throughputPerMin}
             </span>
-            <span className="text-xs text-slate-500 font-medium">/min</span>
+            <span className="text-[11px] text-slate-500 font-medium sm:text-xs">/min</span>
           </div>
         </div>
 
         <div
-          className={`text-[11px] font-semibold z-10 flex items-center gap-1 ${
+          className={`z-10 flex items-center gap-1 text-[11px] font-semibold sm:text-xs ${
             hasTraffic ? 'text-indigo-600 hover:underline cursor-pointer' : 'text-slate-500'
           }`}
         >
