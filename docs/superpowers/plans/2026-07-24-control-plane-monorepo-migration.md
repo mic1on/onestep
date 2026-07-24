@@ -38,7 +38,7 @@ Not included:
 - Create: `apps/control-plane/**` from the filtered source repository.
 - Create: `docs/superpowers/plans/2026-07-24-control-plane-monorepo-migration.md`.
 
-- [ ] **Step 1: Record clean source commits**
+- [x] **Step 1: Record clean source commits**
 
 Run:
 
@@ -50,7 +50,7 @@ git -C /Users/miclon/development/onestep/onestep-control-plane status --short
 
 Expected: both SHAs are printed and the source control-plane worktree is clean.
 
-- [ ] **Step 2: Rewrite a temporary control-plane clone below the target prefix**
+- [x] **Step 2: Rewrite a temporary control-plane clone below the target prefix**
 
 Run:
 
@@ -62,7 +62,7 @@ uvx git-filter-repo --to-subdirectory-filter apps/control-plane --force
 
 Expected: every tracked source path is below `apps/control-plane/`, and 200 source commits remain reachable.
 
-- [ ] **Step 3: Merge the rewritten history**
+- [x] **Step 3: Merge the rewritten history**
 
 Run from the migration worktree:
 
@@ -83,15 +83,16 @@ Expected: the merge has two parents, the imported source tip is an ancestor, and
 - Modify: `.gitignore`.
 - Delete: `apps/control-plane/.github/workflows/ci.yml` after its behavior moves to a root workflow.
 
-- [ ] **Step 1: Keep the control-plane project out of the root uv workspace**
+- [x] **Step 1: Keep the control-plane project out of the root uv workspace**
 
 Verify that root `pyproject.toml` does not add `apps/control-plane` to `[tool.uv.workspace].members`.
 
 Expected: root remains compatible with Python 3.9 and the control-plane server continues using Python 3.11 or newer.
 
-- [ ] **Step 2: Merge component-specific ignore rules**
+- [x] **Step 2: Merge component-specific ignore rules**
 
-Add only control-plane generated paths that are not already ignored:
+The imported `apps/control-plane/.gitignore` already scopes these generated paths,
+so no root ignore entries are needed:
 
 ```gitignore
 apps/control-plane/.data/
@@ -102,7 +103,7 @@ apps/control-plane/desktop/backend-dist/
 apps/control-plane/desktop/test-results/
 ```
 
-- [ ] **Step 3: Check both lockfiles independently**
+- [x] **Step 3: Check both lockfiles independently**
 
 Run:
 
@@ -121,13 +122,13 @@ Expected: both commands succeed without changing either lockfile.
 - Create: `.github/workflows/control-plane-contract.yml`.
 - Delete: `apps/control-plane/.github/workflows/ci.yml`.
 
-- [ ] **Step 1: Add path-scoped full control-plane CI**
+- [x] **Step 1: Add path-scoped full control-plane CI**
 
 The workflow must trigger for `apps/control-plane/**` and its own workflow file. Each shell step runs from `apps/control-plane`, while action cache paths and Docker contexts use repository-relative paths.
 
 Expected jobs: backend lint/tests, frontend tests/build/E2E, Docker build, Compose smoke, and main-branch GHCR publish.
 
-- [ ] **Step 2: Add a focused cross-component contract workflow**
+- [x] **Step 2: Add a focused cross-component contract workflow**
 
 Trigger on:
 
@@ -145,7 +146,7 @@ The job runs reporter/WebSocket tests from the root workspace, then runs server 
 
 Expected: a protocol-affecting PR cannot merge with only one side passing.
 
-- [ ] **Step 3: Validate workflow syntax and path references**
+- [x] **Step 3: Validate workflow syntax and path references**
 
 Run repository searches for stale root-relative `Dockerfile`, lockfile, pnpm cache, and script paths.
 
@@ -162,7 +163,7 @@ Expected: all control-plane workflow paths resolve below `apps/control-plane/`.
 - Modify: `apps/control-plane/RELEASE.md`.
 - Modify: `apps/control-plane/docs/protocols/agent-ws-protocol.md` only when repository links or ownership text are stale.
 
-- [ ] **Step 1: Replace clone instructions with monorepo paths**
+- [x] **Step 1: Replace clone instructions with monorepo paths**
 
 Use:
 
@@ -173,13 +174,13 @@ cd onestep/apps/control-plane
 
 Expected: every current deployment and contributor command starts from a valid directory.
 
-- [ ] **Step 2: Update protocol ownership language**
+- [x] **Step 2: Update protocol ownership language**
 
 Keep one canonical protocol at `apps/control-plane/docs/protocols/agent-ws-protocol.md`, and replace two-repository branch coordination with one-PR contract validation.
 
 Expected: documentation no longer instructs contributors to coordinate matching branches across repositories.
 
-- [ ] **Step 3: Keep historical plans unchanged unless they drive an active command**
+- [x] **Step 3: Keep historical plans unchanged unless they drive an active command**
 
 Expected: historical design records retain their original context; only current operational documentation changes.
 
@@ -187,7 +188,7 @@ Expected: historical design records retain their original context; only current 
 
 **Files:** none unless a verification failure reveals a migration defect.
 
-- [ ] **Step 1: Verify Git history and repository shape**
+- [x] **Step 1: Verify Git history and repository shape**
 
 Run:
 
@@ -201,7 +202,7 @@ git tag --list | wc -l
 
 Expected: clean intentional diff/commits, imported path history is visible, 321 control-plane files are represented before workflow relocation, and 80 core tags remain.
 
-- [ ] **Step 2: Run Python validation**
+- [x] **Step 2: Run Python validation**
 
 Run:
 
@@ -215,7 +216,7 @@ uv run --project apps/control-plane pytest
 
 Expected: all commands pass.
 
-- [ ] **Step 3: Run frontend validation**
+- [x] **Step 3: Run frontend validation**
 
 Run:
 
@@ -228,7 +229,7 @@ pnpm --dir apps/control-plane/frontend run e2e
 
 Expected: unit tests, production build, and Playwright E2E pass.
 
-- [ ] **Step 4: Rebuild and restart the control plane**
+- [x] **Step 4: Rebuild and restart the control plane**
 
 Run:
 
@@ -241,7 +242,7 @@ docker compose ps
 
 Expected: the `plane` container is healthy and serves the rebuilt code.
 
-- [ ] **Step 5: Run release-shape checks**
+- [x] **Step 5: Run release-shape checks**
 
 Run:
 
@@ -256,3 +257,20 @@ Expected: Compose configuration and the production image build succeed without c
 ## Rollback
 
 Before this branch is merged, rollback is deleting the migration worktree and branch. After merge but before the old repository is archived, revert the import merge and workflow/documentation commits. The standalone repository remains the source of truth until this migration branch passes all checks and is merged.
+
+## Execution Record
+
+- Source control-plane commit: `8f55bc56fd8b2c38911a6fcc249b1db33ab4ff98`.
+- Rewritten source tip: `412b1df101a53fdb3285d441eb69ecdb356ae31e`.
+- Import merge: `a63ec18` with 200 rewritten source commits and path history preserved.
+- Dependency validation: both frozen uv locks resolved successfully on Python 3.11.
+- Runtime unit tests: 177 passed.
+- Reporter and WebSocket client tests: 157 passed.
+- Current-checkout server contract tests: 22 passed.
+- Control-plane backend tests: 316 passed; Ruff passed.
+- Frontend tests: 90 passed; production build passed.
+- Desktop tests: 1 passed.
+- Playwright E2E: 23 passed.
+- Docker image build: `onestep-control-plane:latest` succeeded from `apps/control-plane`.
+- Runtime validation: `onestep-control-plane-plane-1` rebuilt and healthy; smoke passed at `http://127.0.0.1:4173`.
+- Pre-existing concern: orphan container `onestep-control-plane-api-1` remains unhealthy and was not modified or removed by this migration.
