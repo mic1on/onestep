@@ -68,15 +68,38 @@ On restart, the agent restores deployments whose recorded PID is still alive,
 reports them in the next control-plane hello/heartbeat, and can stop them by
 PID. Stale records whose PID no longer exists are removed during startup.
 
-## End-to-End Smoke
+## Development
 
-With a sibling `onestep-control-plane` checkout, run a real local deployment
-smoke:
+From the monorepo root:
 
 ```bash
-uv run python scripts/run_smoke.py
+uv sync --project apps/work-agent --frozen --extra dev
+uv run --project apps/work-agent pytest apps/work-agent/tests
+uv run --project apps/work-agent ruff check \
+  apps/work-agent/src apps/work-agent/tests apps/work-agent/scripts
 ```
+
+The worker-agent project keeps its own `pyproject.toml` and `uv.lock`; it is not
+part of the root uv workspace.
+
+## End-to-End Smoke
+
+Run a real local deployment smoke against `apps/control-plane`:
+
+```bash
+uv run --project apps/work-agent python apps/work-agent/scripts/run_smoke.py
+```
+
+Pass `--control-plane-dir <path>` only when testing against another checkout.
 
 The smoke starts a temporary SQLite-backed control plane, starts this worker
 agent, uploads a minimal workflow package, creates a deployment, waits for the
 `running` event, stops it, and waits for `stopped`.
+
+## Release
+
+The root `Worker Agent` workflow tests and builds changes under
+`apps/work-agent`. An annotated `worker-agent-vX.Y.Z` tag publishes the matching
+package version after the PyPI Trusted Publisher is configured for
+`mic1on/onestep` and `.github/workflows/work-agent.yml`. The workflow can also
+be run manually without publishing.

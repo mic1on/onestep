@@ -31,13 +31,13 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)
 
     parser = argparse.ArgumentParser(
-        description="Run a local end-to-end smoke test against a sibling control-plane repo."
+        description="Run a local end-to-end smoke test against the monorepo control plane."
     )
     parser.add_argument(
         "--control-plane-dir",
         type=Path,
         default=None,
-        help="Path to the onestep-control-plane repository.",
+        help="Path to the control-plane application.",
     )
     parser.add_argument(
         "--timeout-s",
@@ -53,10 +53,11 @@ def main() -> int:
     args = parser.parse_args()
 
     worker_agent_dir = Path(__file__).resolve().parents[1]
+    repo_root = worker_agent_dir.parents[1]
     control_plane_dir = (
         args.control_plane_dir.resolve()
         if args.control_plane_dir is not None
-        else worker_agent_dir.parent / "onestep-control-plane"
+        else repo_root / "apps" / "control-plane"
     )
     _require_repo(worker_agent_dir, control_plane_dir)
     _require_executable("uv")

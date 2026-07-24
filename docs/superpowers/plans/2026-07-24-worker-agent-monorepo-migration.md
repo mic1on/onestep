@@ -41,7 +41,7 @@ Not included:
 
 ### Task 1: Import Source History
 
-- [ ] **Step 1: Verify both repositories are clean and record source commits**
+- [x] **Step 1: Verify both repositories are clean and record source commits**
 
 Run:
 
@@ -53,7 +53,7 @@ git -C /Users/miclon/development/onestep/onestep-worker-agent rev-parse HEAD
 
 Expected: both status commands are empty and the source SHA is `828e7fb9b932602651bc1f3bfe9666b537fee344`.
 
-- [ ] **Step 2: Filter a temporary clone into the target prefix**
+- [x] **Step 2: Filter a temporary clone into the target prefix**
 
 Run:
 
@@ -65,7 +65,7 @@ uvx git-filter-repo --source "$tmp_dir/source" --target "$tmp_dir/filtered" --to
 
 Expected: the filtered repository retains all source commits and its tip tree contains only `apps/work-agent/**`.
 
-- [ ] **Step 3: Merge the filtered history**
+- [x] **Step 3: Merge the filtered history**
 
 Run:
 
@@ -80,7 +80,7 @@ Expected: the merge has two parents and imports the worker-agent tree without ch
 
 ### Task 2: Integrate Repository Automation
 
-- [ ] **Step 1: Replace the inert nested release workflow**
+- [x] **Step 1: Replace the inert nested release workflow**
 
 Delete `apps/work-agent/.github/workflows/release.yml` and create `.github/workflows/work-agent.yml` with:
 
@@ -89,11 +89,11 @@ Delete `apps/work-agent/.github/workflows/release.yml` and create `.github/workf
 - manual `workflow_dispatch` publishing through PyPI Trusted Publishing;
 - `working-directory: apps/work-agent` for app-local commands.
 
-- [ ] **Step 2: Extend the cross-component contract gate**
+- [x] **Step 2: Extend the cross-component contract gate**
 
 Modify `.github/workflows/control-plane-contract.yml` so worker-agent source and lock changes trigger the workflow. Install the worker-agent project, replace its installed runtime with the current root checkout, and run its tests alongside the current control-plane protocol tests.
 
-- [ ] **Step 3: Verify workflow syntax**
+- [x] **Step 3: Verify workflow syntax**
 
 Run:
 
@@ -105,39 +105,40 @@ Expected: exit code 0.
 
 ### Task 3: Update Monorepo Paths And Documentation
 
-- [ ] **Step 1: Update the smoke test default path**
+- [x] **Step 1: Update the smoke test default path**
 
 Change the default control-plane directory from a sibling repository to `<repo>/apps/control-plane`. Keep `--control-plane-dir` as an override.
 
-- [ ] **Step 2: Update worker-agent documentation**
+- [x] **Step 2: Update worker-agent documentation**
 
 Document commands from the monorepo root and from `apps/work-agent`, including the explicit smoke command. Do not claim the known background-process smoke regression is fixed.
 
-- [ ] **Step 3: Add the app to the root repository map**
+- [x] **Step 3: Add the app to the root repository map**
 
 Add `apps/work-agent` next to `apps/control-plane`, describing it as the host execution agent published as `onestep-worker-agent`.
 
 ### Task 4: Verify The Migration
 
-- [ ] **Step 1: Run worker-agent checks**
+- [x] **Step 1: Run worker-agent checks**
 
 Run:
 
 ```bash
 uv sync --project apps/work-agent --frozen --extra test
-uv run --project apps/work-agent pytest -q
-uv run --project apps/work-agent ruff check .
+uv run --project apps/work-agent pytest -q apps/work-agent/tests
+uv run --project apps/work-agent ruff check \
+  apps/work-agent/src apps/work-agent/tests apps/work-agent/scripts
 uv build --project apps/work-agent
 uvx twine check apps/work-agent/dist/*
 ```
 
 Expected: all unit tests pass, Ruff reports no findings, and wheel/sdist metadata is valid.
 
-- [ ] **Step 2: Smoke-install the built wheel**
+- [x] **Step 2: Smoke-install the built wheel**
 
 Run the wheel in a temporary virtual environment and verify `onestep-agent --help` exits successfully.
 
-- [ ] **Step 3: Verify history and scope**
+- [x] **Step 3: Verify history and scope**
 
 Run:
 
@@ -149,6 +150,12 @@ git status --short
 
 Expected: source history is visible, the diff has no whitespace errors, and only planned migration changes are present.
 
-- [ ] **Step 4: Record the known smoke result**
+- [x] **Step 4: Record the known smoke result**
 
 Run the end-to-end smoke once. If it still fails because `start` backgrounds the real agent while the smoke monitors the launcher, record that as a pre-existing follow-up rather than changing runtime behavior in this migration.
+
+Observed on 2026-07-24: the migrated default path reached the control plane and
+completed database migration, but the smoke failed after `start` returned exit
+code 0 while its background child continued running. The escaped child was
+terminated manually. Fixing the launcher/process-monitor mismatch remains a
+post-migration worker-agent reliability task.

@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/control-plane-contract.yml"
+      - "apps/work-agent/**"
       - "apps/control-plane/backend/**"
       - "apps/control-plane/pyproject.toml"
       - "apps/control-plane/uv.lock"
@@ -18,6 +19,7 @@ on:
       - feat/**
     paths:
       - ".github/workflows/control-plane-contract.yml"
+      - "apps/work-agent/**"
       - "apps/control-plane/backend/**"
       - "apps/control-plane/pyproject.toml"
       - "apps/control-plane/uv.lock"
@@ -45,6 +47,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: |
             uv.lock
+            apps/work-agent/uv.lock
             apps/control-plane/uv.lock
 
       - name: Install runtime and reporter dependencies
@@ -54,6 +57,14 @@ jobs:
         run: >-
           uv run --all-packages python -m pytest -q
           plugins/onestep-control-plane/tests
+
+      - name: Install worker agent dependencies
+        run: uv sync --project apps/work-agent --frozen --extra test
+
+      - name: Test the current worker agent with the current runtime
+        run: |
+          uv pip install --python apps/work-agent/.venv/bin/python --editable . --no-deps
+          uv run --project apps/work-agent --no-sync python -m pytest -q apps/work-agent/tests
 
       - name: Install control plane dependencies
         run: uv sync --project apps/control-plane --frozen --extra test
@@ -80,3 +91,7 @@ jobs:
           backend/tests/test_agent_ws.py
           backend/tests/test_e2e_workflow.py
           backend/tests/test_resource_catalog_api.py
+          backend/tests/test_agent_install.py
+          backend/tests/test_worker_agent_api.py
+          backend/tests/test_worker_agent_models.py
+          backend/tests/test_worker_agent_ws.py
