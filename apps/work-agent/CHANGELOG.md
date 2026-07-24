@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 - 2026-07-24
+
+- Move the worker agent into the OneStep monorepo under `apps/work-agent` while
+  preserving its standalone PyPI package and CLI entry points.
+- Add path-scoped test, lint, build, and release automation plus current-runtime
+  and control-plane worker-agent contract coverage.
+
 ## 0.1.3 - 2026-06-22
 
 - Add `onestep-agent run` for foreground execution and change
