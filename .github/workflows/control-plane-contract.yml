@@ -1,0 +1,82 @@
+name: Control Plane Contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/control-plane-contract.yml"
+      - "apps/control-plane/backend/**"
+      - "apps/control-plane/pyproject.toml"
+      - "apps/control-plane/uv.lock"
+      - "plugins/onestep-control-plane/**"
+      - "pyproject.toml"
+      - "src/**"
+      - "uv.lock"
+  push:
+    branches:
+      - main
+      - feat/**
+    paths:
+      - ".github/workflows/control-plane-contract.yml"
+      - "apps/control-plane/backend/**"
+      - "apps/control-plane/pyproject.toml"
+      - "apps/control-plane/uv.lock"
+      - "plugins/onestep-control-plane/**"
+      - "pyproject.toml"
+      - "src/**"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Runtime, reporter, and server contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            apps/control-plane/uv.lock
+
+      - name: Install runtime and reporter dependencies
+        run: uv sync --frozen --all-packages --extra test
+
+      - name: Test the current reporter and WebSocket client
+        run: >-
+          uv run --all-packages python -m pytest -q
+          plugins/onestep-control-plane/tests
+
+      - name: Install control plane dependencies
+        run: uv sync --project apps/control-plane --frozen --extra test
+
+      - name: Verify the server imports the current checkout runtime
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/plugins/onestep-control-plane/src
+        run: |
+          uv run --project apps/control-plane python - <<'PY'
+          from pathlib import Path
+          import onestep
+
+          expected = Path.cwd() / "src" / "onestep"
+          actual = Path(onestep.__file__).resolve().parent
+          assert actual == expected.resolve(), (actual, expected)
+          PY
+
+      - name: Test server protocol compatibility with the current runtime
+        working-directory: apps/control-plane
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/plugins/onestep-control-plane/src
+        run: >-
+          uv run python -m pytest -q
+          backend/tests/test_agent_ws.py
+          backend/tests/test_e2e_workflow.py
+          backend/tests/test_resource_catalog_api.py

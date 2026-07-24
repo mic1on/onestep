@@ -38,8 +38,8 @@ or normalizing backend failures.
 - identity helpers exported from `onestep`
 - low-level WebSocket transport classes when `onestep[control-plane]` is installed
 
-These APIs are supported for operational integration, but changes may require
-coordination with `onestep-control-plane`.
+These APIs are supported for operational integration. Changes may require a
+same-PR update to `apps/control-plane` and must pass the control-plane contract workflow.
 
 ## Internal API
 
@@ -123,4 +123,4 @@ Before releasing core, answer:
   `onestep>=<new-version>`?
 - Does `CHANGELOG.md` describe the user-visible behavior and compatibility
   impact?
-- Does `onestep-control-plane` need coordination?
+- Does `apps/control-plane` need a same-PR update and contract validation?
