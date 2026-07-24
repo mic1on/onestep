@@ -1,0 +1,216 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+.brand-logo svg {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+:root {
+  --motion-micro: 120ms;
+  --motion-small: 220ms;
+  --motion-medium: 320ms;
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.55, 0, 1, 0.45);
+  --ease-move: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.ui-pressable {
+  transition:
+    color var(--motion-micro) var(--ease-enter),
+    background-color var(--motion-micro) var(--ease-enter),
+    border-color var(--motion-micro) var(--ease-enter),
+    box-shadow var(--motion-micro) var(--ease-enter),
+    transform var(--motion-micro) var(--ease-enter),
+    opacity var(--motion-micro) var(--ease-enter);
+}
+
+.ui-pressable:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ui-mobile-nav-item {
+  display: flex;
+  min-width: 44px;
+  min-height: 44px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  transition: color var(--motion-micro) var(--ease-enter), background-color var(--motion-micro) var(--ease-enter), transform var(--motion-micro) var(--ease-enter);
+}
+
+.ui-mobile-nav-item[aria-current="page"] {
+  color: #4f46e5;
+}
+
+@media (max-width: 1023px) {
+  .ui-pressable:active:not(:disabled),
+  .ui-mobile-nav-item:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+}
+
+.ui-page-enter {
+  animation: ui-page-enter var(--motion-small) var(--ease-enter) both;
+}
+
+.ui-popover-enter {
+  transform-origin: top right;
+  animation: ui-popover-enter var(--motion-small) var(--ease-enter) both;
+}
+
+.ui-dialog-backdrop {
+  animation: ui-fade-in var(--motion-small) var(--ease-enter) both;
+}
+
+.ui-dialog-enter {
+  animation: ui-dialog-enter var(--motion-medium) var(--ease-enter) both;
+}
+
+.ui-toast-enter {
+  animation: ui-toast-enter var(--motion-small) var(--ease-enter) both;
+}
+
+.ui-panel-state-enter {
+  animation: ui-fade-in var(--motion-small) var(--ease-enter) both;
+}
+
+.ui-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: #e9eef5;
+}
+
+.ui-skeleton::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.72), transparent);
+  transform: translateX(-100%);
+  animation: ui-skeleton-sweep 1.6s var(--ease-move) infinite;
+}
+
+.ui-progress-fill {
+  transform: scaleX(var(--ui-progress, 0));
+  transform-origin: left center;
+  transition: transform var(--motion-medium) var(--ease-enter);
+}
+
+.ui-refresh-ack {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: 8px;
+  background: rgb(79 70 229 / 0.055);
+  animation: ui-refresh-ack 560ms var(--ease-enter) both;
+}
+
+@keyframes ui-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ui-popover-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ui-dialog-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ui-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ui-skeleton-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes ui-refresh-ack {
+  0% {
+    opacity: 0;
+  }
+  22% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

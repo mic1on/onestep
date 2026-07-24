@@ -1,0 +1,921 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  dispatchTaskManualRun,
+  getFanoutCommandIds,
+  loadControlPlaneData,
+  loadTaskManualRunTargets,
+  loadTaskEventLogs,
+  loadTaskMetricWindows,
+  parseManualRunPayload,
+  pollTaskCommandCompletion,
+} from './api';
+import type { Task } from './types';
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function calledUrl(call: unknown[]) {
+  return new URL(String(call[0]));
+}
+
+const serviceSummary = {
+  name: 'control-plane-demo',
+  environment: 'dev',
+  description: 'Shows the local control-plane demo worker.',
+  latest_deployment_version: '2026.7.16',
+  service_status: 'offline',
+  latest_topology_hash: 'topology-demo',
+  latest_sync_at: '2026-07-16T08:00:00Z',
+  instance_count: 0,
+  online_instance_count: 0,
+  last_seen_at: null,
+  source_kinds: ['memory_queue'],
+  task_count: 1,
+  failing_task_count: 0,
+  view_status: 'stopped',
+  success_rate: 100,
+  throughput_per_min: 0,
+  error_count: 0,
+  uptime_reference_at: null,
+  online_task_count: 0,
+  standby_instance_count: 0,
+  created_at: '2026-07-16T08:00:00Z',
+  updated_at: '2026-07-16T08:00:00Z',
+};
+
+const taskFixture: Task = {
+  id: 'control-plane-demo:dev:inspect_dead_letter',
+  apiName: 'inspect_dead_letter',
+  apiServiceName: 'control-plane-demo',
+  environment: 'dev',
+  serviceId: 'control-plane-demo:dev',
+  name: 'inspect_dead_letter',
+  description: null,
+  viewStatus: 'running',
+  supportedCommands: ['pause_task', 'resume_task', 'restart_task'],
+  pipelineSource: 'memory_queue',
+  pipelineSourceLabel: 'memory_queue',
+  sourceKind: 'memory_queue',
+  sourceConfig: null,
+  sourceName: 'memory_queue',
+  pipelineSink: 'handler',
+  pipelineSinkLabel: 'Handler',
+  sinkKind: 'handler',
+  sinkConfig: null,
+  sinkName: 'Handler',
+  concurrency: 2,
+  retryAttempts: 1,
+  uptimeReferenceAt: null,
+  throughputPerMin: 12,
+  successRate: 91.67,
+  errorCount: 1,
+  configYaml: '',
+};
+
+describe('loadControlPlaneData', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('treats zero-online service data as offline for service and task state', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [serviceSummary],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          source_kind_counts: { memory_queue: 1 },
+          summary: {
+            total_services: 1,
+            online_services: 0,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 0,
+            total_instances: 0,
+            online_instances: 0,
+            total_tasks: 1,
+            failing_tasks: 0,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          service: serviceSummary,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+          task_count: 1,
+          failing_task_count: 0,
+          recent_events: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              task_name: 'inspect_dead_letter',
+              description: 'Synchronizes order rows into the audit table',
+              source_name: 'memory_queue',
+              source_kind: 'memory_queue',
+              source_config: { queue: 'control-plane-demo.dead-letter' },
+              emit: [{ kind: 'handler', name: 'Handler', config: {} }],
+              concurrency: 2,
+              timeout_s: null,
+              retry_policy: { kind: 'fixed', config: { attempts: 1 } },
+              topology_hash: 'topology-task',
+              metric_window_count: 0,
+              latest_window_started_at: null,
+              latest_window_ended_at: null,
+              fetched: 0,
+              started: 0,
+              succeeded: 0,
+              retried: 0,
+              failed: 0,
+              dead_lettered: 0,
+              cancelled: 0,
+              timeouts: 0,
+              weighted_avg_duration_ms: null,
+              max_p95_duration_ms: null,
+              last_event_at: null,
+              pause_requested: null,
+              event_counts: {
+                started: 0,
+                failed: 0,
+                retried: 0,
+                dead_lettered: 0,
+                cancelled: 0,
+                succeeded: 0,
+              },
+              view_status: 'offline',
+              success_rate: 100,
+              throughput_per_min: 0,
+              error_count: 0,
+              retry_attempts: 1,
+              source_label: 'control-plane-demo.dead-letter',
+              sink_label: 'Handler',
+              config_yaml: '',
+              uptime_reference_at: null,
+            },
+          ],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }));
+
+    const data = await loadControlPlaneData();
+
+    expect(data.services[0]).toEqual(
+      expect.objectContaining({
+        description: 'Shows the local control-plane demo worker.',
+        viewStatus: 'stopped',
+        activeInstances: 0,
+      }),
+    );
+    expect(data.tasks[0]).toEqual(expect.objectContaining({ name: 'inspect_dead_letter', viewStatus: 'offline' }));
+  });
+
+  it('passes raw source_kind / source_config / source_name through to the Task', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [serviceSummary],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          source_kind_counts: { memory_queue: 1 },
+          summary: {
+            total_services: 1,
+            online_services: 0,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 0,
+            total_instances: 0,
+            online_instances: 0,
+            total_tasks: 1,
+            failing_tasks: 0,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          service: serviceSummary,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+          task_count: 1,
+          failing_task_count: 0,
+          recent_events: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              task_name: 'sync_orders',
+              description: 'Synchronizes order rows into the audit table',
+              source_name: 'mysql.orders',
+              source_kind: 'mysql_incremental',
+              source_config: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
+              emit: [{ kind: 'mysql_table_sink', name: 'mysql.audit', config: { table: 'orders_audit', mode: 'upsert', keys: 'id' } }],
+              concurrency: 2,
+              timeout_s: null,
+              retry_policy: { kind: 'fixed', config: { attempts: 1 } },
+              topology_hash: 'topology-task',
+              metric_window_count: 0,
+              latest_window_started_at: null,
+              latest_window_ended_at: null,
+              fetched: 0,
+              started: 0,
+              succeeded: 0,
+              retried: 0,
+              failed: 0,
+              dead_lettered: 0,
+              cancelled: 0,
+              timeouts: 0,
+              weighted_avg_duration_ms: null,
+              max_p95_duration_ms: null,
+              last_event_at: null,
+              pause_requested: null,
+              event_counts: {
+                started: 0,
+                failed: 0,
+                retried: 0,
+                dead_lettered: 0,
+                cancelled: 0,
+                succeeded: 0,
+              },
+              view_status: 'offline',
+              success_rate: 100,
+              throughput_per_min: 0,
+              error_count: 0,
+              retry_attempts: 1,
+              source_label: 'mysql.orders',
+              sink_label: 'mysql.audit',
+              config_yaml: '',
+              uptime_reference_at: null,
+            },
+          ],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }));
+
+    const data = await loadControlPlaneData();
+
+    // The full source_config must survive mapTask() so the topology panel can
+    // render per-kind fields instead of hardcoded Kafka metadata.
+    expect(data.tasks[0]).toEqual(
+      expect.objectContaining({
+        sourceKind: 'mysql_incremental',
+        description: 'Synchronizes order rows into the audit table',
+        sourceName: 'mysql.orders',
+        sourceConfig: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
+        sinkKind: 'mysql_table_sink',
+        sinkName: 'mysql.audit',
+        sinkConfig: { table: 'orders_audit', mode: 'upsert', keys: 'id' },
+      }),
+    );
+  });
+
+  it('passes raw source_kind / source_config / source_name through to the Task', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [serviceSummary],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          source_kind_counts: { memory_queue: 1 },
+          summary: {
+            total_services: 1,
+            online_services: 0,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 0,
+            total_instances: 0,
+            online_instances: 0,
+            total_tasks: 1,
+            failing_tasks: 0,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          service: serviceSummary,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+          task_count: 1,
+          failing_task_count: 0,
+          recent_events: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              task_name: 'sync_orders',
+              description: null,
+              source_name: 'mysql.orders',
+              source_kind: 'mysql_incremental',
+              source_config: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
+              emit: [{ kind: 'mysql_table_sink', name: 'mysql.audit', config: { table: 'orders_audit', mode: 'upsert', keys: 'id' } }],
+              concurrency: 2,
+              timeout_s: null,
+              retry_policy: { kind: 'fixed', config: { attempts: 1 } },
+              topology_hash: 'topology-task',
+              metric_window_count: 0,
+              latest_window_started_at: null,
+              latest_window_ended_at: null,
+              fetched: 0,
+              started: 0,
+              succeeded: 0,
+              retried: 0,
+              failed: 0,
+              dead_lettered: 0,
+              cancelled: 0,
+              timeouts: 0,
+              weighted_avg_duration_ms: null,
+              max_p95_duration_ms: null,
+              last_event_at: null,
+              supported_commands: ['pause_task', 'resume_task'],
+              event_counts: {
+                failed: 0,
+                retried: 0,
+                dead_lettered: 0,
+                cancelled: 0,
+                succeeded: 0,
+              },
+            },
+          ],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }));
+
+    const data = await loadControlPlaneData();
+
+    // The full source_config must survive mapTask() so the topology panel can
+    // render per-kind fields instead of hardcoded Kafka metadata.
+    expect(data.tasks[0]).toEqual(
+      expect.objectContaining({
+        sourceKind: 'mysql_incremental',
+        sourceName: 'mysql.orders',
+        sourceConfig: { table: 'orders', key: 'id', cursor: 'updated_at', batch_size: 500 },
+        supportedCommands: ['pause_task', 'resume_task'],
+        sinkKind: 'mysql_table_sink',
+        sinkName: 'mysql.audit',
+        sinkConfig: { table: 'orders_audit', mode: 'upsert', keys: 'id' },
+      }),
+    );
+  });
+
+  it('maps failed task events into logs with exception details and tracebacks', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [serviceSummary],
+          total: 1,
+          limit: 100,
+          offset: 0,
+          source_kind_counts: { memory_queue: 1 },
+          summary: {
+            total_services: 1,
+            online_services: 0,
+            attention_services: 0,
+            offline_services: 1,
+            ready_services: 0,
+            total_instances: 0,
+            online_instances: 0,
+            total_tasks: 1,
+            failing_tasks: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          service: serviceSummary,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+          task_count: 1,
+          failing_task_count: 1,
+          recent_events: [
+            {
+              event_id: 'evt_failed',
+              instance_id: '11111111-1111-4111-8111-111111111111',
+              task_name: 'inspect_dead_letter',
+              kind: 'failed',
+              occurred_at: '2026-07-16T08:00:00Z',
+              attempts: 1,
+              duration_ms: 42,
+              failure_kind: 'error',
+              exception_type: 'RuntimeError',
+              message: 'boom',
+              traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+              meta: { source: 'interval:5s' },
+              source_label: 'interval:5s-display',
+              received_at: '2026-07-16T08:00:01Z',
+              created_at: '2026-07-16T08:00:01Z',
+              level: 'error',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [],
+          total: 0,
+          limit: 100,
+          offset: 0,
+          lookback_minutes: 60,
+          lookback_started_at: '2026-07-16T07:00:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 0, limit: 100, offset: 0 }));
+
+    const data = await loadControlPlaneData();
+
+    expect(data.logs[0]).toEqual(
+      expect.objectContaining({
+        level: 'error',
+        source: 'inspect_dead_letter',
+        message: 'RuntimeError: boom',
+        eventKind: 'failed',
+        attempts: 1,
+        durationMs: 42,
+        instanceId: '11111111-1111-4111-8111-111111111111',
+        sourceDetail: 'interval:5s-display',
+        exceptionType: 'RuntimeError',
+        failureKind: 'error',
+        traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+      }),
+    );
+  });
+
+  it('loads recent metric chart points from task detail telemetry', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        service: serviceSummary,
+        task_name: 'inspect_dead_letter',
+        lookback_minutes: 60,
+        lookback_started_at: '2026-07-16T07:00:00Z',
+        summary: {
+          task_name: 'inspect_dead_letter',
+          description: null,
+          source_name: 'memory_queue',
+          source_kind: 'memory_queue',
+          source_config: { queue: 'control-plane-demo.dead-letter' },
+          emit: [{ kind: 'handler', name: 'Handler', config: {} }],
+          concurrency: 2,
+          timeout_s: null,
+          retry_policy: { kind: 'fixed', config: { attempts: 1 } },
+          topology_hash: 'topology-task',
+          metric_window_count: 1,
+          latest_window_started_at: '2026-07-16T07:59:00Z',
+          latest_window_ended_at: '2026-07-16T08:00:00Z',
+          fetched: 12,
+          started: 12,
+          succeeded: 11,
+          retried: 0,
+          failed: 1,
+          dead_lettered: 0,
+          cancelled: 0,
+          timeouts: 0,
+          weighted_avg_duration_ms: 42,
+          max_p95_duration_ms: 84,
+          last_event_at: null,
+          pause_requested: false,
+          event_counts: {
+            started: 12,
+            failed: 1,
+            retried: 0,
+            dead_lettered: 0,
+            cancelled: 0,
+            succeeded: 11,
+          },
+          view_status: 'failed',
+          success_rate: 91.67,
+          throughput_per_min: 0,
+          error_count: 1,
+          retry_attempts: 1,
+          source_label: 'control-plane-demo.dead-letter',
+          sink_label: 'Handler',
+          config_yaml: '',
+          uptime_reference_at: '2026-07-16T07:59:00Z',
+        },
+        task_control: { task_name: 'inspect_dead_letter', instances: [] },
+        recent_metric_points: [
+          {
+            bucket_started_at: '2026-07-16T07:58:00Z',
+            bucket_ended_at: '2026-07-16T07:59:00Z',
+            reported_window_count: 0,
+            fetched: 0,
+            started: 0,
+            succeeded: 0,
+            retried: 0,
+            failed: 0,
+            dead_lettered: 0,
+            cancelled: 0,
+            timeouts: 0,
+            inflight: 0,
+            avg_duration_ms: null,
+            p95_duration_ms: null,
+          },
+          {
+            bucket_started_at: '2026-07-16T07:59:00Z',
+            bucket_ended_at: '2026-07-16T08:00:00Z',
+            reported_window_count: 1,
+            fetched: 12,
+            started: 12,
+            succeeded: 11,
+            retried: 0,
+            failed: 1,
+            dead_lettered: 0,
+            cancelled: 0,
+            timeouts: 0,
+            inflight: 2,
+            avg_duration_ms: 42,
+            p95_duration_ms: 84,
+          },
+        ],
+        recent_metric_windows: [
+          {
+            instance_id: '11111111-1111-4111-8111-111111111111',
+            task_name: 'inspect_dead_letter',
+            window_id: 'inspect_dead_letter:one',
+            window_started_at: '2026-07-16T07:59:00Z',
+            window_ended_at: '2026-07-16T08:00:00Z',
+            fetched: 12,
+            started: 12,
+            succeeded: 11,
+            retried: 0,
+            failed: 1,
+            dead_lettered: 0,
+            cancelled: 0,
+            timeouts: 0,
+            inflight: 2,
+            avg_duration_ms: 42,
+            p95_duration_ms: 84,
+            received_at: '2026-07-16T08:00:01Z',
+            created_at: '2026-07-16T08:00:01Z',
+          },
+        ],
+        recent_events: [],
+      }),
+    );
+
+    const points = await loadTaskMetricWindows(taskFixture, 30);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter?environment=dev&lookback_minutes=30&metric_window_limit=24&event_limit=1',
+    );
+    expect(points).toEqual([
+      expect.objectContaining({
+        bucket_started_at: '2026-07-16T07:58:00Z',
+        reported_window_count: 0,
+        fetched: 0,
+      }),
+      expect.objectContaining({
+        bucket_started_at: '2026-07-16T07:59:00Z',
+        reported_window_count: 1,
+        fetched: 12,
+        failed: 1,
+        p95_duration_ms: 84,
+      }),
+    ]);
+  });
+
+  it('loads paginated task event history with runtime and command events', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        lookback_minutes: 30,
+        lookback_started_at: '2026-07-16T07:30:00Z',
+        total: 2,
+        limit: 20,
+        offset: 0,
+        items: [
+          {
+            id: 'command:cmd_restart_task',
+            source_type: 'command',
+            instance_id: '11111111-1111-4111-8111-111111111111',
+            task_name: 'inspect_dead_letter',
+            kind: 'restart_task',
+            occurred_at: '2026-07-16T08:00:02Z',
+            level: 'info',
+            message: 'succeeded',
+            meta: {
+              status: 'succeeded',
+              args: { task_name: 'inspect_dead_letter' },
+              source_surface: 'console',
+            },
+            attempts: null,
+            duration_ms: 1200,
+            failure_kind: null,
+            exception_type: null,
+            traceback: null,
+            command_id: 'cmd_restart_task',
+            command_status: 'succeeded',
+            ack_status: 'accepted',
+            created_at: '2026-07-16T08:00:01Z',
+            updated_at: '2026-07-16T08:00:02Z',
+          },
+          {
+            id: 'runtime:evt_task_failed',
+            source_type: 'runtime',
+            instance_id: '11111111-1111-4111-8111-111111111111',
+            task_name: 'inspect_dead_letter',
+            kind: 'failed',
+            occurred_at: '2026-07-16T08:00:00Z',
+            level: 'error',
+            message: 'boom',
+            meta: {
+              source:
+                'https://sqs.cn-northwest-1.amazonaws.com.cn/928507961548/ceegic-bidding-signup.fifo',
+            },
+            source_label: 'ceegic-bidding-signup.fifo',
+            attempts: 1,
+            duration_ms: 42,
+            failure_kind: 'error',
+            exception_type: 'RuntimeError',
+            traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+            command_id: null,
+            command_status: null,
+            ack_status: null,
+            created_at: '2026-07-16T08:00:01Z',
+            updated_at: '2026-07-16T08:00:01Z',
+          },
+        ],
+      }),
+    );
+
+    const page = await loadTaskEventLogs(taskFixture, {
+      lookbackMinutes: 30,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter/events?environment=dev&lookback_minutes=30&limit=20&offset=0',
+    );
+    expect(page.total).toBe(2);
+    expect(page.logs).toEqual([
+      expect.objectContaining({
+        id: 'command:cmd_restart_task',
+        sourceType: 'command',
+        eventKind: 'restart_task',
+        level: 'info',
+        message: 'succeeded',
+        durationMs: 1200,
+        commandId: 'cmd_restart_task',
+        commandStatus: 'succeeded',
+        ackStatus: 'accepted',
+      }),
+      expect.objectContaining({
+        id: 'runtime:evt_task_failed',
+        sourceType: 'runtime',
+        level: 'error',
+        message: 'RuntimeError: boom',
+        eventKind: 'failed',
+        attempts: 1,
+        durationMs: 42,
+        instanceId: '11111111-1111-4111-8111-111111111111',
+        sourceDetail: 'ceegic-bidding-signup.fifo',
+        traceback: 'Traceback (most recent call last):\nRuntimeError: boom\n',
+      }),
+    ]);
+  });
+
+  it('extracts dispatched and queued command ids from fanout responses', () => {
+    expect(
+      getFanoutCommandIds({
+        kind: 'restart_task',
+        target_mode: 'all_online',
+        offline_behavior: 'skip',
+        noop_reason_code: null,
+        noop_reason_message: null,
+        counts: { dispatched: 1, queued: 1, skipped: 0, rejected: 0, total: 2 },
+        dispatched: [
+          {
+            instance_id: '11111111-1111-4111-8111-111111111111',
+            node_name: 'worker-a',
+            connectivity: 'online',
+            session_id: 'session-a',
+            command_id: 'command-a',
+            outcome: 'dispatched',
+            reason_code: null,
+            reason_message: null,
+          },
+        ],
+        queued: [
+          {
+            instance_id: '22222222-2222-4222-8222-222222222222',
+            node_name: 'worker-b',
+            connectivity: 'offline',
+            session_id: null,
+            command_id: 'command-b',
+            outcome: 'queued',
+            reason_code: null,
+            reason_message: null,
+          },
+        ],
+        skipped: [],
+        rejected: [],
+      }),
+    ).toEqual(['command-a', 'command-b']);
+  });
+
+  it('polls restart task commands until they succeed', async () => {
+    const fetchMock = vi
+      .spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ command_id: 'command-a', kind: 'restart_task', status: 'dispatched', error_code: null, error_message: null, updated_at: '2026-07-16T08:00:00Z' }],
+          total: 1,
+          limit: 100,
+          offset: 0,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ command_id: 'command-a', kind: 'restart_task', status: 'succeeded', error_code: null, error_message: null, updated_at: '2026-07-16T08:00:01Z' }],
+          total: 1,
+          limit: 100,
+          offset: 0,
+        }),
+      );
+
+    const result = await pollTaskCommandCompletion(taskFixture, ['command-a'], {
+      intervalMs: 0,
+      timeoutMs: 100,
+    });
+
+    expect(result).toEqual({ completed: true, failed: false });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/services/control-plane-demo/commands?environment=dev&kind=restart_task&limit=100&offset=0',
+    );
+  });
+
+  it('reports failed restart task command completion', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        items: [{ command_id: 'command-a', kind: 'restart_task', status: 'failed', error_code: 'restart_failed', error_message: 'boom', updated_at: '2026-07-16T08:00:00Z' }],
+        total: 1,
+        limit: 100,
+        offset: 0,
+      }),
+    );
+
+    const result = await pollTaskCommandCompletion(taskFixture, ['command-a'], {
+      intervalMs: 0,
+      timeoutMs: 100,
+    });
+
+    expect(result).toEqual({ completed: true, failed: true });
+  });
+});
+
+describe('manual task runs', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('parses only JSON object payloads', () => {
+    expect(parseManualRunPayload('{"source":"manual"}')).toEqual({ source: 'manual' });
+    expect(() => parseManualRunPayload('["not-object"]')).toThrow('Payload must be a JSON object.');
+  });
+
+  it('loads only online manual-run-capable targets', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        service: serviceSummary,
+        task_name: 'inspect_dead_letter',
+        lookback_minutes: 60,
+        lookback_started_at: '2026-07-16T07:00:00Z',
+        summary: {},
+        task_control: {
+          task_name: 'inspect_dead_letter',
+          instances: [
+            {
+              instance_id: 'inst-manual',
+              node_name: 'worker-a',
+              connectivity: 'online',
+              status: 'ok',
+              last_seen_at: '2026-07-16T08:00:00Z',
+              supported_commands: ['run_task_once'],
+              state_known: true,
+              pause_requested: false,
+              paused: false,
+              accepting_new_work: true,
+              runner_count: 1,
+              parked_runner_count: 0,
+              fetching_runner_count: 1,
+              inflight_task_count: 0,
+            },
+            {
+              instance_id: 'inst-no-command',
+              node_name: 'worker-b',
+              connectivity: 'online',
+              status: 'ok',
+              last_seen_at: '2026-07-16T08:00:00Z',
+              supported_commands: ['pause_task'],
+              state_known: true,
+              pause_requested: false,
+              paused: false,
+              accepting_new_work: true,
+              runner_count: 1,
+              parked_runner_count: 0,
+              fetching_runner_count: 1,
+              inflight_task_count: 0,
+            },
+            {
+              instance_id: 'inst-offline',
+              node_name: 'worker-c',
+              connectivity: 'offline',
+              status: 'ok',
+              last_seen_at: '2026-07-16T08:00:00Z',
+              supported_commands: ['run_task_once'],
+              state_known: true,
+              pause_requested: false,
+              paused: false,
+              accepting_new_work: true,
+              runner_count: 1,
+              parked_runner_count: 0,
+              fetching_runner_count: 1,
+              inflight_task_count: 0,
+            },
+          ],
+        },
+        recent_metric_windows: [],
+        recent_events: [],
+      }),
+    );
+
+    await expect(loadTaskManualRunTargets(taskFixture)).resolves.toEqual([
+      {
+        instanceId: 'inst-manual',
+        nodeName: 'worker-a',
+        runnerCount: 1,
+        inflightTaskCount: 0,
+        acceptingNewWork: true,
+      },
+    ]);
+    expect(calledUrl(fetchMock.mock.calls[0]).pathname).toBe(
+      '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter',
+    );
+  });
+
+  it('dispatches run_task_once with selected targets and payload', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({
+        kind: 'run_task_once',
+        target_mode: 'selected_instances',
+        offline_behavior: 'skip',
+        noop_reason_code: null,
+        noop_reason_message: null,
+        counts: { dispatched: 1, queued: 0, skipped: 0, rejected: 0, total: 1 },
+        dispatched: [],
+        queued: [],
+        skipped: [],
+        rejected: [],
+      }),
+    );
+
+    await dispatchTaskManualRun(taskFixture, {
+      targetInstanceIds: ['inst-manual'],
+      payload: { source: 'manual', dry_run: true },
+      reason: 'Verify the manual run path',
+    });
+
+    const url = calledUrl(fetchMock.mock.calls[0]);
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(url.pathname).toBe('/api/v1/services/control-plane-demo/tasks/inspect_dead_letter/commands');
+    expect(url.searchParams.get('environment')).toBe('dev');
+    expect(request).toEqual(expect.objectContaining({ method: 'POST' }));
+    expect(JSON.parse(String(request.body))).toEqual({
+      kind: 'run_task_once',
+      args: { payload: { source: 'manual', dry_run: true } },
+      timeout_s: 120,
+      reason: 'Verify the manual run path',
+      target_mode: 'selected_instances',
+      target_instance_ids: ['inst-manual'],
+      offline_behavior: 'skip',
+    });
+  });
+});
