@@ -220,6 +220,11 @@ Use `--json` to emit the build report for automation.
 the [`onestep-control-plane`](apps/control-plane) application over a single WebSocket and
 accept remote commands — with no connector or task-code changes.
 
+The host execution agent lives in [`apps/work-agent`](apps/work-agent) and is
+published separately as `onestep-worker-agent`. It connects outbound to the
+control plane and starts assigned workflow packages as local `onestep`
+subprocesses.
+
 Install the reporter plugin first:
 
 ```bash
