@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from onestep import ConnectorErrorKind, ConnectorOperationError, Envelope
+from onestep import (
+    ConnectorErrorKind,
+    ConnectorOperationError,
+    Delivery,
+    Envelope,
+    OneStepApp,
+    Source,
+)
 from onestep_clickhouse import ClickHouseConnector, ClickHousePayloadError
 
 
@@ -46,6 +53,32 @@ def test_invalid_payloads_fail_before_insert(body) -> None:
         sink._normalize(body)
 
 
+def test_empty_mapping_cannot_safely_infer_columns() -> None:
+    sink = ClickHouseConnector("http://clickhouse:8123/default").table_sink(
+        table="events"
+    )
+    with pytest.raises(ClickHousePayloadError, match="infer columns"):
+        sink._normalize({})
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"table": ""},
+        {"table": "events", "columns": "id"},
+        {"table": "events", "columns": ("id", "")},
+        {"table": "events", "batch_size": 1.5},
+        {"table": "events", "batch_size": True},
+        {"table": "events", "settings": "not-a-mapping"},
+        {"table": "events", "settings": {"async_insert": 1}},
+    ],
+)
+def test_invalid_sink_configuration_is_rejected(options) -> None:
+    connector = ClickHouseConnector("http://clickhouse:8123/default")
+    with pytest.raises((TypeError, ValueError)):
+        connector.table_sink(**options)
+
+
 class FakeAsyncClient:
     def __init__(self, *, fail_call: int | None = None) -> None:
         self.calls: list[dict] = []
@@ -78,6 +111,19 @@ async def test_send_awaits_each_chunk_in_order() -> None:
     sink = connector.table_sink(table="events", columns=("id",), batch_size=2)
     await sink.send(Envelope(body=[{"id": 1}, {"id": 2}, {"id": 3}]))
     assert [call["rows"] for call in client.calls] == [[[1], [2]], [[3]]]
+
+
+@pytest.mark.asyncio
+async def test_invalid_send_is_permanent_before_first_network_call() -> None:
+    client = FakeAsyncClient()
+    sink = ClickHouseConnector(
+        "http://clickhouse:8123/default", client=client
+    ).table_sink(table="events", columns=("id",))
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body=[{"other": "secret-row-value"}]))
+    assert captured.value.kind is ConnectorErrorKind.PERMANENT
+    assert client.calls == []
+    assert "secret-row-value" not in str(captured.value.cause)
 
 
 @pytest.mark.asyncio
@@ -133,3 +179,114 @@ async def test_owned_client_is_lazy_and_closes_once(monkeypatch) -> None:
     await connector.close()
     assert client.closed is True
     assert close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_sends_share_one_lazy_client(monkeypatch) -> None:
+    import asyncio
+    import clickhouse_connect
+
+    client = FakeAsyncClient()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    factory_calls = 0
+
+    async def build_client(**options):
+        nonlocal factory_calls
+        factory_calls += 1
+        entered.set()
+        await release.wait()
+        return client
+
+    monkeypatch.setattr(clickhouse_connect, "get_async_client", build_client)
+    connector = ClickHouseConnector("http://clickhouse:8123/default")
+    sink = connector.table_sink(table="events", columns=("id",))
+    first = asyncio.create_task(sink.send(Envelope(body={"id": 1})))
+    await entered.wait()
+    second = asyncio.create_task(sink.send(Envelope(body={"id": 2})))
+    await asyncio.sleep(0)
+    assert factory_calls == 1
+    release.set()
+    await asyncio.gather(first, second)
+    assert factory_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_client_construction_error_uses_connector_error_contract(monkeypatch) -> None:
+    import clickhouse_connect
+
+    async def fail_client(**options):
+        raise ConnectionError("cannot connect")
+
+    monkeypatch.setattr(clickhouse_connect, "get_async_client", fail_client)
+    sink = ClickHouseConnector("http://clickhouse:8123/default").table_sink(
+        table="events", columns=("id",)
+    )
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": 1}))
+    assert captured.value.kind is ConnectorErrorKind.DISCONNECTED
+
+
+class _AckRecordingDelivery(Delivery):
+    def __init__(self, envelope: Envelope) -> None:
+        super().__init__(envelope)
+        self.acked = False
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        raise AssertionError("runtime ordering test must not retry")
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        raise AssertionError(f"runtime ordering test failed: {exc}")
+
+
+class _OneShotSource(Source):
+    poll_interval_s = 0.01
+
+    def __init__(self, delivery: _AckRecordingDelivery) -> None:
+        super().__init__("one-shot")
+        self.delivery = delivery
+        self.sent = False
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        if self.sent:
+            return []
+        self.sent = True
+        return [self.delivery]
+
+
+@pytest.mark.asyncio
+async def test_runtime_ack_follows_clickhouse_insert_acknowledgement() -> None:
+    import asyncio
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingClient(FakeAsyncClient):
+        async def insert(self, table, rows, *, column_names, settings):
+            entered.set()
+            await release.wait()
+            return await super().insert(
+                table, rows, column_names=column_names, settings=settings
+            )
+
+    sink = ClickHouseConnector(
+        "http://clickhouse:8123/default", client=BlockingClient()
+    ).table_sink(table="events", columns=("id",))
+    delivery = _AckRecordingDelivery(Envelope(body={"id": 1}))
+    source = _OneShotSource(delivery)
+    app = OneStepApp("clickhouse-runtime-order", shutdown_timeout_s=1.0)
+
+    @app.task(source=source, emit=sink, concurrency=1)
+    async def forward(ctx, item):
+        ctx.app.request_shutdown()
+        return item
+
+    serving = asyncio.create_task(app.serve())
+    await entered.wait()
+    assert delivery.acked is False
+    release.set()
+    await asyncio.wait_for(serving, timeout=2.0)
+    assert delivery.acked is True

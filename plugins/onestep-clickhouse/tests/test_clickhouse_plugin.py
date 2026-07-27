@@ -99,3 +99,133 @@ def test_strict_yaml_rejects_unacknowledged_async_insert() -> None:
             ),
             strict=True,
         )
+
+
+@pytest.mark.parametrize(
+    "resource, error_type, message",
+    [
+        ({"type": "clickhouse"}, ValueError, "dsn"),
+        ({"type": "clickhouse", "dsn": "postgres://db"}, ValueError, "DSN"),
+        (
+            {
+                "type": "clickhouse",
+                "dsn": "http://clickhouse:8123/default",
+                "client_options": [],
+            },
+            TypeError,
+            "client_options",
+        ),
+        (
+            {
+                "type": "clickhouse",
+                "dsn": "http://clickhouse:8123/default",
+                "unknown": True,
+            },
+            ValueError,
+            "unsupported fields",
+        ),
+    ],
+)
+def test_strict_connector_validation(resource, error_type, message) -> None:
+    with pytest.raises(error_type, match=message):
+        load_app_config(_config({"db": resource}), strict=True)
+
+
+@pytest.mark.parametrize(
+    "sink, error_type, message",
+    [
+        (
+            {"type": "clickhouse_table_sink", "table": "events"},
+            ValueError,
+            "connector",
+        ),
+        (
+            {
+                "type": "clickhouse_table_sink",
+                "connector": "missing",
+                "table": "events",
+            },
+            KeyError,
+            "missing",
+        ),
+        (
+            {
+                "type": "clickhouse_table_sink",
+                "connector": "db",
+                "table": "events",
+                "columns": [],
+            },
+            ValueError,
+            "columns",
+        ),
+        (
+            {
+                "type": "clickhouse_table_sink",
+                "connector": "db",
+                "table": "events",
+                "columns": ["id", "id"],
+            },
+            ValueError,
+            "duplicate",
+        ),
+        (
+            {
+                "type": "clickhouse_table_sink",
+                "connector": "db",
+                "table": "events",
+                "batch_size": 0,
+            },
+            ValueError,
+            "batch_size",
+        ),
+        (
+            {
+                "type": "clickhouse_table_sink",
+                "connector": "db",
+                "table": "events",
+                "settings": [],
+            },
+            TypeError,
+            "settings",
+        ),
+        (
+            {
+                "type": "clickhouse_table_sink",
+                "connector": "db",
+                "table": "events",
+                "unknown": True,
+            },
+            ValueError,
+            "unsupported fields",
+        ),
+    ],
+)
+def test_strict_sink_validation(sink, error_type, message) -> None:
+    resources = {
+        "db": {"type": "clickhouse", "dsn": "http://clickhouse:8123/default"},
+        "sink": sink,
+    }
+    with pytest.raises(error_type, match=message):
+        load_app_config(_config(resources), strict=True)
+
+
+def test_catalog_marks_connector_secrets() -> None:
+    registry = ResourceRegistry()
+    register(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    fields = {field.name: field for field in catalog["clickhouse"].fields}
+    assert fields["dsn"].secret is True
+    assert fields["client_options"].secret is True
+
+
+def test_sink_reference_must_resolve_to_clickhouse_connector() -> None:
+    resources = {
+        "other": {"type": "http_sink", "url": "https://example.invalid"},
+        "sink": {
+            "type": "clickhouse_table_sink",
+            "connector": "other",
+            "table": "events",
+        },
+    }
+    with pytest.raises(TypeError, match="ClickHouseConnector"):
+        load_app_config(_config(resources), strict=True)

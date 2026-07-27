@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -24,21 +25,25 @@ class ClickHouseConnector:
         client_options: Mapping[str, Any] | None = None,
         client: Any | None = None,
     ) -> None:
-        if not dsn:
+        if not isinstance(dsn, str) or not dsn.strip():
             raise ValueError("dsn must not be empty")
         self.dsn = dsn
         self.client_options = dict(client_options or {})
         self._client = client
         self._owns_client = client is None
         self._closed = False
+        self._client_lock = asyncio.Lock()
 
     async def _get_client(self):
-        if self._client is None:
-            import clickhouse_connect
+        if self._client is not None:
+            return self._client
+        async with self._client_lock:
+            if self._client is None:
+                import clickhouse_connect
 
-            self._client = await clickhouse_connect.get_async_client(
-                dsn=self.dsn, **self.client_options
-            )
+                self._client = await clickhouse_connect.get_async_client(
+                    dsn=self.dsn, **self.client_options
+                )
         return self._client
 
     def table_sink(self, *, table: str, **options: Any) -> "ClickHouseTableSink":
@@ -65,14 +70,21 @@ class ClickHouseTableSink(Sink):
         settings: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(f"clickhouse.table:{table}")
-        if not table:
+        if not isinstance(table, str) or not table.strip():
             raise ValueError("table must not be empty")
         if columns is not None and (
-            not columns or len(set(columns)) != len(columns)
+            isinstance(columns, (str, bytes, bytearray))
+            or not columns
+            or any(not isinstance(column, str) or not column.strip() for column in columns)
+            or len(set(columns)) != len(columns)
         ):
             raise ValueError("columns must be a non-empty unique sequence")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int):
+            raise TypeError("batch_size must be an integer")
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
+        if settings is not None and not isinstance(settings, Mapping):
+            raise TypeError("settings must be a mapping")
         self.connector = connector
         self.table = table
         self.columns = tuple(columns) if columns is not None else None
@@ -101,6 +113,10 @@ class ClickHouseTableSink(Sink):
     def _normalize(self, body: Any) -> tuple[tuple[str, ...], list[list[Any]]]:
         documents = self._documents(body)
         columns = self.columns or tuple(documents[0].keys())
+        if not columns:
+            raise ClickHousePayloadError(
+                "cannot infer columns from an empty mapping"
+            )
         expected = set(columns)
         rows: list[list[Any]] = []
         for index, document in enumerate(documents):
@@ -125,9 +141,9 @@ class ClickHouseTableSink(Sink):
                 source_name=self.name,
                 cause=exc,
             ) from exc
-        client = await self.connector._get_client()
         committed = 0
         try:
+            client = await self.connector._get_client()
             for start in range(0, len(rows), self.batch_size):
                 chunk = rows[start : start + self.batch_size]
                 await client.insert(
