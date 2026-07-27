@@ -503,6 +503,7 @@ configured `body` values can reference `body`, `payload`, `meta`, and
 
 Plugin resource types:
 
+- `onestep-elasticsearch`: `elasticsearch`, `elasticsearch_bulk_sink`
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
