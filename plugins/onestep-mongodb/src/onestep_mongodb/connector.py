@@ -245,12 +245,155 @@ class MongoDBPollingDelivery(Delivery):
 
 
 class MongoDBChangeStreamSource(Source):
+    fetch_is_cancel_safe = False
+
+    def __init__(self, *, connector: MongoDBConnector, collection: str, pipeline: Sequence[Mapping[str, Any]] | None = None, full_document: str = "updateLookup", max_await_time_ms: int = 1000, batch_size: int = 100, poll_interval_s: float = 0.1, state: CursorStore | None = None, state_key: str | None = None) -> None:
+        super().__init__(f"mongodb.change_stream:{collection}")
+        self.connector = connector
+        self.collection_name = collection
+        self.pipeline = [dict(stage) for stage in (pipeline or [])]
+        self.full_document = full_document
+        self.max_await_time_ms = max_await_time_ms
+        self.batch_size = batch_size
+        self.poll_interval_s = poll_interval_s
+        self.state = state or InMemoryCursorStore()
+        self.state_key = state_key or f"mongodb:{connector.database_name}:{collection}:change-stream"
+        self._resume_token = None
+        self._loaded = False
+        self._stream = None
+        self._tracker = _ContiguousGenerationTracker(self._save)
+
+    async def _save(self, token: Any) -> None:
+        self._resume_token = token
+        await self.state.save(self.state_key, encode_state(token))
+
+    async def open(self) -> None:
+        if not self._loaded:
+            loaded = await self.state.load(self.state_key)
+            self._resume_token = decode_state(loaded) if loaded is not None else None
+            self._loaded = True
+        if self._stream is None and self._tracker.can_fetch:
+            options = {"full_document": self.full_document, "max_await_time_ms": self.max_await_time_ms}
+            if self._resume_token is not None:
+                options["resume_after"] = self._resume_token
+            self._stream = await self.connector.collection(self.collection_name).watch(self.pipeline, **options)
+
     async def fetch(self, limit: int) -> list[Delivery]:
-        raise NotImplementedError
+        await self.open()
+        if self._stream is None or not self._tracker.can_fetch:
+            return []
+        events: list[Mapping[str, Any]] = []
+        try:
+            for _ in range(min(limit, self.batch_size)):
+                event = await self._stream.try_next()
+                if event is None:
+                    break
+                events.append(event)
+        except Exception as exc:
+            from .resilience import classify_mongodb_error
+
+            await self._tracker.invalidate(self._tracker.generation)
+            stream = self._stream
+            self._stream = None
+            if stream is not None:
+                await stream.close()
+            history_lost = getattr(exc, "code", None) in {280, 286}
+            has_resumable_label = getattr(exc, "has_error_label", lambda label: False)(
+                "ResumableChangeStreamError"
+            )
+            kind = (
+                ConnectorErrorKind.PERMANENT
+                if history_lost
+                else (
+                    ConnectorErrorKind.TRANSIENT
+                    if has_resumable_label
+                    else classify_mongodb_error(exc, operation="fetch")
+                )
+            )
+            if kind is None:
+                raise
+            message = (
+                "MongoDB change-stream history is unavailable; reset durable "
+                "resume state deliberately before restarting"
+                if history_lost
+                else None
+            )
+            raise ConnectorOperationError(
+                backend="mongodb",
+                operation=ConnectorOperation.FETCH,
+                kind=kind,
+                source_name=self.name,
+                cause=exc,
+                message=message,
+            ) from exc
+
+        deliveries: list[Delivery] = []
+        for event in events:
+            token = event["_id"]
+            tracked = self._tracker.add(token)
+            meta = {
+                "mongodb": {
+                    "database": self.connector.database_name,
+                    "collection": self.collection_name,
+                    "operation_type": event.get("operationType"),
+                    "document_key": event.get("documentKey"),
+                }
+            }
+            deliveries.append(
+                MongoDBChangeStreamDelivery(
+                    self,
+                    Envelope(body=event, meta=meta),
+                    tracked,
+                )
+            )
+        return deliveries
+
+    async def invalidate(self, tracked: _TrackedToken, *, delay_s: float | None = None) -> None:
+        if delay_s:
+            await asyncio.sleep(delay_s)
+        await self._tracker.invalidate(tracked.generation)
+        if self._stream is not None:
+            await self._stream.close()
+            self._stream = None
+
+    async def close(self) -> None:
+        if self._stream is not None:
+            await self._stream.close()
+            self._stream = None
 
 
-class MongoDBChangeStreamDelivery(MongoDBPollingDelivery):
-    pass
+class MongoDBChangeStreamDelivery(Delivery):
+    def __init__(self, source: MongoDBChangeStreamSource, envelope: Envelope, tracked: _TrackedToken) -> None:
+        super().__init__(envelope)
+        self._source = source
+        self._tracked = tracked
+        self._terminal = False
+
+    async def ack(self) -> None:
+        if self._terminal:
+            return
+        self._terminal = True
+        await self._source._tracker.complete(self._tracked, advance=True)
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        if self._terminal:
+            return
+        self._terminal = True
+        await self._source.invalidate(self._tracked, delay_s=delay_s)
+        await self._source._tracker.complete(self._tracked, advance=False)
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        if self._terminal:
+            return
+        self._terminal = True
+        await self._source._tracker.complete(self._tracked, advance=True)
+
+    async def release_unstarted(self) -> None:
+        if self._terminal:
+            return
+        self._terminal = True
+        await self._source.invalidate(self._tracked)
+        await self._source._tracker.complete(self._tracked, advance=False)
 
 
 class MongoDBCollectionSink(Sink):
