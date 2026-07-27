@@ -9,17 +9,18 @@ onestep 1.x 使用**事件钩子**替代传统的中间件模式，提供更清�
 
 ## 事件钩子
 
-使用 `@app.on_event` 注册事件处理器：
+使用 `onestep run` 启动时，CLI 默认注册 `StructuredEventLogger`，应用无需重复配置。直接调用 `app.run()` 或 `app.serve()` 的嵌入式应用仍由宿主进程管理日志和事件处理器。
+
+使用 `@app.on_event` 注册自定义事件处理器：
 
 ```python
-from onestep import InMemoryMetrics, OneStepApp, StructuredEventLogger
+from onestep import InMemoryMetrics, OneStepApp
 
 app = OneStepApp("demo")
 metrics = InMemoryMetrics()
 
-# 注册内置的事件处理器
+# 注册需要由应用持有的指标处理器
 app.on_event(metrics)
-app.on_event(StructuredEventLogger())
 
 
 @app.task(source=...)
@@ -76,15 +77,21 @@ print(snapshot["kinds"])  # 各类事件计数
 
 ### StructuredEventLogger
 
-结构化日志输出：
+`onestep run` 默认启用结构化任务事件。嵌入式运行或需要自定义事件 logger 时，可以显式启用：
 
 ```python
+import logging
+
 from onestep import StructuredEventLogger
 
-app.on_event(StructuredEventLogger())
+app.on_event(
+    StructuredEventLogger(logger=logging.getLogger("billing.task_events"))
+)
 ```
 
 输出包含字段：`event_kind`, `app_name`, `task_name`, `source_name`, `attempts`, `duration_s`, `failure_kind`
+
+也可以使用 `app.enable_structured_event_logging()` 幂等地启用默认处理器；如果已经存在 `StructuredEventLogger`，该方法会复用它。CLI 参数和日志级别规则见 [日志与任务事件](/guide/logging)。
 
 ## 生命周期钩子
 

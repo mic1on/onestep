@@ -38,6 +38,8 @@ onestep check your_package.tasks:app
 onestep check --json your_package.tasks:app
 ```
 
+`onestep run` 默认把 INFO 级别的应用日志和任务生命周期事件写到 stdout，适合由 systemd、Docker 或日志采集器接管。使用 `--log-level DEBUG` 查看更详细的 fetched、started 和 sink-success 事件，或使用 `--no-task-events` 关闭自动任务事件。完整规则见 [日志与任务事件](/guide/logging)。
+
 ## systemd 部署
 
 完整的部署模板位于：
@@ -136,7 +138,7 @@ onestep build worker.yaml --strict --out dist/worker.zip
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.7.1
+  ghcr.io/mic1on/onestep-worker:1.7.2
 ```
 
 详细说明见 [Worker Runtime Image](/guide/worker-runtime-image)。

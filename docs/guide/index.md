@@ -7,7 +7,7 @@ outline: deep
 
 onestep 是一个轻量级 Python 异步任务运行时。它围绕 `OneStepApp`、`Source`、`Sink` 和任务处理函数组织代码，适合队列消费、定时同步、Webhook 接入和多阶段数据处理。
 
-当前包版本为 `1.7.1`。文档站使用仓库锁定的 VitePress `1.6.4`。
+当前包版本为 `1.7.2`。文档站使用仓库锁定的 VitePress `1.6.4`。
 
 ## 安装
 
@@ -118,6 +118,16 @@ onestep run tasks:app
 ```
 
 `onestep tasks:app` 是 `onestep run tasks:app` 的简写。
+
+从 1.7.2 开始，`onestep run` 默认把 INFO 级别的应用日志和任务生命周期事件写到 stdout。应用只需要使用标准库 logger，名称不要求以 `onestep` 开头：
+
+```python
+import logging
+
+logger = logging.getLogger("billing.kpi_sync")
+```
+
+级别控制、任务事件开关和嵌入式运行边界见 [日志与任务事件](/guide/logging)。
 
 ## 处理队列消息
 

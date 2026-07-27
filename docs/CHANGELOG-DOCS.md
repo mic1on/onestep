@@ -1,5 +1,19 @@
 # 文档更新日志
 
+## 2026-07-27 - 同步 1.7.2 与 CLI 日志能力
+
+### 变更概述
+
+将 docs 分支同步到 `main` 的 1.7.2 代码状态，补充 CLI 托管日志、任务生命周期事件和嵌入式运行的配置边界。
+
+### 更新内容
+
+- 快速开始页版本号更新为 `1.7.2`，说明应用 logger 名称不要求使用 `onestep` 前缀。
+- 新增日志与任务事件指南，覆盖 `--log-level`、`--no-task-events`、YAML 优先级和宿主 handler 保留规则。
+- 事件页区分 CLI 自动注册与 `app.run()` / `app.serve()` 嵌入式运行。
+- 部署与 Worker Runtime Image 示例同步到 `ghcr.io/mic1on/onestep-worker:1.7.2`。
+- 同步 Worker Agent 迁入 `apps/work-agent` 后的源码、测试和发布工作流。
+
 ## 2026-07-21 - 同步 1.7.1 与服务描述文档
 
 ### 变更概述
