@@ -5,6 +5,7 @@ import os
 import sys
 import types
 from contextlib import contextmanager
+from typing import Optional
 
 import pytest
 
@@ -859,7 +860,7 @@ def test_load_app_config_strict_applies_yaml_logging_level() -> None:
 def test_cli_log_level_precedence_over_yaml(
     monkeypatch,
     tmp_path,
-    cli_level: str | None,
+    cli_level: Optional[str],
     expected: int,
 ) -> None:
     config_path = tmp_path / "logging.yaml"
