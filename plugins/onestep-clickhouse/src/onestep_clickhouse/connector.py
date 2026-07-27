@@ -138,7 +138,10 @@ class ClickHouseTableSink(Sink):
                 )
                 committed += 1
         except Exception as exc:
-            from .resilience import classify_clickhouse_error
+            from .resilience import (
+                classify_clickhouse_error,
+                redacted_clickhouse_cause,
+            )
 
             kind = classify_clickhouse_error(exc)
             if kind is None:
@@ -150,5 +153,5 @@ class ClickHouseTableSink(Sink):
                 operation=ConnectorOperation.SEND,
                 kind=kind,
                 source_name=self.name,
-                cause=exc,
+                cause=redacted_clickhouse_cause(exc),
             ) from exc
