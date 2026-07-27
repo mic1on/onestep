@@ -397,5 +397,71 @@ class MongoDBChangeStreamDelivery(Delivery):
 
 
 class MongoDBCollectionSink(Sink):
-    async def send(self, envelope) -> None:
-        raise NotImplementedError
+    def __init__(self, *, connector: MongoDBConnector, collection: str, mode: str = "insert", keys: Sequence[str] = (), ordered: bool = True, batch_size: int = 1000) -> None:
+        super().__init__(f"mongodb.collection:{collection}")
+        if mode not in {"insert", "upsert"}:
+            raise ValueError("mode must be insert or upsert")
+        if mode == "upsert" and not keys:
+            raise ValueError("upsert mode requires keys")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        self.connector = connector
+        self.collection_name = collection
+        self.mode = mode
+        self.keys = tuple(keys)
+        self.ordered = ordered
+        self.batch_size = batch_size
+
+    def _documents(self, body: Any) -> list[dict[str, Any]]:
+        if isinstance(body, Mapping):
+            return [dict(body)]
+        if not isinstance(body, Sequence) or isinstance(body, (str, bytes, bytearray)) or not body:
+            raise MongoDBPayloadError("payload must be a mapping or non-empty sequence")
+        if any(not isinstance(item, Mapping) for item in body):
+            raise MongoDBPayloadError("every payload item must be a mapping")
+        return [dict(item) for item in body]
+
+    async def send(self, envelope: Envelope) -> None:
+        from pymongo import UpdateOne
+
+        collection = self.connector.collection(self.collection_name)
+        if not collection.write_concern.acknowledged:
+            raise ValueError("MongoDB sink requires acknowledged write concern")
+        try:
+            single_document = isinstance(envelope.body, Mapping)
+            documents = self._documents(envelope.body)
+            if self.mode == "upsert":
+                for index, document in enumerate(documents):
+                    missing = [key for key in self.keys if key not in document]
+                    if missing:
+                        raise MongoDBPayloadError(f"document {index} missing upsert keys {missing}")
+        except MongoDBPayloadError as exc:
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=ConnectorErrorKind.PERMANENT, source_name=self.name, cause=exc) from exc
+        committed = 0
+        try:
+            for start in range(0, len(documents), self.batch_size):
+                chunk = documents[start : start + self.batch_size]
+                if self.mode == "insert":
+                    if single_document:
+                        await collection.insert_one(chunk[0])
+                    else:
+                        await collection.insert_many(chunk, ordered=self.ordered)
+                else:
+                    operations = []
+                    for document in chunk:
+                        selector = {key: document[key] for key in self.keys}
+                        update = {key: value for key, value in document.items() if key not in self.keys and key != "_id"}
+                        operations.append(UpdateOne(selector, {"$set": update}, upsert=True))
+                    await collection.bulk_write(operations, ordered=self.ordered)
+                committed += 1
+        except Exception as exc:
+            from .resilience import classify_mongodb_error, redacted_mongodb_cause
+
+            kind = classify_mongodb_error(exc, operation="send")
+            if kind is None:
+                raise
+            replay_safe = self.mode == "upsert" and bool(self.keys)
+            partial = committed > 0 or redacted_mongodb_cause(exc).committed_count > 0
+            if partial and not replay_safe:
+                kind = ConnectorErrorKind.UNCERTAIN
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=kind, source_name=self.name, cause=redacted_mongodb_cause(exc)) from exc
