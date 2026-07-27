@@ -142,15 +142,16 @@ a target should not install runtime observers or process logging.
 The effective `onestep` namespace level uses this precedence:
 
 1. an explicit `onestep run --log-level LEVEL`
-2. YAML `app.logging.level`
+2. a level explicitly configured while loading the target, including YAML `app.logging.level`
 3. the CLI default, `INFO`
 
-For a Python target, the second source does not exist, so the default is INFO unless
-the CLI option is present.
+For a Python target that does not set an `onestep` logger level, the default is INFO
+unless the CLI option is present. A Python target that deliberately sets the namespace
+level during import keeps that value, just as a YAML target does.
 
 The CLI must distinguish an omitted `--log-level` from an explicit value. It must
-not blindly apply INFO after loading a YAML app, because that would overwrite
-`app.logging.level`.
+not blindly apply INFO after loading an app, because that would overwrite YAML or
+Python target logging configuration.
 
 The resolved level is applied to the `onestep` logger namespace. Applications that
 want their business logs governed by the same setting should use a descendant name,
