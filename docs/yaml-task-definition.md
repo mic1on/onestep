@@ -509,6 +509,7 @@ Plugin resource types:
 - `onestep-sqs`: `sqs`, `sqs_queue`
 - `onestep-kafka`: `kafka`, `kafka_topic`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
+- `onestep-mongodb`: `mongodb`, `mongodb_polling`, `mongodb_change_stream`, `mongodb_collection_sink`
 
 `kafka_topic` can be used as a source, sink, or both. When used as a source,
 set `group_id`; the plugin disables Kafka auto commit and commits offsets only

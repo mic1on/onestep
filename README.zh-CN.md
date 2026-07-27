@@ -16,7 +16,7 @@ Webhook 场景。你只需用 `source` 和可选的 `sink` 声明一个任务，
 处理拉取、并发、重试、死信和遥测上报。
 
 - **一个装饰器**，把任意 async 函数变成被托管的任务
-- **可插拔连接器**：内存、MySQL、RabbitMQ、Redis、SQS、Kafka、飞书多维表格
+- **可插拔连接器**：内存、MySQL、RabbitMQ、Redis、SQS、Kafka、飞书多维表格、MongoDB
 - **多种调度方式**：间隔、Cron、Webhook、基于数据库的队列
 - **生产可用**：重试、死信、超时、状态存储、指标、控制面 Reporter
 - **两种配置方式**：纯 Python，或声明式 YAML
@@ -135,6 +135,7 @@ async def main():
 | **SQS** | `queue`，支持批量删除与心跳可见性续期 | `pip install onestep-sqs` |
 | **Kafka** | `kafka_topic` source/sink，使用手动 offset commit | `pip install onestep-kafka` |
 | **飞书多维表格** | 增量 source 与 upsert sink | `pip install onestep-feishu-bitable` |
+| **MongoDB** | 确定性轮询、原始变更流、insert/upsert sink | `pip install onestep-mongodb` |
 
 或一次性安装全部：
 
