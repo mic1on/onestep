@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from onestep import Sink
+from onestep import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+    Envelope,
+    Sink,
+)
 
 
 class ClickHousePayloadError(ValueError):
@@ -15,15 +21,37 @@ class ClickHouseConnector:
         self,
         dsn: str,
         *,
-        client_options: dict[str, Any] | None = None,
+        client_options: Mapping[str, Any] | None = None,
         client: Any | None = None,
     ) -> None:
+        if not dsn:
+            raise ValueError("dsn must not be empty")
         self.dsn = dsn
         self.client_options = dict(client_options or {})
         self._client = client
+        self._owns_client = client is None
+        self._closed = False
+
+    async def _get_client(self):
+        if self._client is None:
+            import clickhouse_connect
+
+            self._client = await clickhouse_connect.get_async_client(
+                dsn=self.dsn, **self.client_options
+            )
+        return self._client
 
     def table_sink(self, *, table: str, **options: Any) -> "ClickHouseTableSink":
         return ClickHouseTableSink(connector=self, table=table, **options)
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._owns_client and self._client is not None:
+            result = self._client.close()
+            if hasattr(result, "__await__"):
+                await result
 
 
 class ClickHouseTableSink(Sink):
@@ -86,5 +114,41 @@ class ClickHouseTableSink(Sink):
             rows.append([document[column] for column in columns])
         return columns, rows
 
-    async def send(self, envelope) -> None:
-        raise NotImplementedError("table insert is introduced by Task 3")
+    async def send(self, envelope: Envelope) -> None:
+        try:
+            columns, rows = self._normalize(envelope.body)
+        except ClickHousePayloadError as exc:
+            raise ConnectorOperationError(
+                backend="clickhouse",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                cause=exc,
+            ) from exc
+        client = await self.connector._get_client()
+        committed = 0
+        try:
+            for start in range(0, len(rows), self.batch_size):
+                chunk = rows[start : start + self.batch_size]
+                await client.insert(
+                    self.table,
+                    chunk,
+                    column_names=columns,
+                    settings=self.settings,
+                )
+                committed += 1
+        except Exception as exc:
+            from .resilience import classify_clickhouse_error
+
+            kind = classify_clickhouse_error(exc)
+            if kind is None:
+                raise
+            if committed:
+                kind = ConnectorErrorKind.UNCERTAIN
+            raise ConnectorOperationError(
+                backend="clickhouse",
+                operation=ConnectorOperation.SEND,
+                kind=kind,
+                source_name=self.name,
+                cause=exc,
+            ) from exc
