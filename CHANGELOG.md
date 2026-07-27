@@ -1,5 +1,18 @@
 # Changelog
 
+## onestep-mongodb 0.1.0
+
+- Adds the `onestep-mongodb` plugin package with deterministic collection polling,
+  raw change-stream sources, and acknowledged insert and upsert collection sinks.
+- Registers YAML resource types for `mongodb`, `mongodb_polling`,
+  `mongodb_change_stream`, and `mongodb_collection_sink`.
+- Uses BSON Extended JSON for resume-token and cursor-state durability in generic
+  cursor stores.
+- Preserves redacted MongoDB driver error semantics through classified
+  `ConnectorOperationError` kinds.
+- Adds focused unit tests, runtime shutdown contract tests, replica-set integration
+  coverage, package validation, and metadata checks.
+
 ## 1.7.2
 
 - Makes `onestep run` configure non-destructive INFO-level stdout logging and task lifecycle event logs by default.

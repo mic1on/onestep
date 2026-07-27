@@ -17,7 +17,7 @@ the runtime takes care of fetching, concurrency, retries, dead-lettering, and
 telemetry.
 
 - **One decorator** turns any async function into a managed task
-- **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Kafka, Feishu
+- **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Kafka, Feishu, MongoDB
 - **Scheduling** via interval, cron, webhook, or DB-backed queues
 - **Production-ready**: retries, dead-letter, timeouts, state stores, metrics,
   and an optional control-plane reporter
@@ -140,6 +140,7 @@ Each backend ships as its own package so you only install what you use:
 | **SQS** | `queue` with batched deletes and heartbeat visibility | `pip install onestep-sqs` |
 | **Kafka** | `kafka_topic` source/sink with manual offset commits | `pip install onestep-kafka` |
 | **Feishu Bitable** | incremental source and upsert sink | `pip install onestep-feishu-bitable` |
+| **MongoDB** | deterministic polling, raw change streams, insert/upsert sinks | `pip install onestep-mongodb` |
 
 Or install everything at once:
 
