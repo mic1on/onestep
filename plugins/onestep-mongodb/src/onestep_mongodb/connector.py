@@ -174,12 +174,13 @@ class MongoDBPollingSource(Source):
             self._active_cursor = collection.find(self._query(self._scan), self.projection).sort([(field, 1) for field in self.cursor]).limit(min(limit, self.batch_size))
             documents = [document async for document in self._active_cursor]
         except Exception as exc:
-            from .resilience import classify_mongodb_error
+            from .resilience import classify_mongodb_error, redacted_mongodb_cause
 
             kind = classify_mongodb_error(exc, operation="fetch")
             if kind is None:
                 raise
-            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.FETCH, kind=kind, source_name=self.name, retry_delay_s=self.poll_interval_s, cause=exc) from exc
+            cause = redacted_mongodb_cause(exc)
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.FETCH, kind=kind, source_name=self.name, retry_delay_s=self.poll_interval_s, cause=cause) from cause
         finally:
             cursor = self._active_cursor
             self._active_cursor = None
@@ -290,7 +291,7 @@ class MongoDBChangeStreamSource(Source):
                     break
                 events.append(event)
         except Exception as exc:
-            from .resilience import classify_mongodb_error
+            from .resilience import classify_mongodb_error, redacted_mongodb_cause
 
             await self._tracker.invalidate(self._tracker.generation)
             stream = self._stream
@@ -318,14 +319,15 @@ class MongoDBChangeStreamSource(Source):
                 if history_lost
                 else None
             )
+            cause = redacted_mongodb_cause(exc)
             raise ConnectorOperationError(
                 backend="mongodb",
                 operation=ConnectorOperation.FETCH,
                 kind=kind,
                 source_name=self.name,
-                cause=exc,
+                cause=cause,
                 message=message,
-            ) from exc
+            ) from cause
 
         deliveries: list[Delivery] = []
         for event in events:
@@ -460,8 +462,9 @@ class MongoDBCollectionSink(Sink):
             kind = classify_mongodb_error(exc, operation="send")
             if kind is None:
                 raise
+            cause = redacted_mongodb_cause(exc)
             replay_safe = self.mode == "upsert" and bool(self.keys)
-            partial = committed > 0 or redacted_mongodb_cause(exc).committed_count > 0
+            partial = committed > 0 or cause.committed_count > 0
             if partial and not replay_safe:
                 kind = ConnectorErrorKind.UNCERTAIN
-            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=kind, source_name=self.name, cause=redacted_mongodb_cause(exc)) from exc
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=kind, source_name=self.name, cause=cause) from cause

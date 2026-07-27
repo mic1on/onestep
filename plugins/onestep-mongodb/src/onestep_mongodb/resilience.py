@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from bson.errors import InvalidDocument, InvalidStringData
 from pymongo.errors import AutoReconnect, BulkWriteError, ConfigurationError, DuplicateKeyError, ExecutionTimeout, InvalidURI, NetworkTimeout, OperationFailure, ServerSelectionTimeoutError
 
 from onestep import ConnectorErrorKind
@@ -19,6 +21,15 @@ class MongoDBErrorCause(Exception):
         return f"MongoDB error code={self.code} failed_indexes={self.failed_indexes} codes={self.codes}: {self.message}"
 
 
+_MONGODB_URI_CREDENTIALS = re.compile(r"(?i)\b(mongodb(?:\+srv)?://)[^/@\s]+@")
+_SENSITIVE_QUERY_VALUE = re.compile(r"(?i)([?&](?:password|passwd|pwd|secret|token)\s*=)[^&\s]+")
+
+
+def _redact_message(message: str) -> str:
+    message = _MONGODB_URI_CREDENTIALS.sub(r"\1<redacted>@", message)
+    return _SENSITIVE_QUERY_VALUE.sub(r"\1<redacted>", message)
+
+
 def redacted_mongodb_cause(exc: BaseException) -> MongoDBErrorCause:
     details = exc.details if isinstance(exc, BulkWriteError) else {}
     write_errors = details.get("writeErrors", []) if isinstance(details, dict) else []
@@ -30,12 +41,16 @@ def redacted_mongodb_cause(exc: BaseException) -> MongoDBErrorCause:
         code = write_errors[0].get("code")
     if isinstance(exc, BulkWriteError):
         message = "; ".join(
-            str(item.get("errmsg", "write error"))[:160]
+            _redact_message(str(item.get("errmsg", "write error")))[:160]
             for item in write_errors
             if isinstance(item, dict)
         )[:500]
+    elif isinstance(exc, (InvalidDocument, InvalidStringData)):
+        message = "invalid MongoDB document"
+    elif isinstance(exc, (ConfigurationError, InvalidURI)):
+        message = "invalid MongoDB configuration"
     else:
-        message = str(exc)[:500]
+        message = _redact_message(str(exc))[:500]
     return MongoDBErrorCause(code, failed_indexes, codes, committed_count, message)
 
 
@@ -55,8 +70,16 @@ def classify_mongodb_error(exc: BaseException, *, operation: str) -> ConnectorEr
         return ConnectorErrorKind.PERMANENT
     if isinstance(exc, (ConfigurationError, InvalidURI)):
         return ConnectorErrorKind.MISCONFIGURED
+    if isinstance(exc, (InvalidDocument, InvalidStringData)):
+        return ConnectorErrorKind.PERMANENT
     if isinstance(exc, DuplicateKeyError):
         return ConnectorErrorKind.PERMANENT
+    if isinstance(exc, ServerSelectionTimeoutError):
+        return ConnectorErrorKind.DISCONNECTED
+    if isinstance(exc, NetworkTimeout):
+        return ConnectorErrorKind.UNCERTAIN if operation == "send" else ConnectorErrorKind.DISCONNECTED
+    if isinstance(exc, ExecutionTimeout):
+        return ConnectorErrorKind.UNCERTAIN if operation == "send" else ConnectorErrorKind.TRANSIENT
     if isinstance(exc, OperationFailure):
         if exc.code in {13, 18}:
             return ConnectorErrorKind.MISCONFIGURED
@@ -69,8 +92,4 @@ def classify_mongodb_error(exc: BaseException, *, operation: str) -> ConnectorEr
         return ConnectorErrorKind.PERMANENT
     if isinstance(exc, AutoReconnect):
         return ConnectorErrorKind.UNCERTAIN if operation == "send" else ConnectorErrorKind.DISCONNECTED
-    if isinstance(exc, (NetworkTimeout, ExecutionTimeout)):
-        return ConnectorErrorKind.UNCERTAIN if operation == "send" else ConnectorErrorKind.TRANSIENT
-    if isinstance(exc, ServerSelectionTimeoutError):
-        return ConnectorErrorKind.DISCONNECTED
     return None
