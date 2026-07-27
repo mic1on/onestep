@@ -319,6 +319,24 @@ def test_cli_run_preserves_existing_root_handler() -> None:
         assert existing.formatter is formatter
 
 
+def test_cli_run_cleans_up_stdout_handler_after_failure(capsys) -> None:
+    app = OneStepApp("cli-run-failure")
+
+    def fail() -> None:
+        raise RuntimeError("boom")
+
+    app.run = fail
+    with isolated_logging() as (root, _), registered_module(
+        "testsupport_cli_run_failure", app=app
+    ):
+        assert main(["run", "testsupport_cli_run_failure:app"]) == 1
+        assert root.handlers == []
+
+    assert "testsupport_cli_run_failure:app failed while running: boom" in (
+        capsys.readouterr().err
+    )
+
+
 def test_cli_check_does_not_configure_logging_or_task_events() -> None:
     app = OneStepApp("cli-check-logging")
 

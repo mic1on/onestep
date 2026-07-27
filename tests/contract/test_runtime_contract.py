@@ -1487,6 +1487,17 @@ def test_enable_structured_event_logging_preserves_registered_logger() -> None:
     assert app.describe()["hooks"]["events"] == 1
 
 
+def test_enable_structured_event_logging_keeps_other_event_handlers() -> None:
+    app = OneStepApp("structured-event-helper-with-observer")
+    observer = lambda event: None
+    app.on_event(observer)
+
+    resolved = app.enable_structured_event_logging()
+
+    assert isinstance(resolved, StructuredEventLogger)
+    assert app.describe()["hooks"]["events"] == 2
+
+
 def test_structured_event_logger_includes_failure_fields() -> None:
     class ListHandler(logging.Handler):
         def __init__(self) -> None:
