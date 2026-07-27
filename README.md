@@ -54,6 +54,37 @@ onestep run your_package.tasks:app
 onestep check your_package.tasks:app   # validate the target before starting
 ```
 
+### Logging
+
+`onestep run` writes application logs, framework logs, and task lifecycle events
+to stdout at INFO level by default. Application logger names do not need to use
+the `onestep` namespace:
+
+```python
+import logging
+
+logger = logging.getLogger("billing.kpi_sync")
+```
+
+Use `--log-level DEBUG` to include fetched, started, and sink-success details.
+Use `--no-task-events` to disable the lifecycle logger installed by the CLI:
+
+```bash
+onestep run your_package.tasks:app --log-level DEBUG
+onestep run your_package.tasks:app --no-task-events
+```
+
+An explicit `--log-level` overrides a level configured by the loaded target,
+including YAML `app.logging.level`. Without the option, a target-configured level
+is preserved; otherwise the CLI uses INFO. When the CLI installs the stdout
+handler, that resolved level applies to arbitrary application logger names and
+the `onestep` namespace. Existing logging handlers and custom
+`StructuredEventLogger` instances are preserved; when a host has configured its
+own handler, it also retains ownership of root logger levels.
+
+Direct `app.run()` and `app.serve()` calls do not modify host logging or install
+task event logging. Embedded applications retain full control of process logging.
+
 ## What it does
 
 | Capability | Where |

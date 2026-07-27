@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -12,6 +13,7 @@ from .config import is_yaml_target, load_resource_catalog, load_yaml_app
 from .init_project import init_project
 
 _PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+_CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -37,6 +39,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="strict_env",
         default=None,
         help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
+    )
+    run_parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        default=None,
+        help="Set the onestep logger level (default: target configuration or INFO)",
+    )
+    run_parser.add_argument(
+        "--task-events",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Emit task lifecycle events as logs (default: enabled)",
     )
 
     check_parser = subparsers.add_parser("check", help="Load a target or YAML config and print its task summary")
@@ -204,12 +219,43 @@ def main(argv: list[str] | None = None) -> int:
         _print_summary(args.target, app, as_json=getattr(args, "as_json", False))
         return 0
 
+    cli_logging_state: tuple[logging.Handler, int] | None = None
     try:
+        cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
+        if args.task_events:
+            app.enable_structured_event_logging()
         app.run()
     except Exception as exc:
         print(f"onestep: {args.target} failed while running: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if cli_logging_state is not None:
+            cli_handler, previous_root_level = cli_logging_state
+            root_logger = logging.getLogger()
+            root_logger.removeHandler(cli_handler)
+            root_logger.setLevel(previous_root_level)
+            cli_handler.close()
     return 0
+
+
+def _configure_run_logging(
+    *, explicit_level: str | None
+) -> tuple[logging.Handler, int] | None:
+    framework_logger = logging.getLogger("onestep")
+    if explicit_level is not None:
+        framework_logger.setLevel(getattr(logging, explicit_level))
+    elif framework_logger.level == logging.NOTSET:
+        framework_logger.setLevel(logging.INFO)
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return None
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))
+    previous_root_level = root_logger.level
+    root_logger.setLevel(framework_logger.level)
+    root_logger.addHandler(handler)
+    return handler, previous_root_level
 
 
 def _ensure_local_import_paths(target: str | None = None) -> None:
