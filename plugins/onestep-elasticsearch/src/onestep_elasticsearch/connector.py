@@ -1,28 +1,34 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from onestep import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError, Envelope, Sink
+from onestep import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+    Envelope,
+    Sink,
+)
 
 from .resilience import classify_elasticsearch_exception, classify_elasticsearch_status
 
 
-def _logical_documents(body: Any) -> list[dict[str, Any]]:
+def _logical_document_views(body: Any) -> Sequence[Mapping[str, Any]]:
     if isinstance(body, Mapping):
-        return [dict(body)]
+        return (body,)
     if not isinstance(body, Sequence) or isinstance(body, (str, bytes, bytearray)):
-        raise TypeError("bulk payload must be a mapping or non-empty sequence of mappings")
+        raise TypeError(
+            "bulk payload must be a mapping or non-empty sequence of mappings"
+        )
     if not body:
         raise ValueError("bulk payload sequence must not be empty")
-    documents: list[dict[str, Any]] = []
     for index, item in enumerate(body):
         if not isinstance(item, Mapping):
             raise TypeError(f"bulk payload item {index} must be a mapping")
-        documents.append(dict(item))
-    return documents
+    return body
 
 
 @dataclass(frozen=True)
@@ -36,7 +42,9 @@ class ElasticsearchBulkItemError:
 
 
 class ElasticsearchBulkError(Exception):
-    def __init__(self, items: list[ElasticsearchBulkItemError], *, partial_success: bool = False) -> None:
+    def __init__(
+        self, items: list[ElasticsearchBulkItemError], *, partial_success: bool = False
+    ) -> None:
         self.items = tuple(items)
         self.partial_success = partial_success
         summary = ", ".join(
@@ -99,14 +107,38 @@ class ElasticsearchConnector:
             result["Authorization"] = f"Bearer {self.bearer_token}"
         return result
 
+    def redact(self, value: Any) -> str:
+        result = str(value)
+        secrets = [
+            self.username,
+            self.password,
+            self.api_key,
+            self.bearer_token,
+            self.client_key,
+            *self.headers.values(),
+        ]
+        for secret in sorted(
+            {str(item) for item in secrets if item is not None and str(item)},
+            key=len,
+            reverse=True,
+        ):
+            result = result.replace(secret, "<redacted>")
+        return result
+
     async def _get_client(self):
         import httpx
 
         if self._client is None:
-            verify: Any = self.ca_certs if self.ca_certs is not None else self.verify_certs
+            verify: Any = (
+                self.ca_certs if self.ca_certs is not None else self.verify_certs
+            )
             cert: Any = None
             if self.client_cert is not None:
-                cert = (self.client_cert, self.client_key) if self.client_key else self.client_cert
+                cert = (
+                    (self.client_cert, self.client_key)
+                    if self.client_key
+                    else self.client_cert
+                )
             self._client = httpx.AsyncClient(verify=verify, cert=cert)
         return self._client
 
@@ -136,9 +168,20 @@ class ElasticsearchConnector:
             timeout=self.request_timeout_s,
         )
         try:
-            payload = response.json()
+            raw_payload = response.json()
         except ValueError:
             payload = {"error": {"reason": response.text[:500]}}
+        else:
+            payload = (
+                dict(raw_payload)
+                if isinstance(raw_payload, Mapping)
+                else {
+                    "error": {
+                        "type": "invalid_response",
+                        "reason": "response JSON must be an object",
+                    }
+                }
+            )
         return response.status_code, payload
 
     async def request_ndjson(
@@ -152,7 +195,7 @@ class ElasticsearchConnector:
             headers={"Content-Type": "application/x-ndjson"},
         )
 
-    def bulk_sink(self, *, index: str, **options: Any) -> "ElasticsearchBulkSink":
+    def bulk_sink(self, *, index: str, **options: Any) -> ElasticsearchBulkSink:
         return ElasticsearchBulkSink(connector=self, index=index, **options)
 
     async def close(self) -> None:
@@ -204,26 +247,32 @@ class ElasticsearchBulkSink(Sink):
         ).encode("utf-8")
         return action + b"\n" + source + b"\n"
 
+    def _iter_encoded_chunks(self, body: Any) -> Iterator[bytes]:
+        documents = _logical_document_views(body)
+
+        def encode() -> Iterator[bytes]:
+            current: list[bytes] = []
+            current_bytes = 0
+            for document in documents:
+                action = self._encode_action(document)
+                if len(action) > self.max_chunk_bytes:
+                    raise ValueError("one bulk action exceeds max_chunk_bytes")
+                if current and (
+                    len(current) >= self.chunk_size
+                    or current_bytes + len(action) > self.max_chunk_bytes
+                ):
+                    yield b"".join(current)
+                    current = []
+                    current_bytes = 0
+                current.append(action)
+                current_bytes += len(action)
+            if current:
+                yield b"".join(current)
+
+        return encode()
+
     def _encode_chunks(self, body: Any) -> list[bytes]:
-        chunks: list[bytes] = []
-        current: list[bytes] = []
-        current_bytes = 0
-        for document in _logical_documents(body):
-            action = self._encode_action(document)
-            if len(action) > self.max_chunk_bytes:
-                raise ValueError("one bulk action exceeds max_chunk_bytes")
-            if current and (
-                len(current) >= self.chunk_size
-                or current_bytes + len(action) > self.max_chunk_bytes
-            ):
-                chunks.append(b"".join(current))
-                current = []
-                current_bytes = 0
-            current.append(action)
-            current_bytes += len(action)
-        if current:
-            chunks.append(b"".join(current))
-        return chunks
+        return list(self._iter_encoded_chunks(body))
 
     def _action_documents(self, body: bytes) -> list[bytes]:
         lines = body.splitlines(keepends=True)
@@ -231,18 +280,47 @@ class ElasticsearchBulkSink(Sink):
             raise ValueError("bulk request must contain action/source line pairs")
         return [lines[index] + lines[index + 1] for index in range(0, len(lines), 2)]
 
-    def _parse_items(self, payload: Mapping[str, Any]) -> list[ElasticsearchBulkItemError]:
+    def _parse_items(
+        self, payload: Mapping[str, Any]
+    ) -> list[ElasticsearchBulkItemError]:
         failures: list[ElasticsearchBulkItemError] = []
         items = payload.get("items", [])
         if not isinstance(items, list):
-            return [ElasticsearchBulkItemError(0, self.operation, None, 0, "invalid_response", "bulk response items must be a list")]
+            return [
+                ElasticsearchBulkItemError(
+                    0,
+                    self.operation,
+                    None,
+                    0,
+                    "invalid_response",
+                    "bulk response items must be a list",
+                )
+            ]
         for index, wrapper in enumerate(items):
             if not isinstance(wrapper, Mapping) or len(wrapper) != 1:
-                failures.append(ElasticsearchBulkItemError(index, self.operation, None, 0, "invalid_response", "bulk response item is invalid"))
+                failures.append(
+                    ElasticsearchBulkItemError(
+                        index,
+                        self.operation,
+                        None,
+                        0,
+                        "invalid_response",
+                        "bulk response item is invalid",
+                    )
+                )
                 continue
             operation, item = next(iter(wrapper.items()))
             if not isinstance(item, Mapping):
-                failures.append(ElasticsearchBulkItemError(index, str(operation), None, 0, "invalid_response", "bulk response item details are invalid"))
+                failures.append(
+                    ElasticsearchBulkItemError(
+                        index,
+                        str(operation),
+                        None,
+                        0,
+                        "invalid_response",
+                        "bulk response item details are invalid",
+                    )
+                )
                 continue
             status = int(item.get("status", 0))
             if 200 <= status < 300:
@@ -255,15 +333,45 @@ class ElasticsearchBulkSink(Sink):
                     operation=str(operation),
                     document_id=item.get("_id"),
                     status=status,
-                    error_type=error.get("type") if isinstance(error, Mapping) else None,
-                    reason=str(reason or "bulk item failed")[:500],
+                    error_type=error.get("type")
+                    if isinstance(error, Mapping)
+                    else None,
+                    reason=self.connector.redact(reason or "bulk item failed")[:500],
                 )
             )
         return failures
 
+    def _error_reason(self, error: Any) -> str:
+        if isinstance(error, Mapping):
+            reason = error.get("reason") or error.get("type") or "request failed"
+        else:
+            reason = error or "request failed"
+        return self.connector.redact(reason)[:500]
+
+    def _original_item_errors(
+        self,
+        failures: list[ElasticsearchBulkItemError],
+        pending_indexes: list[int],
+    ) -> list[ElasticsearchBulkItemError]:
+        return [
+            ElasticsearchBulkItemError(
+                action_index=pending_indexes[item.action_index]
+                if 0 <= item.action_index < len(pending_indexes)
+                else item.action_index,
+                operation=item.operation,
+                document_id=item.document_id,
+                status=item.status,
+                error_type=item.error_type,
+                reason=item.reason,
+            )
+            for item in failures
+        ]
+
     def _params(self) -> dict[str, Any]:
         params: dict[str, Any] = {
-            "refresh": str(self.refresh).lower() if isinstance(self.refresh, bool) else self.refresh
+            "refresh": str(self.refresh).lower()
+            if isinstance(self.refresh, bool)
+            else self.refresh
         }
         if self.pipeline is not None:
             params["pipeline"] = self.pipeline
@@ -274,13 +382,25 @@ class ElasticsearchBulkSink(Sink):
         import random
 
         pending = body
+        pending_indexes = list(range(len(self._action_documents(body))))
         partial_success = False
         for attempt in range(self.max_retries + 1):
-            status, payload = await self.connector.request_ndjson("/_bulk", pending, params=self._params())
+            status, payload = await self.connector.request_ndjson(
+                "/_bulk", pending, params=self._params()
+            )
             if status < 200 or status >= 300:
-                failure = ElasticsearchBulkItemError(0, self.operation, None, status, None, str(payload.get("error", "request failed"))[:500])
+                failure = ElasticsearchBulkItemError(
+                    pending_indexes[0],
+                    self.operation,
+                    None,
+                    status,
+                    None,
+                    self._error_reason(payload.get("error", "request failed")),
+                )
                 if status in {429, 502, 503, 504} and attempt < self.max_retries:
-                    await asyncio.sleep((0.05 * (2**attempt)) + random.uniform(0.0, 0.025))
+                    await asyncio.sleep(
+                        (0.05 * (2**attempt)) + random.uniform(0.0, 0.025)
+                    )
                     continue
                 raise ElasticsearchBulkError([failure], partial_success=partial_success)
             items = payload.get("items")
@@ -291,30 +411,67 @@ class ElasticsearchBulkSink(Sink):
                     for wrapper in items:
                         if isinstance(wrapper, Mapping) and len(wrapper) == 1:
                             item = next(iter(wrapper.values()))
-                            if isinstance(item, Mapping) and 200 <= int(item.get("status", 0)) < 300:
+                            if (
+                                isinstance(item, Mapping)
+                                and 200 <= int(item.get("status", 0)) < 300
+                            ):
                                 acknowledged += 1
                 raise ElasticsearchBulkError(
-                    [ElasticsearchBulkItemError(0, self.operation, None, 0, "invalid_response", "bulk response item count did not match request")],
+                    [
+                        ElasticsearchBulkItemError(
+                            pending_indexes[0],
+                            self.operation,
+                            None,
+                            0,
+                            "invalid_response",
+                            "bulk response item count did not match request",
+                        )
+                    ],
                     partial_success=partial_success or acknowledged > 0,
                 )
             failures = self._parse_items(payload)
             if not failures and not payload.get("errors", False):
                 return
             if not failures:
-                failures = [ElasticsearchBulkItemError(0, self.operation, None, 0, "invalid_response", "bulk response reported errors without a failed item")]
+                failures = [
+                    ElasticsearchBulkItemError(
+                        pending_indexes[0],
+                        self.operation,
+                        None,
+                        0,
+                        "invalid_response",
+                        "bulk response reported errors without a failed item",
+                    )
+                ]
             partial_success = partial_success or len(failures) < len(items)
-            retryable_indexes = [item.action_index for item in failures if item.status in {429, 502, 503, 504}]
-            permanent = [item for item in failures if item.action_index not in retryable_indexes]
+            retryable_indexes = [
+                item.action_index
+                for item in failures
+                if item.status in {429, 502, 503, 504}
+            ]
+            permanent = [
+                item for item in failures if item.action_index not in retryable_indexes
+            ]
             if permanent or not retryable_indexes or attempt == self.max_retries:
-                raise ElasticsearchBulkError(failures, partial_success=partial_success)
+                raise ElasticsearchBulkError(
+                    self._original_item_errors(failures, pending_indexes),
+                    partial_success=partial_success,
+                )
             actions = self._action_documents(pending)
             pending = b"".join(actions[index] for index in retryable_indexes)
+            pending_indexes = [pending_indexes[index] for index in retryable_indexes]
             await asyncio.sleep((0.05 * (2**attempt)) + random.uniform(0.0, 0.025))
         raise AssertionError("bulk retry loop exhausted without returning or raising")
 
     async def send(self, envelope: Envelope) -> None:
         try:
-            chunks = self._encode_chunks(envelope.body)
+            documents = _logical_document_views(envelope.body)
+            replay_safe = (
+                self.operation == "index"
+                and self.id_field is not None
+                and all(self.id_field in document for document in documents)
+            )
+            chunks = self._iter_encoded_chunks(envelope.body)
         except (TypeError, ValueError) as exc:
             raise ConnectorOperationError(
                 backend="elasticsearch",
@@ -329,9 +486,16 @@ class ElasticsearchBulkSink(Sink):
                 await self._send_chunk(chunk)
                 committed_chunks += 1
         except ElasticsearchBulkError as exc:
-            base_kind = classify_elasticsearch_status(exc.items[0].status) if exc.items else ConnectorErrorKind.PERMANENT
-            replay_safe = self.operation == "index" and self.id_field is not None
-            kind = ConnectorErrorKind.UNCERTAIN if (committed_chunks or exc.partial_success) and not replay_safe else base_kind
+            base_kind = (
+                classify_elasticsearch_status(exc.items[0].status)
+                if exc.items
+                else ConnectorErrorKind.PERMANENT
+            )
+            kind = (
+                ConnectorErrorKind.UNCERTAIN
+                if (committed_chunks or exc.partial_success) and not replay_safe
+                else base_kind
+            )
             raise ConnectorOperationError(
                 backend="elasticsearch",
                 operation=ConnectorOperation.SEND,
@@ -339,11 +503,18 @@ class ElasticsearchBulkSink(Sink):
                 source_name=self.name,
                 cause=exc,
             ) from exc
+        except (TypeError, ValueError) as exc:
+            raise ConnectorOperationError(
+                backend="elasticsearch",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                cause=exc,
+            ) from exc
         except Exception as exc:
             kind = classify_elasticsearch_exception(exc)
             if kind is None:
                 raise
-            replay_safe = self.operation == "index" and self.id_field is not None
             if committed_chunks and not replay_safe:
                 kind = ConnectorErrorKind.UNCERTAIN
             raise ConnectorOperationError(
