@@ -1465,6 +1465,39 @@ def test_structured_event_logger_emits_uniform_log_fields() -> None:
     asyncio.run(scenario())
 
 
+def test_enable_structured_event_logging_is_idempotent() -> None:
+    app = OneStepApp("structured-event-helper")
+
+    first = app.enable_structured_event_logging()
+    second = app.enable_structured_event_logging()
+
+    assert isinstance(first, StructuredEventLogger)
+    assert second is first
+    assert app.describe()["hooks"]["events"] == 1
+
+
+def test_enable_structured_event_logging_preserves_registered_logger() -> None:
+    app = OneStepApp("custom-structured-event-helper")
+    custom = StructuredEventLogger(logger=logging.getLogger("custom.events"))
+    app.on_event(custom)
+
+    resolved = app.enable_structured_event_logging()
+
+    assert resolved is custom
+    assert app.describe()["hooks"]["events"] == 1
+
+
+def test_enable_structured_event_logging_keeps_other_event_handlers() -> None:
+    app = OneStepApp("structured-event-helper-with-observer")
+    observer = lambda event: None
+    app.on_event(observer)
+
+    resolved = app.enable_structured_event_logging()
+
+    assert isinstance(resolved, StructuredEventLogger)
+    assert app.describe()["hooks"]["events"] == 2
+
+
 def test_structured_event_logger_includes_failure_fields() -> None:
     class ListHandler(logging.Handler):
         def __init__(self) -> None:

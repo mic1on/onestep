@@ -12,7 +12,7 @@ from typing import Any
 
 from .connectors.base import Sink, Source
 from .envelope import Envelope
-from .events import TaskEvent
+from .events import StructuredEventLogger, TaskEvent
 from .invoke import invoke_callback
 from .metrics import CustomMetricsRegistry
 from .retry import RetryPolicy
@@ -629,6 +629,14 @@ class OneStepApp:
 
     def on_event(self, func: Callable[..., Any] | None = None):
         return self._register_hook(self._event_handlers, func)
+
+    def enable_structured_event_logging(self) -> StructuredEventLogger:
+        for handler in self._event_handlers:
+            if isinstance(handler, StructuredEventLogger):
+                return handler
+        handler = StructuredEventLogger()
+        self.on_event(handler)
+        return handler
 
     def task(
         self,

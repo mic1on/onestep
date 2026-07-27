@@ -5,12 +5,13 @@ import os
 import sys
 import types
 from contextlib import contextmanager
+from typing import Optional
 
 import pytest
 
 import onestep.config as config_module
-from onestep import MemoryQueue, OneStepApp, load_app_config
-from onestep.cli import main
+from onestep import MemoryQueue, OneStepApp, StructuredEventLogger, load_app_config
+from onestep.cli import main, parse_args
 
 
 @contextmanager
@@ -36,6 +37,24 @@ def registered_yaml_module():
 
     with registered_module("yaml", safe_load=safe_load) as module:
         yield module
+
+
+@contextmanager
+def isolated_logging():
+    root = logging.getLogger()
+    framework = logging.getLogger("onestep")
+    root_handlers = list(root.handlers)
+    root_level = root.level
+    framework_level = framework.level
+    try:
+        root.handlers = []
+        root.setLevel(logging.WARNING)
+        framework.setLevel(logging.NOTSET)
+        yield root, framework
+    finally:
+        root.handlers = root_handlers
+        root.setLevel(root_level)
+        framework.setLevel(framework_level)
 
 
 def clear_modules(monkeypatch, *names: str) -> None:
@@ -166,6 +185,186 @@ def test_cli_run_shorthand_executes_target(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "cli target started" in captured.out
+
+
+def test_cli_run_parses_logging_options() -> None:
+    args = parse_args(
+        ["run", "worker:app", "--log-level", "debug", "--no-task-events"]
+    )
+
+    assert args.log_level == "DEBUG"
+    assert args.task_events is False
+
+
+def test_cli_run_enables_task_events_by_default() -> None:
+    args = parse_args(["run", "worker:app"])
+
+    assert args.log_level is None
+    assert args.task_events is True
+
+
+def test_cli_run_configures_info_stdout_logging_and_task_events(capsys) -> None:
+    app = OneStepApp("cli-logging-default")
+    observed = {}
+
+    def run() -> None:
+        observed["level"] = logging.getLogger("onestep").level
+        observed["root_level"] = logging.getLogger().level
+        observed["event_hooks"] = app.describe()["hooks"]["events"]
+        logging.getLogger("xxxx.kpi_sync").info("business message")
+
+    app.run = run
+    with isolated_logging() as (root, _), registered_module(
+        "testsupport_cli_logging", app=app
+    ):
+        assert main(["run", "testsupport_cli_logging:app"]) == 0
+        assert root.handlers == []
+        assert root.level == logging.WARNING
+
+    assert observed == {
+        "level": logging.INFO,
+        "root_level": logging.INFO,
+        "event_hooks": 1,
+    }
+    assert "business message" in capsys.readouterr().out
+
+
+def test_cli_run_explicit_log_level_wins() -> None:
+    app = OneStepApp("cli-logging-debug")
+    observed = {}
+    app.run = lambda: observed.update(
+        framework_level=logging.getLogger("onestep").level,
+        root_level=logging.getLogger().level,
+    )
+
+    with isolated_logging(), registered_module("testsupport_cli_debug", app=app):
+        assert (
+            main(
+                [
+                    "run",
+                    "testsupport_cli_debug:app",
+                    "--log-level",
+                    "DEBUG",
+                ]
+            )
+            == 0
+        )
+
+    assert observed == {
+        "framework_level": logging.DEBUG,
+        "root_level": logging.DEBUG,
+    }
+
+
+def test_cli_run_preserves_target_log_level() -> None:
+    app = OneStepApp("cli-target-log-level")
+    observed = {}
+    app.run = lambda: observed.update(
+        framework_level=logging.getLogger("onestep").level,
+        root_level=logging.getLogger().level,
+    )
+
+    with isolated_logging() as (_, framework), registered_module(
+        "testsupport_cli_target_level", app=app
+    ):
+        framework.setLevel(logging.ERROR)
+        assert main(["run", "testsupport_cli_target_level:app"]) == 0
+
+    assert observed == {
+        "framework_level": logging.ERROR,
+        "root_level": logging.ERROR,
+    }
+
+
+def test_cli_run_can_disable_automatic_task_events() -> None:
+    app = OneStepApp("cli-no-task-events")
+    app.run = lambda: None
+
+    with isolated_logging(), registered_module(
+        "testsupport_cli_no_events", app=app
+    ):
+        assert (
+            main(
+                [
+                    "run",
+                    "testsupport_cli_no_events:app",
+                    "--no-task-events",
+                ]
+            )
+            == 0
+        )
+
+    assert app.describe()["hooks"]["events"] == 0
+
+
+@pytest.mark.parametrize("disable_automatic", [False, True])
+def test_cli_run_preserves_registered_structured_event_logger(
+    disable_automatic: bool,
+) -> None:
+    app = OneStepApp("cli-custom-task-events")
+    custom = StructuredEventLogger(logger=logging.getLogger("custom.events"))
+    app.on_event(custom)
+    app.run = lambda: None
+    argv = ["run", "testsupport_cli_custom_events:app"]
+    if disable_automatic:
+        argv.append("--no-task-events")
+
+    with isolated_logging(), registered_module(
+        "testsupport_cli_custom_events", app=app
+    ):
+        assert main(argv) == 0
+
+    assert app.enable_structured_event_logging() is custom
+    assert app.describe()["hooks"]["events"] == 1
+
+
+def test_cli_run_preserves_existing_root_handler() -> None:
+    app = OneStepApp("cli-existing-handler")
+    app.run = lambda: None
+    existing = logging.StreamHandler()
+    formatter = logging.Formatter("CUSTOM %(message)s")
+    existing.setFormatter(formatter)
+
+    with isolated_logging() as (root, _), registered_module(
+        "testsupport_cli_existing_handler", app=app
+    ):
+        root.addHandler(existing)
+        assert main(["run", "testsupport_cli_existing_handler:app"]) == 0
+        assert root.handlers == [existing]
+        assert root.level == logging.WARNING
+        assert existing.formatter is formatter
+
+
+def test_cli_run_cleans_up_stdout_handler_after_failure(capsys) -> None:
+    app = OneStepApp("cli-run-failure")
+
+    def fail() -> None:
+        raise RuntimeError("boom")
+
+    app.run = fail
+    with isolated_logging() as (root, _), registered_module(
+        "testsupport_cli_run_failure", app=app
+    ):
+        assert main(["run", "testsupport_cli_run_failure:app"]) == 1
+        assert root.handlers == []
+        assert root.level == logging.WARNING
+
+    assert "testsupport_cli_run_failure:app failed while running: boom" in (
+        capsys.readouterr().err
+    )
+
+
+def test_cli_check_does_not_configure_logging_or_task_events() -> None:
+    app = OneStepApp("cli-check-logging")
+
+    with isolated_logging() as (root, framework), registered_module(
+        "testsupport_cli_check_logging", app=app
+    ):
+        assert main(["check", "testsupport_cli_check_logging:app"]) == 0
+        assert root.handlers == []
+        assert framework.level == logging.NOTSET
+
+    assert app.describe()["hooks"]["events"] == 0
 
 
 def test_cli_invalid_target_returns_non_zero(capsys) -> None:
@@ -668,6 +867,53 @@ def test_load_app_config_strict_applies_yaml_logging_level() -> None:
         assert logger.level == logging.DEBUG
     finally:
         logger.setLevel(previous_level)
+
+
+@pytest.mark.parametrize(
+    ("cli_level", "expected"),
+    [(None, logging.ERROR), ("DEBUG", logging.DEBUG)],
+)
+def test_cli_log_level_precedence_over_yaml(
+    monkeypatch,
+    tmp_path,
+    cli_level: Optional[str],
+    expected: int,
+) -> None:
+    config_path = tmp_path / "logging.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "name": "yaml-logging",
+                    "logging": {"level": "ERROR"},
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed = {}
+    monkeypatch.setattr(
+        OneStepApp,
+        "run",
+        lambda self: observed.update(
+            level=logging.getLogger("onestep").level,
+            root_level=logging.getLogger().level,
+            event_hooks=self.describe()["hooks"]["events"],
+        ),
+    )
+    argv = ["run", str(config_path)]
+    if cli_level is not None:
+        argv.extend(["--log-level", cli_level])
+
+    with isolated_logging(), registered_yaml_module():
+        assert main(argv) == 0
+
+    assert observed == {
+        "level": expected,
+        "root_level": expected,
+        "event_hooks": 1,
+    }
 
 
 def test_load_app_config_strict_rejects_invalid_yaml_logging_level_type() -> None:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.2
+
+- Makes `onestep run` configure non-destructive INFO-level stdout logging and task lifecycle event logs by default.
+- Adds `--log-level` and `--no-task-events` while preserving application-installed handlers and structured event loggers.
+- Keeps direct `OneStepApp.run()` and `OneStepApp.serve()` embedding in full control of host process logging.
+
 ## 1.7.1
 
 - Adds the source/sink resource catalog contract with roles, fields, defaults, secret metadata, connector types, and topology display fields.
