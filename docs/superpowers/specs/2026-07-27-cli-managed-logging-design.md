@@ -153,9 +153,10 @@ The CLI must distinguish an omitted `--log-level` from an explicit value. It mus
 not blindly apply INFO after loading an app, because that would overwrite YAML or
 Python target logging configuration.
 
-The resolved level is applied to the `onestep` logger namespace. Applications that
-want their business logs governed by the same setting should use a descendant name,
-such as `onestep.kpi_sync` or `onestep.<app-name>.business`.
+The resolved level is applied to the `onestep` logger namespace. When the CLI installs
+its own root handler, it also applies that level to the root logger for the duration
+of the run, so application logger names do not need an `onestep` prefix. The previous
+root level is restored when the run finishes.
 
 ## Process Logging Configuration
 
@@ -163,7 +164,8 @@ Logging configuration occurs after the target is loaded and before `app.run()`.
 Loading first gives application modules a chance to install their own logging setup.
 
 If the root logger has no handlers, the CLI adds one `logging.StreamHandler` targeting
-`sys.stdout` with this format:
+`sys.stdout`, temporarily sets the root level to the resolved level, and uses this
+format:
 
 ```text
 %(asctime)s %(levelname)s %(name)s %(message)s
@@ -173,14 +175,15 @@ The CLI does not call `logging.basicConfig(force=True)`. It does not remove, rep
 or reformat existing root or named logger handlers.
 
 When an existing handler is present, the CLI only applies the resolved level to the
-`onestep` namespace. Handler levels and formatters remain owned by the application or
-host process. This prevents the CLI from silently weakening an explicitly configured
-handler policy.
+`onestep` namespace. Root and handler levels and formatters remain owned by the
+application or host process. This prevents the CLI from silently weakening an
+explicitly configured handler policy.
 
 The CLI removes and closes a handler it installed after `app.run()` returns. This
 does not affect normal worker output because the handler remains active for the full
 runtime, and it keeps repeated in-process CLI invocations from retaining duplicate or
-stale stream handlers. Handlers owned by the application or host are never removed.
+stale stream handlers. The previous root level is restored at the same time. Handlers
+owned by the application or host are never removed.
 
 ## Task Event Registration
 

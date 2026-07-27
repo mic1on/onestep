@@ -219,9 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         _print_summary(args.target, app, as_json=getattr(args, "as_json", False))
         return 0
 
-    cli_handler: logging.Handler | None = None
+    cli_logging_state: tuple[logging.Handler, int] | None = None
     try:
-        cli_handler = _configure_run_logging(explicit_level=args.log_level)
+        cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
         if args.task_events:
             app.enable_structured_event_logging()
         app.run()
@@ -229,14 +229,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"onestep: {args.target} failed while running: {exc}", file=sys.stderr)
         return 1
     finally:
-        if cli_handler is not None:
+        if cli_logging_state is not None:
+            cli_handler, previous_root_level = cli_logging_state
             root_logger = logging.getLogger()
             root_logger.removeHandler(cli_handler)
+            root_logger.setLevel(previous_root_level)
             cli_handler.close()
     return 0
 
 
-def _configure_run_logging(*, explicit_level: str | None) -> logging.Handler | None:
+def _configure_run_logging(
+    *, explicit_level: str | None
+) -> tuple[logging.Handler, int] | None:
     framework_logger = logging.getLogger("onestep")
     if explicit_level is not None:
         framework_logger.setLevel(getattr(logging, explicit_level))
@@ -248,8 +252,10 @@ def _configure_run_logging(*, explicit_level: str | None) -> logging.Handler | N
         return None
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))
+    previous_root_level = root_logger.level
+    root_logger.setLevel(framework_logger.level)
     root_logger.addHandler(handler)
-    return handler
+    return handler, previous_root_level
 
 
 def _ensure_local_import_paths(target: str | None = None) -> None:

@@ -54,14 +54,14 @@ onestep check your_package.tasks:app   # 启动前校验目标
 
 ### 日志
 
-`onestep run` 默认以 INFO 级别将框架日志和任务生命周期事件写到 stdout。
-应用代码只需创建 `onestep` 命名空间下的业务 logger，不再需要调用
+`onestep run` 默认以 INFO 级别将应用日志、框架日志和任务生命周期事件写到
+stdout。业务 logger 名称不需要以 `onestep` 开头，应用也不再需要调用
 `logging.basicConfig(force=True)` 或注册标准 `StructuredEventLogger`：
 
 ```python
 import logging
 
-logger = logging.getLogger("onestep.billing_sync")
+logger = logging.getLogger("billing.kpi_sync")
 ```
 
 需要查看 fetched、started 和 sink 成功等细节时使用 `--log-level DEBUG`；
@@ -74,7 +74,9 @@ onestep run your_package.tasks:app --no-task-events
 
 显式 `--log-level` 的优先级高于目标加载时配置的级别，包括 YAML 的
 `app.logging.level`。未传该参数时保留目标已配置的级别，否则默认使用 INFO。
-已有 logging handler 和自定义 `StructuredEventLogger` 不会被覆盖或重复注册。
+CLI 自行安装 stdout handler 时，解析后的级别同时适用于任意名称的业务 logger
+和 `onestep` 命名空间。已有 logging handler 和自定义 `StructuredEventLogger`
+不会被覆盖或重复注册；宿主已配置 handler 时，也继续控制自己的 root level。
 
 直接调用 `app.run()` 或 `app.serve()` 不会修改宿主进程日志，也不会自动安装
 任务事件 logger；嵌入式应用仍完全控制自己的日志配置。
