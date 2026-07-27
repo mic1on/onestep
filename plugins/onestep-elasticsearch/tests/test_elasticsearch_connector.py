@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import httpx
 
-from onestep import Envelope
+from onestep import ConnectorErrorKind, ConnectorOperationError, Envelope
 from onestep_elasticsearch.connector import ElasticsearchConnector
 
 
@@ -133,3 +133,72 @@ async def test_owned_client_receives_ca_and_client_certificate(monkeypatch) -> N
     await connector.close()
     await connector.close()
     assert close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_send_waits_for_every_success_item() -> None:
+    calls: list[bytes] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.content)
+        return httpx.Response(200, json={"errors": False, "items": [{"index": {"status": 201}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(index="events", chunk_size=1)
+    await sink.send(Envelope(body=[{"n": 1}, {"n": 2}]))
+    assert len(calls) == 2
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_partial_auto_id_failure_is_uncertain() -> None:
+    responses = [
+        httpx.Response(200, json={"errors": False, "items": [{"index": {"status": 201}}]}),
+        httpx.Response(200, json={"errors": True, "items": [{"index": {"status": 400, "error": {"type": "mapper_parsing_exception", "reason": "bad field"}}}]}),
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(index="events", chunk_size=1)
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body=[{"n": 1}, {"n": "bad"}]))
+    assert captured.value.kind is ConnectorErrorKind.UNCERTAIN
+    assert captured.value.cause.items[0].status == 400
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_429_retries_only_failed_subset() -> None:
+    bodies: list[bytes] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        if len(bodies) == 1:
+            return httpx.Response(200, json={"errors": True, "items": [
+                {"index": {"status": 201}},
+                {"index": {"status": 429, "_id": "2", "error": {"type": "rejected", "reason": "busy"}}},
+            ]})
+        return httpx.Response(200, json={"errors": False, "items": [{"index": {"status": 201}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(index="events", id_field="id")
+    await sink.send(Envelope(body=[{"id": "1"}, {"id": "2"}]))
+    assert bodies[1].count(b"\n") == 2
+    assert b'"_id":"2"' in bodies[1]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_missing_bulk_item_acknowledgement_is_permanent() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"errors": False, "items": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(index="events")
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": "one"}))
+    assert captured.value.kind is ConnectorErrorKind.PERMANENT
+    assert captured.value.cause.items[0].status == 0
+    await client.aclose()
