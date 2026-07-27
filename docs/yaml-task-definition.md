@@ -59,6 +59,8 @@ Notes:
 - this only sets the `onestep` logger namespace
 - it does not configure the root logger, handlers, or formatters
 - `DEBUG` enables low-level framework logs such as successful sink sends
+- `onestep run --log-level LEVEL` overrides this value when explicitly provided
+- without a CLI override, `onestep run` preserves this value and supplies stdout output
 
 For long-lived configs, prefer adding:
 

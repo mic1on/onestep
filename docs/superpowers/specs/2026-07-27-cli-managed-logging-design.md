@@ -177,9 +177,10 @@ When an existing handler is present, the CLI only applies the resolved level to 
 host process. This prevents the CLI from silently weakening an explicitly configured
 handler policy.
 
-The CLI-owned handler is marked internally so repeated in-process CLI invocations in
-tests do not add duplicate handlers. This marker is an implementation detail, not a
-public API.
+The CLI removes and closes a handler it installed after `app.run()` returns. This
+does not affect normal worker output because the handler remains active for the full
+runtime, and it keeps repeated in-process CLI invocations from retaining duplicate or
+stale stream handlers. Handlers owned by the application or host are never removed.
 
 ## Task Event Registration
 
