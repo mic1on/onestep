@@ -25,3 +25,15 @@ def test_root_metadata_integrates_database_plugins() -> None:
         assert f"{package} = {{ workspace = true }}" in text
         plugin_text = (ROOT / "plugins" / package / "pyproject.toml").read_text(encoding="utf-8")
         assert "onestep = { workspace = true }" in plugin_text
+
+
+def test_bundled_worker_copies_and_installs_database_plugins() -> None:
+    text = (ROOT / "docker" / "worker" / "Dockerfile").read_text(encoding="utf-8")
+    for package, module in (
+        ("onestep-elasticsearch", "onestep_elasticsearch"),
+        ("onestep-clickhouse", "onestep_clickhouse"),
+        ("onestep-mongodb", "onestep_mongodb"),
+    ):
+        assert f"COPY plugins/{package}/pyproject.toml plugins/{package}/README.md /tmp/onestep/plugins/{package}/" in text
+        assert f"COPY plugins/{package}/src/{module} /tmp/onestep/plugins/{package}/src/{module}" in text
+        assert f"/tmp/onestep/plugins/{package}" in text
