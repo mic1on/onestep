@@ -6,7 +6,7 @@
 
 **Architecture:** Keep all work under `plugins/onestep-clickhouse` and wrap the vendor-supported `clickhouse-connect` async client behind a lazily owned `ClickHouseConnector`. Normalize configured or inferred columns before the first network call, submit chunks sequentially through `AsyncClient.insert`, reject fire-and-forget async insert settings, and surface later-chunk failures as `UNCERTAIN`.
 
-**Tech Stack:** Python `>=3.9`, `onestep>=1.7.1`, `clickhouse-connect>=0.8`, Hatch, pytest, pytest-asyncio, ClickHouse LTS/current.
+**Tech Stack:** Python `>=3.9`, `onestep>=1.7.1`, `clickhouse-connect[async]>=0.8`, Hatch, pytest, pytest-asyncio, ClickHouse LTS/current.
 
 ---
 
@@ -88,7 +88,7 @@ description = "ClickHouse connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-dependencies = ["onestep>=1.7.1", "clickhouse-connect>=0.8"]
+dependencies = ["onestep>=1.7.1", "clickhouse-connect[async]>=0.8"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]

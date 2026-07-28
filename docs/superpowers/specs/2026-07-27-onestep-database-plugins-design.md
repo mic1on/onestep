@@ -330,7 +330,7 @@ It performs acknowledged inserts into an existing table. It does not create or
 migrate databases/tables, model ClickHouse engines, query data, or implement
 upsert/mutation semantics.
 
-The client is `clickhouse-connect>=0.8` using
+The client is `clickhouse-connect[async]>=0.8` using
 `clickhouse_connect.get_async_client`. This vendor-supported async facade avoids a
 custom executor and keeps task concurrency plus the client pool as the only
 concurrency controls.
@@ -780,7 +780,7 @@ entry point:
 | Package | Runtime dependency | Entry point |
 | --- | --- | --- |
 | `onestep-elasticsearch` | `httpx>=0.27` | `elasticsearch = "onestep_elasticsearch:register"` |
-| `onestep-clickhouse` | `clickhouse-connect>=0.8` | `clickhouse = "onestep_clickhouse:register"` |
+| `onestep-clickhouse` | `clickhouse-connect[async]>=0.8` | `clickhouse = "onestep_clickhouse:register"` |
 | `onestep-mongodb` | `pymongo>=4.13` | `mongodb = "onestep_mongodb:register"` |
 
 All also require `onestep>=1.7.1`, Python `>=3.9`, and pytest/pytest-asyncio test
