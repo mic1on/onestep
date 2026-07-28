@@ -48,3 +48,20 @@ def test_integration_harness_contains_database_services_and_tests() -> None:
     assert "plugins/onestep-clickhouse/tests/integration" in runner
     assert "plugins/onestep-mongodb/tests/integration" in runner
     assert "plugins/onestep-elasticsearch/tests/integration" not in runner
+
+
+def test_database_plugin_workflows_gate_build_live_and_publish() -> None:
+    expected = {
+        "elasticsearch": ("onestep-elasticsearch", "ELASTICSEARCH_PYPI_API_TOKEN"),
+        "clickhouse": ("onestep-clickhouse", "CLICKHOUSE_PYPI_API_TOKEN"),
+        "mongodb": ("onestep-mongodb", "MONGODB_PYPI_API_TOKEN"),
+    }
+    for slug, (package, secret) in expected.items():
+        text = (ROOT / ".github" / "workflows" / f"plugin-{slug}.yml").read_text(encoding="utf-8")
+        assert f"PLUGIN_PACKAGE: {package}" in text
+        assert 'python-version: ["3.9", "3.10", "3.11", "3.12"]' in text
+        assert "--sdist --wheel" in text and "twine check" in text
+        assert "live-compatibility" in text
+        assert "id-token: write" in text and secret in text
+        assert "needs.test.result == 'success'" in text
+        assert "needs.live-compatibility.result == 'success'" in text
