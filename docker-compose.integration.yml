@@ -92,7 +92,7 @@ services:
     environment:
       CLICKHOUSE_DB: onestep
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_PASSWORD: clickhouse
     ports:
       - "8123:8123"
     healthcheck:

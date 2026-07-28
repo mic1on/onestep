@@ -100,7 +100,7 @@ jobs:
           if [ "$DISTRIBUTION" = elasticsearch ]; then
             docker run -d --name search -p 9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS='-Xms512m -Xmx512m' "$IMAGE"
           else
-            docker run -d --name search -p 9200:9200 -e discovery.type=single-node -e plugins.security.disabled=true -e OPENSEARCH_JAVA_OPTS='-Xms512m -Xmx512m' "$IMAGE"
+            docker run -d --name search -p 9200:9200 -e discovery.type=single-node -e plugins.security.disabled=true -e OPENSEARCH_INITIAL_ADMIN_PASSWORD=myStrongPassword123! -e OPENSEARCH_JAVA_OPTS='-Xms512m -Xmx512m' "$IMAGE"
           fi
           for attempt in $(seq 1 90); do curl -fsS http://127.0.0.1:9200 >/dev/null && exit 0; sleep 2; done
           docker logs search
