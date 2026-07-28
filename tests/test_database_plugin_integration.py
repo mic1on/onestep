@@ -37,3 +37,14 @@ def test_bundled_worker_copies_and_installs_database_plugins() -> None:
         assert f"COPY plugins/{package}/pyproject.toml plugins/{package}/README.md /tmp/onestep/plugins/{package}/" in text
         assert f"COPY plugins/{package}/src/{module} /tmp/onestep/plugins/{package}/src/{module}" in text
         assert f"/tmp/onestep/plugins/{package}" in text
+
+
+def test_integration_harness_contains_database_services_and_tests() -> None:
+    compose = (ROOT / "docker-compose.integration.yml").read_text(encoding="utf-8")
+    setup = (ROOT / "scripts" / "setup-integration-env.sh").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "run-integration-tests.sh").read_text(encoding="utf-8")
+    assert "clickhouse:" in compose and "mongo:" in compose
+    assert "ONESTEP_CLICKHOUSE_DSN" in setup and "ONESTEP_MONGODB_URI" in setup
+    assert "plugins/onestep-clickhouse/tests/integration" in runner
+    assert "plugins/onestep-mongodb/tests/integration" in runner
+    assert "plugins/onestep-elasticsearch/tests/integration" not in runner

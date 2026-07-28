@@ -28,6 +28,8 @@ eval "$("$ROOT_DIR/scripts/setup-integration-env.sh")"
 test_paths=()
 for path in \
   tests/integration \
+  plugins/onestep-clickhouse/tests/integration \
+  plugins/onestep-mongodb/tests/integration \
   plugins/onestep-rabbitmq/tests/integration \
   plugins/onestep-redis/tests/integration \
   plugins/onestep-mysql/tests/integration \

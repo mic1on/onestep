@@ -85,3 +85,30 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3
+    container_name: onestep-clickhouse
+    environment:
+      CLICKHOUSE_DB: onestep
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    ports:
+      - "8123:8123"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  mongo:
+    image: mongo:8.0
+    container_name: onestep-mongodb
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
