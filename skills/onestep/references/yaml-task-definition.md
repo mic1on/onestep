@@ -228,9 +228,14 @@ Built-in resource types:
 
 Plugin resource types:
 
+- `onestep-elasticsearch`: `elasticsearch`, `elasticsearch_bulk_sink`
+- `onestep-clickhouse`: `clickhouse`, `clickhouse_table_sink`
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-mongodb`: `mongodb`, `mongodb_polling`, `mongodb_change_stream`, `mongodb_collection_sink`
+
+Full field reference and YAML examples for every plugin resource type are in [docs/yaml-task-definition.md](/docs/yaml-task-definition.md).
 
 Resources can reference other resources by name, for example `rabbitmq_queue.connector: rmq` or `mysql_incremental.state: cursor_store`.

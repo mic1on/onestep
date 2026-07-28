@@ -56,6 +56,9 @@ Live connector tests usually require external services or credentials:
 - Redis
 - MySQL
 - AWS SQS
+- Elasticsearch / OpenSearch (for `onestep-elasticsearch` integration tests)
+- ClickHouse (for `onestep-clickhouse` integration tests)
+- MongoDB replica set (for `onestep-mongodb` integration tests)
 
 Use the repo scripts or docker compose files only when the user asks for integration validation or the task specifically touches live connector behavior.
 
