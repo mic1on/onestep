@@ -31,6 +31,11 @@ def test_public_surface_and_entry_point() -> None:
     )
 
 
+def test_package_metadata_installs_clickhouse_async_support() -> None:
+    requirements = importlib_metadata.requires("onestep-clickhouse") or []
+    assert "clickhouse-connect[async]>=0.8" in requirements
+
+
 def _config(resources):
     return {
         "apiVersion": "onestep/v1alpha1",
