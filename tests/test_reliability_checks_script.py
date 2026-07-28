@@ -19,7 +19,10 @@ def test_reliability_check_script_runs_plugin_suites_in_isolated_processes() -> 
     text = SCRIPT.read_text(encoding="utf-8")
     assert '"$PYTHON_BIN" -m pytest -q -m "not integration" tests "$@"' in text
     for plugin in (
+        "plugins/onestep-clickhouse/tests",
+        "plugins/onestep-elasticsearch/tests",
         "plugins/onestep-feishu-bitable/tests",
+        "plugins/onestep-mongodb/tests",
         "plugins/onestep-mysql/tests",
         "plugins/onestep-postgres/tests",
         "plugins/onestep-rabbitmq/tests",
