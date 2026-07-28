@@ -17,7 +17,7 @@ Preconditions:
 - `plugins/onestep-elasticsearch/pyproject.toml` declares version `0.1.0`, Python
   `>=3.9`, `onestep>=1.7.1`, and `httpx>=0.27`.
 - `plugins/onestep-clickhouse/pyproject.toml` declares version `0.1.0`, Python
-  `>=3.9`, `onestep>=1.7.1`, and `clickhouse-connect[async]>=0.8`.
+  `>=3.9`, `onestep>=1.7.1`, and `clickhouse-connect>=0.8`.
 - `plugins/onestep-mongodb/pyproject.toml` declares version `0.1.0`, Python
   `>=3.9`, `onestep>=1.7.1`, and `pymongo>=4.13`.
 - Each package's non-integration tests and wheel/sdist checks pass without any root
