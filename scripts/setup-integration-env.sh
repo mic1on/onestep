@@ -206,7 +206,7 @@ wait_for_rabbitmq
 wait_for_mysql
 wait_for_redis
 wait_for_kafka
-docker exec onestep-mongodb mongosh --quiet /dev/stdin < "$ROOT_DIR/docker/mongodb/init-replica-set.js"
+docker exec -i onestep-mongodb mongosh --quiet < "$ROOT_DIR/docker/mongodb/init-replica-set.js"
 wait_for_url "http://127.0.0.1:8123/ping" "ClickHouse"
 wait_for_mongodb
 
