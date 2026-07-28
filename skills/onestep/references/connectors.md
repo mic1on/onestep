@@ -4,7 +4,10 @@ Use this reference when wiring onestep resources to queues, polling backends, sc
 
 ## General Rules
 
-- Install only the needed package: `onestep-mysql`, `onestep-postgres`, `onestep-mq`, `onestep-redis`, `onestep-sqs`, `onestep-kafka`, or `onestep[yaml]`.
+- Install only the needed package: `onestep-mysql`, `onestep-postgres`,
+  `onestep-mq`, `onestep-redis`, `onestep-sqs`, `onestep-kafka`,
+  `onestep-elasticsearch`, `onestep-clickhouse`, `onestep-mongodb`, or
+  `onestep[yaml]`.
 - Prefer environment variables for DSNs, tokens, and queue URLs in YAML.
 - In YAML, define shared connection resources first, then sources/sinks that reference them by name.
 - Keep connector options minimal until the deployment requires tuning.
@@ -200,6 +203,137 @@ output send and before the Kafka commit succeeds.
 
 `group_id` is required when a `kafka_topic` is used as a source. Sink-only
 topics may omit it.
+
+## Elasticsearch And OpenSearch
+
+`onestep-elasticsearch` uses a shared HTTP(S) boundary for Elasticsearch and
+OpenSearch. It provides an acknowledged bulk sink, not a search source:
+
+```yaml
+resources:
+  search:
+    type: elasticsearch
+    hosts: ["${SEARCH_URL}"]
+    distribution: auto
+    username: "${SEARCH_USERNAME}"
+    password: "${SEARCH_PASSWORD}"
+    verify_certs: true
+    ca_certs: "${SEARCH_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+    request_timeout_s: 30
+
+  events:
+    type: elasticsearch_bulk_sink
+    connector: search
+    index: events-v1
+    operation: index
+    id_field: event_id
+    chunk_size: 500
+    max_chunk_bytes: 5000000
+    refresh: false
+```
+
+Use `distribution: auto`, `elasticsearch`, or `opensearch`. Configure no auth
+mode or exactly one of Basic, API key, or Bearer. A deterministic `id_field`
+makes repeated `index` writes converge; auto-generated IDs and `create` writes
+do not have that guarantee.
+
+## ClickHouse
+
+`onestep-clickhouse` inserts acknowledged row batches into an existing table:
+
+```yaml
+resources:
+  analytics:
+    type: clickhouse
+    dsn: "${CLICKHOUSE_DSN}"
+    client_options:
+      connect_timeout: 10
+      send_receive_timeout: 30
+
+  events:
+    type: clickhouse_table_sink
+    connector: analytics
+    table: events
+    columns: [event_id, occurred_at, kind, payload]
+    batch_size: 1000
+    settings:
+      async_insert: 0
+```
+
+Configured `columns` must exist in every row with no extra keys. Without
+`columns`, the first row fixes insertion order and every later row must have the
+same key set. If `async_insert` is enabled, also set `wait_for_async_insert: 1`;
+fire-and-forget inserts are rejected.
+
+## MongoDB
+
+MongoDB change streams require a replica set or sharded cluster. Production
+sources should bind an explicit durable cursor store:
+
+```yaml
+resources:
+  mongo:
+    type: mongodb
+    uri: "${MONGODB_URI}"
+    database: app
+    client_options:
+      serverSelectionTimeoutMS: 10000
+
+  cursor_db:
+    type: postgres
+    dsn: "${POSTGRES_DSN}"
+
+  events_cursor:
+    type: postgres_cursor_store
+    connector: cursor_db
+    table: onestep_cursor
+
+  events_poll:
+    type: mongodb_polling
+    connector: mongo
+    collection: events
+    cursor: [updated_at, _id]
+    batch_size: 100
+    poll_interval_s: 1
+    state: events_cursor
+    state_key: events-poll
+
+  events_changes:
+    type: mongodb_change_stream
+    connector: mongo
+    collection: events
+    full_document: updateLookup
+    max_await_time_ms: 1000
+    batch_size: 100
+    poll_interval_s: 0.1
+    state: events_cursor
+    state_key: events-change-stream
+
+  archive:
+    type: mongodb_collection_sink
+    connector: mongo
+    collection: events_archive
+    mode: upsert
+    keys: [event_id]
+    ordered: true
+    batch_size: 1000
+```
+
+Polling uses deterministic ascending keyset traversal with `_id` as the final
+tie-breaker. It is not CDC: deletes are invisible and non-monotonic cursor
+updates can be missed. Use raw change-stream events when those changes matter.
+
+All three bulk sinks accept one mapping or a non-empty sequence of mappings and
+await every backend chunk acknowledgement. A retry can repeat committed chunks;
+use stable IDs/keys or backend dedup-aware schema design when duplicates matter.
+
+MongoDB polling/change streams may use in-memory state for development. Production
+restart guarantees require an explicit durable `state` cursor store. Change streams
+emit raw events and default to `full_document: updateLookup`.
+
+When part of a logical batch committed before a later failure, the connectors
+report `UNCERTAIN` unless replay of the entire payload is demonstrably
+idempotent. onestep does not automatically retry uncertain writes.
 
 ## Webhook
 

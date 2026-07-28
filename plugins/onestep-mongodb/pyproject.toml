@@ -22,7 +22,7 @@ build-backend = "hatchling.build"
 packages = ["src/onestep_mongodb"]
 
 [tool.uv.sources]
-onestep = { path = "../..", editable = true }
+onestep = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

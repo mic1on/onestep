@@ -16,7 +16,8 @@ Webhook 场景。你只需用 `source` 和可选的 `sink` 声明一个任务，
 处理拉取、并发、重试、死信和遥测上报。
 
 - **一个装饰器**，把任意 async 函数变成被托管的任务
-- **可插拔连接器**：内存、MySQL、RabbitMQ、Redis、SQS、Kafka、飞书多维表格、MongoDB
+- **可插拔连接器**：内存、MySQL、RabbitMQ、Redis、SQS、Kafka、
+  Elasticsearch/OpenSearch、ClickHouse、MongoDB、飞书多维表格
 - **多种调度方式**：间隔、Cron、Webhook、基于数据库的队列
 - **生产可用**：重试、死信、超时、状态存储、指标、控制面 Reporter
 - **两种配置方式**：纯 Python，或声明式 YAML
@@ -32,6 +33,9 @@ pip install onestep
 pip install 'onestep[yaml]'          # YAML 任务定义
 pip install 'onestep[control-plane]' # 向 onestep-control-plane 上报遥测
 pip install 'onestep[kafka]'         # Kafka topic source/sink，Python 3.10+
+pip install 'onestep[elasticsearch]' # Elasticsearch/OpenSearch bulk sink
+pip install 'onestep[clickhouse]'    # ClickHouse 表 sink
+pip install 'onestep[mongodb]'       # MongoDB 轮询、变更流和 sink
 ```
 
 定义一个 app，然后用 `onestep` CLI 运行：
@@ -85,8 +89,8 @@ CLI 自行安装 stdout handler 时，解析后的级别同时适用于任意名
 
 | 能力 | 入口 |
 | --- | --- |
-| **拉取任务**：队列、调度、Webhook、DB 游标 | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、MySQL `table_queue` / `incremental` / binlog、RabbitMQ `queue`、Redis `stream`、SQS `queue`、Kafka `kafka_topic` |
-| **输出结果**：写入下游 sink | 任意 source 也可作 sink；MySQL `table_sink`；Kafka `kafka_topic`；HTTP `http_sink`；飞书多维表格 sink |
+| **拉取任务**：队列、调度、Webhook、DB 游标 | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、MySQL `table_queue` / `incremental` / binlog、RabbitMQ `queue`、Redis `stream`、SQS `queue`、Kafka `kafka_topic`、MongoDB `mongodb_polling` / `mongodb_change_stream` |
+| **输出结果**：写入下游 sink | 任意 source 也可作 sink；MySQL `table_sink`；Kafka `kafka_topic`；Elasticsearch/OpenSearch `elasticsearch_bulk_sink`；ClickHouse `clickhouse_table_sink`；MongoDB `mongodb_collection_sink`；HTTP `http_sink`；飞书多维表格 sink |
 | **定时调度**：周期任务 | `IntervalSource.every(...)`、`CronSource(...)`，支持重叠控制（`allow` / `skip` / `queue`） |
 | **接收外部事件** | `WebhookSource`，支持 Bearer 鉴权、共享监听、多种 body 解析 |
 | **容错**：重试、死信、超时 | 重试策略、`dead_letter` sink、单任务 `timeout_s`、失败分类（`error` / `timeout` / `cancelled`） |
@@ -135,7 +139,20 @@ async def main():
 | **SQS** | `queue`，支持批量删除与心跳可见性续期 | `pip install onestep-sqs` |
 | **Kafka** | `kafka_topic` source/sink，使用手动 offset commit | `pip install onestep-kafka` |
 | **飞书多维表格** | 增量 source 与 upsert sink | `pip install onestep-feishu-bitable` |
-| **MongoDB** | 确定性轮询、原始变更流、insert/upsert sink | `pip install onestep-mongodb` |
+| **Elasticsearch/OpenSearch** | `elasticsearch` 连接器和基于共同 REST bulk 边界、等待确认的 `elasticsearch_bulk_sink` | `pip install 'onestep[elasticsearch]'`（`onestep-elasticsearch`） |
+| **ClickHouse** | `clickhouse` 连接器和向现有表执行确认写入的 `clickhouse_table_sink` | `pip install 'onestep[clickhouse]'`（`onestep-clickhouse`） |
+| **MongoDB** | `mongodb_polling`、原始 `mongodb_change_stream` 事件和 insert/upsert `mongodb_collection_sink` | `pip install 'onestep[mongodb]'`（`onestep-mongodb`） |
+
+三个数据库 bulk sink 都接受一个 mapping 或非空 mapping 序列，并等待每个后端
+分块确认。onestep 仍采用 at-least-once 语义：重试可能重复已经提交的数据项或
+分块；对重复敏感时，应使用稳定文档 ID、upsert key，或支持去重的 ClickHouse
+表结构。若部分提交后的最终写入集合无法确定，错误会分类为 `UNCERTAIN`，不会
+被自动重放。
+
+Elasticsearch 插件面向 Elasticsearch/OpenSearch 共同的 HTTP bulk 能力，不以
+任一厂商 Python client 作为兼容边界。MongoDB 轮询和变更流在开发环境可以使用
+内存状态，但生产环境的重启保证要求显式配置 durable cursor store；变更流输出
+原始事件，默认 `full_document: updateLookup`。
 
 或一次性安装全部：
 

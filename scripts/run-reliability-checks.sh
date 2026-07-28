@@ -14,8 +14,11 @@ echo "==> Running core non-integration tests"
 "$PYTHON_BIN" -m pytest -q -m "not integration" tests "$@"
 
 plugin_paths=(
+  "plugins/onestep-clickhouse/tests"
   "plugins/onestep-control-plane/tests"
+  "plugins/onestep-elasticsearch/tests"
   "plugins/onestep-feishu-bitable/tests"
+  "plugins/onestep-mongodb/tests"
   "plugins/onestep-mysql/tests"
   "plugins/onestep-postgres/tests"
   "plugins/onestep-rabbitmq/tests"

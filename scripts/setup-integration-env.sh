@@ -17,6 +17,8 @@ MYSQL_PORT="${ONESTEP_MYSQL_PORT:-3306}"
 MYSQL_DATABASE="${ONESTEP_MYSQL_DATABASE:-onestep}"
 MYSQL_USER="${ONESTEP_MYSQL_USER:-root}"
 MYSQL_PASSWORD="${ONESTEP_MYSQL_PASSWORD:-root}"
+CLICKHOUSE_DSN="${ONESTEP_CLICKHOUSE_DSN:-http://default:clickhouse@127.0.0.1:8123/onestep}"
+MONGODB_URI="${ONESTEP_MONGODB_URI:-mongodb://127.0.0.1:27017/onestep?replicaSet=rs0}"
 PYTHON_BIN="${ONESTEP_PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
@@ -143,6 +145,33 @@ raise SystemExit(f"Timed out waiting for Kafka: {last_error}")
 PY
 }
 
+wait_for_mongodb() {
+  MONGODB_URI="$MONGODB_URI" "$PYTHON_BIN" - <<'PY'
+import asyncio
+import os
+
+from pymongo import AsyncMongoClient
+
+
+async def main():
+    last_error = None
+    for _ in range(60):
+        client = AsyncMongoClient(os.environ["MONGODB_URI"], serverSelectionTimeoutMS=2000)
+        try:
+            await client.admin.command("ping")
+            await client.close()
+            return
+        except Exception as exc:
+            last_error = exc
+            await client.close()
+            await asyncio.sleep(2)
+    raise RuntimeError(f"Timed out waiting for MongoDB replica set: {last_error}")
+
+
+asyncio.run(main())
+PY
+}
+
 ensure_sqs_queue() {
   "$PYTHON_BIN" - <<'PY'
 import boto3
@@ -177,6 +206,9 @@ wait_for_rabbitmq
 wait_for_mysql
 wait_for_redis
 wait_for_kafka
+docker exec -i onestep-mongodb mongosh --quiet < "$ROOT_DIR/docker/mongodb/init-replica-set.js" >/dev/null 2>&1 || true
+wait_for_url "http://127.0.0.1:8123/ping" "ClickHouse"
+wait_for_mongodb
 
 SQS_QUEUE_JSON="$(LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" AWS_REGION_VALUE="$AWS_REGION_VALUE" SQS_QUEUE_NAME="$SQS_QUEUE_NAME" ensure_sqs_queue)"
 SQS_QUEUE_URL="$(printf '%s' "$SQS_QUEUE_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["QueueUrl"])')"
@@ -201,4 +233,6 @@ export ONESTEP_MYSQL_HOST="$MYSQL_HOST"
 export ONESTEP_MYSQL_PORT="$MYSQL_PORT"
 export ONESTEP_MYSQL_DATABASE="$MYSQL_DATABASE"
 export ONESTEP_MYSQL_USER="$MYSQL_USER"
+export ONESTEP_CLICKHOUSE_DSN="$CLICKHOUSE_DSN"
+export ONESTEP_MONGODB_URI="$MONGODB_URI"
 ENV

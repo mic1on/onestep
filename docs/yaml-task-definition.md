@@ -504,6 +504,7 @@ configured `body` values can reference `body`, `payload`, `meta`, and
 Plugin resource types:
 
 - `onestep-elasticsearch`: `elasticsearch`, `elasticsearch_bulk_sink`
+- `onestep-clickhouse`: `clickhouse`, `clickhouse_table_sink`
 - `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
@@ -511,6 +512,258 @@ Plugin resource types:
 - `onestep-kafka`: `kafka`, `kafka_topic`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
 - `onestep-mongodb`: `mongodb`, `mongodb_polling`, `mongodb_change_stream`, `mongodb_collection_sink`
+
+### Elasticsearch And OpenSearch Resources
+
+Install `onestep-elasticsearch` directly or with
+`pip install 'onestep[elasticsearch]'`. One connector serves the common
+Elasticsearch/OpenSearch HTTP bulk boundary:
+
+```yaml
+resources:
+  search:
+    type: elasticsearch
+    hosts: ["${SEARCH_URL}"]
+    distribution: auto
+    username: "${SEARCH_USERNAME}"
+    password: "${SEARCH_PASSWORD}"
+    verify_certs: true
+    ca_certs: "${SEARCH_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}"
+    request_timeout_s: 30
+
+  events:
+    type: elasticsearch_bulk_sink
+    connector: search
+    index: events-v1
+    operation: index
+    id_field: event_id
+    chunk_size: 500
+    max_chunk_bytes: 5000000
+    refresh: false
+```
+
+`elasticsearch` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `elasticsearch` | Resource type. |
+| `hosts` | required | Non-empty HTTP(S) URL string or string list. |
+| `distribution` | `auto` | `auto`, `elasticsearch`, or `opensearch`. |
+| `username` | optional | Basic-auth username; requires `password`. |
+| `password` | optional | Basic-auth password; requires `username`; secret. |
+| `api_key` | optional | API-key credential; secret. |
+| `bearer_token` | optional | Bearer credential; secret. |
+| `headers` | optional | Secret mapping of custom HTTP headers. |
+| `verify_certs` | `true` | Enable TLS certificate verification. |
+| `ca_certs` | optional | CA bundle path. |
+| `client_cert` | optional | Client certificate path. |
+| `client_key` | optional | Client key path; secret. |
+| `request_timeout_s` | `10.0` | Positive request timeout in seconds. |
+
+Configure no authentication or exactly one of Basic, API key, or Bearer. The
+Basic pair counts as one mode. Strict mode rejects partial Basic credentials,
+multiple auth modes, invalid host schemes, unknown fields, and non-positive
+timeouts without contacting either service.
+
+`elasticsearch_bulk_sink` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `elasticsearch_bulk_sink` | Resource type. |
+| `connector` | required | Reference to an `elasticsearch` connector. |
+| `index` | required | Non-empty static target index. |
+| `operation` | `index` | `index` or `create`. |
+| `id_field` | optional | Payload field copied to `_id` and retained in `_source`. |
+| `chunk_size` | `500` | Positive maximum actions per request. |
+| `max_chunk_bytes` | `5000000` | Positive maximum serialized NDJSON bytes per request. |
+| `refresh` | `false` | `false`, `true`, or `wait_for`. |
+| `pipeline` | optional | Static ingest pipeline name. |
+
+The index and operation are static resource configuration, not payload-routing
+fields. No Elasticsearch/OpenSearch search source is registered in this release.
+
+### ClickHouse Resources
+
+Install `onestep-clickhouse` directly or with
+`pip install 'onestep[clickhouse]'`:
+
+```yaml
+resources:
+  analytics:
+    type: clickhouse
+    dsn: "${CLICKHOUSE_DSN}"
+    client_options:
+      connect_timeout: 10
+      send_receive_timeout: 30
+
+  events:
+    type: clickhouse_table_sink
+    connector: analytics
+    table: events
+    columns: [event_id, occurred_at, kind, payload]
+    batch_size: 1000
+    settings:
+      async_insert: 0
+```
+
+`clickhouse` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `clickhouse` | Resource type. |
+| `dsn` | required | Non-empty ClickHouse or HTTP(S) DSN; secret. |
+| `client_options` | optional | Secret mapping passed to async client creation. |
+
+`clickhouse_table_sink` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `clickhouse_table_sink` | Resource type. |
+| `connector` | required | Reference to a `clickhouse` connector. |
+| `table` | required | Non-empty existing table name. |
+| `columns` | optional | Non-empty unique list fixing row column order. |
+| `batch_size` | `1000` | Positive maximum rows per insert. |
+| `settings` | optional | Mapping passed to each insert. |
+
+With configured `columns`, every row must contain all named columns and no
+others. Without `columns`, the first row fixes insertion order and later rows
+must have the same key set. If `settings.async_insert` is enabled, strict mode
+also requires `wait_for_async_insert: 1`; fire-and-forget inserts are rejected.
+
+### MongoDB Resources
+
+Install `onestep-mongodb` directly or with `pip install 'onestep[mongodb]'`.
+Change streams require a replica set or sharded cluster. This production example
+uses an explicit durable PostgreSQL cursor store:
+
+```yaml
+resources:
+  mongo:
+    type: mongodb
+    uri: "${MONGODB_URI}"
+    database: app
+    client_options:
+      serverSelectionTimeoutMS: 10000
+
+  cursor_db:
+    type: postgres
+    dsn: "${POSTGRES_DSN}"
+
+  events_cursor:
+    type: postgres_cursor_store
+    connector: cursor_db
+    table: onestep_cursor
+
+  events_poll:
+    type: mongodb_polling
+    connector: mongo
+    collection: events
+    cursor: [updated_at, _id]
+    filter:
+      archived: false
+    batch_size: 100
+    poll_interval_s: 1
+    state: events_cursor
+    state_key: events-poll
+
+  events_changes:
+    type: mongodb_change_stream
+    connector: mongo
+    collection: events
+    pipeline:
+      - $match:
+          operationType:
+            $in: [insert, update, delete]
+    full_document: updateLookup
+    max_await_time_ms: 1000
+    batch_size: 100
+    poll_interval_s: 0.1
+    state: events_cursor
+    state_key: events-change-stream
+
+  archive:
+    type: mongodb_collection_sink
+    connector: mongo
+    collection: events_archive
+    mode: upsert
+    keys: [event_id]
+    ordered: true
+    batch_size: 1000
+```
+
+`mongodb` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `mongodb` | Resource type. |
+| `uri` | required | Non-empty MongoDB URI; secret. |
+| `database` | required | Non-empty database name. |
+| `client_options` | optional | Secret mapping passed to `AsyncMongoClient`. |
+
+Strict mode rejects an unacknowledged `w=0` write concern.
+
+`mongodb_polling` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `mongodb_polling` | Resource type. |
+| `connector` | required | Reference to a `mongodb` connector. |
+| `collection` | required | Non-empty collection name. |
+| `cursor` | `[_id]` | Non-empty unique field list; explicit `_id` must be final. |
+| `filter` | optional | Query mapping combined with the keyset predicate. |
+| `projection` | optional | Projection mapping. |
+| `batch_size` | `100` | Positive maximum documents per fetch. |
+| `poll_interval_s` | `1.0` | Non-negative delay between empty polls. |
+| `state` | optional | Cursor-store resource reference. |
+| `state_key` | optional | Persistent cursor key override. |
+| `initial_cursor` | optional | JSON cursor used only when stored state is absent. |
+
+When `_id` is not configured, it is appended as the deterministic final
+tie-breaker. Polling is ascending keyset traversal, not CDC: deletes are
+invisible and updates that do not advance a cursor field can be missed.
+
+`mongodb_change_stream` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `mongodb_change_stream` | Resource type. |
+| `connector` | required | Reference to a `mongodb` connector. |
+| `collection` | required | Non-empty collection name. |
+| `pipeline` | optional | JSON list of aggregation stages. |
+| `full_document` | `updateLookup` | Supported PyMongo full-document option. |
+| `max_await_time_ms` | `1000` | Positive server await time. |
+| `batch_size` | `100` | Positive maximum events per fetch. |
+| `poll_interval_s` | `0.1` | Non-negative delay after an empty fetch. |
+| `state` | optional | Cursor-store resource reference. |
+| `state_key` | optional | Persistent resume-token key override. |
+
+Change streams emit complete raw MongoDB change events. Without stored state,
+they start at the current server position rather than replaying collection
+history. Invalid or expired resume tokens fail permanently and require an
+explicit operator reset.
+
+`mongodb_collection_sink` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `mongodb_collection_sink` | Resource type. |
+| `connector` | required | Reference to a `mongodb` connector. |
+| `collection` | required | Non-empty collection name. |
+| `mode` | `insert` | `insert` or `upsert`. |
+| `keys` | required for `upsert` | Non-empty unique key-field list. |
+| `ordered` | `true` | Preserve ordered bulk-write behavior. |
+| `batch_size` | `1000` | Positive maximum documents per write. |
+
+All three database bulk sinks accept one mapping or a non-empty sequence of
+mappings and await every backend chunk acknowledgement. A retry can repeat
+committed chunks; use stable IDs/keys or backend dedup-aware schema design when
+duplicates matter. A partial commit is classified as `UNCERTAIN` unless replay
+of the complete payload is demonstrably idempotent.
+
+MongoDB polling and change streams may use in-memory state for development.
+Production restart guarantees require an explicit durable `state` cursor store.
+Resume tokens and cursor values use BSON Extended JSON when stored through a
+generic cursor store.
 
 `kafka_topic` can be used as a source, sink, or both. When used as a source,
 set `group_id`; the plugin disables Kafka auto commit and commits offsets only

@@ -1,17 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Adds `elasticsearch`, `clickhouse`, and `mongodb` optional extras for the three independently published connector plugins.
+- Bundles the three plugins in the worker image and adds isolated reliability/live compatibility gates.
+- Does not change core runtime, delivery, retry, reporter, or control-plane behavior.
+
+## onestep-elasticsearch 0.1.0
+
+- Adds the common Elasticsearch/OpenSearch HTTP connector and acknowledged bulk sink.
+- Registers `elasticsearch` and `elasticsearch_bulk_sink` with strict catalog metadata.
+- Covers Elasticsearch 8/9 and OpenSearch 2/3 before publishing.
+
+## onestep-clickhouse 0.1.0
+
+- Adds acknowledged async ClickHouse table inserts with explicit mapping-or-sequence batching.
+- Registers `clickhouse` and `clickhouse_table_sink` with strict catalog metadata.
+
 ## onestep-mongodb 0.1.0
 
-- Adds the `onestep-mongodb` plugin package with deterministic collection polling,
-  raw change-stream sources, and acknowledged insert and upsert collection sinks.
-- Registers YAML resource types for `mongodb`, `mongodb_polling`,
-  `mongodb_change_stream`, and `mongodb_collection_sink`.
-- Uses BSON Extended JSON for resume-token and cursor-state durability in generic
-  cursor stores.
-- Preserves redacted MongoDB driver error semantics through classified
-  `ConnectorOperationError` kinds.
-- Adds focused unit tests, runtime shutdown contract tests, replica-set integration
-  coverage, package validation, and metadata checks.
+- Adds deterministic polling, raw-event resumable change streams using `updateLookup`, and insert/upsert sinks.
+- Requires explicit durable cursor state for production restart guarantees while retaining in-memory development defaults.
 
 ## 1.7.2
 

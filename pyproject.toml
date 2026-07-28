@@ -48,6 +48,15 @@ sqs = [
 kafka = [
     "onestep-kafka>=0.1.1; python_version >= '3.10'",
 ]
+elasticsearch = [
+    "onestep-elasticsearch>=0.1.0",
+]
+clickhouse = [
+    "onestep-clickhouse>=0.1.0",
+]
+mongodb = [
+    "onestep-mongodb>=0.1.0",
+]
 test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -63,6 +72,9 @@ integration = [
     "onestep-postgres>=0.1.1",
     "onestep-sqs>=0.2.2",
     "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-elasticsearch>=0.1.0",
+    "onestep-clickhouse>=0.1.0",
+    "onestep-mongodb>=0.1.0",
 ]
 all = [
     "onestep-control-plane>=0.1.1",
@@ -73,6 +85,9 @@ all = [
     "onestep-postgres>=0.1.1",
     "onestep-sqs>=0.2.2",
     "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-elasticsearch>=0.1.0",
+    "onestep-clickhouse>=0.1.0",
+    "onestep-mongodb>=0.1.0",
 ]
 dev = [
     "onestep-control-plane>=0.1.1",
@@ -85,6 +100,9 @@ dev = [
     "onestep-postgres>=0.1.1",
     "onestep-sqs>=0.2.2",
     "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-elasticsearch>=0.1.0",
+    "onestep-clickhouse>=0.1.0",
+    "onestep-mongodb>=0.1.0",
 ]
 
 [project.scripts]
@@ -99,6 +117,9 @@ members = [
     "plugins/onestep-mysql",
     "plugins/onestep-postgres",
     "plugins/onestep-sqs",
+    "plugins/onestep-elasticsearch",
+    "plugins/onestep-clickhouse",
+    "plugins/onestep-mongodb",
 ]
 
 [tool.uv.sources]
@@ -109,6 +130,9 @@ onestep-postgres = { workspace = true }
 onestep-sqs = { workspace = true }
 onestep-control-plane = { workspace = true }
 onestep-kafka = { path = "plugins/onestep-kafka" }
+onestep-elasticsearch = { workspace = true }
+onestep-clickhouse = { workspace = true }
+onestep-mongodb = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

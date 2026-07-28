@@ -26,6 +26,12 @@ COPY plugins/onestep-sqs/pyproject.toml plugins/onestep-sqs/README.md /tmp/onest
 COPY plugins/onestep-sqs/src/onestep_sqs /tmp/onestep/plugins/onestep-sqs/src/onestep_sqs
 COPY plugins/onestep-kafka/pyproject.toml plugins/onestep-kafka/README.md /tmp/onestep/plugins/onestep-kafka/
 COPY plugins/onestep-kafka/src/onestep_kafka /tmp/onestep/plugins/onestep-kafka/src/onestep_kafka
+COPY plugins/onestep-elasticsearch/pyproject.toml plugins/onestep-elasticsearch/README.md /tmp/onestep/plugins/onestep-elasticsearch/
+COPY plugins/onestep-elasticsearch/src/onestep_elasticsearch /tmp/onestep/plugins/onestep-elasticsearch/src/onestep_elasticsearch
+COPY plugins/onestep-clickhouse/pyproject.toml plugins/onestep-clickhouse/README.md /tmp/onestep/plugins/onestep-clickhouse/
+COPY plugins/onestep-clickhouse/src/onestep_clickhouse /tmp/onestep/plugins/onestep-clickhouse/src/onestep_clickhouse
+COPY plugins/onestep-mongodb/pyproject.toml plugins/onestep-mongodb/README.md /tmp/onestep/plugins/onestep-mongodb/
+COPY plugins/onestep-mongodb/src/onestep_mongodb /tmp/onestep/plugins/onestep-mongodb/src/onestep_mongodb
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install \
@@ -37,6 +43,9 @@ RUN python -m pip install --upgrade pip \
         /tmp/onestep/plugins/onestep-postgres \
         /tmp/onestep/plugins/onestep-sqs \
         /tmp/onestep/plugins/onestep-kafka \
+        /tmp/onestep/plugins/onestep-elasticsearch \
+        /tmp/onestep/plugins/onestep-clickhouse \
+        /tmp/onestep/plugins/onestep-mongodb \
     && rm -rf /tmp/onestep
 
 COPY docker/worker/entrypoint.sh /usr/local/bin/onestep-worker-entrypoint
