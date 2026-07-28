@@ -17,7 +17,8 @@ the runtime takes care of fetching, concurrency, retries, dead-lettering, and
 telemetry.
 
 - **One decorator** turns any async function into a managed task
-- **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Kafka, Feishu, MongoDB
+- **Pluggable connectors** for memory, MySQL, RabbitMQ, Redis, SQS, Kafka,
+  Elasticsearch/OpenSearch, ClickHouse, MongoDB, and Feishu
 - **Scheduling** via interval, cron, webhook, or DB-backed queues
 - **Production-ready**: retries, dead-letter, timeouts, state stores, metrics,
   and an optional control-plane reporter
@@ -34,6 +35,9 @@ pip install onestep
 pip install 'onestep[yaml]'          # YAML task definitions
 pip install 'onestep[control-plane]' # push telemetry to onestep-control-plane
 pip install 'onestep[kafka]'         # Kafka topic source/sink, Python 3.10+
+pip install 'onestep[elasticsearch]' # Elasticsearch/OpenSearch bulk sink
+pip install 'onestep[clickhouse]'    # ClickHouse table sink
+pip install 'onestep[mongodb]'       # MongoDB polling, change streams, and sink
 ```
 
 Define an app, then run it with the `onestep` CLI:
@@ -89,8 +93,8 @@ task event logging. Embedded applications retain full control of process logging
 
 | Capability | Where |
 | --- | --- |
-| **Fetch work** from a queue, schedule, webhook, or DB cursor | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, MySQL `table_queue` / `incremental` / binlog, RabbitMQ `queue`, Redis `stream`, SQS `queue`, Kafka `kafka_topic` |
-| **Emit results** to a downstream sink | any source doubles as a sink; MySQL `table_sink`; Kafka `kafka_topic`; HTTP `http_sink`; Feishu Bitable sink |
+| **Fetch work** from a queue, schedule, webhook, or DB cursor | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, MySQL `table_queue` / `incremental` / binlog, RabbitMQ `queue`, Redis `stream`, SQS `queue`, Kafka `kafka_topic`, MongoDB `mongodb_polling` / `mongodb_change_stream` |
+| **Emit results** to a downstream sink | any source doubles as a sink; MySQL `table_sink`; Kafka `kafka_topic`; Elasticsearch/OpenSearch `elasticsearch_bulk_sink`; ClickHouse `clickhouse_table_sink`; MongoDB `mongodb_collection_sink`; HTTP `http_sink`; Feishu Bitable sink |
 | **Schedule** recurring work | `IntervalSource.every(...)`, `CronSource(...)` with overlap control (`allow` / `skip` / `queue`) |
 | **Ingest external events** | `WebhookSource` with bearer auth, shared listeners, body parsing |
 | **Survive failures** | retry policies, `dead_letter` sink, per-task `timeout_s`, failure classification (`error` / `timeout` / `cancelled`) |
@@ -140,7 +144,22 @@ Each backend ships as its own package so you only install what you use:
 | **SQS** | `queue` with batched deletes and heartbeat visibility | `pip install onestep-sqs` |
 | **Kafka** | `kafka_topic` source/sink with manual offset commits | `pip install onestep-kafka` |
 | **Feishu Bitable** | incremental source and upsert sink | `pip install onestep-feishu-bitable` |
-| **MongoDB** | deterministic polling, raw change streams, insert/upsert sinks | `pip install onestep-mongodb` |
+| **Elasticsearch/OpenSearch** | `elasticsearch` connector and acknowledged `elasticsearch_bulk_sink` over the common REST bulk boundary | `pip install 'onestep[elasticsearch]'` (`onestep-elasticsearch`) |
+| **ClickHouse** | `clickhouse` connector and acknowledged `clickhouse_table_sink` inserts into existing tables | `pip install 'onestep[clickhouse]'` (`onestep-clickhouse`) |
+| **MongoDB** | `mongodb_polling`, raw `mongodb_change_stream` events, and `mongodb_collection_sink` insert/upsert | `pip install 'onestep[mongodb]'` (`onestep-mongodb`) |
+
+The three database bulk sinks accept one mapping or a non-empty sequence of
+mappings and await every backend chunk acknowledgement. onestep remains
+at-least-once: a retry can repeat committed items or chunks, so use stable
+document IDs, upsert keys, or a dedup-aware ClickHouse schema when duplicates
+matter. A partial commit whose final write set is unknown is reported as
+`UNCERTAIN` and is not automatically replayed.
+
+The Elasticsearch plugin targets the common Elasticsearch/OpenSearch HTTP bulk
+surface rather than either vendor's Python client. MongoDB polling and change
+streams can use in-memory state for development, but production restart
+guarantees require an explicit durable cursor store; change streams emit raw
+events and default to `full_document: updateLookup`.
 
 Or install everything at once:
 

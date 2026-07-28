@@ -65,3 +65,12 @@ def test_database_plugin_workflows_gate_build_live_and_publish() -> None:
         assert "id-token: write" in text and secret in text
         assert "needs.test.result == 'success'" in text
         assert "needs.live-compatibility.result == 'success'" in text
+
+
+def test_public_docs_name_database_plugin_resources_and_semantics() -> None:
+    files = [ROOT / "README.md", ROOT / "docs" / "yaml-task-definition.md", ROOT / "skills" / "onestep" / "references" / "connectors.md", ROOT / "CHANGELOG.md"]
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in files)
+    for value in ("onestep-elasticsearch", "elasticsearch_bulk_sink", "onestep-clickhouse", "clickhouse_table_sink", "onestep-mongodb", "mongodb_polling", "mongodb_change_stream", "mongodb_collection_sink"):
+        assert value in combined
+    assert "full_document: updateLookup" in combined
+    assert "durable" in combined and "UNCERTAIN" in combined
