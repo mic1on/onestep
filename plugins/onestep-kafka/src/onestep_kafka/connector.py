@@ -128,12 +128,12 @@ class KafkaConnector:
         self.options = options or {}
         self._driver_override = driver
 
-    def _secret_tokens(self) -> list[str]:
+    def _secret_tokens(self, topic_options: Mapping[str, Any] | None = None) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
         servers = self.bootstrap_servers
         if isinstance(servers, (list, tuple)):
-            return collect_sensitive_tokens(*servers, self.options)
-        return collect_sensitive_tokens(servers, self.options)
+            return collect_sensitive_tokens(*servers, self.options, topic_options or {})
+        return collect_sensitive_tokens(servers, self.options, topic_options or {})
 
     def topic(
         self,
@@ -256,7 +256,7 @@ class KafkaTopic(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_timeout_ms / 1000,
-                secrets=self.connector._secret_tokens(),
+                secrets=self.connector._secret_tokens(self.consumer_options),
             )
             if connector_error is None:
                 raise
@@ -279,7 +279,7 @@ class KafkaTopic(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_timeout_ms / 1000,
-                secrets=self.connector._secret_tokens(),
+                secrets=self.connector._secret_tokens(self.producer_options),
             )
             if connector_error is None:
                 raise

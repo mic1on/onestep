@@ -30,8 +30,3 @@ packages = ["src/onestep_kafka"]
 
 [tool.uv.sources]
 onestep = { path = "../..", editable = true }
-
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-]
