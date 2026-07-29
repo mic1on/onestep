@@ -7,7 +7,11 @@ from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.resource_registry import ResourceRegistry
 from onestep_sqs import SQSConnector, SQSQueue, register
-from onestep_sqs.resilience import as_sqs_connector_operation_error, classify_sqs_error
+from onestep_sqs.resilience import (
+    as_sqs_connector_operation_error,
+    classify_sqs_error,
+    SQSErrorCause,
+)
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -89,7 +93,8 @@ def test_sqs_plugin_normalizes_sqs_errors() -> None:
     assert normalized.kind is ConnectorErrorKind.DISCONNECTED
     assert normalized.source_name == "jobs"
     assert normalized.retry_delay_s == 3.0
-    assert normalized.cause is timeout
+    assert isinstance(normalized.cause, SQSErrorCause)
+    assert "timeout" in str(normalized.cause)
 
 
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:
@@ -97,3 +102,23 @@ def _entry_points_for_group(group: str) -> tuple[Any, ...]:
     if hasattr(entry_points, "select"):
         return tuple(entry_points.select(group=group))
     return tuple(entry_points.get(group, ()))
+
+
+def test_sqs_connector_error_does_not_leak_option_secrets() -> None:
+    """SQS connector options that contain AWS keys must not appear in errors."""
+    secret_key = "AKIAIOSFODNN7EXAMPLE"
+    secret_token = "IQoJb3JpZ2luX2VjEPn//////////wEaCXVzLXdlc3QtMiJIMEYCIQ"
+
+    # Use a ConnectionError (matches classify_sqs_error) with secret payload
+    error = ConnectionError(f"Access denied with key {secret_key} and token {secret_token}")
+    normalized = as_sqs_connector_operation_error(
+        operation=ConnectorOperation.SEND,
+        exc=error,
+        source_name="jobs",
+        retry_delay_s=3.0,
+        secrets=[secret_key, secret_token],
+    )
+    assert isinstance(normalized, ConnectorOperationError)
+    assert secret_key not in str(normalized.cause)
+    assert secret_token not in str(normalized.cause)
+    assert "<redacted>" in str(normalized.cause)
