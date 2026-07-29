@@ -1,6 +1,6 @@
 [project]
 name = "onestep-mq"
-version = "0.2.1"
+version = "0.2.2"
 description = "RabbitMQ connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
