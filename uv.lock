@@ -1479,7 +1479,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-elasticsearch"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "plugins/onestep-elasticsearch" }
 dependencies = [
     { name = "httpx" },
@@ -1557,7 +1557,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mongodb"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "plugins/onestep-mongodb" }
 dependencies = [
     { name = "onestep" },
