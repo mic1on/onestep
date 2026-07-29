@@ -412,6 +412,42 @@ async def test_bulk_diagnostics_redact_configured_credentials() -> None:
 
 
 @pytest.mark.asyncio
+async def test_transport_errors_redact_hosts_headers_and_generated_auth() -> None:
+    host_password = "url@secret"
+    header_secret = "custom-header-secret"
+    basic_password = "basic-secret"
+
+    class BrokenClient:
+        async def request(self, *args, **kwargs):
+            authorization = kwargs["headers"]["Authorization"]
+            raise httpx.ConnectError(
+                "cannot connect to "
+                "https://url-user:url@secret@search.internal:9200 "
+                f"with X-Api-Key={header_secret} and Authorization={authorization}"
+            )
+
+    connector = ElasticsearchConnector(
+        "https://url-user:url%40secret@search.internal:9200",
+        username="writer",
+        password=basic_password,
+        headers={"X-Api-Key": header_secret},
+        client=BrokenClient(),
+    )
+    sink = connector.bulk_sink(index="events")
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": "one"}))
+
+    diagnostic = str(captured.value.cause)
+    assert host_password not in diagnostic
+    assert header_secret not in diagnostic
+    assert basic_password not in diagnostic
+    assert "Basic " not in diagnostic
+    assert "search.internal" in diagnostic
+    assert "<redacted>" in diagnostic
+
+
+@pytest.mark.asyncio
 async def test_missing_id_field_does_not_claim_replay_safety() -> None:
     responses = [
         httpx.Response(
