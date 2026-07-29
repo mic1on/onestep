@@ -667,12 +667,15 @@ describe('loadControlPlaneData', () => {
       lookbackMinutes: 30,
       limit: 20,
       offset: 0,
+      kinds: ['failed', 'restart_task'],
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
+    const requestUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(String(requestUrl)).toContain(
       '/api/v1/services/control-plane-demo/tasks/inspect_dead_letter/events?environment=dev&lookback_minutes=30&limit=20&offset=0',
     );
+    expect(requestUrl.searchParams.getAll('kind')).toEqual(['failed', 'restart_task']);
     expect(page.total).toBe(2);
     expect(page.logs).toEqual([
       expect.objectContaining({

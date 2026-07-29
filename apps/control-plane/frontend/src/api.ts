@@ -11,6 +11,14 @@ type TaskViewStatus = 'running' | 'idle' | 'failed' | 'paused' | 'offline';
 type InstanceViewStatus = 'running' | 'starting' | 'failed' | 'stopped';
 type EventLogLevel = 'error' | 'warn' | 'info';
 type TaskEventKind = 'started' | 'failed' | 'retried' | 'dead_lettered' | 'cancelled' | 'succeeded';
+export type TaskEventHistoryKind =
+  | TaskEventKind
+  | 'pause_task'
+  | 'resume_task'
+  | 'restart_task'
+  | 'discard_dead_letters'
+  | 'replay_dead_letters'
+  | 'run_task_once';
 type TaskEventHistorySource = 'runtime' | 'command';
 type AgentCommandAckStatus = 'accepted' | 'rejected';
 type AgentCommandStatus =
@@ -39,10 +47,11 @@ type AgentCommandKind =
   | 'flush_events';
 
 export type JsonObject = Record<string, unknown>;
-type QueryValue = string | number | undefined | null;
+type QueryScalar = string | number;
+type QueryValue = QueryScalar | readonly QueryScalar[] | undefined | null;
 
 interface ConnectorDescriptor {
-  kind: string;
+  kind: TaskEventHistoryKind;
   name: string;
   config: JsonObject;
 }
@@ -613,6 +622,10 @@ function buildApiUrl(path: string, query: Record<string, QueryValue> = {}) {
     if (value === undefined || value === null || value === '') {
       continue;
     }
+    if (Array.isArray(value)) {
+      value.forEach((item) => url.searchParams.append(key, String(item)));
+      continue;
+    }
     url.searchParams.set(key, String(value));
   }
   return url;
@@ -996,10 +1009,12 @@ export async function loadTaskEventLogs(
     lookbackMinutes = DEFAULT_TASK_EVENT_LOOKBACK_MINUTES,
     limit = DEFAULT_TASK_EVENT_PAGE_SIZE,
     offset = 0,
+    kinds = [],
   }: {
     lookbackMinutes?: number;
     limit?: number;
     offset?: number;
+    kinds?: readonly TaskEventHistoryKind[];
   } = {},
 ): Promise<TaskEventLogPage> {
   if (!task.apiServiceName || !task.apiName || !task.environment) {
@@ -1020,6 +1035,7 @@ export async function loadTaskEventLogs(
         lookback_minutes: lookbackMinutes,
         limit,
         offset,
+        kind: kinds,
       },
     },
   );
