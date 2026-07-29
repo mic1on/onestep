@@ -10,9 +10,11 @@ from onestep.testing import (
     ClaimedSourceHarness,
     ConnectorCapability,
     ConnectorConformanceProfile,
+    ReplaySafeSinkHarness,
     StopControl,
     run_acknowledged_sink_contract,
     run_claimed_source_stop_contract,
+    run_replay_safe_sink_contract,
 )
 
 
@@ -129,6 +131,25 @@ def test_acknowledged_sink_runner_enforces_runtime_ack_ordering() -> None:
     asyncio.run(scenario())
 
 
+def test_replay_safe_sink_runner_sends_twice_and_requires_one_record() -> None:
+    async def scenario() -> None:
+        sink = _ReplaySafeSink()
+
+        def assert_single_record() -> None:
+            assert sink.records == {"event-1": {"id": "event-1", "value": 3}}
+            assert sink.send_calls == 2
+
+        await run_replay_safe_sink_contract(
+            ReplaySafeSinkHarness(
+                sink=sink,
+                assert_single_record=assert_single_record,
+            ),
+            body={"id": "event-1", "value": 3},
+        )
+
+    asyncio.run(scenario())
+
+
 class _RecordingDelivery(Delivery):
     def __init__(self) -> None:
         super().__init__(Envelope(body={"id": 1}))
@@ -182,3 +203,14 @@ class _BlockingSink(Sink):
 class _CancelSafeSource(Source):
     async def fetch(self, limit: int) -> list[Delivery]:
         return []
+
+
+class _ReplaySafeSink(Sink):
+    def __init__(self) -> None:
+        super().__init__("replay-safe-sink")
+        self.records: dict[str, dict[str, object]] = {}
+        self.send_calls = 0
+
+    async def send(self, envelope: Envelope) -> None:
+        self.send_calls += 1
+        self.records[envelope.body["id"]] = dict(envelope.body)

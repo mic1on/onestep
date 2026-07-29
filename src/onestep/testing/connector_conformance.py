@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -117,6 +118,12 @@ class AcknowledgedSinkHarness:
     release_send: _Action
 
 
+@dataclass(frozen=True)
+class ReplaySafeSinkHarness:
+    sink: Sink
+    assert_single_record: _Action
+
+
 async def run_claimed_source_stop_contract(
     harness: ClaimedSourceHarness,
     control: StopControl,
@@ -225,6 +232,22 @@ async def run_acknowledged_sink_contract(
         if not serving.done():
             serving.cancel()
         await asyncio.gather(serving, return_exceptions=True)
+
+
+async def run_replay_safe_sink_contract(
+    harness: ReplaySafeSinkHarness,
+    *,
+    body: Any,
+) -> None:
+    """Prove replaying the same logical write leaves one backend record."""
+
+    await harness.sink.open()
+    try:
+        await harness.sink.send(Envelope(body=copy.deepcopy(body)))
+        await harness.sink.send(Envelope(body=copy.deepcopy(body)))
+        await _invoke(harness.assert_single_record)
+    finally:
+        await harness.sink.close()
 
 
 async def _invoke(action: _Action) -> None:

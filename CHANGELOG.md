@@ -9,7 +9,20 @@
 ## 1.7.3
 
 - Adds test-side connector capability profiles with explicit contract evidence and dependency validation.
-- Adds reusable claimed-source stop-control and acknowledged-sink ordering contract runners.
+- Adds reusable claimed-source stop-control, acknowledged-sink ordering, and replay-safe sink contract runners.
+- Adds a repository gate covering the capability evidence of all ten official connector plugins.
+
+## onestep-postgres 0.1.3
+
+- Adopts the shared claimed-source runner for drain, pause, and shutdown release semantics.
+- Proves table-sink upsert replay safety with the shared replay contract.
+- Replaces timing-based table queue tests with deterministic fetch/release event handshakes.
+
+## onestep-mysql 0.3.3
+
+- Adopts the shared claimed-source runner for drain, pause, and shutdown release semantics.
+- Proves table-sink upsert replay safety with the shared replay contract.
+- Replaces timing-based table queue tests with deterministic fetch/release event handshakes.
 
 ## onestep-kafka 0.1.3
 

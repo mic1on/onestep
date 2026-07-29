@@ -56,7 +56,26 @@ fetch returns a claimed delivery        backend acknowledgement returns
 runtime calls release_unstarted         runtime calls Delivery.ack
 ```
 
+`run_replay_safe_sink_contract` exercises the other shared sink invariant by sending the same logical envelope twice and requiring the backend probe to observe one record.
+
 Connector-specific tests still own backend setup and backend assertions. The toolkit owns only the shared `OneStepApp` orchestration, so connector behavior remains explicit rather than hidden behind a generic fake backend.
+
+## Official Plugin Matrix
+
+The repository-level conformance manifest covers every official connector plugin. Each declaration names concrete non-integration test evidence, and the core contract suite rejects missing plugins, missing files, misspelled test names, and capability dependency gaps.
+
+| Connector | Source | Checkpoint | Claim release | Acknowledged sink | Chunked | Replay-safe mode | Public errors |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ClickHouse |  |  |  | yes | yes |  | yes |
+| Elasticsearch / OpenSearch |  |  |  | yes | yes | yes | yes |
+| Feishu Bitable | yes | yes |  | yes |  | yes | yes |
+| Kafka | yes | yes | yes | yes |  |  | yes |
+| MongoDB | yes | yes | yes | yes | yes | yes | yes |
+| MySQL | yes | yes | yes | yes |  | yes | yes |
+| PostgreSQL | yes | yes | yes | yes |  | yes | yes |
+| RabbitMQ | yes | yes |  | yes |  |  | yes |
+| Redis Streams | yes | yes |  | yes |  |  | yes |
+| SQS | yes | yes | yes | yes |  |  | yes |
 
 ## Scope
 
