@@ -6,6 +6,16 @@
 - Bundles the three plugins in the worker image and adds isolated reliability/live compatibility gates.
 - Does not change core runtime, delivery, retry, reporter, or control-plane behavior.
 
+## onestep-postgres 0.1.2
+
+- Scrubs DSN credentials and secret values nested in SQLAlchemy engine options from normalized Postgres error causes.
+- Suppresses raw exception chaining for fetch and send failures so reported tracebacks do not expose secrets.
+
+## onestep-kafka 0.1.2
+
+- Scrubs bootstrap-server credentials and connector, consumer, and producer secret options from normalized Kafka error causes.
+- Suppresses raw exception chaining for fetch and send failures so reported tracebacks do not expose secrets.
+
 ## onestep-redis 0.2.2
 
 - Scrubs connector URL credentials and known secret options from normalized Redis error causes.

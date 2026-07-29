@@ -57,11 +57,16 @@ def collect_sensitive_tokens(*config_values: object) -> list[str]:
             seen.add(text)
             tokens.append(text)
 
+    def collect_mapping(value: Mapping[object, object]) -> None:
+        for key, item in value.items():
+            if str(key).lower() in _SECRET_OPTION_KEYS:
+                add(item)
+            elif isinstance(item, Mapping):
+                collect_mapping(item)
+
     for value in config_values:
         if isinstance(value, Mapping):
-            for key, item in value.items():
-                if str(key).lower() in _SECRET_OPTION_KEYS:
-                    add(item)
+            collect_mapping(value)
             continue
         add(value)
         try:
