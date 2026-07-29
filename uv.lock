@@ -1683,7 +1683,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-redis"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "plugins/onestep-redis" }
 dependencies = [
     { name = "onestep" },
