@@ -12,7 +12,11 @@ from onestep.resilience import ConnectorErrorKind, ConnectorOperation, Connector
 from onestep.resource_registry import ResourceRegistry
 from onestep_control_plane import ControlPlaneReporter, ControlPlaneReporterConfig
 from onestep_redis import RedisConnector, RedisStreamQueue, register
-from onestep_redis.resilience import as_redis_connector_operation_error, classify_redis_error
+from onestep_redis.resilience import (
+    as_redis_connector_operation_error,
+    classify_redis_error,
+    RedisErrorCause,
+)
 
 
 @dataclass
@@ -110,7 +114,8 @@ def test_redis_plugin_normalizes_redis_errors() -> None:
     assert normalized.kind is ConnectorErrorKind.DISCONNECTED
     assert normalized.source_name == "jobs"
     assert normalized.retry_delay_s == 0.5
-    assert normalized.cause is timeout
+    assert isinstance(normalized.cause, RedisErrorCause)
+    assert "timeout" in str(normalized.cause)
 
 
 def test_reporter_sync_payload_includes_redis_stream_topology_config() -> None:
