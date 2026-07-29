@@ -223,3 +223,40 @@ def test_rabbitmq_queue_open_maps_connection_errors_and_releases_reference(monke
             raise AssertionError("expected ConnectorOperationError")
 
     asyncio.run(scenario())
+
+
+def test_rabbitmq_open_failure_does_not_leak_url_credentials(monkeypatch):
+    """connect_robust errors embed the full amqp URL; it must be scrubbed."""
+    import traceback
+
+    secret_url = "amqp://writer:supersecret@rabbitmq.internal:5672//"
+
+    async def leaking_connect_robust(url, **kwargs):
+        raise ConnectionError(f"could not connect to {url}: ACCESS_REFUSED")
+
+    fake_driver = SimpleNamespace(connect_robust=leaking_connect_robust)
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", fake_driver)
+
+    async def scenario():
+        connector = RabbitMQConnector(secret_url)
+        queue = connector.queue("jobs", poll_interval_s=0.01)
+        try:
+            await queue.open()
+        except ConnectorOperationError as error:
+            return error
+        raise AssertionError("expected ConnectorOperationError")
+
+    error = asyncio.run(scenario())
+    # The public ``cause`` must not carry credentials.
+    assert "supersecret" not in str(error.cause)
+    assert "writer:supersecret" not in str(error.cause)
+    assert "<redacted>" in str(error.cause)
+    # The original secret-bearing exception must not be chained.
+    assert error.__cause__ is None
+    assert error.__suppress_context__ is True
+    # The formatted traceback (reported by the runtime) stays clean too.
+    traceback_text = "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+    assert "supersecret" not in traceback_text
+    assert "writer:supersecret" not in traceback_text
