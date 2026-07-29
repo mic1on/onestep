@@ -1722,7 +1722,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-sqs"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "plugins/onestep-sqs" }
 dependencies = [
     { name = "boto3" },
