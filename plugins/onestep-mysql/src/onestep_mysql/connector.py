@@ -40,12 +40,13 @@ class MySQLConnector:
         if create_engine is None:
             raise RuntimeError("MySQLConnector requires SQLAlchemy. Install onestep-mysql.")
         self.dsn = dsn
+        self._sensitive_tokens = collect_sensitive_tokens(dsn, engine_options)
         self.engine = create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
+        self._tables: dict[str, Any] = {}
 
     def _secret_tokens(self) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
-        return collect_sensitive_tokens(self.dsn)
-        self._tables: dict[str, Any] = {}
+        return list(self._sensitive_tokens)
 
     async def close(self) -> None:
         await asyncio.to_thread(self.engine.dispose)

@@ -5,10 +5,6 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 import pytest
-
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
-from onestep.config import load_app_config
-from onestep.resource_registry import ResourceRegistry
 from onestep_mysql import (
     BinlogSource,
     IncrementalTableSource,
@@ -19,10 +15,18 @@ from onestep_mysql import (
     register,
 )
 from onestep_mysql.resilience import (
+    MySQLErrorCause,
     as_mysql_connector_operation_error,
     classify_sqlalchemy_error,
-    MySQLErrorCause,
 )
+
+from onestep.config import load_app_config
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
+from onestep.resource_registry import ResourceRegistry
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -180,3 +184,13 @@ def test_mysql_connector_error_does_not_leak_dsn_credentials() -> None:
     assert "mysqlpass" not in str(normalized.cause)
     assert "reporter:mysqlpass" not in str(normalized.cause)
     assert "<redacted>" in str(normalized.cause)
+
+
+def test_mysql_connector_initializes_cache_and_collects_engine_option_secrets() -> None:
+    connector = MySQLConnector(
+        "sqlite://",
+        connect_args={"password": "engine-option-secret"},
+    )
+
+    assert connector._tables == {}
+    assert "engine-option-secret" in connector._secret_tokens()
