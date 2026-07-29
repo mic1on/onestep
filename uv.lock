@@ -1261,7 +1261,7 @@ wheels = [
 
 [[package]]
 name = "onestep"
-version = "1.7.2"
+version = "1.7.3"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1539,7 +1539,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-kafka"
-version = "0.1.2"
+version = "0.1.3"
 source = { directory = "plugins/onestep-kafka" }
 dependencies = [
     { name = "aiokafka", marker = "python_full_version >= '3.10'" },

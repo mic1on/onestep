@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from onestep import Delivery, Envelope, Sink, Source
+from onestep.testing import (
+    AcknowledgedSinkHarness,
+    ClaimedSourceHarness,
+    ConnectorCapability,
+    ConnectorConformanceProfile,
+    StopControl,
+    run_acknowledged_sink_contract,
+    run_claimed_source_stop_contract,
+)
+
+
+def test_profile_normalizes_and_freezes_contract_evidence() -> None:
+    contracts = {
+        ConnectorCapability.BASIC_SOURCE: ("test_fetch",),
+        ConnectorCapability.CHECKPOINT_SOURCE: ("test_ack_checkpoint",),
+    }
+
+    profile = ConnectorConformanceProfile(name="  example  ", contracts=contracts)
+    contracts[ConnectorCapability.BASIC_SOURCE] = ("changed",)
+
+    assert profile.name == "example"
+    assert profile.capabilities == {
+        ConnectorCapability.BASIC_SOURCE,
+        ConnectorCapability.CHECKPOINT_SOURCE,
+    }
+    assert profile.contract_ids(ConnectorCapability.BASIC_SOURCE) == ("test_fetch",)
+    assert profile.supports(ConnectorCapability.CHECKPOINT_SOURCE) is True
+
+
+@pytest.mark.parametrize(
+    ("capability", "dependency"),
+    [
+        (ConnectorCapability.CHECKPOINT_SOURCE, ConnectorCapability.BASIC_SOURCE),
+        (ConnectorCapability.CLAIMED_SOURCE, ConnectorCapability.BASIC_SOURCE),
+        (ConnectorCapability.CHUNKED_SINK, ConnectorCapability.ACKNOWLEDGED_SINK),
+        (ConnectorCapability.REPLAY_SAFE_SINK, ConnectorCapability.ACKNOWLEDGED_SINK),
+    ],
+)
+def test_profile_rejects_missing_capability_dependencies(capability, dependency) -> None:
+    with pytest.raises(ValueError, match=f"{capability.value} requires: {dependency.value}"):
+        ConnectorConformanceProfile(name="invalid", contracts={capability: ("test_case",)})
+
+
+@pytest.mark.parametrize(
+    "contracts",
+    [
+        {},
+        {ConnectorCapability.PUBLIC_ERRORS: ()},
+        {ConnectorCapability.PUBLIC_ERRORS: ("",)},
+        {ConnectorCapability.PUBLIC_ERRORS: ("test_error", "test_error")},
+    ],
+)
+def test_profile_rejects_missing_or_invalid_contract_evidence(contracts) -> None:
+    with pytest.raises(ValueError):
+        ConnectorConformanceProfile(name="invalid", contracts=contracts)
+
+
+def test_profile_reports_undeclared_capability() -> None:
+    profile = ConnectorConformanceProfile(
+        name="errors-only",
+        contracts={ConnectorCapability.PUBLIC_ERRORS: ("test_errors",)},
+    )
+
+    with pytest.raises(ValueError, match="does not declare basic_source"):
+        profile.contract_ids(ConnectorCapability.BASIC_SOURCE)
+
+
+@pytest.mark.parametrize("control", list(StopControl))
+def test_claimed_source_runner_covers_each_stop_control(control: StopControl) -> None:
+    async def scenario() -> None:
+        source = _BlockingClaimedSource()
+
+        def assert_released() -> None:
+            assert source.delivery.released is True
+            assert source.delivery.acked is False
+            assert source.delivery.retried is False
+            assert source.delivery.failed is False
+
+        await run_claimed_source_stop_contract(
+            ClaimedSourceHarness(
+                source=source,
+                wait_for_fetch_started=source.fetch_started.wait,
+                release_fetch=source.release_fetch.set,
+                assert_released=assert_released,
+            ),
+            control,
+        )
+
+    asyncio.run(scenario())
+
+
+def test_claimed_source_runner_rejects_cancel_safe_source() -> None:
+    source = _CancelSafeSource("cancel-safe")
+
+    with pytest.raises(AssertionError, match="fetch_is_cancel_safe"):
+        asyncio.run(
+            run_claimed_source_stop_contract(
+                ClaimedSourceHarness(
+                    source=source,
+                    wait_for_fetch_started=lambda: None,
+                    release_fetch=lambda: None,
+                    assert_released=lambda: None,
+                ),
+                StopControl.SHUTDOWN,
+            )
+        )
+
+
+def test_acknowledged_sink_runner_enforces_runtime_ack_ordering() -> None:
+    async def scenario() -> None:
+        sink = _BlockingSink()
+        await run_acknowledged_sink_contract(
+            AcknowledgedSinkHarness(
+                sink=sink,
+                wait_for_send_started=sink.send_started.wait,
+                release_send=sink.release_send.set,
+            ),
+            body={"id": 1},
+        )
+        assert sink.items == [{"id": 1}]
+
+    asyncio.run(scenario())
+
+
+class _RecordingDelivery(Delivery):
+    def __init__(self) -> None:
+        super().__init__(Envelope(body={"id": 1}))
+        self.released = False
+        self.acked = False
+        self.retried = False
+        self.failed = False
+
+    async def release_unstarted(self) -> None:
+        self.released = True
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self.retried = True
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self.failed = True
+
+
+class _BlockingClaimedSource(Source):
+    fetch_is_cancel_safe = False
+    poll_interval_s = 0.01
+
+    def __init__(self) -> None:
+        super().__init__("blocking-claimed-source")
+        self.fetch_started = asyncio.Event()
+        self.release_fetch = asyncio.Event()
+        self.delivery = _RecordingDelivery()
+
+    async def fetch(self, limit: int) -> list[Delivery]:
+        self.fetch_started.set()
+        await self.release_fetch.wait()
+        return [self.delivery]
+
+
+class _BlockingSink(Sink):
+    def __init__(self) -> None:
+        super().__init__("blocking-acknowledged-sink")
+        self.send_started = asyncio.Event()
+        self.release_send = asyncio.Event()
+        self.items: list[object] = []
+
+    async def send(self, envelope: Envelope) -> None:
+        self.send_started.set()
+        await self.release_send.wait()
+        self.items.append(envelope.body)
+
+
+class _CancelSafeSource(Source):
+    async def fetch(self, limit: int) -> list[Delivery]:
+        return []

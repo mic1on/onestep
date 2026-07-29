@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "1.7.2"
+version = "1.7.3"
 description = "Async task runtime for queue, polling, schedule, and webhook workloads."
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -46,7 +46,7 @@ sqs = [
     "onestep-sqs>=0.2.2",
 ]
 kafka = [
-    "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-kafka>=0.1.3; python_version >= '3.10'",
 ]
 elasticsearch = [
     "onestep-elasticsearch>=0.1.0",
@@ -71,7 +71,7 @@ integration = [
     "onestep-mysql>=0.3.1",
     "onestep-postgres>=0.1.1",
     "onestep-sqs>=0.2.2",
-    "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
     "onestep-mongodb>=0.1.0",
@@ -84,7 +84,7 @@ all = [
     "onestep-mysql>=0.3.1",
     "onestep-postgres>=0.1.1",
     "onestep-sqs>=0.2.2",
-    "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
     "onestep-mongodb>=0.1.0",
@@ -99,7 +99,7 @@ dev = [
     "onestep-mysql>=0.3.1",
     "onestep-postgres>=0.1.1",
     "onestep-sqs>=0.2.2",
-    "onestep-kafka>=0.1.1; python_version >= '3.10'",
+    "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
     "onestep-mongodb>=0.1.0",

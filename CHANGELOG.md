@@ -4,7 +4,17 @@
 
 - Adds `elasticsearch`, `clickhouse`, and `mongodb` optional extras for the three independently published connector plugins.
 - Bundles the three plugins in the worker image and adds isolated reliability/live compatibility gates.
-- Does not change core runtime, delivery, retry, reporter, or control-plane behavior.
+- Adds a pytest-independent `onestep.testing` connector conformance toolkit without changing runtime, reporter, or control-plane behavior.
+
+## 1.7.3
+
+- Adds test-side connector capability profiles with explicit contract evidence and dependency validation.
+- Adds reusable claimed-source stop-control and acknowledged-sink ordering contract runners.
+
+## onestep-kafka 0.1.3
+
+- Declares the Kafka connector's source, checkpoint, claim-release, acknowledged-sink, and public-error conformance evidence.
+- Uses the shared runners to verify claim release under drain, pause, and shutdown and runtime acknowledgement ordering after producer acknowledgement.
 
 ## onestep-mongodb 0.1.1
 
