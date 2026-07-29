@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from importlib import metadata as importlib_metadata
 from typing import Any
 
-from onestep.config import load_app_config
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
-from onestep.resource_registry import ResourceRegistry
+import pytest
 from onestep_sqs import SQSConnector, SQSQueue, register
 from onestep_sqs.resilience import (
+    SQSErrorCause,
     as_sqs_connector_operation_error,
     classify_sqs_error,
-    SQSErrorCause,
 )
+
+from onestep import Envelope
+from onestep.config import load_app_config
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
+from onestep.resource_registry import ResourceRegistry
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -105,20 +113,28 @@ def _entry_points_for_group(group: str) -> tuple[Any, ...]:
 
 
 def test_sqs_connector_error_does_not_leak_option_secrets() -> None:
-    """SQS connector options that contain AWS keys must not appear in errors."""
     secret_key = "AKIAIOSFODNN7EXAMPLE"
     secret_token = "IQoJb3JpZ2luX2VjEPn//////////wEaCXVzLXdlc3QtMiJIMEYCIQ"
 
-    # Use a ConnectionError (matches classify_sqs_error) with secret payload
-    error = ConnectionError(f"Access denied with key {secret_key} and token {secret_token}")
-    normalized = as_sqs_connector_operation_error(
-        operation=ConnectorOperation.SEND,
-        exc=error,
-        source_name="jobs",
-        retry_delay_s=3.0,
-        secrets=[secret_key, secret_token],
+    class BrokenClient:
+        def send_message(self, **kwargs: Any) -> None:
+            raise ConnectionError(
+                f"Access denied with key {secret_key} and token {secret_token}"
+            )
+
+    connector = SQSConnector(
+        options={
+            "aws_access_key_id": secret_key,
+            "aws_session_token": secret_token,
+        },
+        client=BrokenClient(),
     )
-    assert isinstance(normalized, ConnectorOperationError)
-    assert secret_key not in str(normalized.cause)
-    assert secret_token not in str(normalized.cause)
-    assert "<redacted>" in str(normalized.cause)
+    queue = connector.queue("https://sqs.example.test/123/jobs", wait_time_s=0)
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        asyncio.run(queue.send(Envelope(body={"job": 1})))
+
+    cause = str(captured.value.cause)
+    assert secret_key not in cause
+    assert secret_token not in cause
+    assert "<redacted>" in cause
