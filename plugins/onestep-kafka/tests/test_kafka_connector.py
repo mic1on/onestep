@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from onestep.envelope import Envelope
+from onestep.resilience import ConnectorOperationError
 from onestep_kafka import KafkaConnector
 
 
@@ -108,6 +112,52 @@ class FakeDriver:
         producer = FakeProducer(**kwargs)
         self.producers.append(producer)
         return producer
+
+
+def test_kafka_topic_redacts_consumer_and_producer_passwords() -> None:
+    async def scenario() -> None:
+        topic = KafkaConnector("localhost:9092", driver=FakeDriver()).topic(
+            "orders",
+            group_id="workers",
+            consumer_options={"sasl_plain_password": "consumer-password"},
+            producer_options={"sasl_plain_password": "producer-password"},
+        )
+
+        async def fail_consumer() -> Any:
+            raise ConnectionError("consumer-password was rejected")
+
+        async def fail_producer() -> Any:
+            raise ConnectionError("producer-password was rejected")
+
+        topic._open_consumer = fail_consumer
+        with pytest.raises(ConnectorOperationError) as consumer_error:
+            await topic.fetch(1)
+
+        consumer_traceback = "".join(
+            traceback.format_exception(
+                type(consumer_error.value),
+                consumer_error.value,
+                consumer_error.value.__traceback__,
+            )
+        )
+        assert "consumer-password" not in str(consumer_error.value.cause)
+        assert "consumer-password" not in consumer_traceback
+
+        topic._open_producer = fail_producer
+        with pytest.raises(ConnectorOperationError) as producer_error:
+            await topic.send(Envelope(body={"id": 1}))
+
+        producer_traceback = "".join(
+            traceback.format_exception(
+                type(producer_error.value),
+                producer_error.value,
+                producer_error.value.__traceback__,
+            )
+        )
+        assert "producer-password" not in str(producer_error.value.cause)
+        assert "producer-password" not in producer_traceback
+
+    asyncio.run(scenario())
 
 
 def test_kafka_topic_sends_encoded_envelope_with_key_and_headers() -> None:
