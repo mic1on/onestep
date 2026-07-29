@@ -47,6 +47,20 @@ TaskViewStatus = Literal["running", "idle", "failed", "paused", "offline"]
 InstanceViewStatus = Literal["running", "starting", "failed", "stopped"]
 EventLogLevel = Literal["error", "warn", "info"]
 TaskEventKind = Literal["started", "failed", "retried", "dead_lettered", "cancelled", "succeeded"]
+TaskEventHistoryKind = Literal[
+    "started",
+    "failed",
+    "retried",
+    "dead_lettered",
+    "cancelled",
+    "succeeded",
+    "pause_task",
+    "resume_task",
+    "restart_task",
+    "discard_dead_letters",
+    "replay_dead_letters",
+    "run_task_once",
+]
 NotificationProvider = Literal["feishu", "wechat_work", "custom"]
 NotificationEventType = Literal[
     "task_started",

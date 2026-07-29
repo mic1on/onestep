@@ -4016,6 +4016,57 @@ def test_list_service_task_events_merges_runtime_events_and_control_commands(
         "runtime:evt_started",
     ]
 
+    runtime_only = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users/events",
+        params={
+            "environment": "prod",
+            "lookback_minutes": 15,
+            "kind": "succeeded",
+        },
+    )
+    assert runtime_only.status_code == 200
+    assert runtime_only.json()["total"] == 1
+    assert [item["id"] for item in runtime_only.json()["items"]] == [
+        "runtime:evt_succeeded",
+    ]
+
+    command_only = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users/events",
+        params={
+            "environment": "prod",
+            "lookback_minutes": 15,
+            "kind": "pause_task",
+        },
+    )
+    assert command_only.status_code == 200
+    assert command_only.json()["total"] == 1
+    assert [item["id"] for item in command_only.json()["items"]] == [
+        "command:cmd_pause_sync_users",
+    ]
+
+    mixed = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users/events",
+        params=[
+            ("environment", "prod"),
+            ("lookback_minutes", "15"),
+            ("kind", "succeeded"),
+            ("kind", "restart_task"),
+            ("limit", "1"),
+            ("offset", "1"),
+        ],
+    )
+    assert mixed.status_code == 200
+    assert mixed.json()["total"] == 2
+    assert [item["id"] for item in mixed.json()["items"]] == [
+        "runtime:evt_succeeded",
+    ]
+
+    invalid = client.get(
+        "/api/v1/services/billing-sync/tasks/sync_users/events",
+        params={"environment": "prod", "kind": "unknown"},
+    )
+    assert invalid.status_code == 422
+
 
 def test_task_event_history_returns_display_source_label_for_sqs_url(client, db_session) -> None:
     now = datetime.now(UTC)

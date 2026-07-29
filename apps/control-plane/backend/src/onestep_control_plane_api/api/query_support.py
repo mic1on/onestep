@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -42,6 +42,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskControlStateSummary,
     TaskDashboardSummary,
     TaskEventCounts,
+    TaskEventHistoryKind,
     TaskEventHistoryItem,
     TaskEventKind,
     TaskEventSummary,
@@ -61,13 +62,18 @@ from onestep_control_plane_api.db.models import (
     TaskMetricWindow,
 )
 
-TASK_EVENT_HISTORY_COMMAND_KINDS = (
-    "pause_task",
-    "resume_task",
-    "restart_task",
-    "discard_dead_letters",
-    "replay_dead_letters",
-    "run_task_once",
+TASK_EVENT_HISTORY_RUNTIME_KINDS = frozenset(
+    ("started", "failed", "retried", "dead_lettered", "cancelled", "succeeded")
+)
+TASK_EVENT_HISTORY_COMMAND_KINDS = frozenset(
+    (
+        "pause_task",
+        "resume_task",
+        "restart_task",
+        "discard_dead_letters",
+        "replay_dead_letters",
+        "run_task_once",
+    )
 )
 
 
@@ -1293,16 +1299,24 @@ def build_task_event_history_items(
     service_id: UUID,
     task_name: str,
     lookback_started_at: datetime,
+    kinds: list[TaskEventHistoryKind],
     limit: int,
     offset: int,
 ) -> tuple[list[TaskEventHistoryItem], int]:
-    runtime_events = db.scalars(
-        select(TaskEvent).where(
+    selected_kinds = set(kinds)
+    runtime_kinds = selected_kinds.intersection(TASK_EVENT_HISTORY_RUNTIME_KINDS)
+    command_kinds = selected_kinds.intersection(TASK_EVENT_HISTORY_COMMAND_KINDS)
+
+    runtime_events: Sequence[TaskEvent] = []
+    if not selected_kinds or runtime_kinds:
+        runtime_filters = [
             TaskEvent.service_id == service_id,
             TaskEvent.task_name == task_name,
             TaskEvent.occurred_at >= lookback_started_at,
-        )
-    ).all()
+        ]
+        if runtime_kinds:
+            runtime_filters.append(TaskEvent.kind.in_(runtime_kinds))
+        runtime_events = db.scalars(select(TaskEvent).where(*runtime_filters)).all()
 
     command_time = func.coalesce(
         AgentCommand.finished_at,
@@ -1310,13 +1324,14 @@ def build_task_event_history_items(
         AgentCommand.dispatched_at,
         AgentCommand.created_at,
     )
-    commands = db.scalars(
-        select(AgentCommand).where(
+    commands: Sequence[AgentCommand] = []
+    if not selected_kinds or command_kinds:
+        command_filters = [
             AgentCommand.service_id == service_id,
-            AgentCommand.kind.in_(TASK_EVENT_HISTORY_COMMAND_KINDS),
+            AgentCommand.kind.in_(command_kinds or TASK_EVENT_HISTORY_COMMAND_KINDS),
             command_time >= lookback_started_at,
-        )
-    ).all()
+        ]
+        commands = db.scalars(select(AgentCommand).where(*command_filters)).all()
 
     history_items = [
         build_task_runtime_history_item(event)

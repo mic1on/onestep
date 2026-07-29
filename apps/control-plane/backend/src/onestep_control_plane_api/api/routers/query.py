@@ -79,6 +79,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskDashboardSummary,
     TaskDetailResponse,
     TaskEventCounts,
+    TaskEventHistoryKind,
     TaskEventHistoryListResponse,
     TaskEventKind,
     TaskEventListResponse,
@@ -587,6 +588,7 @@ def list_service_task_events(
     task_name: str,
     environment: Environment = Query(...),
     lookback_minutes: int = Query(default=DEFAULT_LOOKBACK_MINUTES, ge=1, le=MAX_LOOKBACK_MINUTES),
+    kind: list[TaskEventHistoryKind] = Query(default=[]),
     limit: int = Query(default=DEFAULT_TASK_ACTIVITY_LIMIT, ge=1, le=MAX_TASK_ACTIVITY_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db_session),
@@ -604,6 +606,7 @@ def list_service_task_events(
         service_id=service.id,
         task_name=task_name,
         lookback_started_at=lookback_started_at,
+        kinds=kind,
         limit=limit,
         offset=offset,
     )
