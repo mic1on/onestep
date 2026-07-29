@@ -33,10 +33,6 @@ PROFILES = (
             Capability.CHUNKED_SINK: (
                 "plugins/onestep-elasticsearch/tests/test_elasticsearch_connector.py::test_send_waits_for_every_success_item",
             ),
-            Capability.REPLAY_SAFE_SINK: (
-                "plugins/onestep-elasticsearch/tests/test_elasticsearch_connector.py::test_mapping_becomes_one_newline_terminated_bulk_action",
-                "plugins/onestep-elasticsearch/tests/test_elasticsearch_connector.py::test_429_retries_only_failed_subset",
-            ),
             Capability.PUBLIC_ERRORS: (
                 "plugins/onestep-elasticsearch/tests/test_elasticsearch_connector.py::test_transport_errors_redact_hosts_headers_and_generated_auth",
             ),
@@ -102,9 +98,6 @@ PROFILES = (
             Capability.CHUNKED_SINK: (
                 "plugins/onestep-mongodb/tests/test_mongodb_sink.py::test_insert_mapping_and_chunked_sequence",
             ),
-            Capability.REPLAY_SAFE_SINK: (
-                "plugins/onestep-mongodb/tests/test_mongodb_sink.py::test_upsert_uses_all_keys_and_excludes_keys_and_id_from_set",
-            ),
             Capability.PUBLIC_ERRORS: (
                 "plugins/onestep-mongodb/tests/test_mongodb_resilience.py::test_redacted_cause_does_not_retain_credentials_or_invalid_documents",
             ),
@@ -126,9 +119,6 @@ PROFILES = (
             Capability.ACKNOWLEDGED_SINK: (
                 "plugins/onestep-mysql/tests/test_mysql_table_queue.py::test_mysql_table_queue_round_trip",
             ),
-            Capability.REPLAY_SAFE_SINK: (
-                "plugins/onestep-mysql/tests/test_mysql_table_queue.py::test_mysql_table_sink_upsert_is_replay_safe",
-            ),
             Capability.PUBLIC_ERRORS: (
                 "plugins/onestep-mysql/tests/test_mysql_plugin.py::test_mysql_connector_error_does_not_leak_dsn_credentials",
             ),
@@ -148,9 +138,6 @@ PROFILES = (
             ),
             Capability.ACKNOWLEDGED_SINK: (
                 "plugins/onestep-postgres/tests/test_postgres_table_queue.py::test_postgres_table_queue_round_trip",
-            ),
-            Capability.REPLAY_SAFE_SINK: (
-                "plugins/onestep-postgres/tests/test_postgres_table_queue.py::test_postgres_table_sink_upsert_is_replay_safe",
             ),
             Capability.PUBLIC_ERRORS: (
                 "plugins/onestep-postgres/tests/test_postgres_plugin.py::test_postgres_connector_error_does_not_leak_dsn_credentials",
@@ -200,9 +187,6 @@ PROFILES = (
             Capability.CHECKPOINT_SOURCE: (
                 "plugins/onestep-sqs/tests/test_sqs_connector.py::test_sqs_queue_send_fetch_batch_delete_and_fail_delete",
             ),
-            Capability.CLAIMED_SOURCE: (
-                "plugins/onestep-sqs/tests/test_sqs_runtime_contract.py::test_shutdown_waits_for_sqs_long_poll_and_releases_unstarted_delivery",
-            ),
             Capability.ACKNOWLEDGED_SINK: (
                 "plugins/onestep-sqs/tests/test_sqs_connector.py::test_sqs_queue_send_fetch_batch_delete_and_fail_delete",
             ),
@@ -214,22 +198,109 @@ PROFILES = (
 )
 
 
-EXPECTED_OFFICIAL_CONNECTORS = {
-    "clickhouse",
-    "elasticsearch",
-    "feishu-bitable",
-    "kafka",
-    "mongodb",
-    "mysql",
-    "postgres",
-    "rabbitmq",
-    "redis",
-    "sqs",
-}
+REPO_ROOT = Path(__file__).parents[2]
+RESOURCE_ENTRY_POINT = '[project.entry-points."onestep.resources"]'
+
+
+def _official_connector_names() -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            pyproject.parent.name.removeprefix("onestep-")
+            for pyproject in (REPO_ROOT / "plugins").glob("*/pyproject.toml")
+            if RESOURCE_ENTRY_POINT in pyproject.read_text(encoding="utf-8")
+        )
+    )
+
+
+def _find_contract_test(
+    tree: ast.Module,
+    qualname: str,
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ast.ClassDef | None] | None:
+    parts = qualname.split("::")
+    if len(parts) == 1:
+        function = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == parts[0]
+            ),
+            None,
+        )
+        return (function, None) if function is not None else None
+
+    if len(parts) != 2:
+        return None
+
+    class_name, function_name = parts
+    test_class = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        ),
+        None,
+    )
+    if test_class is None or not test_class.name.startswith("Test"):
+        return None
+
+    function = next(
+        (
+            node
+            for node in test_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == function_name
+        ),
+        None,
+    )
+    return (function, test_class) if function is not None else None
+
+
+def _decorator_name(decorator: ast.expr) -> str:
+    if isinstance(decorator, ast.Call):
+        return _decorator_name(decorator.func)
+    if isinstance(decorator, ast.Attribute):
+        prefix = _decorator_name(decorator.value)
+        return f"{prefix}.{decorator.attr}" if prefix else decorator.attr
+    if isinstance(decorator, ast.Name):
+        return decorator.id
+    return ""
+
+
+def _has_skip_marker(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> bool:
+    return any(
+        _decorator_name(decorator).split(".")[-1] in {"skip", "skipif"}
+        for decorator in node.decorator_list
+    )
 
 
 def test_every_official_connector_declares_a_profile() -> None:
-    assert {profile.name for profile in PROFILES} == EXPECTED_OFFICIAL_CONNECTORS
+    profile_names = tuple(profile.name for profile in PROFILES)
+    assert len(profile_names) == len(set(profile_names)), "connector profile names must be unique"
+    assert set(profile_names) == set(_official_connector_names())
+
+
+def test_contract_lookup_requires_an_exact_collectable_qualname() -> None:
+    tree = ast.parse(
+        """
+def test_top_level():
+    pass
+
+class TestContract:
+    def test_method(self):
+        pass
+
+def helper():
+    def test_nested():
+        pass
+"""
+    )
+
+    assert _find_contract_test(tree, "test_top_level") is not None
+    assert _find_contract_test(tree, "TestContract::test_method") is not None
+    assert _find_contract_test(tree, "WrongClass::test_method") is None
+    assert _find_contract_test(tree, "test_nested") is None
+    assert _find_contract_test(tree, "helper::test_nested") is None
 
 
 @pytest.mark.parametrize(
@@ -250,16 +321,16 @@ def test_official_profile_evidence_names_real_unit_contracts(
     assert separator, f"{profile.name} contract must include a pytest-style node ID"
     assert "/integration/" not in relative_path, f"{profile.name} must have unit-level evidence"
 
-    path = Path(__file__).parents[2] / relative_path
+    path = REPO_ROOT / relative_path
     assert path.is_file(), f"{profile.name} contract file does not exist: {relative_path}"
 
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    function_name = test_qualname.rsplit("::", 1)[-1]
-    collected_names = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    assert function_name in collected_names, (
-        f"{profile.name} contract test does not exist: {contract_id}"
-    )
+    located = _find_contract_test(tree, test_qualname)
+    assert located is not None, f"{profile.name} contract test does not exist: {contract_id}"
+
+    function, test_class = located
+    assert function.name.startswith("test_"), f"{profile.name} evidence is not a pytest test"
+    assert not _has_skip_marker(function), f"{profile.name} evidence is marked skipped"
+    assert test_class is None or not _has_skip_marker(
+        test_class
+    ), f"{profile.name} evidence class is marked skipped"

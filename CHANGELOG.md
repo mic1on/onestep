@@ -15,13 +15,13 @@
 ## onestep-postgres 0.1.3
 
 - Adopts the shared claimed-source runner for drain, pause, and shutdown release semantics.
-- Proves table-sink upsert replay safety with the shared replay contract.
+- Exercises repeated upserts through the shared replay runner against the SQLite unit-test fallback.
 - Replaces timing-based table queue tests with deterministic fetch/release event handshakes.
 
 ## onestep-mysql 0.3.3
 
 - Adopts the shared claimed-source runner for drain, pause, and shutdown release semantics.
-- Proves table-sink upsert replay safety with the shared replay contract.
+- Exercises repeated upserts through the shared replay runner against the SQLite unit-test fallback.
 - Replaces timing-based table queue tests with deterministic fetch/release event handshakes.
 
 ## onestep-kafka 0.1.3

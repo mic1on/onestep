@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
@@ -34,6 +35,33 @@ def test_profile_normalizes_and_freezes_contract_evidence() -> None:
     }
     assert profile.contract_ids(ConnectorCapability.BASIC_SOURCE) == ("test_fetch",)
     assert profile.supports(ConnectorCapability.CHECKPOINT_SOURCE) is True
+    assert profile.supports(ConnectorCapability.PUBLIC_ERRORS) is False
+
+
+def test_profile_normalizes_a_single_contract_id() -> None:
+    profile = ConnectorConformanceProfile(
+        name="example",
+        contracts={ConnectorCapability.PUBLIC_ERRORS: "test_public_error"},
+    )
+
+    assert profile.contract_ids(ConnectorCapability.PUBLIC_ERRORS) == ("test_public_error",)
+
+
+@pytest.mark.parametrize("name", [None, "", "   "])
+def test_profile_rejects_invalid_names(name) -> None:
+    with pytest.raises(ValueError, match="name must not be empty"):
+        ConnectorConformanceProfile(
+            name=name,
+            contracts={ConnectorCapability.PUBLIC_ERRORS: ("test_error",)},
+        )
+
+
+def test_profile_rejects_unknown_capabilities() -> None:
+    with pytest.raises(ValueError, match="unknown connector capability"):
+        ConnectorConformanceProfile(
+            name="invalid",
+            contracts={"future_capability": ("test_future",)},
+        )
 
 
 @pytest.mark.parametrize(
@@ -53,6 +81,8 @@ def test_profile_rejects_missing_capability_dependencies(capability, dependency)
 @pytest.mark.parametrize(
     "contracts",
     [
+        None,
+        [],
         {},
         {ConnectorCapability.PUBLIC_ERRORS: ()},
         {ConnectorCapability.PUBLIC_ERRORS: ("",)},
@@ -115,6 +145,29 @@ def test_claimed_source_runner_rejects_cancel_safe_source() -> None:
         )
 
 
+def test_claimed_source_runner_times_out_a_blocking_sync_wait_callback() -> None:
+    async def scenario() -> None:
+        source = _BlockingClaimedSource()
+        callback_gate = threading.Event()
+
+        try:
+            with pytest.raises(TimeoutError):
+                await run_claimed_source_stop_contract(
+                    ClaimedSourceHarness(
+                        source=source,
+                        wait_for_fetch_started=callback_gate.wait,
+                        release_fetch=source.release_fetch.set,
+                        assert_released=lambda: None,
+                    ),
+                    StopControl.SHUTDOWN,
+                    timeout_s=0.01,
+                )
+        finally:
+            callback_gate.set()
+
+    asyncio.run(scenario())
+
+
 def test_acknowledged_sink_runner_enforces_runtime_ack_ordering() -> None:
     async def scenario() -> None:
         sink = _BlockingSink()
@@ -146,6 +199,27 @@ def test_replay_safe_sink_runner_sends_twice_and_requires_one_record() -> None:
             ),
             body={"id": "event-1", "value": 3},
         )
+
+    asyncio.run(scenario())
+
+
+def test_replay_safe_sink_runner_closes_after_a_failed_backend_assertion() -> None:
+    async def scenario() -> None:
+        sink = _ReplaySafeSink()
+
+        def reject_duplicate() -> None:
+            raise AssertionError("backend retained two logical records")
+
+        with pytest.raises(AssertionError, match="retained two logical records"):
+            await run_replay_safe_sink_contract(
+                ReplaySafeSinkHarness(
+                    sink=sink,
+                    assert_single_record=reject_duplicate,
+                ),
+                body={"id": "event-1", "value": 3},
+            )
+
+        assert sink.closed is True
 
     asyncio.run(scenario())
 
@@ -210,7 +284,11 @@ class _ReplaySafeSink(Sink):
         super().__init__("replay-safe-sink")
         self.records: dict[str, dict[str, object]] = {}
         self.send_calls = 0
+        self.closed = False
 
     async def send(self, envelope: Envelope) -> None:
         self.send_calls += 1
         self.records[envelope.body["id"]] = dict(envelope.body)
+
+    async def close(self) -> None:
+        self.closed = True

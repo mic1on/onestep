@@ -62,20 +62,20 @@ Connector-specific tests still own backend setup and backend assertions. The too
 
 ## Official Plugin Matrix
 
-The repository-level conformance manifest covers every official connector plugin. Each declaration names concrete non-integration test evidence, and the core contract suite rejects missing plugins, missing files, misspelled test names, and capability dependency gaps.
+The repository-level conformance manifest covers every plugin that registers an `onestep.resources` entry point. Each declaration names concrete non-integration test evidence, and the core contract suite rejects missing or duplicate profiles, missing files, inexact test node IDs, skipped evidence, and capability dependency gaps.
 
 | Connector | Source | Checkpoint | Claim release | Acknowledged sink | Chunked | Replay-safe mode | Public errors |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ClickHouse |  |  |  | yes | yes |  | yes |
-| Elasticsearch / OpenSearch |  |  |  | yes | yes | yes | yes |
+| Elasticsearch / OpenSearch |  |  |  | yes | yes |  | yes |
 | Feishu Bitable | yes | yes |  | yes |  | yes | yes |
 | Kafka | yes | yes | yes | yes |  |  | yes |
-| MongoDB | yes | yes | yes | yes | yes | yes | yes |
-| MySQL | yes | yes | yes | yes |  | yes | yes |
-| PostgreSQL | yes | yes | yes | yes |  | yes | yes |
+| MongoDB | yes | yes | yes | yes | yes |  | yes |
+| MySQL | yes | yes | yes | yes |  |  | yes |
+| PostgreSQL | yes | yes | yes | yes |  |  | yes |
 | RabbitMQ | yes | yes |  | yes |  |  | yes |
 | Redis Streams | yes | yes |  | yes |  |  | yes |
-| SQS | yes | yes | yes | yes |  |  | yes |
+| SQS | yes | yes |  | yes |  |  | yes |
 
 ## Scope
 

@@ -83,7 +83,7 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
     assert processed_rows == [(1, "A", "done"), (2, "B", "done")]
 
 
-def test_mysql_table_sink_upsert_is_replay_safe(tmp_path: Path) -> None:
+def test_mysql_table_sink_sqlite_fallback_handles_replayed_upsert(tmp_path: Path) -> None:
     db_url = f"sqlite:///{tmp_path / 'sink.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()

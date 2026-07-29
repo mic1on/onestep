@@ -145,7 +145,9 @@ async def run_claimed_source_stop_contract(
     serving = asyncio.create_task(app.serve())
     fetch_released = False
     try:
-        await asyncio.wait_for(_invoke(harness.wait_for_fetch_started), timeout=timeout_s)
+        await asyncio.wait_for(
+            _invoke_wait_action(harness.wait_for_fetch_started), timeout=timeout_s
+        )
 
         if control is StopControl.DRAIN:
             app.request_drain()
@@ -210,7 +212,9 @@ async def run_acknowledged_sink_contract(
     serving = asyncio.create_task(app.serve())
     send_released = False
     try:
-        await asyncio.wait_for(_invoke(harness.wait_for_send_started), timeout=timeout_s)
+        await asyncio.wait_for(
+            _invoke_wait_action(harness.wait_for_send_started), timeout=timeout_s
+        )
         if delivery.acked:
             raise AssertionError("delivery was acked before the sink backend acknowledged the send")
         if serving.done():
@@ -252,6 +256,16 @@ async def run_replay_safe_sink_contract(
 
 async def _invoke(action: _Action) -> None:
     result = action()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _invoke_wait_action(action: _Action) -> None:
+    if inspect.iscoroutinefunction(action):
+        await action()
+        return
+
+    result = await asyncio.to_thread(action)
     if inspect.isawaitable(result):
         await result
 
