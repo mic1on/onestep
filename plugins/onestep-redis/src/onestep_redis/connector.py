@@ -10,7 +10,7 @@ from onestep.resilience import ConnectorOperation, ConnectorOperationError
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
 
-from .resilience import as_redis_connector_operation_error
+from .resilience import as_redis_connector_operation_error, collect_sensitive_tokens
 
 try:  # pragma: no cover - optional dependency
     from redis.asyncio import Redis
@@ -218,6 +218,12 @@ class RedisStreamQueue(Source, Sink):
         self._redis: Any | None = None
         self._opened = False
 
+    def _connection_secrets(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        return collect_sensitive_tokens(
+            self.connector.url, self.connector.options
+        )
+
     async def open(self) -> None:
         """Open connection and create consumer group if needed."""
         if self._opened:
@@ -248,10 +254,11 @@ class RedisStreamQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self._connection_secrets(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def close(self) -> None:
         """Close connection."""
@@ -313,11 +320,12 @@ class RedisStreamQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self._connection_secrets(),
             )
             if connector_error is None:
                 raise
             await self._reset_transport_state()
-            raise connector_error from exc
+            raise connector_error from None
 
     def _process_messages(self, messages: list) -> list[Delivery]:
         """Process raw xreadgroup response into Delivery objects."""
@@ -377,11 +385,12 @@ class RedisStreamQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self._connection_secrets(),
             )
             if connector_error is None:
                 raise
             await self._reset_transport_state()
-            raise connector_error from exc
+            raise connector_error from None
 
     async def _reset_transport_state(self) -> None:
         """Reset transport state on error."""
