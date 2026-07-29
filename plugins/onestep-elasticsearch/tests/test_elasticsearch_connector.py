@@ -249,18 +249,188 @@ async def test_429_retries_only_failed_subset() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_bulk_item_acknowledgement_is_permanent() -> None:
+@pytest.mark.parametrize("status", [502, 503, 504])
+async def test_request_level_gateway_failure_without_stable_ids_is_not_replayed(
+    status,
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, json={"error": {"reason": "gateway failure"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
+        index="events", max_retries=2
+    )
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"value": 1}))
+
+    assert calls == 1
+    assert captured.value.kind is ConnectorErrorKind.UNCERTAIN
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_level_504_with_stable_ids_retries() -> None:
+    responses = [
+        httpx.Response(504, json={"error": {"reason": "gateway timeout"}}),
+        httpx.Response(
+            200,
+            json={"errors": False, "items": [{"index": {"status": 201}}]},
+        ),
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
+        index="events", id_field="id", max_retries=2
+    )
+
+    await sink.send(Envelope(body={"id": "evt-1", "value": 1}))
+
+    assert responses == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "id_field", "expected_kind"),
+    [
+        (504, "id", ConnectorErrorKind.TRANSIENT),
+        (429, None, ConnectorErrorKind.THROTTLED),
+    ],
+)
+async def test_request_level_retry_exhaustion_is_bounded(
+    status, id_field, expected_kind
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, json={"error": {"reason": "unavailable"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
+        index="events", id_field=id_field, max_retries=2
+    )
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": "evt-1", "value": 1}))
+
+    assert calls == 3
+    assert captured.value.kind is expected_kind
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_create_with_id_field_does_not_claim_replay_safety() -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(504, json={"error": {"reason": "gateway timeout"}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
+        index="events", operation="create", id_field="id", max_retries=2
+    )
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": "evt-1", "value": 1}))
+
+    assert calls == 1
+    assert captured.value.kind is ConnectorErrorKind.UNCERTAIN
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_level_429_without_stable_ids_remains_retryable() -> None:
+    responses = [
+        httpx.Response(429, json={"error": {"reason": "rejected"}}),
+        httpx.Response(
+            200,
+            json={"errors": False, "items": [{"index": {"status": 201}}]},
+        ),
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
+        index="events", max_retries=2
+    )
+
+    await sink.send(Envelope(body={"value": 1}))
+
+    assert responses == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("id_field", "expected_kind"),
+    [
+        (None, ConnectorErrorKind.UNCERTAIN),
+        ("id", ConnectorErrorKind.PERMANENT),
+    ],
+)
+async def test_missing_bulk_item_acknowledgement_is_classified_by_replay_safety(
+    id_field, expected_kind
+) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"errors": False, "items": []})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
-        index="events"
+        index="events", id_field=id_field
     )
     with pytest.raises(ConnectorOperationError) as captured:
         await sink.send(Envelope(body={"id": "one"}))
-    assert captured.value.kind is ConnectorErrorKind.PERMANENT
+    assert captured.value.kind is expected_kind
     assert captured.value.cause.items[0].status == 0
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"errors": False, "items": ["invalid"]},
+        {"errors": False, "items": [{"index": {"status": "invalid"}}]},
+        {"errors": True, "items": [{"index": {"status": 201}}]},
+    ],
+)
+@pytest.mark.parametrize(
+    ("id_field", "expected_kind"),
+    [
+        (None, ConnectorErrorKind.UNCERTAIN),
+        ("id", ConnectorErrorKind.PERMANENT),
+    ],
+)
+async def test_malformed_bulk_item_response_is_classified_by_replay_safety(
+    payload, id_field, expected_kind
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
+        index="events", id_field=id_field
+    )
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": "one"}))
+
+    assert captured.value.kind is expected_kind
+    assert captured.value.cause.items[0].error_type == "invalid_response"
     await client.aclose()
 
 
@@ -315,19 +485,28 @@ async def test_oversized_action_is_permanent_without_a_network_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_object_bulk_response_is_permanent() -> None:
+@pytest.mark.parametrize(
+    ("id_field", "expected_kind"),
+    [
+        (None, ConnectorErrorKind.UNCERTAIN),
+        ("id", ConnectorErrorKind.PERMANENT),
+    ],
+)
+async def test_non_object_bulk_response_is_classified_by_replay_safety(
+    id_field, expected_kind
+) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[])
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     sink = ElasticsearchConnector("http://search:9200", client=client).bulk_sink(
-        index="events"
+        index="events", id_field=id_field
     )
 
     with pytest.raises(ConnectorOperationError) as captured:
         await sink.send(Envelope(body={"id": "one"}))
 
-    assert captured.value.kind is ConnectorErrorKind.PERMANENT
+    assert captured.value.kind is expected_kind
     await client.aclose()
 
 
