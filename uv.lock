@@ -1409,7 +1409,7 @@ provides-extras = ["control-plane", "yaml", "mysql", "postgres", "rabbitmq", "re
 
 [[package]]
 name = "onestep-clickhouse"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "plugins/onestep-clickhouse" }
 dependencies = [
     { name = "clickhouse-connect", version = "0.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
