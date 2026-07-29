@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import ssl
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -34,7 +35,9 @@ class EsErrorCause(Exception):
         return f"elasticsearch error: {self.message}"
 
 
-def collect_sensitive_tokens(*config_values: object) -> list[str]:
+def collect_sensitive_tokens(
+    *config_values: object, urls: Iterable[str] = ()
+) -> list[str]:
     """Collect secret substrings that may surface in ES error messages.
 
     Tokens are derived from connector config: host strings (which may contain
@@ -59,6 +62,24 @@ def collect_sensitive_tokens(*config_values: object) -> list[str]:
                     add(item)
             continue
         add(value)
+
+    for url in urls:
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            continue
+        raw_username = parsed.username
+        raw_password = parsed.password
+        decoded_username = unquote(raw_username) if raw_username else raw_username
+        decoded_password = unquote(raw_password) if raw_password else raw_password
+        for username, password in (
+            (raw_username, raw_password),
+            (decoded_username, decoded_password),
+        ):
+            if username and password:
+                add(f"{username}:{password}")
+                add(f"{username}:{password}@")
+            add(password)
 
     return tokens
 

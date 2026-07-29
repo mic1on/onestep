@@ -13,7 +13,12 @@ from onestep import (
     Sink,
 )
 
-from .resilience import classify_elasticsearch_exception, classify_elasticsearch_status, redacted_es_cause
+from .resilience import (
+    classify_elasticsearch_exception,
+    classify_elasticsearch_status,
+    collect_sensitive_tokens,
+    redacted_es_cause,
+)
 
 
 def _logical_document_views(body: Any) -> Sequence[Mapping[str, Any]]:
@@ -133,7 +138,8 @@ class ElasticsearchConnector:
             self.api_key,
             self.bearer_token,
             self.client_key,
-            self.headers,
+            *self._auth_headers().values(),
+            urls=self.hosts,
         )
 
     async def _get_client(self):
