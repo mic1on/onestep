@@ -87,6 +87,11 @@ the item index, status, identifier, and normalized reason. A partial commit is
 reported as `UNCERTAIN` unless `index` with a stable `id_field` makes replay
 deterministic. `create` conflicts and malformed documents are permanent failures.
 
+Request-level 502, 503, and 504 responses are ambiguous after the request body
+has been sent. The sink retries them internally only when `operation: index` and
+a present `id_field` make replay convergent. A request-level 429 is an explicit
+rejection and remains retryable without stable IDs.
+
 ## Deferred features
 
 Version 1 intentionally excludes Cloud ID, sniffing, SigV4, data streams,
