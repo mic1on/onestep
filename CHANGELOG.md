@@ -6,6 +6,10 @@
 - Bundles the three plugins in the worker image and adds isolated reliability/live compatibility gates.
 - Does not change core runtime, delivery, retry, reporter, or control-plane behavior.
 
+## onestep-elasticsearch 0.1.1
+
+- Keeps connector error diagnostics useful without exposing configured authentication credentials, custom header values, or URL-embedded passwords.
+
 ## onestep-elasticsearch 0.1.0
 
 - Adds the common Elasticsearch/OpenSearch HTTP connector and acknowledged bulk sink.
