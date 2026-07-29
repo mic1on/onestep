@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 from importlib import metadata as importlib_metadata
 from typing import Any
@@ -17,7 +18,11 @@ from onestep_postgres import (
     SQLAlchemyStateStore,
     register,
 )
-from onestep_postgres.resilience import as_postgres_connector_operation_error, classify_sqlalchemy_error
+from onestep_postgres.resilience import (
+    PostgresErrorCause,
+    as_postgres_connector_operation_error,
+    classify_sqlalchemy_error,
+)
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -77,7 +82,8 @@ def test_postgres_plugin_normalizes_sqlalchemy_errors() -> None:
     assert normalized.kind is ConnectorErrorKind.TRANSIENT
     assert normalized.source_name == "postgres.incremental:users"
     assert normalized.retry_delay_s == 2.0
-    assert normalized.cause is sql_error
+    assert isinstance(normalized.cause, PostgresErrorCause)
+    assert "timeout" in str(normalized.cause)
 
 
 def test_yaml_builds_postgres_resources_via_plugin_entry_point(tmp_path) -> None:
@@ -137,3 +143,52 @@ def _entry_points_for_group(group: str) -> tuple[Any, ...]:
     if hasattr(entry_points, "select"):
         return tuple(entry_points.select(group=group))
     return tuple(entry_points.get(group, ()))
+
+
+def test_postgres_connector_error_does_not_leak_dsn_credentials() -> None:
+    """DBAPI ``orig`` exceptions can echo the DSN; it must be scrubbed."""
+    secret_dsn = "postgresql://reporter:pgpassword@db.internal:5432/appdb"
+    import sqlalchemy as sa
+
+    orig = sa.exc.OperationalError(
+        statement="SELECT 1",
+        params={},
+        orig=Exception(
+            f"connection to server at {secret_dsn} failed: "
+            "FATAL: password authentication failed"
+        ),
+    )
+    normalized = as_postgres_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=orig,
+        source_name="postgres.incremental:users",
+        secrets=[secret_dsn, "pgpassword"],
+    )
+    assert isinstance(normalized, ConnectorOperationError)
+    assert "pgpassword" not in str(normalized.cause)
+    assert "reporter:pgpassword" not in str(normalized.cause)
+    assert "<redacted>" in str(normalized.cause)
+
+
+def test_postgres_connector_error_does_not_leak_connect_args_password() -> None:
+    import sqlalchemy as sa
+
+    secret = "connect-args-password"
+    connector = PostgresConnector("sqlite://", connect_args={"password": secret})
+    source = connector.incremental(table="users", key="id", cursor=("id",))
+
+    def fail_fetch(limit: int) -> list[dict[str, Any]]:
+        raise sa.exc.OperationalError(
+            statement="SELECT 1",
+            params={},
+            orig=Exception(f"password {secret} was rejected"),
+        )
+
+    source._fetch_sync = fail_fetch
+
+    with pytest.raises(ConnectorOperationError) as exc_info:
+        asyncio.run(source.fetch(1))
+
+    assert secret not in str(exc_info.value.cause)
+    assert "<redacted>" in str(exc_info.value.cause)
+    asyncio.run(connector.close())
