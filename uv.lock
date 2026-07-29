@@ -1479,7 +1479,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-elasticsearch"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "plugins/onestep-elasticsearch" }
 dependencies = [
     { name = "httpx" },
