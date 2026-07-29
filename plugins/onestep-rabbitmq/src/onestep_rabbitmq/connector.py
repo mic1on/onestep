@@ -10,7 +10,7 @@ from onestep.resilience import ConnectorOperation, ConnectorOperationError
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
 
-from .resilience import as_rabbitmq_connector_operation_error
+from .resilience import as_rabbitmq_connector_operation_error, collect_sensitive_tokens
 
 try:  # pragma: no cover - optional dependency
     import aio_pika
@@ -181,6 +181,10 @@ class RabbitMQQueue(Source, Sink):
         self._exchange: Any | None = None
         self._opened = False
 
+    def _connection_secrets(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        return collect_sensitive_tokens(self.connector.url, self.connector.options)
+
     async def open(self) -> None:
         if self._opened:
             return
@@ -230,10 +234,11 @@ class RabbitMQQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self._connection_secrets(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def close(self) -> None:
         if not self._opened:
@@ -276,11 +281,12 @@ class RabbitMQQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self._connection_secrets(),
             )
             if connector_error is None:
                 raise
             await self._reset_transport_state(release_connection=True)
-            raise connector_error from exc
+            raise connector_error from None
 
     async def send(self, envelope: Envelope) -> None:
         try:
@@ -305,11 +311,12 @@ class RabbitMQQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self._connection_secrets(),
             )
             if connector_error is None:
                 raise
             await self._reset_transport_state(release_connection=True)
-            raise connector_error from exc
+            raise connector_error from None
 
     async def _reset_transport_state(self, *, release_connection: bool) -> None:
         try:
