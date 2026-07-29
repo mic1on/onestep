@@ -26,6 +26,7 @@ import {
   type ServiceSummaryStats,
   type ResourceCatalogEntry,
   type TaskManualRunTarget,
+  type TaskEventHistoryKind,
   type TaskMetricChartPointSummary,
 } from './api';
 import {
@@ -182,6 +183,7 @@ export default function App() {
   const [isLoadingTaskMetrics, setIsLoadingTaskMetrics] = useState(false);
   const [taskEventLogs, setTaskEventLogs] = useState<LogEntry[]>([]);
   const [taskEventLookbackMinutes, setTaskEventLookbackMinutes] = useState(DEFAULT_TASK_EVENT_LOOKBACK_MINUTES);
+  const [taskEventKinds, setTaskEventKinds] = useState<TaskEventHistoryKind[]>([]);
   const [taskEventOffset, setTaskEventOffset] = useState(0);
   const [taskEventTotal, setTaskEventTotal] = useState(0);
   const [taskEventsError, setTaskEventsError] = useState<string | null>(null);
@@ -519,6 +521,10 @@ export default function App() {
     setTaskEventLookbackMinutes(minutes);
     setTaskEventOffset(0);
   }, []);
+  const handleTaskEventKindsChange = useCallback((kinds: TaskEventHistoryKind[]) => {
+    setTaskEventKinds(kinds);
+    setTaskEventOffset(0);
+  }, []);
 
   // --- Live Terminal Logs Simulator ---
   const logTerminalRef = useRef<HTMLDivElement>(null);
@@ -592,6 +598,7 @@ export default function App() {
       lookbackMinutes: taskEventLookbackMinutes,
       limit: DEFAULT_TASK_EVENT_PAGE_SIZE,
       offset: taskEventOffset,
+      kinds: taskEventKinds,
     })
       .then((page) => {
         if (cancelled) return;
@@ -617,7 +624,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [redirectToLogin, selectedTask, taskEventLookbackMinutes, taskEventOffset]);
+  }, [redirectToLogin, selectedTask, taskEventKinds, taskEventLookbackMinutes, taskEventOffset]);
 
   // --- Interactive Control plane Handlers ---
 
@@ -1487,6 +1494,8 @@ export default function App() {
                         limit={DEFAULT_TASK_EVENT_PAGE_SIZE}
                         offset={taskEventOffset}
                         onPageChange={setTaskEventOffset}
+                        selectedKinds={taskEventKinds}
+                        onSelectedKindsChange={handleTaskEventKindsChange}
                       />
                     </div>
                   </div>
