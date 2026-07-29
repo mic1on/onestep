@@ -6,7 +6,17 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from onestep import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError, CursorStore, Delivery, Envelope, InMemoryCursorStore, Sink, Source
+from onestep import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+    CursorStore,
+    Delivery,
+    Envelope,
+    InMemoryCursorStore,
+    Sink,
+    Source,
+)
 
 from .state_codec import decode_state, encode_state
 
@@ -97,7 +107,23 @@ class MongoDBConnector:
         return self._client
 
     def collection(self, name: str):
-        return self._get_client()[self.database_name][name]
+        try:
+            return self._get_client()[self.database_name][name]
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            from .resilience import classify_mongodb_error, redacted_mongodb_cause
+
+            kind = classify_mongodb_error(exc, operation="open")
+            if kind is None:
+                raise
+            cause = redacted_mongodb_cause(exc, secrets=self._secret_tokens())
+            raise ConnectorOperationError(
+                backend="mongodb",
+                operation=ConnectorOperation.OPEN,
+                kind=kind,
+                cause=cause,
+            ) from None
 
     def poll_collection(self, collection: str, **options: Any) -> "MongoDBPollingSource":
         return MongoDBPollingSource(connector=self, collection=collection, **options)
@@ -282,7 +308,24 @@ class MongoDBChangeStreamSource(Source):
             options = {"full_document": self.full_document, "max_await_time_ms": self.max_await_time_ms}
             if self._resume_token is not None:
                 options["resume_after"] = self._resume_token
-            self._stream = await self.connector.collection(self.collection_name).watch(self.pipeline, **options)
+            try:
+                self._stream = await self.connector.collection(self.collection_name).watch(self.pipeline, **options)
+            except ConnectorOperationError:
+                raise
+            except Exception as exc:
+                from .resilience import classify_mongodb_error, redacted_mongodb_cause
+
+                kind = classify_mongodb_error(exc, operation="open")
+                if kind is None:
+                    raise
+                cause = redacted_mongodb_cause(exc, secrets=self.connector._secret_tokens())
+                raise ConnectorOperationError(
+                    backend="mongodb",
+                    operation=ConnectorOperation.OPEN,
+                    kind=kind,
+                    source_name=self.name,
+                    cause=cause,
+                ) from None
 
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
@@ -302,7 +345,12 @@ class MongoDBChangeStreamSource(Source):
             stream = self._stream
             self._stream = None
             if stream is not None:
-                await stream.close()
+                # Keep a classified close failure from replacing the primary error.
+                try:
+                    await stream.close()
+                except Exception as close_exc:
+                    if classify_mongodb_error(close_exc, operation="close") is None:
+                        raise
             history_lost = getattr(exc, "code", None) in {280, 286}
             has_resumable_label = getattr(exc, "has_error_label", lambda label: False)(
                 "ResumableChangeStreamError"

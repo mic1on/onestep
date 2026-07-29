@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import pytest
 from bson.errors import InvalidDocument
-from pymongo.errors import AutoReconnect, BulkWriteError, DuplicateKeyError, ExecutionTimeout, NetworkTimeout, OperationFailure, ServerSelectionTimeoutError
+from onestep_mongodb.resilience import (
+    classify_mongodb_error,
+    collect_sensitive_tokens,
+    redacted_mongodb_cause,
+)
+from pymongo.errors import (
+    AutoReconnect,
+    BulkWriteError,
+    DuplicateKeyError,
+    ExecutionTimeout,
+    NetworkTimeout,
+    OperationFailure,
+    ServerSelectionTimeoutError,
+)
 
 from onestep import ConnectorErrorKind
-from onestep_mongodb.resilience import classify_mongodb_error, redacted_mongodb_cause
 
 
 def test_driver_error_classes() -> None:
@@ -31,3 +44,40 @@ def test_redacted_cause_does_not_retain_credentials_or_invalid_documents() -> No
     payload = redacted_mongodb_cause(invalid)
     assert classify_mongodb_error(invalid, operation="send") is ConnectorErrorKind.PERMANENT
     assert "document-secret" not in str(payload)
+
+
+@pytest.mark.parametrize(
+    "client_options",
+    [
+        {"tlsCertificateKeyFilePassword": "mongo-super-secret"},
+        {"proxyPassword": "mongo-super-secret"},
+        {"authMechanismProperties": {"AWS_SESSION_TOKEN": "mongo-super-secret"}},
+        {"authMechanismProperties": "AWS_SESSION_TOKEN:mongo-super-secret"},
+        {"nested": {"password": "mongo-super-secret"}},
+    ],
+)
+def test_redacted_cause_scrubs_pymongo_client_option_secrets(client_options) -> None:
+    secret = "mongo-super-secret"
+    tokens = collect_sensitive_tokens("mongodb://local", client_options)
+    cause = redacted_mongodb_cause(AutoReconnect(f"disconnected with {secret}"), secrets=tokens)
+    assert secret not in str(cause)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "tlsCertificateKeyFilePassword=mongo-super-secret",
+        "proxyPassword=mongo-super-secret",
+        "authMechanismProperties=AWS_SESSION_TOKEN:mongo-super-secret",
+    ],
+)
+def test_redacted_cause_scrubs_pymongo_uri_query_secrets(query: str) -> None:
+    uri = f"mongodb://host/db?{query}"
+    cause = redacted_mongodb_cause(AutoReconnect(uri), secrets=collect_sensitive_tokens(uri))
+    assert "mongo-super-secret" not in str(cause)
+
+
+def test_redacted_cause_scrubs_decoded_uri_password() -> None:
+    uri = "mongodb://user:p%40ss@host/db"
+    cause = redacted_mongodb_cause(AutoReconnect("authentication failed for p@ss"), secrets=collect_sensitive_tokens(uri))
+    assert "p@ss" not in str(cause)
