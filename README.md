@@ -338,6 +338,8 @@ mapping, unsupported features, and rollout guidance.
 - [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md) — YAML schema
 - [`docs/core-reliability.md`](docs/core-reliability.md) — stable API,
   delivery semantics, plugin compatibility, and release checklist
+- [`docs/framework-evolution-roadmap.md`](docs/framework-evolution-roadmap.md) —
+  ordered framework milestones and exit gates
 - [`docs/stable-instance-identity.md`](docs/stable-instance-identity.md) —
   reporter identity resolution
 - [`docs/agent-ws-protocol.md`](docs/agent-ws-protocol.md) — agent WS protocol
