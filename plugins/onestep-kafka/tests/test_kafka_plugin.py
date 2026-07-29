@@ -9,7 +9,11 @@ from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.resource_registry import ResourceRegistry
 from onestep_kafka import KafkaConnector, KafkaTopic, register
-from onestep_kafka.resilience import as_kafka_connector_operation_error, classify_kafka_error
+from onestep_kafka.resilience import (
+    as_kafka_connector_operation_error,
+    classify_kafka_error,
+    KafkaErrorCause,
+)
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -152,7 +156,8 @@ def test_kafka_plugin_normalizes_common_connection_errors() -> None:
     assert normalized.kind is ConnectorErrorKind.DISCONNECTED
     assert normalized.source_name == "orders"
     assert normalized.retry_delay_s == 1.0
-    assert normalized.cause is connection_error
+    assert isinstance(normalized.cause, KafkaErrorCause)
+    assert "broker unavailable" in str(normalized.cause)
 
 
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:
@@ -160,3 +165,44 @@ def _entry_points_for_group(group: str) -> tuple[Any, ...]:
     if hasattr(entry_points, "select"):
         return tuple(entry_points.select(group=group))
     return tuple(entry_points.get(group, ()))
+
+
+def test_kafka_connector_error_does_not_leak_credentials() -> None:
+    """Kafka broker errors can embed bootstrap-server strings; they must be scrubbed."""
+    import traceback
+
+    from onestep.resilience import ConnectorOperationError
+
+    secret_dsn = "kafka://producer:secretpassword@broker.internal:9092"
+    exc = ConnectionError(f"could not connect to {secret_dsn}: Connection refused")
+    normalized = as_kafka_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=exc,
+        source_name="orders",
+        retry_delay_s=1.0,
+        secrets=[secret_dsn, "secretpassword", "producer:secretpassword"],
+    )
+    assert isinstance(normalized, ConnectorOperationError)
+    assert "secretpassword" not in str(normalized.cause)
+    assert "producer:secretpassword" not in str(normalized.cause)
+    assert "<redacted>" in str(normalized.cause)
+    # The cause is a KafkaErrorCause, not the raw ConnectionError
+    assert not isinstance(normalized.cause, ConnectionError)
+    # No chained exception
+    assert normalized.__cause__ is None
+    # When raised via `from None`, __suppress_context__ is True.
+    # Verify by raising and catching:
+    try:
+        raise normalized from None
+    except ConnectorOperationError as e:
+        assert e.__suppress_context__ is True
+        assert e.__cause__ is None
+        text = "".join(
+            traceback.format_exception(type(e), e, e.__traceback__)
+        )
+        assert "secretpassword" not in text
+    # Formatted traceback stays clean
+    text = "".join(
+        traceback.format_exception(type(normalized), normalized, normalized.__traceback__)
+    )
+    assert "secretpassword" not in text

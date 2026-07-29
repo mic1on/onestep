@@ -1539,7 +1539,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-kafka"
-version = "0.1.1"
+version = "0.1.2"
 source = { directory = "plugins/onestep-kafka" }
 dependencies = [
     { name = "aiokafka", marker = "python_full_version >= '3.10'" },

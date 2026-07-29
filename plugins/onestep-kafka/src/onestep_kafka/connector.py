@@ -11,7 +11,7 @@ from onestep.resilience import ConnectorOperation, ConnectorOperationError
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
 
-from .resilience import as_kafka_connector_operation_error
+from .resilience import as_kafka_connector_operation_error, collect_sensitive_tokens
 
 try:  # pragma: no cover - optional dependency
     from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -127,6 +127,13 @@ class KafkaConnector:
         self.bootstrap_servers = bootstrap_servers
         self.options = options or {}
         self._driver_override = driver
+
+    def _secret_tokens(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        servers = self.bootstrap_servers
+        if isinstance(servers, (list, tuple)):
+            return collect_sensitive_tokens(*servers, self.options)
+        return collect_sensitive_tokens(servers, self.options)
 
     def topic(
         self,
@@ -249,10 +256,11 @@ class KafkaTopic(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_timeout_ms / 1000,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def send(self, envelope: Envelope) -> None:
         try:
@@ -271,10 +279,11 @@ class KafkaTopic(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_timeout_ms / 1000,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def mark_started(self, record: Any) -> None:
         async with self._runtime_offset_lock():

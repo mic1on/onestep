@@ -1,6 +1,6 @@
 [project]
 name = "onestep-kafka"
-version = "0.1.1"
+version = "0.1.2"
 description = "Kafka connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,3 +30,8 @@ packages = ["src/onestep_kafka"]
 
 [tool.uv.sources]
 onestep = { path = "../..", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
