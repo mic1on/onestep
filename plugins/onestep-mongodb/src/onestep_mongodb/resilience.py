@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from bson.errors import InvalidDocument, InvalidStringData
-from pymongo.errors import AutoReconnect, BulkWriteError, ConfigurationError, DuplicateKeyError, ExecutionTimeout, InvalidURI, NetworkTimeout, OperationFailure, ServerSelectionTimeoutError
+from pymongo.errors import (
+    AutoReconnect,
+    BulkWriteError,
+    ConfigurationError,
+    DuplicateKeyError,
+    ExecutionTimeout,
+    InvalidURI,
+    NetworkTimeout,
+    OperationFailure,
+    ServerSelectionTimeoutError,
+)
 
 from onestep import ConnectorErrorKind
 
@@ -22,15 +34,126 @@ class MongoDBErrorCause(Exception):
 
 
 _MONGODB_URI_CREDENTIALS = re.compile(r"(?i)\b(mongodb(?:\+srv)?://)[^/@\s]+@")
-_SENSITIVE_QUERY_VALUE = re.compile(r"(?i)([?&](?:password|passwd|pwd|secret|token)\s*=)[^&\s]+")
+_SENSITIVE_QUERY_VALUE = re.compile(
+    r"(?i)([?&](?:password|passwd|pwd|secret|token|proxyPassword|"
+    r"tlsCertificateKeyFilePassword|authMechanismProperties)\s*=)[^&\s]+"
+)
+_REDACTED = "<redacted>"
+_MAX_MESSAGE_LENGTH = 500
+_SECRET_OPTION_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "access_token",
+        "api_key",
+        "apikey",
+        "credentials",
+        "authorization",
+        "aws_session_token",
+        "proxypassword",
+        "tlscertificatekeyfilepassword",
+    }
+)
+_SECRET_MECHANISM_PROPERTY_KEYS = frozenset({"AWS_SESSION_TOKEN"})
 
 
-def _redact_message(message: str) -> str:
+def collect_sensitive_tokens(*config_values: object) -> list[str]:
+    """Collect secret substrings from MongoDB connector config.
+
+    Tokens are derived from the URI (parsed userinfo) and known secret keys
+    inside client_options. Error causes are scrubbed against these before they
+    leave the plugin.
+    """
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if value is None:
+            return
+        text = str(value)
+        if text and text not in seen:
+            seen.add(text)
+            tokens.append(text)
+
+    def add_secret_value(value: object) -> None:
+        if isinstance(value, Mapping):
+            for item in value.values():
+                add_secret_value(item)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                add_secret_value(item)
+        else:
+            add(value)
+
+    def collect_auth_mechanism_properties(value: object) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if str(key).upper() in _SECRET_MECHANISM_PROPERTY_KEYS:
+                    add_secret_value(item)
+            return
+        if isinstance(value, str):
+            for property_value in value.split(","):
+                key, separator, item = property_value.partition(":")
+                if separator and key.upper() in _SECRET_MECHANISM_PROPERTY_KEYS:
+                    add(item)
+
+    def collect_mapping(value: Mapping[object, object]) -> None:
+        for key, item in value.items():
+            normalized_key = str(key).lower()
+            if normalized_key == "authmechanismproperties":
+                collect_auth_mechanism_properties(item)
+            elif normalized_key in _SECRET_OPTION_KEYS:
+                add_secret_value(item)
+            elif isinstance(item, Mapping):
+                collect_mapping(item)
+
+    for value in config_values:
+        if isinstance(value, Mapping):
+            collect_mapping(value)
+            continue
+        try:
+            parsed = urlsplit(str(value))
+        except (ValueError, AttributeError):
+            continue
+        raw_username = parsed.username
+        raw_password = parsed.password
+        decoded_username = unquote(raw_username) if raw_username else raw_username
+        decoded_password = unquote(raw_password) if raw_password else raw_password
+        for username, password in (
+            (raw_username, raw_password),
+            (decoded_username, decoded_password),
+        ):
+            if username and password:
+                add(f"{username}:{password}")
+                add(f"{username}:{password}@")
+            add(password)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+            normalized_key = key.lower()
+            if normalized_key == "authmechanismproperties":
+                collect_auth_mechanism_properties(item)
+            elif normalized_key in _SECRET_OPTION_KEYS:
+                add(item)
+
+    return tokens
+
+
+def _redact_message(message: str, tokens: list[str] | None = None) -> str:
     message = _MONGODB_URI_CREDENTIALS.sub(r"\1<redacted>@", message)
-    return _SENSITIVE_QUERY_VALUE.sub(r"\1<redacted>", message)
+    message = _SENSITIVE_QUERY_VALUE.sub(r"\1<redacted>", message)
+    if tokens:
+        for token in sorted(tokens, key=len, reverse=True):
+            if token:
+                message = message.replace(token, _REDACTED)
+    return message[:_MAX_MESSAGE_LENGTH]
 
 
-def redacted_mongodb_cause(exc: BaseException) -> MongoDBErrorCause:
+def redacted_mongodb_cause(
+    exc: BaseException,
+    secrets: list[str] | None = None,
+) -> MongoDBErrorCause:
     details = exc.details if isinstance(exc, BulkWriteError) else {}
     write_errors = details.get("writeErrors", []) if isinstance(details, dict) else []
     failed_indexes = tuple(int(item["index"]) for item in write_errors if isinstance(item, dict) and "index" in item)
@@ -41,7 +164,7 @@ def redacted_mongodb_cause(exc: BaseException) -> MongoDBErrorCause:
         code = write_errors[0].get("code")
     if isinstance(exc, BulkWriteError):
         message = "; ".join(
-            _redact_message(str(item.get("errmsg", "write error")))[:160]
+            _redact_message(str(item.get("errmsg", "write error")), tokens=secrets)[:160]
             for item in write_errors
             if isinstance(item, dict)
         )[:500]
@@ -50,7 +173,7 @@ def redacted_mongodb_cause(exc: BaseException) -> MongoDBErrorCause:
     elif isinstance(exc, (ConfigurationError, InvalidURI)):
         message = "invalid MongoDB configuration"
     else:
-        message = _redact_message(str(exc))[:500]
+        message = _redact_message(str(exc), tokens=secrets)[:500]
     return MongoDBErrorCause(code, failed_indexes, codes, committed_count, message)
 
 

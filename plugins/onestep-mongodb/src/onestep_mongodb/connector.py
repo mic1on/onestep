@@ -6,7 +6,17 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from onestep import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError, CursorStore, Delivery, Envelope, InMemoryCursorStore, Sink, Source
+from onestep import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+    CursorStore,
+    Delivery,
+    Envelope,
+    InMemoryCursorStore,
+    Sink,
+    Source,
+)
 
 from .state_codec import decode_state, encode_state
 
@@ -84,6 +94,11 @@ class MongoDBConnector:
         self._owns_client = client is None
         self._closed = False
 
+    def _secret_tokens(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        from .resilience import collect_sensitive_tokens
+        return collect_sensitive_tokens(self.uri, self.client_options)
+
     def _get_client(self):
         if self._client is None:
             from pymongo import AsyncMongoClient
@@ -92,7 +107,23 @@ class MongoDBConnector:
         return self._client
 
     def collection(self, name: str):
-        return self._get_client()[self.database_name][name]
+        try:
+            return self._get_client()[self.database_name][name]
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            from .resilience import classify_mongodb_error, redacted_mongodb_cause
+
+            kind = classify_mongodb_error(exc, operation="open")
+            if kind is None:
+                raise
+            cause = redacted_mongodb_cause(exc, secrets=self._secret_tokens())
+            raise ConnectorOperationError(
+                backend="mongodb",
+                operation=ConnectorOperation.OPEN,
+                kind=kind,
+                cause=cause,
+            ) from None
 
     def poll_collection(self, collection: str, **options: Any) -> "MongoDBPollingSource":
         return MongoDBPollingSource(connector=self, collection=collection, **options)
@@ -179,8 +210,8 @@ class MongoDBPollingSource(Source):
             kind = classify_mongodb_error(exc, operation="fetch")
             if kind is None:
                 raise
-            cause = redacted_mongodb_cause(exc)
-            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.FETCH, kind=kind, source_name=self.name, retry_delay_s=self.poll_interval_s, cause=cause) from cause
+            cause = redacted_mongodb_cause(exc, secrets=self.connector._secret_tokens())
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.FETCH, kind=kind, source_name=self.name, retry_delay_s=self.poll_interval_s, cause=cause) from None
         finally:
             cursor = self._active_cursor
             self._active_cursor = None
@@ -277,7 +308,24 @@ class MongoDBChangeStreamSource(Source):
             options = {"full_document": self.full_document, "max_await_time_ms": self.max_await_time_ms}
             if self._resume_token is not None:
                 options["resume_after"] = self._resume_token
-            self._stream = await self.connector.collection(self.collection_name).watch(self.pipeline, **options)
+            try:
+                self._stream = await self.connector.collection(self.collection_name).watch(self.pipeline, **options)
+            except ConnectorOperationError:
+                raise
+            except Exception as exc:
+                from .resilience import classify_mongodb_error, redacted_mongodb_cause
+
+                kind = classify_mongodb_error(exc, operation="open")
+                if kind is None:
+                    raise
+                cause = redacted_mongodb_cause(exc, secrets=self.connector._secret_tokens())
+                raise ConnectorOperationError(
+                    backend="mongodb",
+                    operation=ConnectorOperation.OPEN,
+                    kind=kind,
+                    source_name=self.name,
+                    cause=cause,
+                ) from None
 
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
@@ -297,7 +345,12 @@ class MongoDBChangeStreamSource(Source):
             stream = self._stream
             self._stream = None
             if stream is not None:
-                await stream.close()
+                # Keep a classified close failure from replacing the primary error.
+                try:
+                    await stream.close()
+                except Exception as close_exc:
+                    if classify_mongodb_error(close_exc, operation="close") is None:
+                        raise
             history_lost = getattr(exc, "code", None) in {280, 286}
             has_resumable_label = getattr(exc, "has_error_label", lambda label: False)(
                 "ResumableChangeStreamError"
@@ -319,7 +372,7 @@ class MongoDBChangeStreamSource(Source):
                 if history_lost
                 else None
             )
-            cause = redacted_mongodb_cause(exc)
+            cause = redacted_mongodb_cause(exc, secrets=self.connector._secret_tokens())
             raise ConnectorOperationError(
                 backend="mongodb",
                 operation=ConnectorOperation.FETCH,
@@ -327,7 +380,7 @@ class MongoDBChangeStreamSource(Source):
                 source_name=self.name,
                 cause=cause,
                 message=message,
-            ) from cause
+            ) from None
 
         deliveries: list[Delivery] = []
         for event in events:
@@ -438,7 +491,7 @@ class MongoDBCollectionSink(Sink):
                     if missing:
                         raise MongoDBPayloadError(f"document {index} missing upsert keys {missing}")
         except MongoDBPayloadError as exc:
-            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=ConnectorErrorKind.PERMANENT, source_name=self.name, cause=exc) from exc
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=ConnectorErrorKind.PERMANENT, source_name=self.name, cause=exc) from None
         committed = 0
         try:
             for start in range(0, len(documents), self.batch_size):
@@ -462,9 +515,9 @@ class MongoDBCollectionSink(Sink):
             kind = classify_mongodb_error(exc, operation="send")
             if kind is None:
                 raise
-            cause = redacted_mongodb_cause(exc)
+            cause = redacted_mongodb_cause(exc, secrets=self.connector._secret_tokens())
             replay_safe = self.mode == "upsert" and bool(self.keys)
             partial = committed > 0 or cause.committed_count > 0
             if partial and not replay_safe:
                 kind = ConnectorErrorKind.UNCERTAIN
-            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=kind, source_name=self.name, cause=cause) from cause
+            raise ConnectorOperationError(backend="mongodb", operation=ConnectorOperation.SEND, kind=kind, source_name=self.name, cause=cause) from None

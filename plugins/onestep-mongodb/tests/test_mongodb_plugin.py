@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import traceback
 from importlib import metadata as importlib_metadata
 
+import pytest
 from onestep_mongodb import (
     MongoDBChangeStreamDelivery,
     MongoDBChangeStreamSource,
@@ -13,11 +15,17 @@ from onestep_mongodb import (
     register,
     register_resources,
 )
-
-import pytest
-
-from onestep import InMemoryCursorStore, ResourceBuildContext, ResourceRegistry, load_app_config
 from onestep_mongodb.resources import _build_polling
+from pymongo.errors import AutoReconnect
+
+from onestep import (
+    ConnectorOperation,
+    ConnectorOperationError,
+    InMemoryCursorStore,
+    ResourceBuildContext,
+    ResourceRegistry,
+    load_app_config,
+)
 
 
 def test_public_surface_and_entry_point() -> None:
@@ -85,3 +93,97 @@ def test_strict_yaml_rejects_invalid_resource(resource) -> None:
         resources = {"mongo": resource}
     with pytest.raises((TypeError, ValueError)):
         load_app_config(_config(resources), strict=True)
+
+
+def _assert_public_error_is_redacted(exc: ConnectorOperationError, secret: str) -> None:
+    rendered = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    assert secret not in rendered
+    assert secret not in str(exc.cause)
+    assert exc.__suppress_context__ is True
+
+
+def test_collection_normalizes_client_initialization_errors() -> None:
+    secret = "mongo-super-secret"
+
+    class Client:
+        def __getitem__(self, name):
+            raise AutoReconnect(f"cannot connect with {secret}")
+
+    connector = MongoDBConnector(
+        "mongodb://local",
+        database="app",
+        client_options={"password": secret},
+        client=Client(),
+    )
+    with pytest.raises(ConnectorOperationError) as captured:
+        connector.collection("events")
+
+    assert captured.value.operation is ConnectorOperation.OPEN
+    _assert_public_error_is_redacted(captured.value, secret)
+
+
+@pytest.mark.asyncio
+async def test_change_stream_open_normalizes_watch_errors() -> None:
+    secret = "mongo-super-secret"
+
+    class Collection:
+        async def watch(self, pipeline, **options):
+            raise AutoReconnect(f"cannot watch with {secret}")
+
+    class Database:
+        def __getitem__(self, name):
+            return Collection()
+
+    class Client:
+        def __getitem__(self, name):
+            return Database()
+
+    connector = MongoDBConnector(
+        "mongodb://local",
+        database="app",
+        client_options={"password": secret},
+        client=Client(),
+    )
+    source = connector.watch_collection("events")
+    with pytest.raises(ConnectorOperationError) as captured:
+        await source.open()
+
+    assert captured.value.operation is ConnectorOperation.OPEN
+    _assert_public_error_is_redacted(captured.value, secret)
+
+
+@pytest.mark.asyncio
+async def test_change_stream_cleanup_cannot_replace_redacted_fetch_error() -> None:
+    secret = "mongo-super-secret"
+
+    class Stream:
+        async def try_next(self):
+            raise AutoReconnect(f"fetch failed with {secret}")
+
+        async def close(self):
+            raise AutoReconnect(f"cleanup failed with {secret}")
+
+    class Collection:
+        async def watch(self, pipeline, **options):
+            return Stream()
+
+    class Database:
+        def __getitem__(self, name):
+            return Collection()
+
+    class Client:
+        def __getitem__(self, name):
+            return Database()
+
+    connector = MongoDBConnector(
+        "mongodb://local",
+        database="app",
+        client_options={"password": secret},
+        client=Client(),
+    )
+    source = connector.watch_collection("events")
+    with pytest.raises(ConnectorOperationError) as captured:
+        await source.fetch(1)
+
+    assert captured.value.operation is ConnectorOperation.FETCH
+    _assert_public_error_is_redacted(captured.value, secret)
