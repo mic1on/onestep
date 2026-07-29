@@ -12,7 +12,7 @@ from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation
 from onestep.state import CursorStore, InMemoryCursorStore
 
-from .resilience import as_postgres_connector_operation_error
+from .resilience import as_postgres_connector_operation_error, collect_sensitive_tokens
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 
 try:
@@ -29,6 +29,10 @@ class PostgresConnector:
             raise RuntimeError("PostgresConnector requires SQLAlchemy. Install onestep-postgres.")
         self.dsn = dsn
         self.engine = create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
+
+    def _secret_tokens(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        return collect_sensitive_tokens(self.dsn)
         self._tables: dict[str, Any] = {}
 
     async def close(self) -> None:
@@ -229,10 +233,11 @@ class PostgresTableQueueSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
@@ -361,10 +366,11 @@ class PostgresIncrementalSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
         deliveries: list[Delivery] = []
         for row in rows:
             token = _CursorToken(tuple(row[column] for column in self.cursor))
@@ -435,10 +441,11 @@ class PostgresTableSink(Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=1.0,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     def _send_sync(self, payload: dict[str, Any]) -> None:
         table = self.connector._table(self.table_name)
