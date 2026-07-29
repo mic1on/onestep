@@ -13,7 +13,7 @@ from onestep.state import CursorStore, InMemoryCursorStore
 
 from onestep.connectors.base import Delivery, Sink, Source
 
-from .resilience import as_mysql_connector_operation_error
+from .resilience import as_mysql_connector_operation_error, collect_sensitive_tokens
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
 
 try:
@@ -41,6 +41,10 @@ class MySQLConnector:
             raise RuntimeError("MySQLConnector requires SQLAlchemy. Install onestep-mysql.")
         self.dsn = dsn
         self.engine = create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
+
+    def _secret_tokens(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        return collect_sensitive_tokens(self.dsn)
         self._tables: dict[str, Any] = {}
 
     async def close(self) -> None:
@@ -283,10 +287,11 @@ class TableQueueSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
@@ -431,10 +436,11 @@ class BinlogSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
         deliveries: list[Delivery] = []
         for payload, token in rows:
@@ -664,10 +670,11 @@ class IncrementalTableSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
         deliveries: list[Delivery] = []
         for row in rows:
             token = _CursorToken(tuple(row[column] for column in self.cursor))
@@ -738,10 +745,11 @@ class TableSink(Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=1.0,
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     def _send_sync(self, payload: dict[str, Any]) -> None:
         table = self.connector._table(self.table_name)
