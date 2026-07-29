@@ -7,7 +7,11 @@ from onestep.config import load_app_config
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.resource_registry import ResourceRegistry
 from onestep_rabbitmq import RabbitMQConnector, RabbitMQQueue, register
-from onestep_rabbitmq.resilience import as_rabbitmq_connector_operation_error, classify_rabbitmq_error
+from onestep_rabbitmq.resilience import (
+    as_rabbitmq_connector_operation_error,
+    classify_rabbitmq_error,
+    RabbitMQErrorCause,
+)
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -93,7 +97,8 @@ def test_rabbitmq_plugin_normalizes_rabbitmq_errors() -> None:
     assert normalized.kind is ConnectorErrorKind.DISCONNECTED
     assert normalized.source_name == "incoming_jobs"
     assert normalized.retry_delay_s == 1.0
-    assert normalized.cause is connection_error
+    assert isinstance(normalized.cause, RabbitMQErrorCause)
+    assert "connection refused" in str(normalized.cause)
 
 
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:
