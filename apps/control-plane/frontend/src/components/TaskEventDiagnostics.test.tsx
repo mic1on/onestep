@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider, type Locale } from '../i18n';
+import type { TaskEventHistoryKind } from '../api';
 import type { LogEntry } from '../types';
 import TaskEventDiagnostics from './TaskEventDiagnostics';
 
@@ -55,6 +56,8 @@ function renderDiagnostics(
     limit: number;
     offset: number;
     onPageChange: (offset: number) => void;
+    selectedKinds: TaskEventHistoryKind[];
+    onSelectedKindsChange: (kinds: TaskEventHistoryKind[]) => void;
     locale: Locale;
   }> = {},
 ) {
@@ -70,6 +73,8 @@ function renderDiagnostics(
         limit={props.limit ?? 20}
         offset={props.offset ?? 0}
         onPageChange={props.onPageChange ?? vi.fn()}
+        selectedKinds={props.selectedKinds ?? []}
+        onSelectedKindsChange={props.onSelectedKindsChange ?? vi.fn()}
       />
     </I18nProvider>,
   );
@@ -167,6 +172,35 @@ describe('TaskEventDiagnostics', () => {
     expect(handlePageChange).toHaveBeenCalledWith(40);
   });
 
+  it('selects and clears multiple event kinds from grouped filters', () => {
+    const handleKindsChange = vi.fn();
+    renderDiagnostics([failedLog], {
+      selectedKinds: ['failed'],
+      onSelectedKindsChange: handleKindsChange,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Event type: 1 selected' }));
+
+    expect(screen.getByText('Runtime events')).toBeTruthy();
+    expect(screen.getByText('Control commands')).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Failed' }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Restart task' }));
+    expect(handleKindsChange).toHaveBeenCalledWith(['failed', 'restart_task']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear type filter' }));
+    expect(handleKindsChange).toHaveBeenCalledWith([]);
+  });
+
+  it('localizes event filter groups in Chinese', () => {
+    renderDiagnostics([failedLog], { locale: 'zh-CN' });
+
+    fireEvent.click(screen.getByRole('button', { name: '事件类型：全部' }));
+
+    expect(screen.getByText('运行时事件')).toBeTruthy();
+    expect(screen.getByText('控制命令')).toBeTruthy();
+  });
+
   it('announces task event loading', () => {
     render(
       <I18nProvider initialLocale="en">
@@ -179,6 +213,8 @@ describe('TaskEventDiagnostics', () => {
           offset={0}
           onLookbackMinutesChange={vi.fn()}
           onPageChange={vi.fn()}
+          selectedKinds={[]}
+          onSelectedKindsChange={vi.fn()}
           total={0}
         />
       </I18nProvider>,

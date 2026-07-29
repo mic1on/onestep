@@ -1,11 +1,32 @@
-import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, Terminal } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ListFilter, Terminal } from 'lucide-react';
 import {
   MAX_TASK_EVENT_LOOKBACK_MINUTES,
   TASK_EVENT_LOOKBACK_PRESETS,
 } from '../api';
+import type { TaskEventHistoryKind } from '../api';
 import type { LogEntry } from '../types';
 import { useI18n, type MessageKey } from '../i18n';
 import LookbackControl from './LookbackControl';
+import useDismissibleMenu from './useDismissibleMenu';
+
+const RUNTIME_EVENT_KINDS: readonly TaskEventHistoryKind[] = [
+  'started',
+  'succeeded',
+  'failed',
+  'retried',
+  'dead_lettered',
+  'cancelled',
+];
+
+const COMMAND_EVENT_KINDS: readonly TaskEventHistoryKind[] = [
+  'pause_task',
+  'resume_task',
+  'restart_task',
+  'discard_dead_letters',
+  'replay_dead_letters',
+  'run_task_once',
+];
 
 interface TaskEventDiagnosticsProps {
   logs: LogEntry[];
@@ -17,6 +38,8 @@ interface TaskEventDiagnosticsProps {
   limit: number;
   offset: number;
   onPageChange: (offset: number) => void;
+  selectedKinds: readonly TaskEventHistoryKind[];
+  onSelectedKindsChange: (kinds: TaskEventHistoryKind[]) => void;
 }
 
 export default function TaskEventDiagnostics({
@@ -29,6 +52,8 @@ export default function TaskEventDiagnostics({
   limit,
   offset,
   onPageChange,
+  selectedKinds,
+  onSelectedKindsChange,
 }: TaskEventDiagnosticsProps) {
   const { t } = useI18n();
   const start = total === 0 ? 0 : offset + 1;
@@ -37,8 +62,8 @@ export default function TaskEventDiagnostics({
   const canGoNext = offset + limit < total;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
+    <div className="overflow-visible rounded-xl border border-slate-200 bg-white shadow-xs">
+      <div className="rounded-t-xl border-b border-slate-200 bg-slate-50 px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
           <h3 className="flex items-center gap-2 text-xs font-bold text-slate-700">
             <Terminal className="h-4 w-4 text-slate-400" />
@@ -51,6 +76,11 @@ export default function TaskEventDiagnostics({
             maxLookbackMinutes={MAX_TASK_EVENT_LOOKBACK_MINUTES}
             presets={TASK_EVENT_LOOKBACK_PRESETS}
             onLookbackMinutesChange={onLookbackMinutesChange}
+          />
+
+          <TaskEventKindFilter
+            selectedKinds={selectedKinds}
+            onSelectedKindsChange={onSelectedKindsChange}
           />
         </div>
       </div>
@@ -146,7 +176,7 @@ export default function TaskEventDiagnostics({
       </div>
 
       {!isLoading && !error && total > 0 ? (
-        <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-b-xl border-t border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <span>
             {t('task.eventsPagination', {
               start,
@@ -173,6 +203,106 @@ export default function TaskEventDiagnostics({
               className="p-1.5 border border-slate-200 rounded-md bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
               <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface TaskEventKindFilterProps {
+  selectedKinds: readonly TaskEventHistoryKind[];
+  onSelectedKindsChange: (kinds: TaskEventHistoryKind[]) => void;
+}
+
+function TaskEventKindFilter({
+  selectedKinds,
+  onSelectedKindsChange,
+}: TaskEventKindFilterProps) {
+  const { t } = useI18n();
+  const [isOpen, setIsOpen] = useState(false);
+  const closeMenu = useCallback(() => setIsOpen(false), []);
+  const { menuRef, triggerRef } = useDismissibleMenu({ onClose: closeMenu, open: isOpen });
+  const triggerLabel = selectedKinds.length === 0
+    ? t('task.eventTypeAll')
+    : t('task.eventTypeSelected', { count: selectedKinds.length });
+
+  const toggleKind = (kind: TaskEventHistoryKind) => {
+    if (selectedKinds.includes(kind)) {
+      onSelectedKindsChange(selectedKinds.filter((selectedKind) => selectedKind !== kind));
+      return;
+    }
+    onSelectedKindsChange([...selectedKinds, kind]);
+  };
+
+  const groups: Array<{
+    label: string;
+    kinds: readonly TaskEventHistoryKind[];
+  }> = [
+    { label: t('task.runtimeEvents'), kinds: RUNTIME_EVENT_KINDS },
+    { label: t('task.controlCommands'), kinds: COMMAND_EVENT_KINDS },
+  ];
+
+  return (
+    <div className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="true"
+        onClick={() => setIsOpen((open) => !open)}
+        className={`ui-pressable flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-bold transition-colors ${
+          selectedKinds.length > 0
+            ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        <ListFilter className="h-3.5 w-3.5" />
+        <span>{triggerLabel}</span>
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen ? (
+        <div
+          ref={menuRef}
+          className="ui-popover-enter absolute left-0 z-40 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white text-xs shadow-lg"
+        >
+          <div className="max-h-80 overflow-y-auto p-2">
+            {groups.map((group) => (
+              <fieldset key={group.label} className="min-w-0 py-1">
+                <legend className="px-2 pb-1 text-[10px] font-bold uppercase text-slate-400">
+                  {group.label}
+                </legend>
+                <div className="space-y-0.5">
+                  {group.kinds.map((kind) => (
+                    <label
+                      key={kind}
+                      className="flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 text-slate-700 hover:bg-slate-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedKinds.includes(kind)}
+                        onChange={() => toggleKind(kind)}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600"
+                      />
+                      <span className="min-w-0 break-words font-semibold">
+                        {formatEventKind(kind, t)}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+          </div>
+          <div className="border-t border-slate-100 bg-slate-50 p-2">
+            <button
+              type="button"
+              disabled={selectedKinds.length === 0}
+              onClick={() => onSelectedKindsChange([])}
+              className="ui-pressable w-full rounded-md px-2 py-1.5 text-left font-bold text-slate-600 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {t('task.clearEventTypeFilter')}
             </button>
           </div>
         </div>
