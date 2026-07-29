@@ -290,3 +290,32 @@ async def test_runtime_ack_follows_clickhouse_insert_acknowledgement() -> None:
     release.set()
     await asyncio.wait_for(serving, timeout=2.0)
     assert delivery.acked is True
+
+
+@pytest.mark.asyncio
+async def test_send_failure_does_not_leak_dsn_credentials(monkeypatch) -> None:
+    """The DSN password and client_options passwords must be scrubbed from errors."""
+    import clickhouse_connect
+
+    secret_dsn = "http://writer:supersecret@clickhouse:8123/default"
+
+    async def fail_client(**options):
+        raise ConnectionError(
+            f"cannot connect to {secret_dsn} with password 'supersecret'"
+        )
+
+    monkeypatch.setattr(clickhouse_connect, "get_async_client", fail_client)
+    sink = ClickHouseConnector(
+        secret_dsn,
+        client_options={"password": "supersecret"},
+    ).table_sink(table="events", columns=("id",))
+
+    with pytest.raises(ConnectorOperationError) as captured:
+        await sink.send(Envelope(body={"id": 1}))
+
+    err_str = str(captured.value.cause)
+    assert "supersecret" not in err_str
+    assert "writer:supersecret" not in err_str
+    assert "<redacted>" in err_str
+    # Non-sensitive info should be preserved
+    assert "default" in err_str

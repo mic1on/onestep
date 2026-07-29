@@ -5,10 +5,6 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 import pytest
-
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
-from onestep.config import load_app_config
-from onestep.resource_registry import ResourceRegistry
 from onestep_mysql import (
     BinlogSource,
     IncrementalTableSource,
@@ -18,7 +14,19 @@ from onestep_mysql import (
     TableSink,
     register,
 )
-from onestep_mysql.resilience import as_mysql_connector_operation_error, classify_sqlalchemy_error
+from onestep_mysql.resilience import (
+    MySQLErrorCause,
+    as_mysql_connector_operation_error,
+    classify_sqlalchemy_error,
+)
+
+from onestep.config import load_app_config
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
+from onestep.resource_registry import ResourceRegistry
 
 
 def test_package_exposes_onestep_resource_entry_point() -> None:
@@ -78,7 +86,8 @@ def test_mysql_plugin_normalizes_sqlalchemy_errors() -> None:
     assert normalized.kind is ConnectorErrorKind.TRANSIENT
     assert normalized.source_name == "mysql.incremental:users"
     assert normalized.retry_delay_s == 2.0
-    assert normalized.cause is sql_error
+    assert isinstance(normalized.cause, MySQLErrorCause)
+    assert "timeout" in str(normalized.cause)
 
 
 def test_yaml_builds_mysql_resources_via_plugin_entry_point(tmp_path) -> None:
@@ -150,3 +159,38 @@ def _entry_points_for_group(group: str) -> tuple[Any, ...]:
     if hasattr(entry_points, "select"):
         return tuple(entry_points.select(group=group))
     return tuple(entry_points.get(group, ()))
+
+
+def test_mysql_connector_error_does_not_leak_dsn_credentials() -> None:
+    """DBAPI ``orig`` exceptions can echo the DSN; it must be scrubbed."""
+    import sqlalchemy as sa
+
+    secret_dsn = "mysql://reporter:mysqlpass@db.internal:3306/appdb"
+    orig = sa.exc.OperationalError(
+        statement="SELECT 1",
+        params={},
+        orig=Exception(
+            f"Access denied for user 'reporter'@'host' (using password: YES) "
+            f"connecting to {secret_dsn}"
+        ),
+    )
+    normalized = as_mysql_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=orig,
+        source_name="mysql.incremental:users",
+        secrets=[secret_dsn, "mysqlpass", "reporter:mysqlpass"],
+    )
+    assert isinstance(normalized, ConnectorOperationError)
+    assert "mysqlpass" not in str(normalized.cause)
+    assert "reporter:mysqlpass" not in str(normalized.cause)
+    assert "<redacted>" in str(normalized.cause)
+
+
+def test_mysql_connector_initializes_cache_and_collects_engine_option_secrets() -> None:
+    connector = MySQLConnector(
+        "sqlite://",
+        connect_args={"password": "engine-option-secret"},
+    )
+
+    assert connector._tables == {}
+    assert "engine-option-secret" in connector._secret_tokens()

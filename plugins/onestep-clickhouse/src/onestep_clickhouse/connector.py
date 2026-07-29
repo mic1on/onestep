@@ -140,7 +140,7 @@ class ClickHouseTableSink(Sink):
                 kind=ConnectorErrorKind.PERMANENT,
                 source_name=self.name,
                 cause=exc,
-            ) from exc
+            ) from None
         committed = 0
         try:
             client = await self.connector._get_client()
@@ -169,5 +169,9 @@ class ClickHouseTableSink(Sink):
                 operation=ConnectorOperation.SEND,
                 kind=kind,
                 source_name=self.name,
-                cause=redacted_clickhouse_cause(exc),
-            ) from exc
+                cause=redacted_clickhouse_cause(
+                    exc,
+                    dsn=self.connector.dsn,
+                    client_options=self.connector.client_options,
+                ),
+            ) from None

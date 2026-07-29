@@ -10,7 +10,7 @@ from onestep.resilience import ConnectorOperation, ConnectorOperationError
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.connectors.codec import decode_envelope, encode_envelope
 
-from .resilience import as_sqs_connector_operation_error
+from .resilience import as_sqs_connector_operation_error, collect_sensitive_tokens
 
 try:  # pragma: no cover - optional dependency
     import boto3
@@ -91,6 +91,10 @@ class SQSDelivery(Delivery):
 class SQSConnector:
     region_name: str | None = None
     options: dict[str, Any] | None = None
+
+    def _secret_tokens(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        return collect_sensitive_tokens(self.options)
     client: Any | None = None
     _client: Any | None = field(default=None, init=False, repr=False)
 
@@ -204,10 +208,11 @@ class SQSQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=max(self.poll_interval_s, float(self.wait_time_s)),
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def close(self) -> None:
         if self._delete_flusher_task is not None:
@@ -245,10 +250,11 @@ class SQSQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=max(self.poll_interval_s, float(self.wait_time_s)),
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def send(self, envelope: Envelope) -> None:
         try:
@@ -273,10 +279,11 @@ class SQSQueue(Source, Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=max(self.poll_interval_s, float(self.wait_time_s)),
+                secrets=self.connector._secret_tokens(),
             )
             if connector_error is None:
                 raise
-            raise connector_error from exc
+            raise connector_error from None
 
     async def stage_delete(self, message: dict[str, Any]) -> None:
         await self.open()

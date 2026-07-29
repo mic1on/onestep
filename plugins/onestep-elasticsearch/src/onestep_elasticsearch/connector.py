@@ -13,7 +13,12 @@ from onestep import (
     Sink,
 )
 
-from .resilience import classify_elasticsearch_exception, classify_elasticsearch_status
+from .resilience import (
+    classify_elasticsearch_exception,
+    classify_elasticsearch_status,
+    collect_sensitive_tokens,
+    redacted_es_cause,
+)
 
 
 def _logical_document_views(body: Any) -> Sequence[Mapping[str, Any]]:
@@ -124,6 +129,18 @@ class ElasticsearchConnector:
         ):
             result = result.replace(secret, "<redacted>")
         return result
+
+    def _secret_tokens(self) -> list[str]:
+        """Secret-bearing config tokens used to scrub error messages."""
+        return collect_sensitive_tokens(
+            self.username,
+            self.password,
+            self.api_key,
+            self.bearer_token,
+            self.client_key,
+            *self._auth_headers().values(),
+            urls=self.hosts,
+        )
 
     async def _get_client(self):
         import httpx
@@ -479,7 +496,7 @@ class ElasticsearchBulkSink(Sink):
                 kind=ConnectorErrorKind.PERMANENT,
                 source_name=self.name,
                 cause=exc,
-            ) from exc
+            ) from None
         committed_chunks = 0
         try:
             for chunk in chunks:
@@ -502,7 +519,7 @@ class ElasticsearchBulkSink(Sink):
                 kind=kind,
                 source_name=self.name,
                 cause=exc,
-            ) from exc
+            ) from None
         except (TypeError, ValueError) as exc:
             raise ConnectorOperationError(
                 backend="elasticsearch",
@@ -510,7 +527,7 @@ class ElasticsearchBulkSink(Sink):
                 kind=ConnectorErrorKind.PERMANENT,
                 source_name=self.name,
                 cause=exc,
-            ) from exc
+            ) from None
         except Exception as exc:
             kind = classify_elasticsearch_exception(exc)
             if kind is None:
@@ -522,5 +539,5 @@ class ElasticsearchBulkSink(Sink):
                 operation=ConnectorOperation.SEND,
                 kind=kind,
                 source_name=self.name,
-                cause=exc,
-            ) from exc
+                cause=redacted_es_cause(exc, secrets=self.connector._secret_tokens()),
+            ) from None

@@ -16,6 +16,26 @@
 - Scrubs bootstrap-server credentials and connector, consumer, and producer secret options from normalized Kafka error causes.
 - Suppresses raw exception chaining for fetch and send failures so reported tracebacks do not expose secrets.
 
+## onestep-mysql 0.3.2
+
+- Scrubs DSN credentials and secret values nested in SQLAlchemy engine options from normalized MySQL error causes.
+- Suppresses raw exception chaining for fetch and send failures so reported tracebacks do not expose secrets.
+
+## onestep-sqs 0.2.3
+
+- Scrubs AWS credentials and known secret connector options from normalized SQS error causes.
+- Suppresses raw exception chaining for open, fetch, and send failures so reported tracebacks do not expose secrets.
+
+## onestep-clickhouse 0.1.1
+
+- Scrubs DSN credentials and known secret client options from normalized ClickHouse error causes.
+- Suppresses raw exception chaining for send failures so reported tracebacks do not expose secrets.
+
+## onestep-elasticsearch 0.1.1
+
+- Scrubs host userinfo, authentication values, and configured headers from normalized Elasticsearch and OpenSearch error causes.
+- Suppresses raw exception chaining for send failures so reported tracebacks do not expose secrets.
+
 ## onestep-redis 0.2.2
 
 - Scrubs connector URL credentials and known secret options from normalized Redis error causes.
