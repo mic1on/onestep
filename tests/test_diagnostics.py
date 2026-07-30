@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
 from onestep import MaxAttempts, NoRetry, OneStepApp
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.diagnostics.connectivity import check_connectivity
-from onestep.diagnostics.models import DiagnosticReport
+from onestep.diagnostics.ipc import (
+    FrameValidator,
+    IPCProtocolError,
+    decode_frame,
+    encode_frame,
+)
+from onestep.diagnostics.models import DiagnosticReport, DiagnosticRequest
 from onestep.diagnostics.runner import DiagnosticRunner
+from onestep.diagnostics.supervisor import supervise_diagnostic
 from onestep.envelope import Envelope
 from onestep.events import TaskEventKind
 from onestep.task import EmitRoute, TaskHooks
@@ -363,3 +373,229 @@ def test_connectivity_only_not_probeable_is_success_with_warning() -> None:
     report = asyncio.run(check_connectivity(app, timeout_s=0.1))
     assert report.ok is True
     assert "no connection was verified" in report.warnings[0]
+
+
+def test_ipc_rejects_non_monotonic_and_unknown_frames() -> None:
+    validator = FrameValidator(direction="status")
+    validator.accept(
+        decode_frame(
+            encode_frame(
+                "checkpoint",
+                sequence=1,
+                payload={
+                    "phase": "child_start",
+                    "transition": "entered",
+                    "elapsed_s": 0.0,
+                },
+            )
+        )
+    )
+    with pytest.raises(IPCProtocolError, match="sequence"):
+        validator.accept(
+            decode_frame(
+                encode_frame(
+                    "checkpoint",
+                    sequence=1,
+                    payload={
+                        "phase": "handler",
+                        "transition": "entered",
+                        "elapsed_s": 0.1,
+                    },
+                )
+            )
+        )
+    with pytest.raises(IPCProtocolError, match="kind"):
+        decode_frame(
+            b'{"schema":"onestep/diagnostic-ipc","version":1,'
+            b'"kind":"other","sequence":2,"payload":{}}'
+        )
+
+
+@pytest.mark.parametrize(
+    "data,match",
+    [
+        (b"\xff", "malformed"),
+        (b"{", "malformed"),
+        (
+            b'{"schema":"wrong","version":1,"kind":"cancel",'
+            b'"sequence":1,"payload":{}}',
+            "schema",
+        ),
+    ],
+)
+def test_ipc_rejects_malformed_frames(data: bytes, match: str) -> None:
+    with pytest.raises(IPCProtocolError, match=match):
+        decode_frame(data)
+
+
+def test_ipc_rejects_invalid_checkpoint_and_final_payloads() -> None:
+    checkpoint_validator = FrameValidator(direction="status")
+    with pytest.raises(IPCProtocolError, match="fields"):
+        checkpoint_validator.accept(
+            decode_frame(
+                encode_frame(
+                    "checkpoint",
+                    sequence=1,
+                    payload={
+                        "phase": "handler",
+                        "transition": "entered",
+                        "elapsed_s": 0.0,
+                        "secret": "must not cross IPC",
+                    },
+                )
+            )
+        )
+    with pytest.raises(IPCProtocolError, match="diagnostic result"):
+        checkpoint_validator.accept(
+            decode_frame(encode_frame("final", sequence=1, payload={}))
+        )
+    frame = decode_frame(
+        encode_frame(
+            "checkpoint",
+            sequence=True,
+            payload={
+                "phase": "handler",
+                "transition": "entered",
+                "elapsed_s": 0.0,
+            },
+        )
+    )
+    with pytest.raises(IPCProtocolError, match="sequence"):
+        checkpoint_validator.accept(frame)
+
+
+def _run_request(target: str, task: str, *, send: bool = False) -> DiagnosticRequest:
+    return DiagnosticRequest(
+        operation="run",
+        target=target,
+        task=task,
+        envelope=Envelope(body={"value": 1}),
+        send=send,
+    )
+
+
+def test_spawned_python_and_yaml_targets_have_matching_results(
+    tmp_path: Path,
+) -> None:
+    yaml_target = tmp_path / "worker.yaml"
+    yaml_target.write_text(
+        """apiVersion: onestep/v1alpha1
+kind: App
+app:
+  name: diagnostic-yaml
+tasks:
+  - name: success
+    handler:
+      ref: tests.assets.diagnostic_app:yaml_handler
+""",
+        encoding="utf-8",
+    )
+    python_report = supervise_diagnostic(
+        _run_request("tests.assets.diagnostic_app:app", "success"),
+        timeout_s=3,
+        grace_s=0.2,
+    )
+    yaml_report = supervise_diagnostic(
+        _run_request(str(yaml_target), "success"),
+        timeout_s=3,
+        grace_s=0.2,
+    )
+    assert python_report.completion == yaml_report.completion == "succeeded"
+    assert python_report.selected_sinks == yaml_report.selected_sinks == ()
+    assert python_report.delivery_action == yaml_report.delivery_action == "would_ack"
+
+
+@pytest.mark.parametrize(
+    "target,phase",
+    [
+        ("tests.assets.diagnostic_app:blocking_app", "handler"),
+        ("tests.assets.diagnostic_app:hook_blocking_app", "before_hook"),
+        ("tests.assets.diagnostic_app:async_cancel_app", "handler"),
+    ],
+)
+def test_supervisor_bounds_blocking_diagnostics(target: str, phase: str) -> None:
+    task = {
+        "tests.assets.diagnostic_app:blocking_app": "block",
+        "tests.assets.diagnostic_app:hook_blocking_app": "blocked_by_hook",
+        "tests.assets.diagnostic_app:async_cancel_app": "wait_forever",
+    }[target]
+    started = time.monotonic()
+    report = supervise_diagnostic(
+        _run_request(target, task),
+        timeout_s=0.3,
+        grace_s=0.2,
+    )
+    assert time.monotonic() - started < 2
+    assert report.completion == "timed_out"
+    assert report.cleanup in {"complete", "incomplete"}
+    assert report.last_checkpoint is not None
+    assert report.last_checkpoint["phase"] == phase
+
+
+def test_spawned_child_output_is_forwarded_only_to_stderr(capsys) -> None:
+    report = supervise_diagnostic(
+        _run_request("tests.assets.diagnostic_app:output_app", "write_output"),
+        timeout_s=3,
+        grace_s=0.2,
+    )
+    captured = capsys.readouterr()
+    assert report.completion == "succeeded"
+    assert captured.out == ""
+    assert "child stdout marker" in captured.err
+    assert "child stderr marker" in captured.err
+
+
+def test_supervisor_marks_forced_send_outcome_unknown(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    marker = tmp_path / "send-entered"
+    monkeypatch.setenv("ONESTEP_DIAGNOSTIC_SEND_MARKER", str(marker))
+    report = supervise_diagnostic(
+        _run_request(
+            "tests.assets.diagnostic_app:send_blocking_app",
+            "block_during_send",
+            send=True,
+        ),
+        timeout_s=0.4,
+        grace_s=0.2,
+    )
+    assert marker.read_text(encoding="utf-8") == "entered"
+    assert report.completion == "timed_out"
+    assert report.side_effect_outcome == "unknown"
+    assert "partial" in report.warning
+    assert "duplicate" in report.warning
+
+
+def test_supervisor_synthesizes_child_failure_without_final() -> None:
+    report = supervise_diagnostic(
+        _run_request("tests.assets.diagnostic_app:exit_app", "exit_without_final"),
+        timeout_s=3,
+        grace_s=0.2,
+    )
+    assert report.completion == "child_failed"
+    assert report.last_checkpoint is not None
+    assert report.last_checkpoint["phase"] in {"child_start", "handler"}
+
+
+def test_final_frame_requires_strict_nested_report_types() -> None:
+    app = OneStepApp("strict-final")
+
+    @app.task()
+    async def task(ctx, payload):
+        return None
+
+    report = asyncio.run(
+        DiagnosticRunner(app).run(
+            task_name="task",
+            envelope=Envelope(body={}),
+            send=False,
+        )
+    ).to_dict()
+    invalid = deepcopy(report)
+    invalid["events"][0]["attempts"] = True
+    validator = FrameValidator(direction="status")
+    with pytest.raises(IPCProtocolError, match="diagnostic result"):
+        validator.accept(
+            decode_frame(encode_frame("final", sequence=1, payload=invalid))
+        )

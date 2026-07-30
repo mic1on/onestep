@@ -182,6 +182,7 @@ def _event_to_dict(event: TaskEvent) -> dict[str, Any]:
 def _event_from_dict(value: Any) -> TaskEvent:
     if not isinstance(value, Mapping):
         raise ValueError("diagnostic event must be an object")
+    _validate_event(value)
     failure_value = value.get("failure")
     failure = None
     if failure_value is not None:
@@ -255,10 +256,135 @@ def _validate_diagnostic_result(value: Mapping[str, Any]) -> None:
         "cancelled",
     }:
         raise ValueError("diagnostic completion is invalid")
-    if not isinstance(value["selected_sinks"], list):
+    for field in ("operation", "app", "task", "mode", "delivery_action_basis"):
+        if not isinstance(value[field], str):
+            raise ValueError(f"diagnostic {field} must be a string")
+    if value["operation"] not in {"run", "replay"}:
+        raise ValueError("diagnostic operation is invalid")
+    if value["mode"] not in {"dry-run", "send"}:
+        raise ValueError("diagnostic mode is invalid")
+    if value["delivery_action_basis"] != "predicted":
+        raise ValueError("diagnostic delivery_action_basis is invalid")
+    if value["delivery_action"] not in {
+        None,
+        "would_ack",
+        "would_retry",
+        "would_dead_letter",
+        "would_fail",
+    }:
+        raise ValueError("diagnostic delivery_action is invalid")
+    if not isinstance(value["selected_sinks"], list) or any(
+        not isinstance(item, str) for item in value["selected_sinks"]
+    ):
         raise ValueError("diagnostic selected_sinks must be a list")
     if not isinstance(value["events"], list) or not isinstance(value["outputs"], list):
         raise ValueError("diagnostic events and outputs must be lists")
+    for event in value["events"]:
+        if not isinstance(event, Mapping):
+            raise ValueError("diagnostic event must be an object")
+        _validate_event(event)
+    for output in value["outputs"]:
+        _validate_output(output)
+    dead_letter = value["dead_letter"]
+    if not isinstance(dead_letter, dict) or set(dead_letter) != {
+        "attempted",
+        "published",
+    }:
+        raise ValueError("diagnostic dead_letter is invalid")
+    published = dead_letter["published"]
+    if not isinstance(dead_letter["attempted"], bool) or (
+        published is not None and not isinstance(published, bool)
+    ):
+        raise ValueError("diagnostic dead_letter values are invalid")
+    failure = value["failure"]
+    if failure is not None and (
+        not isinstance(failure, dict)
+        or any(not isinstance(key, str) for key in failure)
+        or any(not isinstance(item, str) for item in failure.values())
+    ):
+        raise ValueError("diagnostic failure is invalid")
+    if value["failure_stage"] is not None and not isinstance(
+        value["failure_stage"], str
+    ):
+        raise ValueError("diagnostic failure_stage is invalid")
+    if value["cleanup"] not in {"complete", "failed", "incomplete"}:
+        raise ValueError("diagnostic cleanup is invalid")
+    if value["side_effect_outcome"] not in {
+        "not_attempted",
+        "completed",
+        "unknown",
+    }:
+        raise ValueError("diagnostic side_effect_outcome is invalid")
+    if not isinstance(value["warning"], str):
+        raise ValueError("diagnostic warning must be a string")
+    checkpoint = value["last_checkpoint"]
+    if checkpoint is not None and not isinstance(checkpoint, dict):
+        raise ValueError("diagnostic last_checkpoint must be an object")
+
+
+def _validate_event(value: Mapping[str, Any]) -> None:
+    if set(value) != {
+        "kind",
+        "app",
+        "task",
+        "source",
+        "attempts",
+        "emitted_at",
+        "duration_s",
+        "failure",
+        "meta",
+    }:
+        raise ValueError("diagnostic event fields are invalid")
+    for field in ("kind", "app", "task", "emitted_at"):
+        if not isinstance(value[field], str):
+            raise ValueError(f"diagnostic event {field} must be a string")
+    if value["source"] is not None and not isinstance(value["source"], str):
+        raise ValueError("diagnostic event source must be a string")
+    attempts = value["attempts"]
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+        raise ValueError("diagnostic event attempts must be non-negative")
+    duration = value["duration_s"]
+    if duration is not None and (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or duration < 0
+        or not math.isfinite(float(duration))
+    ):
+        raise ValueError("diagnostic event duration_s is invalid")
+    failure = value["failure"]
+    if failure is not None:
+        if not isinstance(failure, Mapping) or set(failure) != {
+            "kind",
+            "exception_type",
+        }:
+            raise ValueError("diagnostic event failure is invalid")
+        if not all(isinstance(item, str) for item in failure.values()):
+            raise ValueError("diagnostic event failure values are invalid")
+    try:
+        TaskEventKind(value["kind"])
+        datetime.fromisoformat(value["emitted_at"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("diagnostic event value is invalid") from exc
+
+
+def _validate_output(value: Any) -> None:
+    if not isinstance(value, dict) or set(value) != {"sink", "kind", "envelope"}:
+        raise ValueError("diagnostic output is invalid")
+    if not isinstance(value["sink"], str) or value["kind"] not in {
+        "emit",
+        "dead_letter",
+    }:
+        raise ValueError("diagnostic output sink or kind is invalid")
+    envelope = value["envelope"]
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "body",
+        "meta",
+        "attempts",
+    }:
+        raise ValueError("diagnostic output envelope is invalid")
+    attempts = envelope["attempts"]
+    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+        raise ValueError("diagnostic output attempts must be non-negative")
 
 
 def encode_request(request: DiagnosticRequest) -> bytes:
