@@ -142,6 +142,13 @@ terminal `fail()` skips the poison document and advances that contiguous cursor;
 last committed cursor only after all stale deliveries finish. Late acknowledgements
 from invalidated generations do nothing.
 
+A polling projection must retain every effective cursor field, including the
+implicit `_id` tie-breaker. Invalid projections fail during source construction.
+Cursor state is updated in memory only after the configured cursor store confirms
+the save; a save failure leaves the generation replayable from the last durable
+cursor. If any delivery retries, every token in that fetch generation is prevented
+from advancing the cursor, including later deliveries that already acknowledged.
+
 Polling does not emit deletes. It sees updates only if a cursor field increases,
 and can miss non-monotonic cursor updates. Use change streams for workloads that
 need those events.

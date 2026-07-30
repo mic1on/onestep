@@ -721,6 +721,9 @@ Strict mode rejects an unacknowledged `w=0` write concern.
 When `_id` is not configured, it is appended as the deterministic final
 tie-breaker. Polling is ascending keyset traversal, not CDC: deletes are
 invisible and updates that do not advance a cursor field can be missed.
+A polling projection must retain every effective cursor field unchanged,
+including the implicit `_id` tie-breaker. Invalid projections fail during
+resource construction.
 
 `mongodb_change_stream` fields:
 

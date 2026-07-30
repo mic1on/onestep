@@ -6,6 +6,16 @@
 - Bundles the three plugins in the worker image and adds isolated reliability/live compatibility gates.
 - Does not change core runtime, delivery, retry, reporter, or control-plane behavior.
 
+## onestep-mongodb 0.1.2
+
+- Rejects invalid direct Python numeric options during construction and polling projections that omit or rewrite effective cursor fields.
+- Prevents later acknowledgements from advancing the cursor after an earlier delivery invalidates the same generation for retry.
+- Keeps cursor generations replayable when durable state persistence fails.
+
+## onestep-elasticsearch 0.1.2
+
+- Prevents the Elasticsearch/OpenSearch bulk sink from internally replaying ambiguous request-level gateway failures when documents lack stable IDs.
+
 ## onestep-mongodb 0.1.1
 
 - Scrubs URI credentials and PyMongo secret options from normalized MongoDB error causes.
