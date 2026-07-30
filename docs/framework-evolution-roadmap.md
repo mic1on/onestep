@@ -78,6 +78,10 @@ blocked by test-kit API design.
 
 ## P2: Local Handler Loop
 
+Status: complete in core 1.8.0 after focused feature tests, production delivery
+contracts, the full non-integration suite, and all repository reliability gates
+passed.
+
 Committed CLI surface:
 
 ```text
