@@ -17,6 +17,8 @@ from onestep.resilience import ConnectorOperationError, connector_retry_delay, i
 from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
 from onestep.task import TaskSpec
 
+from .executor import DeliveryExecutor
+
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
     from onestep.connectors.base import Delivery, Sink
@@ -35,6 +37,7 @@ class TaskRunner:
         self._drain_parked = False
         self._pause_parked = False
         self._logger = logging.getLogger(f"onestep.{app.name}.{task.name}")
+        self._executor = DeliveryExecutor(app, task)
 
     @property
     def inflight_count(self) -> int:
@@ -281,60 +284,7 @@ class TaskRunner:
                 raise
 
     async def _handle_delivery(self, delivery: "Delivery") -> None:
-        ctx = TaskContext(app=self.app, task=self.task, delivery=delivery)
-        started_at = time.perf_counter()
-        try:
-            await delivery.start_processing()
-            await self._emit_event(TaskEventKind.STARTED, delivery)
-            await self._run_task_hooks(self.task.hooks.before, ctx, delivery.payload)
-            result = await self._invoke_handler(ctx, delivery)
-            await self._run_task_hooks(self.task.hooks.after_success, ctx, delivery.payload, result)
-            if result is not None and self.task.emit_routes:
-                envelope = Envelope(body=result)
-                for sink in await self._select_emit_sinks(ctx, delivery.payload, result):
-                    await self._send_to_sink(sink, envelope)
-            await delivery.ack()
-            event_meta = self._build_succeeded_event_meta(delivery, result)
-            await self._emit_event(
-                TaskEventKind.SUCCEEDED,
-                delivery,
-                duration_s=time.perf_counter() - started_at,
-                event_meta=event_meta,
-            )
-        except asyncio.CancelledError:
-            failure = FailureInfo.from_exception(asyncio.CancelledError(), kind=FailureKind.CANCELLED)
-            ctx.logger.warning("task cancelled", extra={"failure_kind": failure.kind.value})
-            duration_s = time.perf_counter() - started_at
-            await self._emit_event(
-                TaskEventKind.CANCELLED,
-                delivery,
-                failure=failure,
-                duration_s=duration_s,
-            )
-            await delivery.retry()
-            await self._emit_event(
-                TaskEventKind.RETRIED,
-                delivery,
-                failure=failure,
-                duration_s=duration_s,
-            )
-            raise
-        except asyncio.TimeoutError as exc:
-            await self._handle_failure(
-                ctx,
-                delivery,
-                exc,
-                FailureKind.TIMEOUT,
-                duration_s=time.perf_counter() - started_at,
-            )
-        except Exception as exc:
-            await self._handle_failure(
-                ctx,
-                delivery,
-                exc,
-                FailureKind.ERROR,
-                duration_s=time.perf_counter() - started_at,
-            )
+        await self._executor.execute(delivery)
 
     async def _invoke_handler(self, ctx: TaskContext, delivery: "Delivery"):
         result = self.task.handler(ctx, delivery.payload)

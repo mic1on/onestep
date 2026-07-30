@@ -11,12 +11,14 @@ from uuid import UUID
 
 import pytest
 
-from onestep import FailureCaptureConfig
+from onestep import FailureCaptureConfig, MaxAttempts, NoRetry, OneStepApp
 from onestep.capture.codec import CaptureEncodingError, decode_value, encode_value
 from onestep.capture.writer import FailureCaptureWriter, load_capture, redact_envelope
+from onestep.connectors.base import Delivery, Sink
 from onestep.config import load_app_config
 from onestep.envelope import Envelope
 from onestep.retry import FailureInfo, FailureKind
+from onestep.runtime import TaskRunner
 
 
 class CaptureStatus(Enum):
@@ -24,6 +26,41 @@ class CaptureStatus(Enum):
 
 
 CapturePoint = namedtuple("CapturePoint", "x y")
+
+
+class _CaptureDelivery(Delivery):
+    def __init__(self, body, *, fail_raises: bool = False) -> None:
+        super().__init__(Envelope(body=body))
+        self.fail_raises = fail_raises
+        self.acked = False
+        self.retried = False
+        self.failed = False
+
+    async def ack(self) -> None:
+        self.acked = True
+
+    async def retry(self, *, delay_s: float | None = None) -> None:
+        self.retried = True
+        self.envelope = Envelope(
+            body=self.envelope.body,
+            meta=dict(self.envelope.meta),
+            attempts=self.envelope.attempts + 1,
+        )
+
+    async def fail(self, exc: Exception | None = None) -> None:
+        self.failed = True
+        if self.fail_raises:
+            raise RuntimeError("fail unavailable")
+
+
+class _CaptureSink(Sink):
+    def __init__(self, *, broken: bool = False) -> None:
+        super().__init__("capture-dead")
+        self.broken = broken
+
+    async def send(self, envelope: Envelope) -> None:
+        if self.broken:
+            raise RuntimeError("dead letter unavailable")
 
 
 def test_failure_capture_config_normalizes_values(tmp_path: Path) -> None:
@@ -290,3 +327,110 @@ def test_capture_file_contains_no_traceback(tmp_path: Path) -> None:
         )
     )
     assert "secret traceback" not in path.read_text(encoding="utf-8")
+
+
+def _run_failed_delivery(
+    tmp_path: Path,
+    *,
+    mode: str,
+    retry=None,
+    dead_letter: Sink | None = None,
+    delivery: _CaptureDelivery | None = None,
+) -> _CaptureDelivery:
+    app = OneStepApp(
+        "runtime-capture",
+        failure_capture=FailureCaptureConfig(directory=tmp_path, mode=mode),
+    )
+
+    @app.task(retry=retry or NoRetry(), dead_letter=dead_letter)
+    async def consume(ctx, payload):
+        raise ValueError("boom")
+
+    active_delivery = delivery or _CaptureDelivery({"id": 1})
+    asyncio.run(TaskRunner(app, app.tasks[0])._handle_delivery(active_delivery))
+    return active_delivery
+
+
+def test_failure_capture_runtime_terminal_writes_after_effective_fail(
+    tmp_path: Path,
+) -> None:
+    delivery = _run_failed_delivery(
+        tmp_path,
+        mode="terminal",
+        dead_letter=_CaptureSink(),
+    )
+    paths = list(tmp_path.glob("*.json"))
+    assert delivery.failed is True
+    assert delivery.retried is False
+    assert len(paths) == 1
+    capture = load_capture(paths[0])
+    assert capture.terminal is True
+    assert capture.stage == "handler"
+
+
+def test_failure_capture_runtime_terminal_skips_retrying_outcomes(
+    tmp_path: Path,
+) -> None:
+    retry_delivery = _run_failed_delivery(
+        tmp_path / "retry",
+        mode="terminal",
+        retry=MaxAttempts(max_attempts=3),
+    )
+    broken_dead_delivery = _run_failed_delivery(
+        tmp_path / "dead",
+        mode="terminal",
+        dead_letter=_CaptureSink(broken=True),
+    )
+    fail_fallback_delivery = _run_failed_delivery(
+        tmp_path / "fail",
+        mode="terminal",
+        delivery=_CaptureDelivery({"id": 1}, fail_raises=True),
+    )
+    assert retry_delivery.retried is True
+    assert broken_dead_delivery.retried is True
+    assert fail_fallback_delivery.retried is True
+    assert list(tmp_path.rglob("*.json")) == []
+
+
+def test_failure_capture_runtime_all_writes_non_terminal_retry(
+    tmp_path: Path,
+) -> None:
+    delivery = _run_failed_delivery(
+        tmp_path,
+        mode="all",
+        retry=MaxAttempts(max_attempts=3),
+    )
+    paths = list(tmp_path.glob("*.json"))
+    assert delivery.retried is True
+    assert len(paths) == 1
+    capture = load_capture(paths[0])
+    assert capture.terminal is False
+    assert capture.envelope.attempts == 0
+
+
+def test_failure_capture_runtime_encoding_error_preserves_action_and_logs_safe_context(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    class Unsupported:
+        def __repr__(self) -> str:
+            return "secret-repr"
+
+    caplog.set_level("ERROR")
+    delivery = _run_failed_delivery(
+        tmp_path,
+        mode="all",
+        retry=MaxAttempts(max_attempts=3),
+        delivery=_CaptureDelivery({"value": Unsupported()}),
+    )
+    assert delivery.retried is True
+    assert list(tmp_path.glob("*.json")) == []
+    capture_logs = [
+        record for record in caplog.records if record.message == "failure capture encoding failed"
+    ]
+    assert len(capture_logs) == 1
+    assert capture_logs[0].app_name == "runtime-capture"
+    assert capture_logs[0].task_name == "consume"
+    assert capture_logs[0].failure_stage == "handler"
+    assert capture_logs[0].capture_path == "/value"
+    assert "secret-repr" not in capture_logs[0].getMessage()

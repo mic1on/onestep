@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from .capture.config import FailureCaptureConfig
+from .capture.writer import FailureCaptureWriter
 from .connectors.base import Sink, Source
 from .envelope import Envelope
 from .events import StructuredEventLogger, TaskEvent
@@ -70,6 +71,11 @@ class OneStepApp:
         self.state = state or InMemoryStateStore()
         self.shutdown_timeout_s = shutdown_timeout_s
         self.failure_capture = failure_capture
+        self._failure_capture_writer = (
+            FailureCaptureWriter(failure_capture)
+            if failure_capture is not None
+            else None
+        )
         self.custom_metrics = CustomMetricsRegistry()
         self._tasks: list[TaskSpec] = []
         self._named_resources: dict[str, Any] = {}
