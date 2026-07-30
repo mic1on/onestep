@@ -52,6 +52,14 @@ def _connector(collection):
     return MongoDBConnector("mongodb://local", database="app", client=FakeSinkClient(collection))
 
 
+@pytest.mark.parametrize("batch_size", [0, -1, True, 1.5])
+def test_sink_rejects_invalid_batch_size(batch_size) -> None:
+    with pytest.raises((TypeError, ValueError), match="batch_size"):
+        _connector(FakeSinkCollection()).collection_sink(
+            "events", batch_size=batch_size
+        )
+
+
 @pytest.mark.asyncio
 async def test_insert_mapping_and_chunked_sequence() -> None:
     collection = FakeSinkCollection()

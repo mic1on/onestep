@@ -48,10 +48,15 @@ class ElasticsearchBulkItemError:
 
 class ElasticsearchBulkError(Exception):
     def __init__(
-        self, items: list[ElasticsearchBulkItemError], *, partial_success: bool = False
+        self,
+        items: list[ElasticsearchBulkItemError],
+        *,
+        partial_success: bool = False,
+        outcome_uncertain: bool = False,
     ) -> None:
         self.items = tuple(items)
         self.partial_success = partial_success
+        self.outcome_uncertain = outcome_uncertain
         summary = ", ".join(
             f"item={item.action_index} status={item.status} reason={item.reason[:160]}"
             for item in self.items[:10]
@@ -339,7 +344,20 @@ class ElasticsearchBulkSink(Sink):
                     )
                 )
                 continue
-            status = int(item.get("status", 0))
+            try:
+                status = int(item.get("status", 0))
+            except (TypeError, ValueError):
+                failures.append(
+                    ElasticsearchBulkItemError(
+                        index,
+                        str(operation),
+                        item.get("_id"),
+                        0,
+                        "invalid_response",
+                        "bulk response item status is invalid",
+                    )
+                )
+                continue
             if 200 <= status < 300:
                 continue
             error = item.get("error") or {}
@@ -394,7 +412,7 @@ class ElasticsearchBulkSink(Sink):
             params["pipeline"] = self.pipeline
         return params
 
-    async def _send_chunk(self, body: bytes) -> None:
+    async def _send_chunk(self, body: bytes, *, replay_safe: bool) -> None:
         import asyncio
         import random
 
@@ -414,12 +432,21 @@ class ElasticsearchBulkSink(Sink):
                     None,
                     self._error_reason(payload.get("error", "request failed")),
                 )
-                if status in {429, 502, 503, 504} and attempt < self.max_retries:
+                request_rejected = status == 429
+                request_ambiguous = status in {502, 503, 504}
+                can_retry_request = request_rejected or (
+                    request_ambiguous and replay_safe
+                )
+                if can_retry_request and attempt < self.max_retries:
                     await asyncio.sleep(
                         (0.05 * (2**attempt)) + random.uniform(0.0, 0.025)
                     )
                     continue
-                raise ElasticsearchBulkError([failure], partial_success=partial_success)
+                raise ElasticsearchBulkError(
+                    [failure],
+                    partial_success=partial_success,
+                    outcome_uncertain=request_ambiguous and not replay_safe,
+                )
             items = payload.get("items")
             expected_items = len(self._action_documents(pending))
             if not isinstance(items, list) or len(items) != expected_items:
@@ -428,11 +455,13 @@ class ElasticsearchBulkSink(Sink):
                     for wrapper in items:
                         if isinstance(wrapper, Mapping) and len(wrapper) == 1:
                             item = next(iter(wrapper.values()))
-                            if (
-                                isinstance(item, Mapping)
-                                and 200 <= int(item.get("status", 0)) < 300
-                            ):
-                                acknowledged += 1
+                            if isinstance(item, Mapping):
+                                try:
+                                    status = int(item.get("status", 0))
+                                except (TypeError, ValueError):
+                                    continue
+                                if 200 <= status < 300:
+                                    acknowledged += 1
                 raise ElasticsearchBulkError(
                     [
                         ElasticsearchBulkItemError(
@@ -445,6 +474,7 @@ class ElasticsearchBulkSink(Sink):
                         )
                     ],
                     partial_success=partial_success or acknowledged > 0,
+                    outcome_uncertain=not replay_safe,
                 )
             failures = self._parse_items(payload)
             if not failures and not payload.get("errors", False):
@@ -473,6 +503,10 @@ class ElasticsearchBulkSink(Sink):
                 raise ElasticsearchBulkError(
                     self._original_item_errors(failures, pending_indexes),
                     partial_success=partial_success,
+                    outcome_uncertain=not replay_safe
+                    and any(
+                        item.error_type == "invalid_response" for item in failures
+                    ),
                 )
             actions = self._action_documents(pending)
             pending = b"".join(actions[index] for index in retryable_indexes)
@@ -500,7 +534,7 @@ class ElasticsearchBulkSink(Sink):
         committed_chunks = 0
         try:
             for chunk in chunks:
-                await self._send_chunk(chunk)
+                await self._send_chunk(chunk, replay_safe=replay_safe)
                 committed_chunks += 1
         except ElasticsearchBulkError as exc:
             base_kind = (
@@ -510,7 +544,8 @@ class ElasticsearchBulkSink(Sink):
             )
             kind = (
                 ConnectorErrorKind.UNCERTAIN
-                if (committed_chunks or exc.partial_success) and not replay_safe
+                if exc.outcome_uncertain
+                or ((committed_chunks or exc.partial_success) and not replay_safe)
                 else base_kind
             )
             raise ConnectorOperationError(

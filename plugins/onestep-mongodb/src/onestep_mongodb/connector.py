@@ -21,6 +21,66 @@ from onestep import (
 from .state_codec import decode_state, encode_state
 
 
+def _positive_integer(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{field} must be positive")
+    return value
+
+
+def _non_negative_number(value: Any, *, field: str) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{field} must be a number")
+    if value < 0:
+        raise ValueError(f"{field} must be non-negative")
+    return value
+
+
+def _validate_cursor_projection(
+    projection: Mapping[str, Any] | None,
+    cursor: Sequence[str],
+) -> None:
+    if not projection:
+        return
+
+    def excludes(value: Any) -> bool:
+        return value is False or (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and value == 0
+        )
+
+    def includes_unchanged(value: Any) -> bool:
+        return value is True or (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and value == 1
+        )
+
+    excluded = {key for key, value in projection.items() if excludes(value)}
+    has_inclusion = any(not excludes(value) for value in projection.values())
+    missing = [
+        field
+        for field in cursor
+        if field in excluded
+        or (
+            has_inclusion
+            and field != "_id"
+            and not includes_unchanged(projection.get(field))
+        )
+        or (
+            has_inclusion
+            and field == "_id"
+            and field in projection
+            and not includes_unchanged(projection[field])
+        )
+    ]
+    if missing:
+        fields = ", ".join(dict.fromkeys(missing))
+        raise ValueError(f"projection must preserve cursor fields: {fields}")
+
+
 @dataclass
 class _TrackedToken:
     generation: int
@@ -58,25 +118,51 @@ class _ContiguousGenerationTracker:
         async with self._lock:
             if generation == self.generation:
                 self._invalidated.add(generation)
+                for item in self._pending:
+                    if item.generation == generation:
+                        item.advances = False
                 self.generation += 1
+
+    def _discard_settled_generations(self) -> None:
+        settled = [
+            generation
+            for generation, count in self._outstanding.items()
+            if count == 0
+        ]
+        for generation in settled:
+            self._outstanding.pop(generation, None)
+            self._invalidated.discard(generation)
 
     async def complete(self, tracked: _TrackedToken, *, advance: bool) -> None:
         async with self._lock:
+            previous = (tracked.completed, tracked.advances)
             stale = tracked.generation in self._invalidated
             tracked.completed = True
             tracked.advances = advance and not stale
-            self._outstanding[tracked.generation] = max(0, self._outstanding.get(tracked.generation, 1) - 1)
+
+            prefix: list[_TrackedToken] = []
             saved = None
-            while self._pending and self._pending[0].completed:
-                item = self._pending.popleft()
+            for item in self._pending:
+                if not item.completed:
+                    break
+                prefix.append(item)
                 if item.advances:
                     saved = item.token
-            stale_generations = [item for item, count in self._outstanding.items() if count == 0]
-            for item in stale_generations:
-                self._outstanding.pop(item, None)
-                self._invalidated.discard(item)
-            if saved is not None:
-                await self._save(saved)
+
+            try:
+                if saved is not None:
+                    await self._save(saved)
+            except BaseException:
+                tracked.completed, tracked.advances = previous
+                raise
+
+            if not previous[0]:
+                self._outstanding[tracked.generation] = max(
+                    0, self._outstanding.get(tracked.generation, 1) - 1
+                )
+            for _ in prefix:
+                self._pending.popleft()
+            self._discard_settled_generations()
 
 
 class MongoDBPayloadError(ValueError):
@@ -159,8 +245,11 @@ class MongoDBPollingSource(Source):
         self.collection_name = collection
         self.filter = dict(filter or {})
         self.projection = dict(projection or {}) or None
-        self.batch_size = batch_size
-        self.poll_interval_s = poll_interval_s
+        _validate_cursor_projection(self.projection, self.cursor)
+        self.batch_size = _positive_integer(batch_size, field="batch_size")
+        self.poll_interval_s = _non_negative_number(
+            poll_interval_s, field="poll_interval_s"
+        )
         self.state = state or InMemoryCursorStore()
         self.state_key = state_key or f"mongodb:{connector.database_name}:{collection}:poll:{','.join(self.cursor)}"
         self.initial_cursor = tuple(decode_state({"extended_json": list(initial_cursor)})) if initial_cursor is not None else None
@@ -185,8 +274,8 @@ class MongoDBPollingSource(Source):
         return dict(self.filter or cursor_query)
 
     async def _save(self, token: Any) -> None:
-        self._committed = tuple(token)
         await self.state.save(self.state_key, encode_state(list(token)))
+        self._committed = tuple(token)
 
     async def open(self) -> None:
         if self._loaded:
@@ -252,28 +341,28 @@ class MongoDBPollingDelivery(Delivery):
     async def ack(self) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source._tracker.complete(self._tracked, advance=True)
+        self._terminal = True
 
     async def retry(self, *, delay_s: float | None = None) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source.invalidate(self._tracked, delay_s=delay_s)
         await self._source._tracker.complete(self._tracked, advance=False)
+        self._terminal = True
 
     async def fail(self, exc: Exception | None = None) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source._tracker.complete(self._tracked, advance=True)
+        self._terminal = True
 
     async def release_unstarted(self) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source.invalidate(self._tracked)
         await self._source._tracker.complete(self._tracked, advance=False)
+        self._terminal = True
 
 
 class MongoDBChangeStreamSource(Source):
@@ -285,9 +374,13 @@ class MongoDBChangeStreamSource(Source):
         self.collection_name = collection
         self.pipeline = [dict(stage) for stage in (pipeline or [])]
         self.full_document = full_document
-        self.max_await_time_ms = max_await_time_ms
-        self.batch_size = batch_size
-        self.poll_interval_s = poll_interval_s
+        self.max_await_time_ms = _positive_integer(
+            max_await_time_ms, field="max_await_time_ms"
+        )
+        self.batch_size = _positive_integer(batch_size, field="batch_size")
+        self.poll_interval_s = _non_negative_number(
+            poll_interval_s, field="poll_interval_s"
+        )
         self.state = state or InMemoryCursorStore()
         self.state_key = state_key or f"mongodb:{connector.database_name}:{collection}:change-stream"
         self._resume_token = None
@@ -296,8 +389,8 @@ class MongoDBChangeStreamSource(Source):
         self._tracker = _ContiguousGenerationTracker(self._save)
 
     async def _save(self, token: Any) -> None:
-        self._resume_token = token
         await self.state.save(self.state_key, encode_state(token))
+        self._resume_token = token
 
     async def open(self) -> None:
         if not self._loaded:
@@ -407,9 +500,15 @@ class MongoDBChangeStreamSource(Source):
         if delay_s:
             await asyncio.sleep(delay_s)
         await self._tracker.invalidate(tracked.generation)
-        if self._stream is not None:
-            await self._stream.close()
-            self._stream = None
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            try:
+                await stream.close()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
     async def close(self) -> None:
         if self._stream is not None:
@@ -427,28 +526,28 @@ class MongoDBChangeStreamDelivery(Delivery):
     async def ack(self) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source._tracker.complete(self._tracked, advance=True)
+        self._terminal = True
 
     async def retry(self, *, delay_s: float | None = None) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source.invalidate(self._tracked, delay_s=delay_s)
         await self._source._tracker.complete(self._tracked, advance=False)
+        self._terminal = True
 
     async def fail(self, exc: Exception | None = None) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source._tracker.complete(self._tracked, advance=True)
+        self._terminal = True
 
     async def release_unstarted(self) -> None:
         if self._terminal:
             return
-        self._terminal = True
         await self._source.invalidate(self._tracked)
         await self._source._tracker.complete(self._tracked, advance=False)
+        self._terminal = True
 
 
 class MongoDBCollectionSink(Sink):
@@ -458,14 +557,12 @@ class MongoDBCollectionSink(Sink):
             raise ValueError("mode must be insert or upsert")
         if mode == "upsert" and not keys:
             raise ValueError("upsert mode requires keys")
-        if batch_size <= 0:
-            raise ValueError("batch_size must be positive")
         self.connector = connector
         self.collection_name = collection
         self.mode = mode
         self.keys = tuple(keys)
         self.ordered = ordered
-        self.batch_size = batch_size
+        self.batch_size = _positive_integer(batch_size, field="batch_size")
 
     def _documents(self, body: Any) -> list[dict[str, Any]]:
         if isinstance(body, Mapping):
