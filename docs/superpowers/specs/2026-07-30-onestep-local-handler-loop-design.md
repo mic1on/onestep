@@ -164,10 +164,45 @@ must warn before every task run or replay.
 ### Diagnostic Process And Overall Timeout
 
 `task run` and `task replay` execute the diagnostic session in a fresh child
-process supervised by the CLI parent. Process isolation is required because a
-blocking synchronous handler, hook, route predicate, plugin call, or native
-library cannot be reliably interrupted by an asyncio timeout in the same
-process.
+process supervised by the CLI parent. The child uses the `spawn` start method so
+it does not inherit event-loop, app, thread, or connector state. Process
+isolation is required because a blocking synchronous handler, hook, route
+predicate, plugin call, or native library cannot be reliably interrupted by an
+asyncio timeout in the same process.
+
+The parent creates two private one-way pipes for each spawned child: a control
+pipe from parent to child and a status pipe from child to parent. Pipe messages
+are UTF-8 JSON frames sent with `Connection.send_bytes()` and
+`Connection.recv_bytes()`, not pickled Python objects and not stdout. Every
+frame contains the internal schema `onestep/diagnostic-ipc`, version `1`, and a
+monotonically increasing sequence for its direction. The status pipe supports:
+
+- `checkpoint`: the child sends this immediately before each potentially
+  blocking phase and after each externally visible send or cleanup transition.
+  It contains the current phase, transition (`entered` or `completed`), elapsed
+  time, and only safe partial result fields accumulated so far;
+- `final`: the complete versioned diagnostic result, sent only after normal
+  cleanup finishes.
+
+The control pipe accepts only a `cancel` frame. Unknown schemas, versions,
+kinds, non-monotonic sequences, or malformed JSON are protocol failures. The
+parent discards the invalid frame, terminates the child, and synthesizes
+`child_failed` from the last previously validated checkpoint.
+
+Checkpoint phases cover child startup, target loading, validation, before hook,
+handler, success/failure hook, routing, each sink send, dead-letter publication,
+synthetic delivery action, and cleanup. The partial-field allowlist is limited
+to app/task/resource identifiers, selected sink names, completion booleans,
+elapsed time, and cleanup status. Checkpoints must not contain envelope bodies,
+exception messages, credentials, or arbitrary object representations.
+The parent continuously drains and validates the status pipe while supervising
+the deadline, retaining the highest valid checkpoint sequence. Child stdout and
+stderr are forwarded to parent stderr; stdout is reserved for the parent's final
+human or JSON report and is never used as IPC.
+
+This IPC is local and private to a parent and child from the same installed
+onestep version. It is not an exported API, reporter payload, WebSocket message,
+or Control Plane protocol.
 
 `--timeout` is a positive number of seconds and defaults to `60`. Its monotonic
 deadline begins when the child starts and covers target loading, task
@@ -175,16 +210,31 @@ validation, handler and hook execution, routing, real sends, dead-letter work,
 and normal cleanup. The task's existing `timeout_s` still applies to the handler
 using production semantics; whichever deadline expires first wins.
 
-On overall timeout, the parent requests cooperative cancellation and allows up
-to five additional seconds for reverse-order resource cleanup. If the child is
-still blocked, the parent terminates it and reports cleanup as incomplete. This
-makes the maximum expected wall time `--timeout + 5` seconds while acknowledging
-that forced termination cannot run arbitrary plugin cleanup code.
+On overall timeout, the parent sends a `cancel` control frame. A child-side
+control listener schedules cancellation on the diagnostic event loop when it is
+responsive, after which the child attempts reverse-order cleanup and may return
+a final timeout report. The parent allows up to five additional seconds for
+this cooperative path. If the child is still blocked, the parent forcibly
+terminates it and reports cleanup as incomplete. This makes the maximum expected
+wall time `--timeout + 5` seconds while acknowledging that forced termination
+cannot run arbitrary plugin cleanup code.
 
 Timeout produces a versioned diagnostic report with `completion` set to
-`timed_out`, the last stage reported by the child when available, and cleanup
-status. It exits with code `1`. The parent owns final rendering so `--json`
-still emits one valid JSON document even if the child is terminated.
+`timed_out`, the last valid checkpoint retained by the parent, and cleanup
+status. If the child never produced a checkpoint, the parent uses
+`child_start`. A child exit or broken status pipe without a valid `final` frame
+similarly produces a parent-authored `child_failed` report rather than partial
+JSON. Timeout exits with code `1`; the parent always owns final rendering, so
+`--json` emits exactly one valid JSON document even after forced termination.
+
+In `--send` mode, timeout or forced termination may occur after an external sink
+has accepted all or part of a write but before its `completed` checkpoint. That
+outcome is inherently ambiguous and can leave partial fan-out, duplicates on a
+later replay, or backend connections that close only when the operating system
+reclaims the process. Any timeout with an entered but incomplete send sets
+`side_effect_outcome` to `unknown` and repeats this warning in the result. This
+is an explicit risk accepted by opting into `--send`; onestep cannot roll back
+or prove the outcome of the interrupted external operation.
 
 ## Local Execution Semantics
 
@@ -236,8 +286,18 @@ Dry-run is the default.
   the final source action remains synthetic. `--send` can confirm whether the
   configured dead-letter sinks accepted the capture in this run; it cannot
   guarantee that a production source's later `fail()` call would succeed.
+- A timeout or forced child termination during a real send has an unknown
+  external outcome. Retrying the diagnostic may duplicate a write that the
+  backend committed before the timeout.
 
 ## CLI Contract
+
+The current argument-normalization shim treats an unknown first token as the
+legacy `run` shorthand. Implementation must add `task` to
+`_normalize_argv()`'s known top-level command set before parsing nested
+subcommands; otherwise `onestep task run ...` is silently rewritten as
+`onestep run task run ...`. The legacy shorthand remains unchanged for other
+unknown first tokens.
 
 ### `task run`
 
@@ -471,8 +531,10 @@ successful capture is durable before the runtime proceeds.
 | Replay validation | app/task mismatch | exit 2 | expected and captured identity |
 | Handler/hook/route | exception or timeout | compute one retry decision | local failure report with stage |
 | Overall diagnostic session | `--timeout` expires | cooperative cancel, bounded cleanup, then terminate if needed; exit 1 | `timed_out`, last stage, and cleanup status |
+| Diagnostic child/IPC | child exits or status pipe breaks without `final` | parent synthesizes report; exit 1 | `child_failed` and last valid checkpoint |
 | Dry-run sink | output cannot be represented | exit 1 | serialization failure without lossy output |
 | Send sink | normalized connector failure | preserve error kind | redacted backend/operation/kind |
+| Interrupted in-flight `--send` | external commit state cannot be known | do not claim rollback or retry safety | `side_effect_outcome: unknown` and duplicate/partial-write warning |
 | Connectivity open | timeout or connector failure | record failure, continue | per-resource result |
 | Resource close | close failure | record failure, continue cleanup | per-resource cleanup result |
 | Resource without lifecycle | no callable `open()` and `close()` pair | do not perform a surrogate read/write probe | `not_probeable` with role and type |
@@ -491,6 +553,10 @@ This is an additive core feature suitable for a minor release.
 - Existing YAML remains valid; `app.failure_capture` is additive.
 - Existing `run`, `check`, `init`, `build`, and `catalog` command behavior is
   unchanged.
+- `_normalize_argv()` recognizes `task` as a top-level command so nested task
+  commands bypass legacy shorthand rewriting. Consequently, the bare shorthand
+  target name `task` becomes reserved; users of that exact target must write
+  `onestep run task`. Other shorthand targets remain unchanged.
 - `TaskRunner` retains its constructor and compatibility entry point.
 - `run_task_once()` retains its current remote-control contract.
 - Existing `Envelope` and `TaskEvent` fields and semantics are unchanged.
@@ -536,7 +602,14 @@ Cover:
 - task timeout, overall process timeout, cooperative cancellation, forced child
   termination, valid parent-rendered JSON, and reverse-order cleanup paths;
 - blocking synchronous handler and hook fixtures that prove the CLI returns by
-  `--timeout + 5` seconds.
+  `--timeout + 5` seconds;
+- ordered IPC checkpoints for every blocking phase, malformed/truncated frame
+  handling, child exit without `final`, and fallback to `child_start` when no
+  checkpoint arrives;
+- child stdout/stderr during `--json` without corruption of the single JSON
+  document emitted on parent stdout;
+- forced termination during `--send` reporting an unknown external side-effect
+  outcome and the duplicate/partial-write warning.
 
 ### Capture Codec And Writer
 
@@ -560,7 +633,8 @@ Cover:
 
 Cover:
 
-- command parsing and help;
+- command parsing and help, including `task` bypassing shorthand normalization,
+  explicit `onestep run task`, and unchanged shorthand for other targets;
 - human and JSON reports;
 - exit codes 0, 1, and 2;
 - invalid input, schema version, task identity, and target loading;
@@ -585,11 +659,13 @@ uv run pytest -q -m "not integration"
 - Release core as a minor version, expected to be `1.8.0` if no earlier minor is
   released first.
 - Update `CHANGELOG.md` with the new CLI, capture policy, compatibility statement,
-  and side-effect warning.
+  the reserved bare `task` shorthand, and side-effect warning.
 - Document the commands in the English and Chinese READMEs.
 - Document that dry-run dead-letter actions are predictions, `--send` observes
   sink publication but not a real source finalization, and diagnostic commands
   have an overall timeout.
+- Document that timeout or forced termination during `--send` has an unknown
+  external outcome and may cause partial or duplicate writes on replay.
 - Document the lossless codec's supported types and make the best-effort nature
   of `mode=all` explicit, including how unsupported custom types are reported.
 - Extend `docs/yaml-task-definition.md` with `app.failure_capture`.
@@ -615,7 +691,13 @@ frontend types and views, and image rebuild/restart in one compatibility window.
 P2 is complete when:
 
 - both Python and YAML targets support local run and replay;
+- `task` commands bypass legacy argv rewriting while explicit `run` and other
+  shorthand targets retain their behavior;
 - dry-run never invokes framework-managed sinks;
+- an unresponsive diagnostic child returns a parent-authored valid report with
+  its last safe checkpoint within the documented deadline and cleanup grace;
+- an interrupted in-flight `--send` is reported with an unknown external
+  side-effect outcome rather than a false success or rollback claim;
 - a captured terminal handler failure can be replayed without a worker or
   Control Plane;
 - capture files are versioned, bounded, redacted, private, atomic, and lossless;
