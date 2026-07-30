@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlalchemy as sa
 
 from onestep import OneStepApp
+from onestep.testing import ReplaySafeSinkHarness, run_replay_safe_sink_contract
 from onestep_mysql import MySQLConnector
 
 
@@ -80,3 +81,38 @@ def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:
     assert sorted(seen_scores) == [(1, 10), (2, 20)]
     assert order_rows == [(1, 1, 10), (2, 1, 20)]
     assert processed_rows == [(1, "A", "done"), (2, "B", "done")]
+
+
+def test_mysql_table_sink_sqlite_fallback_handles_replayed_upsert(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'sink.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    processed = sa.Table(
+        "processed_orders",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("payload", sa.String, nullable=False),
+    )
+    metadata.create_all(engine)
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        sink = db.table_sink(table="processed_orders", mode="upsert", keys=("id",))
+
+        def assert_single_record() -> None:
+            verify_engine = sa.create_engine(db_url, future=True)
+            with verify_engine.begin() as conn:
+                rows = conn.execute(sa.select(processed.c.id, processed.c.payload)).all()
+            verify_engine.dispose()
+            assert rows == [(1, "A")]
+
+        try:
+            await run_replay_safe_sink_contract(
+                ReplaySafeSinkHarness(sink=sink, assert_single_record=assert_single_record),
+                body={"id": 1, "payload": "A"},
+            )
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 from pathlib import Path
 
+import pytest
 import sqlalchemy as sa
 
-from onestep import OneStepApp
+from onestep.testing import (
+    ClaimedSourceHarness,
+    StopControl,
+    run_claimed_source_stop_contract,
+)
 from onestep_postgres import PostgresConnector
 
 
@@ -36,123 +41,62 @@ def _load_order_rows(db_url: str, orders: sa.Table) -> list[tuple[int, int]]:
     return list(rows)
 
 
-def test_table_queue_drain_releases_claimed_rows_when_fetch_is_stopped_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize("control", list(StopControl))
+def test_table_queue_stop_controls_release_claimed_rows(
+    tmp_path: Path,
+    control: StopControl,
+) -> None:
     db_url, orders = _build_table_queue_db(tmp_path)
 
-    async def scenario() -> list[int]:
-        app = OneStepApp("table-queue-drain-contract", shutdown_timeout_s=1.0)
+    async def scenario() -> None:
         db = PostgresConnector(db_url)
-        source = _source(db)
+        source = db.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=1,
+            poll_interval_s=0.01,
+        )
+        fetch_started = threading.Event()
+        release_fetch = threading.Event()
         original_fetch = source._fetch_sync
 
-        def slow_fetch(limit: int):
+        def blocking_fetch(limit: int):
             rows = original_fetch(limit)
-            time.sleep(0.2)
+            fetch_started.set()
+            if not release_fetch.wait(timeout=1.0):
+                raise TimeoutError("test did not release the PostgreSQL table queue fetch")
             return rows
 
-        source._fetch_sync = slow_fetch
-        seen: list[int] = []
+        source._fetch_sync = blocking_fetch
 
-        @app.task(source=source, concurrency=1)
-        async def consume(ctx, row):
-            seen.append(row["id"])
+        def assert_released() -> None:
+            assert _load_order_rows(db_url, orders) == [(1, 0)]
 
-        async def controller() -> None:
-            await asyncio.sleep(0.05)
-            app.request_drain()
-            await asyncio.wait_for(app.wait_for_drain(), timeout=1.0)
-            app.request_shutdown()
+        try:
+            await run_claimed_source_stop_contract(
+                ClaimedSourceHarness(
+                    source=source,
+                    wait_for_fetch_started=lambda: _wait_for_thread_event(fetch_started),
+                    release_fetch=release_fetch.set,
+                    assert_released=assert_released,
+                ),
+                control,
+            )
+        finally:
+            release_fetch.set()
+            await db.close()
 
-        await asyncio.wait_for(asyncio.gather(app.serve(), controller()), timeout=2.0)
-        await db.close()
-        return seen
-
-    seen = asyncio.run(scenario())
-
-    assert seen == []
-    assert _load_order_rows(db_url, orders) == [(1, 0)]
-
-
-def test_table_queue_pause_releases_claimed_rows_when_fetch_is_stopped_contract(tmp_path: Path) -> None:
-    db_url, orders = _build_table_queue_db(tmp_path)
-
-    async def scenario() -> list[int]:
-        app = OneStepApp("table-queue-pause-contract", shutdown_timeout_s=1.0)
-        db = PostgresConnector(db_url)
-        source = _source(db)
-        original_fetch = source._fetch_sync
-
-        def slow_fetch(limit: int):
-            rows = original_fetch(limit)
-            time.sleep(0.2)
-            return rows
-
-        source._fetch_sync = slow_fetch
-        seen: list[int] = []
-
-        @app.task(source=source, concurrency=1)
-        async def consume(ctx, row):
-            seen.append(row["id"])
-
-        async def controller() -> None:
-            await asyncio.sleep(0.05)
-            app.request_task_pause("consume")
-            await asyncio.wait_for(app.wait_for_task_pause("consume"), timeout=1.0)
-            app.request_shutdown()
-
-        await asyncio.wait_for(asyncio.gather(app.serve(), controller()), timeout=2.0)
-        await db.close()
-        return seen
-
-    seen = asyncio.run(scenario())
-
-    assert seen == []
-    assert _load_order_rows(db_url, orders) == [(1, 0)]
+    asyncio.run(scenario())
 
 
-def test_table_queue_shutdown_releases_claimed_rows_when_fetch_is_stopped_contract(tmp_path: Path) -> None:
-    db_url, orders = _build_table_queue_db(tmp_path)
-
-    async def scenario() -> list[int]:
-        app = OneStepApp("table-queue-shutdown-contract", shutdown_timeout_s=1.0)
-        db = PostgresConnector(db_url)
-        source = _source(db)
-        original_fetch = source._fetch_sync
-
-        def slow_fetch(limit: int):
-            rows = original_fetch(limit)
-            time.sleep(0.2)
-            return rows
-
-        source._fetch_sync = slow_fetch
-        seen: list[int] = []
-
-        @app.task(source=source, concurrency=1)
-        async def consume(ctx, row):
-            seen.append(row["id"])
-
-        async def controller() -> None:
-            await asyncio.sleep(0.05)
-            app.request_shutdown()
-
-        await asyncio.wait_for(asyncio.gather(app.serve(), controller()), timeout=2.0)
-        await db.close()
-        return seen
-
-    seen = asyncio.run(scenario())
-
-    assert seen == []
-    assert _load_order_rows(db_url, orders) == [(1, 0)]
-
-
-def _source(db: PostgresConnector):
-    return db.table_queue(
-        table="orders",
-        key="id",
-        where="status = 0",
-        claim={"status": 9},
-        ack={"status": 1},
-        nack={"status": 0},
-        batch_size=1,
-        poll_interval_s=0.01,
-    )
+async def _wait_for_thread_event(event: threading.Event) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.0
+    while not event.is_set():
+        if loop.time() >= deadline:
+            raise TimeoutError("table queue fetch did not start")
+        await asyncio.sleep(0.001)
