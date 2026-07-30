@@ -9,7 +9,7 @@
 
 YAML is responsible for:
 
-- `app`: name, global config, shutdown timeout, state store binding, framework log level
+- `app`: name, global config, shutdown timeout, state store binding, framework log level, failure capture policy
 - `reporter`: optional control-plane telemetry wiring through `onestep[control-plane]`
 - `resources`: named runtime objects and their dependencies
 - `hooks`: app-level startup, shutdown, and event observers
@@ -68,6 +68,49 @@ For long-lived configs, prefer adding:
 apiVersion: onestep/v1alpha1
 kind: App
 ```
+
+## Failure Capture
+
+Failure capture is disabled unless `app.failure_capture` is configured:
+
+```yaml
+app:
+  name: billing-sync
+  failure_capture:
+    directory: ./captures
+    mode: terminal
+    max_bytes: 1048576
+    redact_paths:
+      - /body/customer/token
+      - /meta/authorization
+```
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `directory` | required | Directory for private, atomically written capture files. |
+| `mode` | `terminal` | `terminal` captures effective terminal failures; `all` also captures retryable attempts. |
+| `max_bytes` | `1048576` | Positive maximum encoded file size. Oversized captures fail explicitly. |
+| `redact_paths` | `[]` | JSON Pointer paths under the logical `/body` and `/meta` document. |
+
+Known secret-key names are redacted recursively in addition to configured
+pointers. Capture files use the versioned `onestep/envelope-capture` schema and
+preserve JSON scalars/containers plus datetime, UUID, bytes, Decimal, enum,
+tuple/namedtuple, set, and frozenset values. Enum and namedtuple types must
+remain importable when replayed.
+
+The format does not stringify unsupported values. In `mode: all`, an attempt
+containing an unsupported custom value logs a capture encoding error and writes
+no file; task retry/dead-letter behavior continues unchanged. This avoids a
+record that looks replayable but has already lost type information.
+
+Replay a valid capture with:
+
+```bash
+onestep task replay worker.yaml --task sync_billing --envelope captures/failure.json
+```
+
+The capture schema/version and app/task identity are validated before replay.
+Sink I/O remains disabled unless `--send` is explicit.
 
 ## Real Project Layout
 

@@ -89,6 +89,57 @@ own handler, it also retains ownership of root logger levels.
 Direct `app.run()` and `app.serve()` calls do not modify host logging or install
 task event logging. Embedded applications retain full control of process logging.
 
+## Local task diagnostics
+
+Run exactly one task attempt from JSON, or replay a captured failure, without a
+worker or control plane:
+
+```bash
+onestep task run your_package.tasks:app --task sync_billing --input input.json
+onestep task replay your_package.tasks:app --task sync_billing --envelope captures/failure.json
+onestep check your_package.tasks:app --connect
+```
+
+Diagnostics execute the real handler, task hooks, retry decision, and sink
+routing. Sink I/O is suppressed by default; `--send` opens, sends to, and closes
+the selected sinks. Handler and hook code may still perform external side
+effects in either mode. `--timeout` defaults to 60 seconds and is enforced in a
+spawned process, including for synchronously blocked code.
+
+`delivery_action` is always a prediction because source `ack`/`retry`/`fail`
+methods are synthetic. In dry-run, `would_dead_letter` means dead-lettering
+would occur if the configured dead-letter sink publishes successfully. Use
+`--send` to observe that result. A forced timeout during `--send` can leave a
+partial external write and a later retry can duplicate it.
+
+`check --connect` calls `open()` and `close()` only when both methods are
+callable. State/cursor stores without that lifecycle are reported as
+`not_probeable`; the command never calls `load()`, `save()`, or `delete()` as a
+connectivity probe.
+
+Opt-in failure capture makes production envelopes replayable:
+
+```python
+from onestep import FailureCaptureConfig, OneStepApp
+
+app = OneStepApp(
+    "billing-sync",
+    failure_capture=FailureCaptureConfig(
+        directory="captures",
+        mode="terminal",
+        redact_paths=("/body/customer/token",),
+    ),
+)
+```
+
+Capture files are versioned, private, atomically written, and reject lossy
+serialization. `terminal` records only effective terminal failures; `all` also
+records retryable attempts. Common values including datetime, UUID, bytes,
+Decimal, enum, tuple/namedtuple, set, and frozenset round-trip losslessly.
+Unsupported custom values produce an explicit capture error and no file rather
+than a degraded record. See
+[`docs/yaml-task-definition.md`](docs/yaml-task-definition.md) for YAML policy.
+
 ## What it does
 
 | Capability | Where |
