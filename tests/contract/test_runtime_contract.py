@@ -27,7 +27,8 @@ from onestep import (
 )
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
-from onestep.task import EmitRoute
+from onestep.runtime import TaskRunner
+from onestep.task import EmitRoute, TaskHooks
 
 
 class _StubDelivery(Delivery):
@@ -43,6 +44,110 @@ class _StubDelivery(Delivery):
 
     async def fail(self, exc: Exception | None = None) -> None:
         return None
+
+
+def test_single_delivery_success_order_is_stable_contract() -> None:
+    class RecordingDelivery(Delivery):
+        def __init__(self, steps: list[str]) -> None:
+            super().__init__(Envelope(body={"value": 2}, meta={"trace": "t-1"}))
+            self.steps = steps
+
+        async def start_processing(self) -> None:
+            self.steps.append("start_processing")
+
+        async def ack(self) -> None:
+            self.steps.append("ack")
+
+        async def retry(self, *, delay_s: float | None = None) -> None:
+            self.steps.append("retry")
+
+        async def fail(self, exc: Exception | None = None) -> None:
+            self.steps.append("fail")
+
+    class RecordingSink(Sink):
+        def __init__(self, steps: list[str]) -> None:
+            super().__init__("recording")
+            self.steps = steps
+
+        async def send(self, envelope: Envelope) -> None:
+            assert envelope.body == {"value": 4}
+            self.steps.append("sink")
+
+    async def scenario() -> None:
+        steps: list[str] = []
+        app = OneStepApp("execution-order")
+        sink = RecordingSink(steps)
+
+        @app.on_event
+        def event(event):
+            steps.append(f"event:{event.kind.value}")
+
+        async def before(ctx, payload):
+            steps.append("before")
+
+        async def after(ctx, payload, result):
+            steps.append("after_success")
+
+        @app.task(emit=sink, hooks=TaskHooks(before=(before,), after_success=(after,)))
+        async def consume(ctx, payload):
+            steps.append("handler")
+            return {"value": payload["value"] * 2}
+
+        await TaskRunner(app, app.tasks[0])._handle_delivery(RecordingDelivery(steps))
+
+        assert steps == [
+            "start_processing",
+            "event:started",
+            "before",
+            "handler",
+            "after_success",
+            "sink",
+            "ack",
+            "event:succeeded",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_fail_action_fallback_order_is_stable_contract() -> None:
+    class FallbackDelivery(Delivery):
+        def __init__(self, actions: list[str]) -> None:
+            super().__init__(Envelope(body={"value": 1}))
+            self.actions = actions
+
+        async def ack(self) -> None:
+            raise AssertionError("ack must not be called")
+
+        async def retry(self, *, delay_s: float | None = None) -> None:
+            self.actions.append("retry")
+
+        async def fail(self, exc: Exception | None = None) -> None:
+            self.actions.append("fail")
+            raise RuntimeError("source fail unavailable")
+
+    class RecordingDeadLetterSink(Sink):
+        def __init__(self) -> None:
+            super().__init__("dead")
+
+        async def send(self, envelope: Envelope) -> None:
+            return None
+
+    async def scenario() -> None:
+        actions: list[str] = []
+        events: list[str] = []
+        app = OneStepApp("fallback-order")
+        app.on_event(lambda event: events.append(event.kind.value))
+
+        @app.task(retry=NoRetry(), dead_letter=RecordingDeadLetterSink())
+        async def consume(ctx, payload):
+            raise ValueError("invalid")
+
+        await TaskRunner(app, app.tasks[0])._handle_delivery(FallbackDelivery(actions))
+
+        assert actions == ["fail", "retry"]
+        assert events == ["started", "dead_lettered", "failed"]
+
+    asyncio.run(scenario())
 
 
 class _FlakySource(Source):
