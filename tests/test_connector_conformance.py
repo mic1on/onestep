@@ -151,7 +151,7 @@ def test_claimed_source_runner_times_out_a_blocking_sync_wait_callback() -> None
         callback_gate = threading.Event()
 
         try:
-            with pytest.raises(TimeoutError):
+            with pytest.raises(asyncio.TimeoutError):
                 await run_claimed_source_stop_contract(
                     ClaimedSourceHarness(
                         source=source,
