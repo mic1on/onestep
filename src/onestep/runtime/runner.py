@@ -1,34 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
 import copy
 import inspect
 import logging
-import math
-import time
 from typing import TYPE_CHECKING, Any
 
-from onestep.context import TaskContext
-from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
-from onestep.invoke import invoke_callback
-from onestep.resilience import ConnectorOperationError, connector_retry_delay, is_retryable_connector_error
-from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
+from onestep.resilience import (
+    ConnectorOperationError,
+    connector_retry_delay,
+    is_retryable_connector_error,
+)
 from onestep.task import TaskSpec
 
 from .executor import DeliveryExecutor
 
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
-    from onestep.connectors.base import Delivery, Sink
-
-
-_INVALID_NOTIFICATION_VALUE = object()
+    from onestep.connectors.base import Delivery
 
 
 class TaskRunner:
-    _SEND_ATTEMPTS = 2
     def __init__(self, app: "OneStepApp", task: TaskSpec) -> None:
         self.app = app
         self.task = task
@@ -244,167 +237,8 @@ class TaskRunner:
         except asyncio.TimeoutError:
             return
 
-    async def _send_to_sink(self, sink, envelope: Envelope) -> None:
-        fallback_s = getattr(sink, "poll_interval_s", 1.0)
-        for attempt in range(self._SEND_ATTEMPTS):
-            try:
-                await sink.send(envelope)
-                self._logger.debug(
-                    "sink send succeeded",
-                    extra={
-                        "sink_name": getattr(sink, "name", sink.__class__.__name__),
-                        "sink_kind": sink.__class__.__name__,
-                        "connector_backend": getattr(getattr(sink, "connector", None), "__class__", type(None)).__name__
-                        if getattr(sink, "connector", None) is not None
-                        else None,
-                        "delivery_attempts": envelope.attempts,
-                    },
-                )
-                return
-            except ConnectorOperationError as exc:
-                if not is_retryable_connector_error(exc) or attempt == self._SEND_ATTEMPTS - 1:
-                    raise
-                delay_s = connector_retry_delay(exc, fallback_s=fallback_s)
-                self._logger.warning(
-                    "sink send degraded; retrying",
-                    extra={
-                        "connector_backend": exc.backend,
-                        "connector_operation": exc.operation.value,
-                        "connector_kind": exc.kind.value,
-                        "connector_retry_delay_s": delay_s,
-                    },
-                    exc_info=exc,
-                )
-                if delay_s <= 0 or self.app.is_stopping:
-                    continue
-                try:
-                    await asyncio.wait_for(self.app.wait_for_shutdown(), timeout=delay_s)
-                except asyncio.TimeoutError:
-                    continue
-                raise
-
     async def _handle_delivery(self, delivery: "Delivery") -> None:
         await self._executor.execute(delivery)
-
-    async def _invoke_handler(self, ctx: TaskContext, delivery: "Delivery"):
-        result = self.task.handler(ctx, delivery.payload)
-        if inspect.isawaitable(result):
-            if self.task.timeout_s is not None:
-                return await asyncio.wait_for(result, timeout=self.task.timeout_s)
-            return await result
-        return result
-
-    async def _select_emit_sinks(self, ctx: TaskContext, payload: Any, result: Any) -> tuple["Sink", ...]:
-        sinks: list["Sink"] = []
-        for route in self.task.emit_routes:
-            if route.predicate is None:
-                sinks.extend(route.then_sinks)
-                continue
-            predicate_result = invoke_callback(route.predicate, ctx, payload, result)
-            if inspect.isawaitable(predicate_result):
-                predicate_result = await predicate_result
-            if predicate_result:
-                sinks.extend(route.then_sinks)
-            else:
-                sinks.extend(route.otherwise_sinks)
-        return tuple(sinks)
-
-    async def _handle_failure(
-        self,
-        ctx: TaskContext,
-        delivery: "Delivery",
-        exc: Exception,
-        kind: FailureKind,
-        *,
-        duration_s: float | None,
-    ) -> None:
-        failure = FailureInfo.from_exception(exc, kind=kind)
-        ctx.logger.exception("task failed", extra={"failure_kind": failure.kind.value})
-        await self._run_task_hooks(
-            self.task.hooks.on_failure,
-            ctx,
-            delivery.payload,
-            failure,
-            suppress_exceptions=True,
-            logger=ctx.logger,
-            message="task failure hook failed",
-        )
-        action = resolve_retry_action(self.task.retry, delivery.envelope, exc, failure)
-        if action.decision is RetryDecision.RETRY:
-            await delivery.retry(delay_s=action.delay_s)
-            await self._emit_event(
-                TaskEventKind.RETRIED,
-                delivery,
-                failure=failure,
-                duration_s=duration_s,
-            )
-            return
-        if self.task.dead_letter_sinks:
-            published = await self._publish_dead_letter(
-                ctx,
-                delivery,
-                failure,
-                duration_s=duration_s,
-            )
-            if not published:
-                return
-        await self._fail_delivery(ctx, delivery, exc)
-        await self._emit_event(
-            TaskEventKind.FAILED,
-            delivery,
-            failure=failure,
-            duration_s=duration_s,
-        )
-
-    async def _publish_dead_letter(
-        self,
-        ctx: TaskContext,
-        delivery: "Delivery",
-        failure: FailureInfo,
-        *,
-        duration_s: float | None,
-    ) -> bool:
-        envelope = Envelope(
-            body={
-                "payload": copy.deepcopy(delivery.envelope.body),
-                "failure": failure.as_dict(),
-            },
-            meta={
-                "app": self.app.name,
-                "task": self.task.name,
-                "source": self.task.source.name if self.task.source is not None else None,
-                "original_meta": copy.deepcopy(delivery.envelope.meta),
-                "original_attempts": delivery.envelope.attempts,
-            },
-            attempts=0,
-        )
-        try:
-            for sink in self.task.dead_letter_sinks:
-                await sink.send(envelope)
-        except Exception:
-            ctx.logger.exception("dead-letter publish failed; retrying original delivery")
-            await delivery.retry()
-            await self._emit_event(
-                TaskEventKind.RETRIED,
-                delivery,
-                failure=failure,
-                duration_s=duration_s,
-            )
-            return False
-        await self._emit_event(
-            TaskEventKind.DEAD_LETTERED,
-            delivery,
-            failure=failure,
-            duration_s=duration_s,
-        )
-        return True
-
-    async def _fail_delivery(self, ctx: TaskContext, delivery: "Delivery", exc: Exception) -> None:
-        try:
-            await delivery.fail(exc)
-        except Exception:
-            ctx.logger.exception("delivery fail action failed; retrying original delivery")
-            await delivery.retry()
 
     async def _drain_inflight(self) -> None:
         if not self._inflight:
@@ -424,36 +258,10 @@ class TaskRunner:
         for delivery in deliveries:
             await self._emit_event(kind, delivery)
 
-    async def _run_task_hooks(
-        self,
-        hooks,
-        *args,
-        suppress_exceptions: bool = False,
-        logger: logging.Logger | None = None,
-        message: str = "task hook failed",
-    ) -> None:
-        for hook in hooks:
-            try:
-                result = invoke_callback(hook, *args)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                if not suppress_exceptions:
-                    raise
-                active_logger = logger or self._logger
-                active_logger.exception(
-                    message,
-                    extra={"task_hook": getattr(hook, "__name__", hook.__class__.__name__)},
-                )
-
     async def _emit_event(
         self,
         kind: TaskEventKind,
         delivery: "Delivery",
-        *,
-        duration_s: float | None = None,
-        failure: FailureInfo | None = None,
-        event_meta: dict[str, Any] | None = None,
     ) -> None:
         event = TaskEvent(
             kind=kind,
@@ -461,51 +269,6 @@ class TaskRunner:
             task=self.task.name,
             source=self.task.source.name if self.task.source is not None else None,
             attempts=delivery.envelope.attempts,
-            duration_s=duration_s,
-            failure=failure,
-            meta=copy.deepcopy(event_meta) if event_meta is not None else copy.deepcopy(delivery.envelope.meta),
+            meta=copy.deepcopy(delivery.envelope.meta),
         )
         await self.app.emit_event(event)
-
-    def _build_succeeded_event_meta(self, delivery: "Delivery", result: Any) -> dict[str, Any]:
-        event_meta = copy.deepcopy(delivery.envelope.meta)
-        notification = self._extract_notification_payload(result)
-        if notification is not None:
-            event_meta["notification"] = notification
-        return event_meta
-
-    def _extract_notification_payload(self, result: Any) -> dict[str, Any] | None:
-        if not isinstance(result, Mapping):
-            return None
-        notification = result.get("notification")
-        if not isinstance(notification, Mapping):
-            return None
-        sanitized = self._sanitize_notification_value(notification)
-        if not isinstance(sanitized, dict) or not sanitized:
-            return None
-        return sanitized
-
-    def _sanitize_notification_value(self, value: Any) -> Any:
-        if value is None or isinstance(value, (str, bool, int)):
-            return value
-        if isinstance(value, float):
-            return value if math.isfinite(value) else _INVALID_NOTIFICATION_VALUE
-        if isinstance(value, Mapping):
-            sanitized: dict[str, Any] = {}
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    continue
-                clean_item = self._sanitize_notification_value(item)
-                if clean_item is _INVALID_NOTIFICATION_VALUE:
-                    continue
-                sanitized[key] = clean_item
-            return sanitized
-        if isinstance(value, (list, tuple)):
-            sanitized_items = []
-            for item in value:
-                clean_item = self._sanitize_notification_value(item)
-                if clean_item is _INVALID_NOTIFICATION_VALUE:
-                    continue
-                sanitized_items.append(clean_item)
-            return sanitized_items
-        return _INVALID_NOTIFICATION_VALUE
