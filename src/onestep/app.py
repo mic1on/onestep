@@ -10,6 +10,7 @@ import signal
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .capture.config import FailureCaptureConfig
 from .connectors.base import Sink, Source
 from .envelope import Envelope
 from .events import StructuredEventLogger, TaskEvent
@@ -60,6 +61,7 @@ class OneStepApp:
         config: Mapping[str, Any] | None = None,
         state: StateStore | None = None,
         shutdown_timeout_s: float | None = 30.0,
+        failure_capture: FailureCaptureConfig | None = None,
     ) -> None:
         if shutdown_timeout_s is not None and shutdown_timeout_s <= 0:
             raise ValueError("shutdown_timeout_s must be > 0")
@@ -67,6 +69,7 @@ class OneStepApp:
         self.config = dict(config or {})
         self.state = state or InMemoryStateStore()
         self.shutdown_timeout_s = shutdown_timeout_s
+        self.failure_capture = failure_capture
         self.custom_metrics = CustomMetricsRegistry()
         self._tasks: list[TaskSpec] = []
         self._named_resources: dict[str, Any] = {}
