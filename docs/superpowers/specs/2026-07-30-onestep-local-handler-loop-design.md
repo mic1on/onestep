@@ -13,8 +13,8 @@ YAML remains a wiring and runtime-policy layer.
 The committed CLI surface is:
 
 ```text
-onestep task run <target> --task <name> --input <json-file> [--send] [--json]
-onestep task replay <target> --task <name> --envelope <capture-file> [--send] [--json]
+onestep task run <target> --task <name> --input <json-file> [--send] [--timeout 60] [--json]
+onestep task replay <target> --task <name> --envelope <capture-file> [--send] [--timeout 60] [--json]
 onestep check <target> --connect [--connect-timeout 10] [--json]
 ```
 
@@ -50,11 +50,12 @@ The current gaps are:
 - Default local execution to dry-run for framework-managed sinks.
 - Make real sink sends an explicit `--send` opt-in.
 - Replay a versioned capture without requiring a running worker or control plane.
-- Capture terminal runtime failures by default, with an option to capture every
-  failed attempt.
+- Attempt to capture terminal runtime failures by default, with an option to
+  attempt capture for every failed attempt.
 - Redact resource secrets and configured payload paths before persistence.
-- Check all configured resources for open/close connectivity without fetching
-  deliveries or starting task runners.
+- Include every configured resource in connectivity reports, probe resources
+  with an explicit lifecycle without fetching, reading, or sending, and clearly
+  identify resources that cannot be probed safely.
 - Preserve existing stable APIs, delivery ordering, task-event semantics,
   reporter payloads, remote controls, and WebSocket behavior.
 
@@ -81,7 +82,7 @@ Production Source
   TaskRunner --------------------------+
   fetch/concurrency/stop controls      |
                                        v
-CLI input/capture -> DiagnosticRunner -> DeliveryExecutor
+CLI supervisor -> diagnostic worker -> DiagnosticRunner -> DeliveryExecutor
                                        | handler
                                        | task hooks
                                        | timeout
@@ -160,6 +161,31 @@ Task-level before, success, and failure hooks do execute. Handler and hook code
 may perform external writes directly; the CLI cannot sandbox those effects and
 must warn before every task run or replay.
 
+### Diagnostic Process And Overall Timeout
+
+`task run` and `task replay` execute the diagnostic session in a fresh child
+process supervised by the CLI parent. Process isolation is required because a
+blocking synchronous handler, hook, route predicate, plugin call, or native
+library cannot be reliably interrupted by an asyncio timeout in the same
+process.
+
+`--timeout` is a positive number of seconds and defaults to `60`. Its monotonic
+deadline begins when the child starts and covers target loading, task
+validation, handler and hook execution, routing, real sends, dead-letter work,
+and normal cleanup. The task's existing `timeout_s` still applies to the handler
+using production semantics; whichever deadline expires first wins.
+
+On overall timeout, the parent requests cooperative cancellation and allows up
+to five additional seconds for reverse-order resource cleanup. If the child is
+still blocked, the parent terminates it and reports cleanup as incomplete. This
+makes the maximum expected wall time `--timeout + 5` seconds while acknowledging
+that forced termination cannot run arbitrary plugin cleanup code.
+
+Timeout produces a versioned diagnostic report with `completion` set to
+`timed_out`, the last stage reported by the child when available, and cleanup
+status. It exits with code `1`. The parent owns final rendering so `--json`
+still emits one valid JSON document even if the child is terminated.
+
 ## Local Execution Semantics
 
 Local diagnostics execute exactly one attempt. They do not loop or sleep for a
@@ -171,6 +197,13 @@ attempt count and reports one of:
 - `would_retry`;
 - `would_dead_letter`;
 - `would_fail`.
+
+These values are diagnostic conclusions, not all equally observable outcomes.
+In dry-run, `would_dead_letter` means that production would attempt dead-letter
+publication; it becomes terminal only if every configured dead-letter publish
+and the source delivery's `fail()` action succeed. The report therefore sets
+`delivery_action_basis` to `predicted` and records that dead-letter publication
+was not attempted.
 
 This makes a production attempt reproducible without making the CLI wait through
 production backoff windows. Existing remote `run_task_once()` keeps its current
@@ -185,6 +218,8 @@ Dry-run is the default.
 - Selected sink names and output envelopes are recorded.
 - Configured emit and dead-letter sinks are not opened or called.
 - Synthetic delivery actions are recorded rather than sent to a source.
+- `would_dead_letter` is explicitly reported as a prediction conditional on
+  successful dead-letter publication and source finalization.
 
 ### Send Mode
 
@@ -197,13 +232,17 @@ Dry-run is the default.
   machine-readable output carries the same warning as structured data.
 - Synthetic source `ack()`, `retry()`, and `fail()` remain local observations;
   no source delivery exists to mutate.
+- A successful dead-letter send is an observed result for this invocation, but
+  the final source action remains synthetic. `--send` can confirm whether the
+  configured dead-letter sinks accepted the capture in this run; it cannot
+  guarantee that a production source's later `fail()` call would succeed.
 
 ## CLI Contract
 
 ### `task run`
 
 ```text
-onestep task run <target> --task <name> --input <json-file> [--send] [--json]
+onestep task run <target> --task <name> --input <json-file> [--send] [--timeout 60] [--json]
 ```
 
 The input file must contain one JSON value. That value becomes `Envelope.body`.
@@ -212,7 +251,7 @@ The synthetic envelope uses empty metadata and `attempts=0`.
 ### `task replay`
 
 ```text
-onestep task replay <target> --task <name> --envelope <capture-file> [--send] [--json]
+onestep task replay <target> --task <name> --envelope <capture-file> [--send] [--timeout 60] [--json]
 ```
 
 Replay validates the capture schema and version, verifies that its app and task
@@ -228,14 +267,29 @@ onestep check <target> --connect [--connect-timeout 10] [--json]
 Connectivity checking:
 
 - performs the normal target load and optional strict YAML validation first;
-- deduplicates shared resource objects by identity;
-- calls each resource's `open()` and `close()` without fetching or sending;
+- inventories named resources, app state, task sources, emit sinks, and
+  dead-letter sinks, then deduplicates shared objects by identity while
+  retaining every name and role in the result;
+- probes only resources that expose callable `open()` and `close()` methods;
+- calls `open()` and `close()` without fetching, reading, writing, or sending;
+- reports state stores, cursor stores, and other resources without both
+  lifecycle methods as `not_probeable`; this status is visible but does not
+  make the command fail;
+- never calls `load()`, `save()`, or `delete()` as a generic connectivity probe,
+  because store operations may create schema or otherwise mutate a backend;
 - checks resources sequentially to avoid connection storms and preserve clear
   attribution;
-- applies the timeout independently to each resource;
+- applies `--connect-timeout` independently to each lifecycle operation;
 - continues after a resource failure so the report includes every resource;
-- always attempts reverse-order cleanup for successfully opened resources;
+- always attempts bounded cleanup after an invoked `open()`, including an open
+  failure or timeout that may have left a partially initialized resource;
 - does not run app hooks or task runners.
+
+Each resource result contains its aliases, roles, concrete type, probe kind
+(`lifecycle` or `none`), status (`connected`, `failed`, or `not_probeable`), and
+separate open/close outcomes when applicable. Exit code `0` means every
+lifecycle probe passed; a report containing only `not_probeable` resources is
+successful but carries an explicit warning that no connection was verified.
 
 ### Output And Exit Codes
 
@@ -249,19 +303,31 @@ Human-readable output is the default. `--json` returns a versioned report:
   "app": "billing-sync",
   "task": "sync_users",
   "mode": "dry-run",
+  "timeout_s": 60,
   "completion": "succeeded",
   "attempts": 0,
   "selected_sinks": ["warehouse"],
   "delivery_action": "would_ack",
+  "delivery_action_basis": "predicted",
+  "dead_letter": {"attempted": false, "published": null},
   "events": [],
   "warning": "handler and task hooks may perform external side effects"
 }
 ```
 
+For `task run` and `task replay`, `delivery_action` always describes the
+synthetic source transition and `delivery_action_basis` is therefore
+`predicted`. The separate `dead_letter` object distinguishes an unattempted
+dry-run (`published: null`) from an observed `--send` success or failure
+(`published: true` or `false`). This prevents a successful sink publication
+from being presented as proof that a real source delivery was finalized.
+
 Exit codes retain the existing CLI convention:
 
-- `0`: successful execution or all connectivity checks passed;
-- `1`: handler execution, sink send, cleanup, or connectivity failure;
+- `0`: successful execution or all attempted lifecycle connectivity probes
+  passed;
+- `1`: handler execution, overall timeout, sink send, cleanup, or lifecycle
+  connectivity failure;
 - `2`: argument, target, configuration, input, capture-version, or capture-task
   validation failure.
 
@@ -302,10 +368,10 @@ app:
 
 `mode` is either:
 
-- `terminal`: capture only after the runtime confirms the delivery will not be
-  retried;
-- `all`: capture every failed attempt that produces a retry or terminal
-  decision.
+- `terminal`: attempt capture only after the runtime confirms the delivery will
+  not be retried;
+- `all`: attempt capture for every failed attempt that produces a retry or
+  terminal decision.
 
 ### Capture Format
 
@@ -334,9 +400,30 @@ Capture files do not reuse or modify the `Envelope` dataclass schema.
 }
 ```
 
-The codec supports JSON values plus tagged datetime, UUID, and bytes values.
-Unsupported values fail capture explicitly. The writer must not persist a lossy
-record that cannot reproduce the delivery.
+The codec uses collision-safe recursive type tags rather than `default=str` or
+`repr()`. It supports JSON values plus these lossless extensions:
+
+- `datetime`, UUID, and bytes;
+- `Decimal`, encoded with its exact string form so exponent, trailing zeros,
+  signed zero, infinities, and NaN forms round trip;
+- plain tuple;
+- enum members, encoded with module, qualified class name, member name, and
+  encoded value;
+- namedtuple instances, encoded with module, qualified class name, field names,
+  and encoded field values;
+- set and frozenset, with members ordered by their canonical encoded JSON so
+  captures are deterministic.
+
+Enum and namedtuple reconstruction is allowed only when the class is importable
+from the already loaded target module graph and its recorded metadata still
+matches. Local classes, dataclasses, arbitrary custom classes, generators,
+open handles, and other unsupported values fail capture explicitly. The error
+identifies the JSON Pointer and type but never includes `repr(value)`.
+
+`mode=all` is therefore best-effort rather than a promise that every failed
+attempt produces a file. Every encode failure emits an ERROR log with app,
+task, stage, safe type name, and unsupported path. The writer must not persist a
+lossy or partial record that cannot reproduce the delivery.
 
 ### Capture Timing
 
@@ -351,7 +438,7 @@ For terminal mode, capture only after the resolved delivery action is known:
   terminal;
 - a `delivery.fail()` failure that falls back to retry is not terminal.
 
-All mode records these retrying failures as non-terminal captures.
+All mode attempts to record these retrying failures as non-terminal captures.
 
 Capture persistence runs through `asyncio.to_thread()` so filesystem work does
 not block the event loop. The delivery waits for the capture result so a reported
@@ -383,11 +470,13 @@ successful capture is durable before the runtime proceeds.
 | Replay load | unsupported schema/version | exit 2 | supported version and received version |
 | Replay validation | app/task mismatch | exit 2 | expected and captured identity |
 | Handler/hook/route | exception or timeout | compute one retry decision | local failure report with stage |
+| Overall diagnostic session | `--timeout` expires | cooperative cancel, bounded cleanup, then terminate if needed; exit 1 | `timed_out`, last stage, and cleanup status |
 | Dry-run sink | output cannot be represented | exit 1 | serialization failure without lossy output |
 | Send sink | normalized connector failure | preserve error kind | redacted backend/operation/kind |
 | Connectivity open | timeout or connector failure | record failure, continue | per-resource result |
 | Resource close | close failure | record failure, continue cleanup | per-resource cleanup result |
-| Capture encode | unsupported value or size limit | do not write | ERROR log with app/task/stage |
+| Resource without lifecycle | no callable `open()` and `close()` pair | do not perform a surrogate read/write probe | `not_probeable` with role and type |
+| Capture encode | unsupported value or size limit | do not write | ERROR log with app/task/stage and safe type/path context |
 | Capture persist | permissions, disk full, atomic-write error | do not change delivery action | ERROR log with safe path context |
 
 Capture failure must never change production acknowledgement, retry, fail, or
@@ -440,16 +529,25 @@ Cover:
 - synchronous and asynchronous handlers and task hooks;
 - conditional true/false routes and multiple selected sinks;
 - one-attempt execution and `would_retry`/`would_dead_letter`/`would_fail`;
+- predicted dry-run dead-letter versus observed `--send` publication, including
+  publication failure and synthetic source finalization;
 - captured attempts participating in retry-policy resolution;
 - local events never reaching an attached reporter;
-- exception, timeout, cancellation, and reverse-order cleanup paths.
+- task timeout, overall process timeout, cooperative cancellation, forced child
+  termination, valid parent-rendered JSON, and reverse-order cleanup paths;
+- blocking synchronous handler and hook fixtures that prove the CLI returns by
+  `--timeout + 5` seconds.
 
 ### Capture Codec And Writer
 
 Cover:
 
-- JSON, datetime, UUID, and bytes round trips;
-- unsupported and oversized values;
+- JSON, datetime, UUID, bytes, Decimal, plain tuple, enum, namedtuple, set, and
+  frozenset round trips;
+- deterministic set ordering and collision-safe tags;
+- unsupported local/custom classes and oversized values;
+- codec failures logging safe type/path context without `repr()` or payload
+  leakage;
 - built-in nested credential-key redaction;
 - configured JSON Pointer paths, including lists and missing paths;
 - owner-only directory and file permissions;
@@ -466,8 +564,10 @@ Cover:
 - human and JSON reports;
 - exit codes 0, 1, and 2;
 - invalid input, schema version, task identity, and target loading;
-- all-resource connectivity results after partial failure;
-- per-resource timeout and reverse-order cleanup;
+- all-resource inventory after partial lifecycle failure;
+- `not_probeable` state/cursor stores, including proof that no store method is
+  called and SQLAlchemy `auto_create` cannot run;
+- per-operation connectivity timeout and bounded cleanup;
 - shared resource identity deduplication;
 - normalized official-connector errors and hidden unknown-plugin messages.
 
@@ -487,6 +587,11 @@ uv run pytest -q -m "not integration"
 - Update `CHANGELOG.md` with the new CLI, capture policy, compatibility statement,
   and side-effect warning.
 - Document the commands in the English and Chinese READMEs.
+- Document that dry-run dead-letter actions are predictions, `--send` observes
+  sink publication but not a real source finalization, and diagnostic commands
+  have an overall timeout.
+- Document the lossless codec's supported types and make the best-effort nature
+  of `mode=all` explicit, including how unsupported custom types are reported.
 - Extend `docs/yaml-task-definition.md` with `app.failure_capture`.
 - Mark P2 complete in `docs/framework-evolution-roadmap.md` only after all exit
   gates pass.
@@ -514,7 +619,8 @@ P2 is complete when:
 - a captured terminal handler failure can be replayed without a worker or
   Control Plane;
 - capture files are versioned, bounded, redacted, private, atomic, and lossless;
-- connectivity checks report every configured resource without fetching work;
+- connectivity checks represent every configured resource, probe only explicit
+  lifecycle capabilities, and never use store reads or writes as a surrogate;
 - local diagnostic events never reach the Control Plane;
 - production delivery and remote manual-run contracts remain unchanged;
 - focused, non-integration, and all-plugin reliability gates pass.
