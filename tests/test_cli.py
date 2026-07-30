@@ -382,6 +382,45 @@ def test_task_replay_validates_identity_and_passes_capture_path(
     assert "Warning:" in captured.out
 
 
+def test_task_replay_json_keeps_parent_target_output_off_stdout(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    capture_path = tmp_path / "capture.json"
+    capture_path.write_text("{}", encoding="utf-8")
+
+    def load_target(target):
+        print("target import output")
+        return OneStepApp("cli-diagnostic")
+
+    monkeypatch.setattr(cli_module, "load_diagnostic_target", load_target)
+    monkeypatch.setattr(cli_module, "load_capture", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli_module,
+        "supervise_diagnostic",
+        lambda request, *, timeout_s: make_diagnostic_report(),
+    )
+    assert (
+        main(
+            [
+                "task",
+                "replay",
+                "pkg.jobs:app",
+                "--task",
+                "sync",
+                "--envelope",
+                str(capture_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["completion"] == "succeeded"
+    assert "target import output" in captured.err
+
+
 @pytest.mark.parametrize(
     "completion,expected",
     [

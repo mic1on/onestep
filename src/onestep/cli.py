@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import sys
+from contextlib import redirect_stdout
 from importlib.metadata import PackageNotFoundError, version
 
 from .app import OneStepApp
@@ -369,7 +370,8 @@ def _run_task_command(args: argparse.Namespace) -> int:
                 send=args.send,
             )
         else:
-            app = load_diagnostic_target(args.target)
+            with redirect_stdout(sys.stderr):
+                app = load_diagnostic_target(args.target)
             load_capture(
                 args.capture_path,
                 expected_app=app.name,
