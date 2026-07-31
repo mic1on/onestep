@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_events_request
 from onestep_control_plane_api.api.notification_service import (
-    claim_pending_outbox_rows,
+    claim_next_pending_outbox_row,
     delete_notification_channel,
     dispatch_runtime_task_event_notifications,
     drain_notification_outbox,
@@ -536,24 +536,79 @@ def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypa
     assert delivery.response_body == "ok"
 
 
-def test_claim_increments_attempts_for_at_least_once_semantics(db_session) -> None:
+def test_claim_increments_only_the_next_outbox_attempt(db_session) -> None:
     """Claiming a row increments attempts in its own committed transaction so a
     worker crash after claiming leaves the row retriable (at-least-once)."""
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    for _ in range(2):
+        task_event = seed_failed_task_event(db_session, service, instance)
+        dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    now = _utcnow()
+    claimed = claim_next_pending_outbox_row(db_session, now=now)
+    assert claimed is not None
+    assert claimed.attempts == 1
+    assert claimed.last_attempt_at == now
+
+    outboxes = db_session.query(NotificationOutbox).all()
+    assert sorted(outbox.attempts for outbox in outboxes) == [0, 1]
+    assert all(outbox.status == "pending" for outbox in outboxes)
+
+
+def test_drain_failure_does_not_claim_later_rows(db_session) -> None:
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    for _ in range(2):
+        task_event = seed_failed_task_event(db_session, service, instance)
+        dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def crash_during_delivery(
+        delivery, *, webhook_url: str, timeout_s: float = 5.0
+    ) -> None:
+        raise RuntimeError("worker stopped")
+
+    with pytest.raises(RuntimeError, match="worker stopped"):
+        drain_notification_outbox(
+            db_session,
+            now=_utcnow(),
+            batch_size=2,
+            deliver_fn=crash_during_delivery,
+        )
+    db_session.rollback()
+
+    outboxes = db_session.query(NotificationOutbox).all()
+    assert sorted(outbox.attempts for outbox in outboxes) == [0, 1]
+
+
+def test_drain_terminalizes_exhausted_row_without_dispatch(db_session) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
     dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
 
-    now = _utcnow()
-    claimed = claim_pending_outbox_rows(db_session, now=now, batch_size=10)
-    assert len(claimed) == 1
-    assert claimed[0].attempts == 1
-    assert claimed[0].last_attempt_at == now
-
-    # The claim committed: a fresh session still sees attempts == 1.
     outbox = db_session.query(NotificationOutbox).one()
-    assert outbox.attempts == 1
-    assert outbox.status == "pending"
+    outbox.attempts = outbox.max_attempts
+    db_session.commit()
+    delivery_count = 0
+
+    def unexpected_delivery(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        nonlocal delivery_count
+        delivery_count += 1
+
+    assert (
+        drain_notification_outbox(
+            db_session,
+            now=_utcnow(),
+            deliver_fn=unexpected_delivery,
+        )
+        == 1
+    )
+    db_session.refresh(outbox)
+    assert outbox.status == "permanently_failed"
+    assert outbox.attempts == outbox.max_attempts
+    assert outbox.delivery.status == "failed"
+    assert delivery_count == 0
 
 
 # --------------------------------------------------------------------------- #

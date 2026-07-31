@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -463,38 +463,47 @@ def _apply_delivery_outcome(
     outbox.next_attempt_at = now + timedelta(seconds=_outbox_backoff_seconds(outbox.attempts))
 
 
-def claim_pending_outbox_rows(
+def claim_next_pending_outbox_row(
     db: Session,
     *,
     now: datetime,
-    batch_size: int | None = None,
-) -> list[NotificationOutbox]:
-    """Claim a batch of due outbox rows for delivery (at-least-once).
+    excluded_ids: set[object] | None = None,
+) -> NotificationOutbox | None:
+    """Claim the next due outbox row for delivery (at-least-once).
 
-    Rows are selected ``FOR UPDATE SKIP LOCKED`` on PostgreSQL so multiple
+    The row is selected ``FOR UPDATE SKIP LOCKED`` on PostgreSQL so multiple
     replicas (or a future parallel drainer) never claim the same row; on SQLite
     the lock hint is a no-op and the leader gate guarantees a single drainer.
     Claiming increments ``attempts`` and stamps ``last_attempt_at`` within its
     own committed transaction so a crash after claiming leaves the row
     ``pending`` (retried on the next tick) rather than lost.
     """
-    limit = batch_size if batch_size is not None else settings.notification_outbox_batch_size
     current_time = _normalize_scan_now(now)
-    rows = db.scalars(
+    statement = (
         select(NotificationOutbox)
         .where(
             NotificationOutbox.status == "pending",
             NotificationOutbox.next_attempt_at <= current_time,
         )
         .order_by(NotificationOutbox.next_attempt_at, NotificationOutbox.created_at)
-        .limit(limit)
+        .limit(1)
         .with_for_update(skip_locked=True)
-    ).all()
-    for outbox in rows:
+    )
+    if excluded_ids:
+        statement = statement.where(~NotificationOutbox.id.in_(excluded_ids))
+    outbox = db.scalar(statement)
+    if outbox is None:
+        db.commit()
+        return None
+    if outbox.attempts >= outbox.max_attempts:
+        outbox.status = "permanently_failed"
+        outbox.next_attempt_at = current_time
+        outbox.delivery.status = "failed"
+    else:
         outbox.attempts += 1
         outbox.last_attempt_at = current_time
     db.commit()
-    return rows
+    return outbox
 
 
 def process_outbox_row(
@@ -545,12 +554,22 @@ def drain_notification_outbox(
     Returns the number of rows processed in this drain.
     """
     current_time = _normalize_scan_now(now)
-    rows = claim_pending_outbox_rows(db, now=current_time, batch_size=batch_size)
-    for outbox in rows:
-        process_outbox_row(db, outbox, deliver_fn=deliver_fn)
+    limit = batch_size if batch_size is not None else settings.notification_outbox_batch_size
+    processed_ids: set[object] = set()
+    for _ in range(limit):
+        outbox = claim_next_pending_outbox_row(
+            db,
+            now=current_time,
+            excluded_ids=processed_ids,
+        )
+        if outbox is None:
+            break
+        processed_ids.add(outbox.id)
+        if outbox.status == "pending":
+            process_outbox_row(db, outbox, deliver_fn=deliver_fn)
         if progress_cb is not None:
             progress_cb()
-    return len(rows)
+    return len(processed_ids)
 
 
 def _normalize_scan_now(now: datetime | None) -> datetime:
@@ -977,22 +996,38 @@ def update_notification_channel_enabled(
 
 def delete_notification_channel(db: Session, channel_id) -> None:
     channel = _get_channel_or_404(db, channel_id)
-    deliveries = db.scalars(
-        select(NotificationDelivery)
-        .options(selectinload(NotificationDelivery.outbox_entry))
+    channel_delivery_ids = select(NotificationDelivery.id).where(
+        NotificationDelivery.channel_id == channel.id
+    )
+    db.execute(
+        delete(NotificationOutbox)
+        .where(
+            NotificationOutbox.delivery_id.in_(channel_delivery_ids),
+            NotificationOutbox.status.in_({"delivered", "permanently_failed"}),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    pending_outbox_delivery_ids = select(NotificationOutbox.delivery_id).where(
+        NotificationOutbox.status == "pending"
+    )
+    db.execute(
+        delete(NotificationDelivery)
+        .where(
+            NotificationDelivery.channel_id == channel.id,
+            NotificationDelivery.status.in_(
+                {"succeeded", "failed", "permanently_failed"}
+            ),
+            ~NotificationDelivery.id.in_(pending_outbox_delivery_ids),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        update(NotificationDelivery)
         .where(NotificationDelivery.channel_id == channel.id)
-    ).all()
-    for delivery in deliveries:
-        outbox = delivery.outbox_entry
-        if (
-            outbox is None
-            and delivery.status in {"succeeded", "failed", "permanently_failed"}
-        ) or (
-            outbox is not None
-            and outbox.status in {"delivered", "permanently_failed"}
-        ):
-            db.delete(delivery)
-    db.flush()
+        .values(channel_id=None)
+        .execution_options(synchronize_session=False)
+    )
+    db.expire(channel, ["deliveries"])
     db.delete(channel)
     db.commit()
 
