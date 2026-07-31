@@ -21,6 +21,7 @@ from onestep_control_plane_api.api.schemas import (
     TaskEventRecord,
     TaskFailureDescriptor,
 )
+from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.base import Base
 from onestep_control_plane_api.db.models import (
     Instance,
@@ -134,9 +135,7 @@ def test_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) ->
     )
 
     start = time.monotonic()
-    created_count = dispatch_runtime_task_event_notifications(
-        db_session, task_events=[task_event]
-    )
+    created_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
     elapsed_s = time.monotonic() - start
 
     assert created_count == 1
@@ -155,9 +154,7 @@ def test_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) ->
     assert delivery.sent_at is None
 
 
-def test_ingest_events_receive_path_does_not_block_on_slow_webhook(
-    db_session, monkeypatch
-) -> None:
+def test_ingest_events_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) -> None:
     """The full agent WS ingest receive path stays fast under a slow webhook."""
     seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -232,9 +229,7 @@ def test_outbox_snapshots_webhook_url_at_enqueue(db_session, monkeypatch) -> Non
     assert outbox.webhook_url == original_url
 
 
-def test_outbox_uses_frozen_provider_contract_after_channel_edit(
-    db_session, monkeypatch
-) -> None:
+def test_outbox_uses_frozen_provider_contract_after_channel_edit(db_session, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = NotificationChannel(
         name=f"ops-custom-{uuid4().hex[:6]}",
@@ -300,14 +295,10 @@ def test_outbox_uses_frozen_provider_contract_after_channel_edit(
     )
 
     assert drain_notification_outbox(db_session, now=_utcnow()) == 1
-    assert sent_requests == [
-        ("GET", "https://example.com/custom", {"service": "billing-sync"})
-    ]
+    assert sent_requests == [("GET", "https://example.com/custom", {"service": "billing-sync"})]
 
 
-def test_channel_delete_preserves_and_drains_accepted_delivery(
-    db_session, monkeypatch
-) -> None:
+def test_channel_delete_preserves_and_drains_accepted_delivery(db_session, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -463,6 +454,43 @@ def test_outbox_drain_retries_with_backoff_then_marks_permanently_failed(
     assert delivery.error_message == "boom"
 
 
+def test_outbox_backoff_starts_when_slow_attempt_finishes(db_session, monkeypatch) -> None:
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    batch_started_at = datetime(2026, 4, 30, 2, 5, 0, tzinfo=UTC)
+    attempt_finished_at = batch_started_at + timedelta(seconds=20)
+    outbox = db_session.query(NotificationOutbox).one()
+    outbox.next_attempt_at = batch_started_at
+    db_session.commit()
+    clock = {"now": batch_started_at}
+    monkeypatch.setattr(settings, "notification_outbox_backoff_base_s", 10.0)
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service.utcnow",
+        lambda: clock["now"],
+    )
+
+    def slow_failed_post(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        clock["now"] = attempt_finished_at
+        delivery.status = "failed"
+        delivery.error_message = "downstream timeout"
+        delivery.sent_at = attempt_finished_at
+
+    assert (
+        drain_notification_outbox(
+            db_session,
+            now=batch_started_at,
+            deliver_fn=slow_failed_post,
+        )
+        == 1
+    )
+
+    db_session.refresh(outbox)
+    assert outbox.next_attempt_at == attempt_finished_at + timedelta(seconds=10)
+
+
 def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -563,9 +591,7 @@ def test_drain_failure_does_not_claim_later_rows(db_session) -> None:
         task_event = seed_failed_task_event(db_session, service, instance)
         dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
 
-    def crash_during_delivery(
-        delivery, *, webhook_url: str, timeout_s: float = 5.0
-    ) -> None:
+    def crash_during_delivery(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
         raise RuntimeError("worker stopped")
 
     with pytest.raises(RuntimeError, match="worker stopped"):
@@ -788,16 +814,18 @@ def test_only_one_replica_drains_outbox_when_leases_contend(monkeypatch) -> None
             app_two.state.background_task_refs[NOTIFICATION_OUTBOX_WORKER_NAME] = task_two
 
             await _wait_until(
-                lambda: sum(deliver_totals) >= 1
-                and {
-                    app_one.state.background_task_states[
-                        NOTIFICATION_OUTBOX_WORKER_NAME
-                    ].leadership_status,
-                    app_two.state.background_task_states[
-                        NOTIFICATION_OUTBOX_WORKER_NAME
-                    ].leadership_status,
-                }
-                == {"leader", "standby"}
+                lambda: (
+                    sum(deliver_totals) >= 1
+                    and {
+                        app_one.state.background_task_states[
+                            NOTIFICATION_OUTBOX_WORKER_NAME
+                        ].leadership_status,
+                        app_two.state.background_task_states[
+                            NOTIFICATION_OUTBOX_WORKER_NAME
+                        ].leadership_status,
+                    }
+                    == {"leader", "standby"}
+                )
             )
 
             task_one.cancel()
@@ -813,6 +841,75 @@ def test_only_one_replica_drains_outbox_when_leases_contend(monkeypatch) -> None
                 outbox = db.query(NotificationOutbox).one()
                 assert outbox.status == "delivered"
                 assert outbox.attempts == 1
+        finally:
+            engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_worker_marks_readiness_tick_after_each_processed_row(monkeypatch) -> None:
+    def fast_ok(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "succeeded"
+        delivery.response_status_code = 200
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        fast_ok,
+    )
+
+    from onestep_control_plane_api.workers.leader import LocalWorkerLease
+
+    async def scenario() -> None:
+        session_factory, engine = _build_session_factory()
+        try:
+            with session_factory() as db:
+                service, instance = seed_service_and_instance(db)
+                seed_channel(db, event_types=["task_failed"])
+                for _ in range(3):
+                    task_event = seed_failed_task_event(db, service, instance)
+                    dispatch_runtime_task_event_notifications(db, task_events=[task_event])
+
+            app = _build_memory_app(session_factory)
+            state = app.state.background_task_states[NOTIFICATION_OUTBOX_WORKER_NAME]
+            original_mark_tick = state.mark_tick
+            tick_count = 0
+
+            def count_tick() -> None:
+                nonlocal tick_count
+                tick_count += 1
+                original_mark_tick()
+
+            monkeypatch.setattr(state, "mark_tick", count_tick)
+            first_drain_finished = asyncio.Event()
+
+            async def wait_after_first_drain(_: float) -> None:
+                first_drain_finished.set()
+                await asyncio.Event().wait()
+
+            task = asyncio.create_task(
+                run_notification_outbox_worker(
+                    app,
+                    sleep_fn=wait_after_first_drain,
+                    lease_factory=LocalWorkerLease,
+                    drain_interval_s=0,
+                    leader_poll_interval_s=0,
+                )
+            )
+            app.state.background_task_refs[NOTIFICATION_OUTBOX_WORKER_NAME] = task
+
+            await _wait_until(first_drain_finished.is_set)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            # One tick starts the worker loop, then each delivered row refreshes
+            # readiness before the worker begins its first drain-interval sleep.
+            assert tick_count == 4
+            with session_factory() as db:
+                outboxes = db.query(NotificationOutbox).all()
+                assert len(outboxes) == 3
+                assert all(outbox.status == "delivered" for outbox in outboxes)
         finally:
             engine.dispose()
 

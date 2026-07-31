@@ -162,8 +162,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "sent_at",
     }
     delivery_columns = {
-        column["name"]: column
-        for column in inspector.get_columns("notification_deliveries")
+        column["name"]: column for column in inspector.get_columns("notification_deliveries")
     }
     assert delivery_columns["channel_id"]["nullable"] is True
     delivery_channel_fk = next(
@@ -189,9 +188,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "updated_at",
     }
-    assert {
-        column["name"] for column in inspector.get_columns("notification_instance_states")
-    } == {
+    assert {column["name"] for column in inspector.get_columns("notification_instance_states")} == {
         "id",
         "channel_id",
         "instance_id",
@@ -370,8 +367,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         column["name"]: column for column in inspector.get_columns("notification_deliveries")
     }
     notification_instance_state_columns = {
-        column["name"]: column
-        for column in inspector.get_columns("notification_instance_states")
+        column["name"]: column for column in inspector.get_columns("notification_instance_states")
     }
     worker_agent_columns = {
         column["name"]: column for column in inspector.get_columns("worker_agents")
@@ -385,9 +381,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     worker_deployment_columns = {
         column["name"]: column for column in inspector.get_columns("worker_deployments")
     }
-    worker_columns = {
-        column["name"]: column for column in inspector.get_columns("workers")
-    }
+    worker_columns = {column["name"]: column for column in inspector.get_columns("workers")}
     worker_agent_command_columns = {
         column["name"]: column for column in inspector.get_columns("worker_agent_commands")
     }
@@ -561,9 +555,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
 
     with engine.connect() as connection:
-        role_names = connection.execute(
-            text("SELECT name FROM local_roles ORDER BY name")
-        ).scalars().all()
+        role_names = (
+            connection.execute(text("SELECT name FROM local_roles ORDER BY name")).scalars().all()
+        )
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
     assert role_names == ["admin", "operator", "viewer"]
@@ -746,9 +740,7 @@ def test_alembic_upgrade_head_reconciles_missing_task_description_column(tmp_pat
     upgraded_engine = create_engine(database_url)
     inspector = inspect(upgraded_engine)
 
-    assert "description" in {
-        column["name"] for column in inspector.get_columns("task_definitions")
-    }
+    assert "description" in {column["name"] for column in inspector.get_columns("task_definitions")}
 
     with upgraded_engine.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()

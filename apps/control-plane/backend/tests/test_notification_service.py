@@ -1007,9 +1007,7 @@ def test_scan_and_dispatch_missed_start_notifications_falls_back_to_control_plan
         settings.api_response_timezone = original_api_timezone
 
 
-def test_instance_connectivity_scan_seeds_state_without_delivery(
-    db_session, monkeypatch
-) -> None:
+def test_instance_connectivity_scan_seeds_state_without_delivery(db_session, monkeypatch) -> None:
     service, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["instance_online", "instance_offline"])
@@ -1036,9 +1034,7 @@ def test_instance_connectivity_scan_seeds_state_without_delivery(
     assert service.name == "billing-sync"
 
 
-def test_instance_connectivity_scan_sends_offline_once(
-    db_session, monkeypatch
-) -> None:
+def test_instance_connectivity_scan_sends_offline_once(db_session, monkeypatch) -> None:
     _, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["instance_offline"])
@@ -1091,9 +1087,7 @@ def test_instance_connectivity_scan_sends_offline_once(
     assert state.last_transition_at == datetime(2026, 4, 30, 2, 11, 30, tzinfo=UTC)
 
 
-def test_instance_connectivity_scan_sends_online_recovery_once(
-    db_session, monkeypatch
-) -> None:
+def test_instance_connectivity_scan_sends_online_recovery_once(db_session, monkeypatch) -> None:
     _, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["instance_online", "instance_offline"])
@@ -1139,9 +1133,7 @@ def test_instance_connectivity_scan_sends_online_recovery_once(
     assert len(sent_payloads) == 2
 
     deliveries = (
-        db_session.query(NotificationDelivery)
-        .order_by(NotificationDelivery.created_at)
-        .all()
+        db_session.query(NotificationDelivery).order_by(NotificationDelivery.created_at).all()
     )
     assert [delivery.event_type for delivery in deliveries] == [
         "instance_offline",

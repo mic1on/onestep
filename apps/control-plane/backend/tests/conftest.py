@@ -60,10 +60,7 @@ def test_engine():
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(
-            text(
-                "CREATE TABLE IF NOT EXISTS alembic_version "
-                "(version_num VARCHAR(32) NOT NULL)"
-            )
+            text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)")
         )
         connection.execute(text("DELETE FROM alembic_version"))
         connection.execute(

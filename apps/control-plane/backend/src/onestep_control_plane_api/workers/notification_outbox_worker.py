@@ -82,6 +82,7 @@ async def run_notification_outbox_worker(
     state = app.state.background_task_states[NOTIFICATION_OUTBOX_WORKER_NAME]
     raw_drain = drain_fn if drain_fn is not None else drain_notification_outbox
     if _supports_progress_cb(raw_drain):
+
         def drain_with_progress(db: Session) -> int:
             return raw_drain(db, progress_cb=state.mark_tick)
 
@@ -98,11 +99,7 @@ async def run_notification_outbox_worker(
         if leader_poll_interval_s is None
         else leader_poll_interval_s
     )
-    lease = (
-        lease_factory()
-        if lease_factory is not None
-        else _default_lease_factory(app)()
-    )
+    lease = lease_factory() if lease_factory is not None else _default_lease_factory(app)()
 
     state.mark_started()
     state.mark_starting(lease.mode)

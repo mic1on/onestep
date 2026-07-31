@@ -932,9 +932,7 @@ class Connector(Base):
 
 class Worker(Base):
     __tablename__ = "workers"
-    __table_args__ = (
-        sa.UniqueConstraint("name", name="uq_workers_name"),
-    )
+    __table_args__ = (sa.UniqueConstraint("name", name="uq_workers_name"),)
 
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)

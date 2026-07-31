@@ -10,9 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-DEFAULT_DATABASE_URL = (
-    "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
-)
+DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
 
 
 class Settings(BaseSettings):
@@ -23,9 +21,7 @@ class Settings(BaseSettings):
     instance_health_participation_window_s: int = Field(default=3600, ge=1)
     database_url: str = DEFAULT_DATABASE_URL
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(
-        default_factory=list
-    )
+    worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
     worker_package_storage_dir: str = ".onestep-control-plane/packages"
     console_auth_username: str = ""
     console_auth_password: str = ""

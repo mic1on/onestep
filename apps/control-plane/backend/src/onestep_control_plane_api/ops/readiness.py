@@ -146,8 +146,7 @@ class ReadinessReport:
             "database": self.database.to_response(),
             "migrations": self.migrations.to_response(),
             "background_tasks": {
-                name: result.to_response()
-                for name, result in self.background_tasks.items()
+                name: result.to_response() for name, result in self.background_tasks.items()
             },
         }
         return {

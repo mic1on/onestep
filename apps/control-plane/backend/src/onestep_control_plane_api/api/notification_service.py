@@ -592,9 +592,9 @@ def _online_service_started_at_by_id(
     rows = db.execute(
         select(
             Instance.service_id,
-            func.min(
-                func.coalesce(Instance.started_at, Instance.created_at)
-            ).label("online_started_at"),
+            func.min(func.coalesce(Instance.started_at, Instance.created_at)).label(
+                "online_started_at"
+            ),
         )
         .where(
             Instance.last_seen_at.is_not(None),
@@ -603,9 +603,7 @@ def _online_service_started_at_by_id(
         .group_by(Instance.service_id)
     ).all()
     return {
-        row.service_id: row.online_started_at
-        for row in rows
-        if row.online_started_at is not None
+        row.service_id: row.online_started_at for row in rows if row.online_started_at is not None
     }
 
 
@@ -1014,9 +1012,7 @@ def delete_notification_channel(db: Session, channel_id) -> None:
         delete(NotificationDelivery)
         .where(
             NotificationDelivery.channel_id == channel.id,
-            NotificationDelivery.status.in_(
-                {"succeeded", "failed", "permanently_failed"}
-            ),
+            NotificationDelivery.status.in_({"succeeded", "failed", "permanently_failed"}),
             ~NotificationDelivery.id.in_(pending_outbox_delivery_ids),
         )
         .execution_options(synchronize_session=False)
@@ -1087,10 +1083,7 @@ def scan_and_dispatch_instance_connectivity_notifications(
             )
         )
     ).all()
-    state_by_key = {
-        (state.channel_id, state.instance_id): state
-        for state in states
-    }
+    state_by_key = {(state.channel_id, state.instance_id): state for state in states}
     instances = db.scalars(
         select(Instance)
         .options(selectinload(Instance.service))
@@ -1147,9 +1140,7 @@ def scan_and_dispatch_instance_connectivity_notifications(
             if notification_event.event_type not in channel.event_types_json:
                 continue
 
-            event_type = (
-                "instance_online" if connectivity == "online" else "instance_offline"
-            )
+            event_type = "instance_online" if connectivity == "online" else "instance_offline"
             delivery = _persist_pending_delivery(
                 db,
                 channel=channel,
@@ -1224,9 +1215,7 @@ def scan_and_dispatch_missed_start_notifications(
         min_last_seen_at=min_last_seen_at,
     )
     channels = db.scalars(
-        select(NotificationChannel).where(
-            NotificationChannel.enabled.is_(True)
-        )
+        select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
     ).all()
     missed_start_channels = [
         channel for channel in channels if "task_missed_start" in channel.event_types_json
@@ -1272,9 +1261,7 @@ def scan_and_dispatch_missed_start_notifications(
                     task_name=task_definition.task_name,
                     scheduled_at=scheduled_at,
                     interval_seconds=(
-                        interval_seconds
-                        if task_definition.source_kind == "interval"
-                        else None
+                        interval_seconds if task_definition.source_kind == "interval" else None
                     ),
                 ):
                     continue
