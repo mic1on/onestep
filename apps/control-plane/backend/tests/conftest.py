@@ -12,6 +12,9 @@ from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
     get_expected_migration_heads,
 )
+from onestep_control_plane_api.workers.notification_outbox_worker import (
+    NOTIFICATION_OUTBOX_WORKER_NAME,
+)
 from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
 )
@@ -101,6 +104,7 @@ def client(test_engine, configure_ingest_tokens, tmp_path) -> Generator[TestClie
         state.mark_success(now)
     app.state.background_task_refs = {
         NOTIFICATION_MISSED_START_SCANNER_NAME: object(),
+        NOTIFICATION_OUTBOX_WORKER_NAME: object(),
         RETENTION_WORKER_NAME: object(),
     }
     with TestClient(app) as test_client:
@@ -110,6 +114,7 @@ def client(test_engine, configure_ingest_tokens, tmp_path) -> Generator[TestClie
     app.state.background_task_states = build_default_background_task_states()
     app.state.background_task_refs = {
         NOTIFICATION_MISSED_START_SCANNER_NAME: None,
+        NOTIFICATION_OUTBOX_WORKER_NAME: None,
         RETENTION_WORKER_NAME: None,
     }
     settings.console_auth_username = original_username

@@ -15,6 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.core.settings import settings
+from onestep_control_plane_api.workers.notification_outbox_worker import (
+    NOTIFICATION_OUTBOX_WORKER_NAME,
+)
 from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
 )
@@ -335,6 +338,9 @@ def build_default_background_task_states() -> dict[str, BackgroundTaskReadinessS
     return {
         NOTIFICATION_MISSED_START_SCANNER_NAME: BackgroundTaskReadinessState(
             name=NOTIFICATION_MISSED_START_SCANNER_NAME
+        ),
+        NOTIFICATION_OUTBOX_WORKER_NAME: BackgroundTaskReadinessState(
+            name=NOTIFICATION_OUTBOX_WORKER_NAME
         ),
         RETENTION_WORKER_NAME: BackgroundTaskReadinessState(name=RETENTION_WORKER_NAME),
     }

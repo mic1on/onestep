@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202607230001"
+HEAD_REVISION = "202607240001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -41,6 +41,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "notification_channels",
         "notification_deliveries",
         "notification_instance_states",
+        "notification_outbox",
         "task_definitions",
         "task_custom_metric_windows",
         "task_events",

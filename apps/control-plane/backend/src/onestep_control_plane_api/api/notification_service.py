@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -47,10 +49,13 @@ from onestep_control_plane_api.db.models import (
     NotificationChannel,
     NotificationDelivery,
     NotificationInstanceState,
+    NotificationOutbox,
     Service,
     TaskDefinition,
     TaskEvent,
 )
+
+logger = logging.getLogger("onestep_control_plane_api.api.notification_service")
 
 DEFAULT_WEBHOOK_TIMEOUT_S = 5.0
 DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT = 32
@@ -344,6 +349,19 @@ def _persist_pending_delivery(
     except IntegrityError:
         savepoint.rollback()
         return None
+    # Enqueue an outbox row so webhook delivery happens off the event loop via
+    # the leader-gated notification_outbox_worker. This is a fast insert only;
+    # no HTTP call is made on the receive/scan path.
+    db.add(
+        NotificationOutbox(
+            delivery=delivery,
+            webhook_url=channel.webhook_url,
+            status="pending",
+            attempts=0,
+            max_attempts=settings.notification_outbox_max_attempts,
+        )
+    )
+    db.flush()
     savepoint.commit()
     db.refresh(delivery)
     return delivery
@@ -393,15 +411,124 @@ def _post_webhook(
         delivery.sent_at = utcnow()
 
 
-def _dispatch_delivery(
+def _outbox_backoff_seconds(attempts: int) -> float:
+    base = float(settings.notification_outbox_backoff_base_s)
+    cap = float(settings.notification_outbox_backoff_max_s)
+    exponent = max(0, attempts - 1)
+    return min(cap, base * (2**exponent))
+
+
+def _apply_delivery_outcome(
+    outbox: NotificationOutbox,
+    delivery: NotificationDelivery,
+    *,
+    now: datetime,
+) -> None:
+    """Map ``_post_webhook`` mutations on ``delivery`` onto outbox retry state."""
+    outbox.last_response_status_code = delivery.response_status_code
+    outbox.last_response_body = delivery.response_body
+    outbox.last_error = delivery.error_message
+
+    if delivery.status == "succeeded":
+        outbox.status = "delivered"
+        outbox.next_attempt_at = now
+        return
+
+    if outbox.attempts >= outbox.max_attempts:
+        outbox.status = "permanently_failed"
+        outbox.next_attempt_at = now
+        logger.warning(
+            "notification outbox delivery permanently failed",
+            extra={
+                "outbox_id": str(outbox.id),
+                "delivery_id": str(outbox.delivery_id),
+                "attempts": outbox.attempts,
+                "max_attempts": outbox.max_attempts,
+                "last_status_code": outbox.last_response_status_code,
+            },
+        )
+        return
+
+    # Transient failure: re-queue for a later attempt with exponential backoff.
+    outbox.status = "pending"
+    outbox.next_attempt_at = now + timedelta(seconds=_outbox_backoff_seconds(outbox.attempts))
+
+
+def claim_pending_outbox_rows(
     db: Session,
     *,
-    delivery: NotificationDelivery,
-    webhook_url: str,
-    timeout_s: float = DEFAULT_WEBHOOK_TIMEOUT_S,
-) -> None:
-    _post_webhook(delivery, webhook_url=webhook_url, timeout_s=timeout_s)
+    now: datetime,
+    batch_size: int | None = None,
+) -> list[NotificationOutbox]:
+    """Claim a batch of due outbox rows for delivery (at-least-once).
+
+    Rows are selected ``FOR UPDATE SKIP LOCKED`` on PostgreSQL so multiple
+    replicas (or a future parallel drainer) never claim the same row; on SQLite
+    the lock hint is a no-op and the leader gate guarantees a single drainer.
+    Claiming increments ``attempts`` and stamps ``last_attempt_at`` within its
+    own committed transaction so a crash after claiming leaves the row
+    ``pending`` (retried on the next tick) rather than lost.
+    """
+    limit = batch_size if batch_size is not None else settings.notification_outbox_batch_size
+    current_time = _normalize_scan_now(now)
+    rows = db.scalars(
+        select(NotificationOutbox)
+        .where(
+            NotificationOutbox.status == "pending",
+            NotificationOutbox.next_attempt_at <= current_time,
+        )
+        .order_by(NotificationOutbox.next_attempt_at, NotificationOutbox.created_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for outbox in rows:
+        outbox.attempts += 1
+        outbox.last_attempt_at = current_time
     db.commit()
+    return rows
+
+
+def process_outbox_row(
+    db: Session,
+    outbox: NotificationOutbox,
+    *,
+    deliver_fn: Callable[..., None] | None = None,
+    timeout_s: float | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Deliver a single claimed outbox row and apply its outcome."""
+    deliver = deliver_fn if deliver_fn is not None else _post_webhook
+    effective_timeout = (
+        timeout_s if timeout_s is not None else settings.notification_delivery_timeout_s
+    )
+    current_time = _normalize_scan_now(now)
+    delivery = outbox.delivery
+    # Ensure the channel is loaded for providers that inspect it (e.g. custom).
+    _ = delivery.channel
+    deliver(delivery, webhook_url=outbox.webhook_url, timeout_s=effective_timeout)
+    _apply_delivery_outcome(outbox, delivery, now=current_time)
+    db.commit()
+
+
+def drain_notification_outbox(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    batch_size: int | None = None,
+    deliver_fn: Callable[..., None] | None = None,
+) -> int:
+    """Claim and deliver one batch of pending outbox rows.
+
+    This performs the blocking HTTP POSTs via ``deliver_fn`` (default
+    ``_post_webhook``) and must therefore be invoked off the event loop. The
+    ``notification_outbox_worker`` runs it inside ``asyncio.to_thread``.
+    Returns the number of rows processed in this drain.
+    """
+    current_time = _normalize_scan_now(now)
+    rows = claim_pending_outbox_rows(db, now=current_time, batch_size=batch_size)
+    for outbox in rows:
+        process_outbox_row(db, outbox, deliver_fn=deliver_fn, now=current_time)
+    return len(rows)
 
 
 def _normalize_scan_now(now: datetime | None) -> datetime:
@@ -973,8 +1100,6 @@ def scan_and_dispatch_instance_connectivity_notifications(
         return 0
 
     db.commit()
-    for delivery, webhook_url in pending_deliveries:
-        _dispatch_delivery(db, delivery=delivery, webhook_url=webhook_url)
     return len(pending_deliveries)
 
 
@@ -1010,8 +1135,6 @@ def dispatch_runtime_task_event_notifications(
         return 0
 
     db.commit()
-    for delivery, webhook_url in pending_deliveries:
-        _dispatch_delivery(db, delivery=delivery, webhook_url=webhook_url)
     return len(pending_deliveries)
 
 
@@ -1120,6 +1243,4 @@ def scan_and_dispatch_missed_start_notifications(
         return 0
 
     db.commit()
-    for delivery, webhook_url in pending_deliveries:
-        _dispatch_delivery(db, delivery=delivery, webhook_url=webhook_url)
     return len(pending_deliveries)

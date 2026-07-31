@@ -23,6 +23,10 @@ from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
 )
 from onestep_control_plane_api.ui import router as ui_router
+from onestep_control_plane_api.workers.notification_outbox_worker import (
+    NOTIFICATION_OUTBOX_WORKER_NAME,
+    run_notification_outbox_worker,
+)
 from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
     run_notification_missed_start_scanner,
@@ -52,6 +56,11 @@ def create_app() -> FastAPI:
                 started_at=datetime.now(UTC),
             )
         )
+        outbox_task = create_task(
+            run_notification_outbox_worker(
+                app,
+            )
+        )
         retention_task = create_task(
             run_retention_worker(
                 app,
@@ -59,10 +68,12 @@ def create_app() -> FastAPI:
             )
         )
         app.state.background_task_refs[NOTIFICATION_MISSED_START_SCANNER_NAME] = scanner_task
+        app.state.background_task_refs[NOTIFICATION_OUTBOX_WORKER_NAME] = outbox_task
         app.state.background_task_refs[RETENTION_WORKER_NAME] = retention_task
         yield
         for name, task in (
             (NOTIFICATION_MISSED_START_SCANNER_NAME, scanner_task),
+            (NOTIFICATION_OUTBOX_WORKER_NAME, outbox_task),
             (RETENTION_WORKER_NAME, retention_task),
         ):
             task.cancel()
@@ -86,6 +97,7 @@ def create_app() -> FastAPI:
     app.state.background_task_states = build_default_background_task_states()
     app.state.background_task_refs = {
         NOTIFICATION_MISSED_START_SCANNER_NAME: None,
+        NOTIFICATION_OUTBOX_WORKER_NAME: None,
         RETENTION_WORKER_NAME: None,
     }
     if settings.cors_allow_origins:
