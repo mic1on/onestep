@@ -516,6 +516,12 @@ def process_outbox_row(
         timeout_s if timeout_s is not None else settings.notification_delivery_timeout_s
     )
     delivery = outbox.delivery
+    delivery.error_message = None
+    delivery.response_status_code = None
+    delivery.response_body = None
+    outbox.last_error = None
+    outbox.last_response_status_code = None
+    outbox.last_response_body = None
     deliver(delivery, webhook_url=outbox.webhook_url, timeout_s=effective_timeout)
     _apply_delivery_outcome(outbox, delivery, now=_normalize_scan_now(now))
     db.commit()
@@ -971,6 +977,22 @@ def update_notification_channel_enabled(
 
 def delete_notification_channel(db: Session, channel_id) -> None:
     channel = _get_channel_or_404(db, channel_id)
+    deliveries = db.scalars(
+        select(NotificationDelivery)
+        .options(selectinload(NotificationDelivery.outbox_entry))
+        .where(NotificationDelivery.channel_id == channel.id)
+    ).all()
+    for delivery in deliveries:
+        outbox = delivery.outbox_entry
+        if (
+            outbox is None
+            and delivery.status in {"succeeded", "failed", "permanently_failed"}
+        ) or (
+            outbox is not None
+            and outbox.status in {"delivered", "permanently_failed"}
+        ):
+            db.delete(delivery)
+    db.flush()
     db.delete(channel)
     db.commit()
 

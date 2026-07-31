@@ -333,6 +333,46 @@ def test_channel_delete_preserves_and_drains_accepted_delivery(
     assert db_session.query(NotificationOutbox).one().status == "delivered"
 
 
+def test_channel_delete_removes_terminal_history_but_preserves_retries(db_session) -> None:
+    service, instance = seed_service_and_instance(db_session)
+    channel = seed_channel(db_session, event_types=["task_failed"])
+    deliveries: list[NotificationDelivery] = []
+    for _ in range(4):
+        task_event = seed_failed_task_event(db_session, service, instance)
+        dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+        deliveries.append(
+            db_session.query(NotificationDelivery)
+            .filter_by(task_event_id=task_event.event_id)
+            .one()
+        )
+
+    pending_delivery, retry_delivery, delivered_delivery, failed_delivery = deliveries
+    retry_delivery.status = "failed"
+    retry_delivery.outbox_entry.status = "pending"
+    delivered_delivery.status = "succeeded"
+    delivered_delivery.outbox_entry.status = "delivered"
+    failed_delivery.status = "failed"
+    failed_delivery.outbox_entry.status = "permanently_failed"
+    legacy_failed_delivery = NotificationDelivery(
+        channel=channel,
+        dedupe_key=f"legacy-{uuid4()}",
+        event_type="task_failed",
+        status="failed",
+    )
+    db_session.add(legacy_failed_delivery)
+    db_session.commit()
+
+    preserved_ids = {pending_delivery.id, retry_delivery.id}
+    delete_notification_channel(db_session, channel.id)
+
+    remaining_deliveries = db_session.query(NotificationDelivery).all()
+    assert {delivery.id for delivery in remaining_deliveries} == preserved_ids
+    assert all(delivery.channel_id is None for delivery in remaining_deliveries)
+    remaining_outboxes = db_session.query(NotificationOutbox).all()
+    assert {outbox.delivery_id for outbox in remaining_outboxes} == preserved_ids
+    assert all(outbox.status == "pending" for outbox in remaining_outboxes)
+
+
 def test_outbox_drain_delivers_and_marks_succeeded(db_session, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -421,6 +461,79 @@ def test_outbox_drain_retries_with_backoff_then_marks_permanently_failed(
     delivery = db_session.query(NotificationDelivery).one()
     assert delivery.status == "failed"
     assert delivery.error_message == "boom"
+
+
+def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypatch) -> None:
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    attempt_count = 0
+
+    def deliver_with_changing_outcomes(
+        delivery, *, webhook_url: str, timeout_s: float = 5.0
+    ) -> None:
+        nonlocal attempt_count
+        attempt_count += 1
+        if attempt_count == 1:
+            delivery.status = "failed"
+            delivery.response_status_code = 503
+            delivery.response_body = "busy"
+            delivery.error_message = "webhook responded with status 503"
+        elif attempt_count == 2:
+            delivery.status = "failed"
+            delivery.error_message = "connection reset"
+        else:
+            delivery.status = "succeeded"
+            delivery.response_status_code = 200
+            delivery.response_body = "ok"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        deliver_with_changing_outcomes,
+    )
+
+    outbox = db_session.query(NotificationOutbox).one()
+    outbox.max_attempts = 3
+    db_session.commit()
+
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    db_session.refresh(outbox)
+    assert outbox.last_response_status_code == 503
+    assert outbox.last_response_body == "busy"
+
+    assert (
+        drain_notification_outbox(
+            db_session,
+            now=outbox.next_attempt_at + timedelta(seconds=1),
+        )
+        == 1
+    )
+    db_session.refresh(outbox)
+    delivery = outbox.delivery
+    assert delivery.response_status_code is None
+    assert delivery.response_body is None
+    assert outbox.last_response_status_code is None
+    assert outbox.last_response_body is None
+    assert outbox.last_error == "connection reset"
+
+    assert (
+        drain_notification_outbox(
+            db_session,
+            now=outbox.next_attempt_at + timedelta(seconds=1),
+        )
+        == 1
+    )
+    db_session.refresh(outbox)
+    assert outbox.status == "delivered"
+    assert outbox.last_error is None
+    assert outbox.last_response_status_code == 200
+    assert outbox.last_response_body == "ok"
+    assert delivery.error_message is None
+    assert delivery.response_status_code == 200
+    assert delivery.response_body == "ok"
 
 
 def test_claim_increments_attempts_for_at_least_once_semantics(db_session) -> None:
