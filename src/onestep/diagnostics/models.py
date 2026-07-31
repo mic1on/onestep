@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Mapping
 
@@ -253,6 +253,7 @@ def _validate_diagnostic_result(value: Mapping[str, Any]) -> None:
         "failed",
         "timed_out",
         "child_failed",
+        "validation_failed",
         "cancelled",
     }:
         raise ValueError("diagnostic completion is invalid")

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import time
 import types
 from contextlib import contextmanager
 from typing import Optional
@@ -11,7 +12,14 @@ import pytest
 
 import onestep.cli as cli_module
 import onestep.config as config_module
-from onestep import MemoryQueue, OneStepApp, StructuredEventLogger, load_app_config
+from onestep import (
+    FailureCaptureConfig,
+    MemoryQueue,
+    OneStepApp,
+    StructuredEventLogger,
+    load_app_config,
+)
+from onestep.capture.writer import FailureCaptureWriter
 from onestep.cli import (
     _connectivity_exit_code,
     _diagnostic_exit_code,
@@ -23,6 +31,8 @@ from onestep.diagnostics.models import (
     ConnectivityResourceResult,
     DiagnosticReport,
 )
+from onestep.envelope import Envelope
+from onestep.retry import FailureInfo, FailureKind
 
 
 @contextmanager
@@ -337,25 +347,37 @@ def test_task_run_accepts_any_single_json_value(
     assert "handler and task hooks" in captured.err
 
 
-def test_task_replay_validates_identity_and_passes_capture_path(
+def test_task_replay_defers_validation_and_passes_capture_path(
     tmp_path,
     monkeypatch,
     capsys,
 ) -> None:
     capture_path = tmp_path / "capture.json"
     capture_path.write_text("{}", encoding="utf-8")
-    app = OneStepApp("cli-diagnostic")
     observed = {}
-    monkeypatch.setattr(cli_module, "load_diagnostic_target", lambda target: app)
 
-    def validate_capture(path, *, expected_app, expected_task):
-        observed["identity"] = (path, expected_app, expected_task)
+    def reject_parent_target_load(target):
+        raise AssertionError("replay target must load only in the supervised child")
+
+    def reject_parent_capture_load(*args, **kwargs):
+        raise AssertionError("replay capture must load only in the supervised child")
 
     def supervise(request, *, timeout_s):
         observed["request"] = request
         return make_diagnostic_report()
 
-    monkeypatch.setattr(cli_module, "load_capture", validate_capture)
+    monkeypatch.setattr(
+        cli_module,
+        "load_diagnostic_target",
+        reject_parent_target_load,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "load_capture",
+        reject_parent_capture_load,
+        raising=False,
+    )
     monkeypatch.setattr(cli_module, "supervise_diagnostic", supervise)
     assert (
         main(
@@ -372,17 +394,12 @@ def test_task_replay_validates_identity_and_passes_capture_path(
         == 0
     )
     captured = capsys.readouterr()
-    assert observed["identity"] == (
-        str(capture_path),
-        "cli-diagnostic",
-        "sync",
-    )
     assert observed["request"].capture_path == str(capture_path)
     assert "Completion: succeeded" in captured.out
     assert "Warning:" in captured.out
 
 
-def test_task_replay_json_keeps_parent_target_output_off_stdout(
+def test_task_replay_json_does_not_load_target_in_parent(
     tmp_path,
     monkeypatch,
     capsys,
@@ -391,11 +408,14 @@ def test_task_replay_json_keeps_parent_target_output_off_stdout(
     capture_path.write_text("{}", encoding="utf-8")
 
     def load_target(target):
-        print("target import output")
-        return OneStepApp("cli-diagnostic")
+        raise AssertionError("target must load only in the supervised child")
 
-    monkeypatch.setattr(cli_module, "load_diagnostic_target", load_target)
-    monkeypatch.setattr(cli_module, "load_capture", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli_module,
+        "load_diagnostic_target",
+        load_target,
+        raising=False,
+    )
     monkeypatch.setattr(
         cli_module,
         "supervise_diagnostic",
@@ -418,7 +438,98 @@ def test_task_replay_json_keeps_parent_target_output_off_stdout(
     )
     captured = capsys.readouterr()
     assert json.loads(captured.out)["completion"] == "succeeded"
-    assert "target import output" in captured.err
+    assert "target import output" not in captured.err
+
+
+def test_task_replay_imports_target_once_and_bounds_parent_wall_time(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    capture_path = asyncio.run(
+        FailureCaptureWriter(
+            FailureCaptureConfig(directory=tmp_path / "captures")
+        ).write(
+            app="diagnostic-replay-import",
+            task="replay",
+            stage="handler",
+            terminal=True,
+            failure=FailureInfo(
+                kind=FailureKind.ERROR,
+                exception_type="ValueError",
+                message="expected",
+            ),
+            envelope=Envelope(body={"value": 1}),
+        )
+    )
+    marker = tmp_path / "imports.log"
+    monkeypatch.setenv("ONESTEP_REPLAY_IMPORT_MARKER", str(marker))
+    monkeypatch.setenv("ONESTEP_REPLAY_IMPORT_DELAY_S", "0.4")
+
+    started = time.monotonic()
+    exit_code = main(
+        [
+            "task",
+            "replay",
+            "tests.assets.diagnostic_replay_import:app",
+            "--task",
+            "replay",
+            "--envelope",
+            str(capture_path),
+            "--timeout",
+            "0.05",
+            "--json",
+        ]
+    )
+    elapsed = time.monotonic() - started
+
+    document = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert document["completion"] == "timed_out"
+    assert elapsed < 0.7
+    assert marker.read_text(encoding="utf-8").splitlines() == ["imported"]
+
+
+def test_task_replay_validation_failure_is_reported_from_child(
+    tmp_path,
+    capsys,
+) -> None:
+    capture_path = asyncio.run(
+        FailureCaptureWriter(
+            FailureCaptureConfig(directory=tmp_path / "captures")
+        ).write(
+            app="wrong-app",
+            task="success",
+            stage="handler",
+            terminal=True,
+            failure=FailureInfo(
+                kind=FailureKind.ERROR,
+                exception_type="ValueError",
+                message="expected",
+            ),
+            envelope=Envelope(body={"value": 1}),
+        )
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "replay",
+            "tests.assets.diagnostic_app:app",
+            "--task",
+            "success",
+            "--envelope",
+            str(capture_path),
+            "--timeout",
+            "2",
+            "--json",
+        ]
+    )
+
+    document = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert document["completion"] == "validation_failed"
+    assert document["failure_stage"] == "child_start"
 
 
 @pytest.mark.parametrize(
@@ -428,6 +539,7 @@ def test_task_replay_json_keeps_parent_target_output_off_stdout(
         ("failed", 1),
         ("timed_out", 1),
         ("child_failed", 1),
+        ("validation_failed", 2),
     ],
 )
 def test_task_exit_codes(completion: str, expected: int) -> None:

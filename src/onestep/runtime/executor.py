@@ -53,6 +53,7 @@ class ExecutionOutcome:
     dead_letter_published: bool | None = None
     terminal: bool = False
     capture_envelope: Envelope | None = None
+    capture_snapshot_error_type: str | None = None
 
 
 EventEmitter = Callable[[TaskEvent], Awaitable[None]]
@@ -246,7 +247,7 @@ class DeliveryExecutor:
             kind=FailureKind.CANCELLED,
         )
         outcome.failure = failure
-        outcome.capture_envelope = copy.deepcopy(delivery.envelope)
+        self._snapshot_capture_envelope(delivery, outcome)
         outcome.public_failure = self._public_failure(failure, None)
         outcome.delivery_action = DeliveryAction.RETRY
         outcome.completion = "cancelled"
@@ -283,7 +284,7 @@ class DeliveryExecutor:
         duration_s = time.perf_counter() - started_at
         failure = FailureInfo.from_exception(exc, kind=kind)
         outcome.failure = failure
-        outcome.capture_envelope = copy.deepcopy(delivery.envelope)
+        self._snapshot_capture_envelope(delivery, outcome)
         outcome.public_failure = self._public_failure(failure, exc)
         outcome.completion = "failed"
         ctx.logger.exception(
@@ -602,6 +603,17 @@ class DeliveryExecutor:
             return
         if config.mode == "terminal" and not outcome.terminal:
             return
+        if outcome.capture_snapshot_error_type is not None:
+            self.logger.error(
+                "failure capture snapshot failed",
+                extra={
+                    "app_name": self.app.name,
+                    "task_name": self.task.name,
+                    "failure_stage": outcome.failure_stage,
+                    "capture_type": outcome.capture_snapshot_error_type,
+                },
+            )
+            return
         try:
             await writer.write(
                 app=self.app.name,
@@ -630,6 +642,22 @@ class DeliveryExecutor:
                     "task_name": self.task.name,
                 },
             )
+
+    def _snapshot_capture_envelope(
+        self,
+        delivery: Delivery,
+        outcome: ExecutionOutcome,
+    ) -> None:
+        if self.app.failure_capture is None or getattr(
+            self.app,
+            "_failure_capture_writer",
+            None,
+        ) is None:
+            return
+        try:
+            outcome.capture_envelope = copy.deepcopy(delivery.envelope)
+        except Exception as exc:
+            outcome.capture_snapshot_error_type = type(exc).__name__
 
 
 __all__ = [

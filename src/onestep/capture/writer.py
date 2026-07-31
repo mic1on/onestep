@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import os
 import stat
@@ -52,7 +51,7 @@ def _escape_pointer_token(value: str) -> str:
 
 
 def _redact_secret_keys(value: Any, *, path: str, redacted: set[str]) -> Any:
-    if isinstance(value, dict):
+    if type(value) is dict:
         result: dict[Any, Any] = {}
         for key, item in value.items():
             child_path = f"{path}/{_escape_pointer_token(str(key))}"
@@ -69,7 +68,7 @@ def _redact_secret_keys(value: Any, *, path: str, redacted: set[str]) -> Any:
                     redacted=redacted,
                 )
         return result
-    if isinstance(value, list):
+    if type(value) is list:
         return [
             _redact_secret_keys(
                 item,
@@ -78,7 +77,7 @@ def _redact_secret_keys(value: Any, *, path: str, redacted: set[str]) -> Any:
             )
             for index, item in enumerate(value)
         ]
-    if isinstance(value, tuple):
+    if isinstance(value, tuple) and hasattr(type(value), "_fields"):
         items = [
             _redact_secret_keys(
                 item,
@@ -87,14 +86,22 @@ def _redact_secret_keys(value: Any, *, path: str, redacted: set[str]) -> Any:
             )
             for index, item in enumerate(value)
         ]
-        if hasattr(type(value), "_fields"):
-            return type(value)(*items)
+        return type(value)(*items)
+    if type(value) is tuple:
+        items = [
+            _redact_secret_keys(
+                item,
+                path=f"{path}/{index}",
+                redacted=redacted,
+            )
+            for index, item in enumerate(value)
+        ]
         return tuple(items)
-    if isinstance(value, set):
+    if type(value) is set:
         return {
             _redact_secret_keys(item, path=path, redacted=redacted) for item in value
         }
-    if isinstance(value, frozenset):
+    if type(value) is frozenset:
         return frozenset(
             _redact_secret_keys(item, path=path, redacted=redacted) for item in value
         )
@@ -125,7 +132,7 @@ def _replace_tokens(value: Any, tokens: list[str], replacement: Any) -> tuple[An
     if not tokens:
         return replacement, True
     token, *remaining = tokens
-    if isinstance(value, dict):
+    if type(value) is dict:
         if token not in value:
             return value, False
         replaced, changed = _replace_tokens(value[token], remaining, replacement)
@@ -134,7 +141,9 @@ def _replace_tokens(value: Any, tokens: list[str], replacement: Any) -> tuple[An
         result = dict(value)
         result[token] = replaced
         return result, True
-    if isinstance(value, (list, tuple)):
+    if type(value) is list or type(value) is tuple or (
+        isinstance(value, tuple) and hasattr(type(value), "_fields")
+    ):
         try:
             index = int(token)
         except ValueError:
@@ -148,7 +157,7 @@ def _replace_tokens(value: Any, tokens: list[str], replacement: Any) -> tuple[An
         result_items[index] = replaced
         if isinstance(value, tuple) and hasattr(type(value), "_fields"):
             return type(value)(*result_items), True
-        if isinstance(value, tuple):
+        if type(value) is tuple:
             return tuple(result_items), True
         return result_items, True
     return value, False
@@ -159,8 +168,8 @@ def redact_envelope(
     pointers: tuple[str, ...],
 ) -> tuple[Envelope, tuple[str, ...]]:
     logical = {
-        "body": copy.deepcopy(envelope.body),
-        "meta": copy.deepcopy(envelope.meta),
+        "body": envelope.body,
+        "meta": envelope.meta,
     }
     redacted: set[str] = set()
     logical = _redact_secret_keys(logical, path="", redacted=redacted)

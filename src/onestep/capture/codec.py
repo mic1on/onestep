@@ -26,6 +26,30 @@ def _type_name(value: Any) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
+def _ensure_replayable_type(cls: type[Any], *, path: str) -> None:
+    module_name = cls.__module__
+    qualname = cls.__qualname__
+    if "<locals>" in qualname.split("."):
+        raise CaptureEncodingError(
+            path=path,
+            type_name=f"{module_name}.{qualname}",
+            reason="local recorded type is not replayable",
+        )
+    module = sys.modules.get(module_name)
+    resolved: Any = module
+    if resolved is not None:
+        for part in qualname.split("."):
+            resolved = getattr(resolved, part, None)
+            if resolved is None:
+                break
+    if resolved is not cls:
+        raise CaptureEncodingError(
+            path=path,
+            type_name=f"{module_name}.{qualname}",
+            reason="recorded type is not replayable from the loaded module",
+        )
+
+
 def _pointer(path: str, token: str) -> str:
     escaped = token.replace("~", "~0").replace("/", "~1")
     return f"{path}/{escaped}"
@@ -38,6 +62,7 @@ def _tag(type_name: str, **fields: Any) -> dict[str, Any]:
 def encode_value(value: Any, *, _path: str = "") -> Any:
     if isinstance(value, Enum):
         cls = type(value)
+        _ensure_replayable_type(cls, path=_path)
         return _tag(
             "enum",
             module=cls.__module__,
@@ -45,9 +70,9 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
             name=value.name,
             value=encode_value(value.value, _path=_pointer(_path, "value")),
         )
-    if value is None or isinstance(value, (bool, int, str)):
+    if value is None or type(value) in {bool, int, str}:
         return value
-    if isinstance(value, float):
+    if type(value) is float:
         if not math.isfinite(value):
             raise CaptureEncodingError(
                 path=_path,
@@ -55,16 +80,17 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
                 reason="non-finite float",
             )
         return value
-    if isinstance(value, datetime):
+    if type(value) is datetime:
         return _tag("datetime", value=value.isoformat(), fold=value.fold)
-    if isinstance(value, UUID):
+    if type(value) is UUID:
         return _tag("uuid", value=str(value))
-    if isinstance(value, bytes):
+    if type(value) is bytes:
         return _tag("bytes", value=base64.b64encode(value).decode("ascii"))
-    if isinstance(value, Decimal):
+    if type(value) is Decimal:
         return _tag("decimal", value=str(value))
     if isinstance(value, tuple) and hasattr(type(value), "_fields"):
         cls = type(value)
+        _ensure_replayable_type(cls, path=_path)
         fields = tuple(getattr(cls, "_fields"))
         return _tag(
             "namedtuple",
@@ -76,7 +102,7 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
                 for field, item in zip(fields, value)
             ],
         )
-    if isinstance(value, tuple):
+    if type(value) is tuple:
         return _tag(
             "tuple",
             values=[
@@ -84,7 +110,7 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
                 for index, item in enumerate(value)
             ],
         )
-    if isinstance(value, (set, frozenset)):
+    if type(value) in {set, frozenset}:
         encoded = [
             encode_value(item, _path=_pointer(_path, "set")) for item in value
         ]
@@ -97,15 +123,15 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
             )
         )
         return _tag(
-            "frozenset" if isinstance(value, frozenset) else "set",
+            "frozenset" if type(value) is frozenset else "set",
             values=encoded,
         )
-    if isinstance(value, list):
+    if type(value) is list:
         return [
             encode_value(item, _path=_pointer(_path, str(index)))
             for index, item in enumerate(value)
         ]
-    if isinstance(value, dict):
+    if type(value) is dict:
         for key in value:
             if not isinstance(key, str):
                 raise CaptureEncodingError(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -366,6 +367,43 @@ def test_connectivity_continues_after_failures_and_attempts_cleanup() -> None:
         assert report.ok is False
 
     asyncio.run(scenario())
+
+
+def test_connectivity_timeout_bounds_synchronously_blocking_lifecycle() -> None:
+    class BlockingLifecycle:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.connected = False
+            self.cleaned_up = threading.Event()
+
+        def open(self) -> None:
+            self.calls.append("open")
+            time.sleep(0.1)
+            self.connected = True
+
+        def close(self) -> None:
+            self.calls.append("close")
+            self.connected = False
+            self.cleaned_up.set()
+
+    resource = BlockingLifecycle()
+    app = OneStepApp("sync-blocking-connectivity")
+    app.register_resource("blocking", resource)
+
+    started = time.monotonic()
+    report = asyncio.run(check_connectivity(app, timeout_s=0.02))
+    elapsed = time.monotonic() - started
+
+    result = report.resources[0]
+    assert elapsed < 0.15
+    assert result.open == {"status": "timed_out"}
+    assert result.close == {"status": "timed_out"}
+    assert resource.calls == ["open"]
+    assert report.ok is False
+
+    assert resource.cleaned_up.wait(timeout=0.5)
+    assert resource.calls == ["open", "close"]
+    assert resource.connected is False
 
 
 def test_connectivity_only_not_probeable_is_success_with_warning() -> None:

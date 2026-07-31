@@ -94,6 +94,7 @@ async def _run_worker(
     send = False
     attempts = 0
     send_incomplete = False
+    validation_complete = False
 
     def send_status(kind: str, payload: dict[str, Any]) -> None:
         nonlocal sequence
@@ -154,6 +155,12 @@ async def _run_worker(
             assert request.envelope is not None
             envelope = request.envelope
         attempts = envelope.attempts
+        matches = [task for task in app.tasks if task.name == request.task]
+        if len(matches) != 1:
+            raise ValueError(
+                f"expected exactly one task named {request.task!r}, found {len(matches)}"
+            )
+        validation_complete = True
         report = await DiagnosticRunner(app, checkpoint=checkpoint).run(
             task_name=request.task,
             envelope=envelope,
@@ -181,7 +188,9 @@ async def _run_worker(
             task=task_name,
             send=send,
             attempts=attempts,
-            completion="child_failed",
+            completion=(
+                "child_failed" if validation_complete else "validation_failed"
+            ),
             last_checkpoint=last_checkpoint,
             side_effect_unknown=send_incomplete,
             failure_type=type(exc).__name__,

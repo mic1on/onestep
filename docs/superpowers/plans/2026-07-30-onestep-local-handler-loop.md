@@ -460,19 +460,19 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
             name=value.name,
             value=encode_value(value.value, _path=_pointer(_path, "value")),
         )
-    if value is None or isinstance(value, (bool, int, str)):
+    if value is None or type(value) in {bool, int, str}:
         return value
-    if isinstance(value, float):
+    if type(value) is float:
         if not math.isfinite(value):
             raise CaptureEncodingError(path=_path, type_name="builtins.float", reason="non-finite float")
         return value
-    if isinstance(value, datetime):
+    if type(value) is datetime:
         return _tag("datetime", value=value.isoformat(), fold=value.fold)
-    if isinstance(value, UUID):
+    if type(value) is UUID:
         return _tag("uuid", value=str(value))
-    if isinstance(value, bytes):
+    if type(value) is bytes:
         return _tag("bytes", value=base64.b64encode(value).decode("ascii"))
-    if isinstance(value, Decimal):
+    if type(value) is Decimal:
         return _tag("decimal", value=str(value))
     if isinstance(value, tuple) and hasattr(type(value), "_fields"):
         cls = type(value)
@@ -484,15 +484,15 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
             fields=list(fields),
             values=[encode_value(item, _path=_pointer(_path, field)) for field, item in zip(fields, value)],
         )
-    if isinstance(value, tuple):
+    if type(value) is tuple:
         return _tag("tuple", values=[encode_value(item, _path=_pointer(_path, str(i))) for i, item in enumerate(value)])
-    if isinstance(value, (set, frozenset)):
+    if type(value) in {set, frozenset}:
         encoded = [encode_value(item, _path=_pointer(_path, "set")) for item in value]
         encoded.sort(key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
-        return _tag("frozenset" if isinstance(value, frozenset) else "set", values=encoded)
-    if isinstance(value, list):
+        return _tag("frozenset" if type(value) is frozenset else "set", values=encoded)
+    if type(value) is list:
         return [encode_value(item, _path=_pointer(_path, str(i))) for i, item in enumerate(value)]
-    if isinstance(value, dict):
+    if type(value) is dict:
         for key in value:
             if not isinstance(key, str):
                 raise CaptureEncodingError(path=_path, type_name=_type_name(key), reason="mapping keys must be strings")
@@ -501,6 +501,10 @@ def encode_value(value: Any, *, _path: str = "") -> Any:
         return {key: encode_value(item, _path=_pointer(_path, key)) for key, item in value.items()}
     raise CaptureEncodingError(path=_path, type_name=_type_name(value), reason="unsupported value type")
 ```
+
+Plain JSON branches accept exact built-in types only. Reject subclasses of
+supported built-ins unless they use an explicit lossless extension such as enum
+or namedtuple; decoding a custom subtype as its base type is forbidden.
 
 - [ ] **Step 4: Implement strict decoding and type reconstruction**
 
@@ -1488,18 +1492,25 @@ async def check_connectivity(app: OneStepApp, *, timeout_s: float) -> Connectivi
 
 `_probe_entry()` checks `callable(getattr(resource, "open", None))` and
 `callable(getattr(resource, "close", None))`. Unless both are true, return
-`not_probeable` without calling any other method. Wrap open and close separately
-with the same sync-or-awaitable invocation rule as `app._open_resource()`:
+`not_probeable` without calling any other method. Wrap open and close separately.
+Coroutine functions run on the diagnostic event loop. Invoke synchronous
+methods on a dedicated daemon thread and deliver their result through an
+`asyncio.Future`; use `asyncio.wait(..., timeout=timeout_s)` without the default
+executor so event-loop shutdown cannot wait forever for a blocked method. If a
+synchronous method returns an awaitable, await it with the remaining operation
+budget:
 
 ```python
-async def _invoke_lifecycle(method: Callable[[], Any]) -> None:
-    result = method()
-    if inspect.isawaitable(result):
-        await result
+async def _invoke_lifecycle(
+    method: Callable[[], Any],
+    *,
+    timeout_s: float,
+) -> None:
+    ...
 ```
 
-Call `await asyncio.wait_for(_invoke_lifecycle(method), timeout_s)` and always
-attempt bounded close once open
+Call `await _invoke_lifecycle(method, timeout_s=timeout_s)` and always attempt
+bounded close once open
 was invoked. Continue inventory after all failures. Do not call app hooks,
 fetch, send, `load`, `save`, or `delete`.
 
@@ -1702,7 +1713,10 @@ so enum/namedtuple types are already importable.
 entered/completed checkpoints, loads Python or YAML targets in the child,
 validates replay identity through `load_capture(capture_path,
 expected_app=app.name, expected_task=request.task)`, and invokes
-`DiagnosticRunner`. A daemon control thread blocks on `control_rx.recv_bytes()`,
+`DiagnosticRunner`. Target, request, capture, and exact task-name validation
+occur only in this child. Validation exceptions produce a valid final report
+with `completion="validation_failed"`; execution exceptions after validation
+produce `child_failed`. A daemon control thread blocks on `control_rx.recv_bytes()`,
 validates only `cancel`, and calls `loop.call_soon_threadsafe(task.cancel)`.
 Every child status write is
 `status_tx.send_bytes(encode_frame(kind, sequence=sequence, payload=payload))`;
@@ -1822,7 +1836,13 @@ to parse as exactly one object. Parameterize exit mapping:
 ```python
 @pytest.mark.parametrize(
     "completion,expected",
-    [("succeeded", 0), ("failed", 1), ("timed_out", 1), ("child_failed", 1)],
+    [
+        ("succeeded", 0),
+        ("failed", 1),
+        ("timed_out", 1),
+        ("child_failed", 1),
+        ("validation_failed", 2),
+    ],
 )
 def test_task_exit_codes(completion, expected) -> None:
     report = make_diagnostic_report(completion=completion)
@@ -1875,9 +1895,10 @@ if argv[0].startswith("-") or argv[0] in {
 Before loading an app in `main()`, branch `args.command == "task"`. Read input
 JSON in the parent only to validate it, construct a versioned request for the
 child, call `supervise_diagnostic()`, then render the returned report. Replay
-uses `load_capture()` for early schema/identity validation after resolving the
-target identity, sends `capture_path` rather than a decoded envelope in the
-request, and lets the child repeat validation before execution. Print the
+sends `capture_path` rather than a decoded envelope and performs target loading,
+capture decoding, identity checks, and task validation only in the supervised
+child. This keeps import side effects single-shot and inside the overall
+deadline. Print the
 side-effect warning to stderr for both dry-run and send modes; JSON stdout must
 contain only `json.dumps(report.to_dict(), indent=2)`.
 
@@ -1895,15 +1916,21 @@ Use one `_diagnostic_exit_code()` and one `_connectivity_exit_code()`:
 
 ```python
 def _diagnostic_exit_code(report: DiagnosticReport) -> int:
-    return 0 if report.completion == "succeeded" else 1
+    if report.completion == "succeeded":
+        return 0
+    if report.completion == "validation_failed":
+        return 2
+    return 1
 
 
 def _connectivity_exit_code(report: ConnectivityReport) -> int:
     return 0 if report.ok else 1
 ```
 
-Validation exceptions are caught before these helpers and return `2` with an
-`onestep:` error on stderr. Human diagnostic output includes operation, target,
+Parent-side input/argument validation exceptions return `2`. Child-side target,
+capture, identity, and task validation returns a complete
+`validation_failed` report, which this helper maps to `2`; child validation
+diagnostics remain on stderr. Human diagnostic output includes operation, target,
 app/task, mode, completion, failure stage, selected sinks, predicted delivery
 action, dead-letter attempted/published, cleanup, side-effect outcome, last
 checkpoint, duration, and warning. Human connectivity output prints every

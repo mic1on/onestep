@@ -6,12 +6,10 @@ import json
 import logging
 import math
 import sys
-from contextlib import redirect_stdout
 from importlib.metadata import PackageNotFoundError, version
 
 from .app import OneStepApp
 from .build import BuildOptions, BuildResult, build_worker_package
-from .capture import load_capture
 from .config import is_yaml_target, load_resource_catalog, load_yaml_app
 from .diagnostics.connectivity import check_connectivity
 from .diagnostics.models import (
@@ -20,7 +18,7 @@ from .diagnostics.models import (
     DiagnosticRequest,
 )
 from .diagnostics.supervisor import supervise_diagnostic
-from .diagnostics.targets import _ensure_local_import_paths, load_diagnostic_target
+from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
 from .init_project import init_project
 
@@ -370,13 +368,6 @@ def _run_task_command(args: argparse.Namespace) -> int:
                 send=args.send,
             )
         else:
-            with redirect_stdout(sys.stderr):
-                app = load_diagnostic_target(args.target)
-            load_capture(
-                args.capture_path,
-                expected_app=app.name,
-                expected_task=args.task_name,
-            )
             request = DiagnosticRequest(
                 operation="replay",
                 target=args.target,
@@ -516,7 +507,11 @@ def _format_probe_outcome(value: dict[str, object]) -> str:
 
 
 def _diagnostic_exit_code(report: DiagnosticReport) -> int:
-    return 0 if report.completion == "succeeded" else 1
+    if report.completion == "succeeded":
+        return 0
+    if report.completion == "validation_failed":
+        return 2
+    return 1
 
 
 def _connectivity_exit_code(report: ConnectivityReport) -> int:

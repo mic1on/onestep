@@ -169,6 +169,28 @@ def test_capture_codec_rejects_custom_values_without_repr() -> None:
     assert "do-not-log" not in str(captured.value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        type("CustomInt", (int,), {})(1),
+        type("CustomFloat", (float,), {})(1.5),
+        type("CustomStr", (str,), {})("value"),
+        type("CustomBytes", (bytes,), {})(b"value"),
+        type("CustomList", (list,), {})([1]),
+        type("CustomDict", (dict,), {})(value=1),
+        type("CustomTuple", (tuple,), {})([1]),
+        type("CustomSet", (set,), {})({1}),
+        type("CustomFrozenSet", (frozenset,), {})({1}),
+        type("CustomDatetime", (datetime,), {})(2026, 7, 30),
+        type("CustomDecimal", (Decimal,), {})("1.25"),
+        type("CustomUUID", (UUID,), {})("d78e3d0d-13e1-44ef-96a5-10bd28fc882d"),
+    ],
+)
+def test_capture_codec_rejects_lossy_builtin_subclasses(value) -> None:
+    with pytest.raises(CaptureEncodingError, match="unsupported value type"):
+        encode_value(value)
+
+
 def test_capture_codec_rejects_invalid_values_and_tags() -> None:
     with pytest.raises(CaptureEncodingError, match="mapping keys must be strings"):
         encode_value({1: "value"})
@@ -190,9 +212,8 @@ def test_capture_codec_rejects_unloaded_or_local_types() -> None:
         decode_value(encoded)
 
     LocalPoint = namedtuple("LocalPoint", "x")
-    encoded_local = encode_value(LocalPoint(1))
-    with pytest.raises(ValueError, match="unavailable"):
-        decode_value(encoded_local)
+    with pytest.raises(CaptureEncodingError, match="not replayable"):
+        encode_value(LocalPoint(1))
 
 
 def test_redact_envelope_handles_secret_keys_and_pointers() -> None:
@@ -267,6 +288,27 @@ def test_capture_writer_redacts_and_round_trips(tmp_path: Path) -> None:
     assert path.stat().st_mode & 0o777 == 0o600
     assert path.parent.stat().st_mode & 0o077 == 0
     assert not list(path.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        type("WriterCustomList", (list,), {})([1]),
+        type("WriterCustomDict", (dict,), {})(value=1),
+        type("WriterCustomSet", (set,), {})({1}),
+    ],
+)
+def test_capture_writer_rejects_lossy_container_subclasses(
+    tmp_path: Path,
+    value,
+) -> None:
+    directory = tmp_path / "captures"
+    writer = FailureCaptureWriter(FailureCaptureConfig(directory=directory))
+
+    with pytest.raises(CaptureEncodingError, match="unsupported value type"):
+        _write_capture(writer, Envelope(body=value))
+
+    assert list(directory.iterdir()) == []
 
 
 def test_capture_writer_rejects_oversized_values_without_file(tmp_path: Path) -> None:
@@ -434,3 +476,50 @@ def test_failure_capture_runtime_encoding_error_preserves_action_and_logs_safe_c
     assert capture_logs[0].failure_stage == "handler"
     assert capture_logs[0].capture_path == "/value"
     assert "secret-repr" not in capture_logs[0].getMessage()
+
+
+def test_disabled_failure_capture_does_not_copy_failed_envelope(tmp_path: Path) -> None:
+    class NonCopyable:
+        def __deepcopy__(self, memo):
+            raise TypeError("must not copy")
+
+    app = OneStepApp("capture-disabled")
+
+    @app.task(retry=NoRetry())
+    async def consume(ctx, payload):
+        raise ValueError("boom")
+
+    delivery = _CaptureDelivery({"value": NonCopyable()})
+    asyncio.run(TaskRunner(app, app.tasks[0])._handle_delivery(delivery))
+
+    assert delivery.failed is True
+    assert delivery.retried is False
+
+
+def test_capture_snapshot_failure_preserves_retry_action(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    class NonCopyable:
+        def __deepcopy__(self, memo):
+            raise TypeError("secret snapshot detail")
+
+    caplog.set_level("ERROR")
+    delivery = _run_failed_delivery(
+        tmp_path,
+        mode="all",
+        retry=MaxAttempts(max_attempts=3),
+        delivery=_CaptureDelivery({"value": NonCopyable()}),
+    )
+
+    assert delivery.retried is True
+    assert delivery.failed is False
+    assert list(tmp_path.glob("*.json")) == []
+    snapshot_logs = [
+        record
+        for record in caplog.records
+        if record.message == "failure capture snapshot failed"
+    ]
+    assert len(snapshot_logs) == 1
+    assert snapshot_logs[0].capture_type == "TypeError"
+    assert "secret snapshot detail" not in snapshot_logs[0].getMessage()

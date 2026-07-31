@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import threading
+import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 from onestep.app import OneStepApp
 from onestep.resilience import ConnectorOperationError
 
 from .models import ConnectivityReport, ConnectivityResourceResult
+
+_T = TypeVar("_T")
+
+
+class _SyncLifecycleTimeout(asyncio.TimeoutError):
+    pass
 
 
 @dataclass
@@ -46,10 +54,103 @@ def inventory_resources(app: OneStepApp) -> tuple[_InventoryEntry, ...]:
     return tuple(entries.values())
 
 
-async def _invoke_lifecycle(method: Callable[[], Any]) -> None:
-    result = method()
+def _complete_sync_invocation(
+    future: asyncio.Future[tuple[bool, Any]],
+    outcome: tuple[bool, Any],
+) -> None:
+    if future.done():
+        result = outcome[1]
+        if outcome[0] and inspect.iscoroutine(result):
+            result.close()
+        return
+    future.set_result(outcome)
+
+
+async def _invoke_sync_lifecycle(
+    method: Callable[[], _T],
+    *,
+    timeout_s: float,
+    late_cleanup: Callable[[], Any] | None = None,
+) -> _T:
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[tuple[bool, Any]] = loop.create_future()
+    decision_made = threading.Event()
+    cleanup_required = threading.Event()
+
+    def invoke() -> None:
+        try:
+            outcome = (True, method())
+        except BaseException as exc:
+            outcome = (False, exc)
+        try:
+            loop.call_soon_threadsafe(_complete_sync_invocation, future, outcome)
+        except RuntimeError:
+            result = outcome[1]
+            if outcome[0] and inspect.iscoroutine(result):
+                result.close()
+        decision_made.wait()
+        if cleanup_required.is_set() and late_cleanup is not None:
+            _run_late_cleanup(late_cleanup)
+
+    threading.Thread(
+        target=invoke,
+        daemon=True,
+        name="onestep-connectivity-lifecycle",
+    ).start()
+    try:
+        done, _ = await asyncio.wait((future,), timeout=timeout_s)
+    except BaseException:
+        cleanup_required.set()
+        future.cancel()
+        decision_made.set()
+        raise
+    if not done:
+        cleanup_required.set()
+        future.cancel()
+        decision_made.set()
+        raise _SyncLifecycleTimeout
+    decision_made.set()
+    succeeded, value = future.result()
+    if not succeeded:
+        raise value
+    return value
+
+
+def _run_late_cleanup(method: Callable[[], Any]) -> None:
+    try:
+        result = method()
+        if inspect.isawaitable(result):
+            asyncio.run(_await_late_cleanup(result))
+    except BaseException:
+        return
+
+
+async def _await_late_cleanup(result: Any) -> None:
+    await result
+
+
+async def _invoke_lifecycle(
+    method: Callable[[], Any],
+    *,
+    timeout_s: float,
+    late_cleanup: Callable[[], Any] | None = None,
+) -> None:
+    started_at = time.monotonic()
+    if inspect.iscoroutinefunction(method):
+        result = method()
+    else:
+        result = await _invoke_sync_lifecycle(
+            method,
+            timeout_s=timeout_s,
+            late_cleanup=late_cleanup,
+        )
     if inspect.isawaitable(result):
-        await result
+        remaining_s = timeout_s - (time.monotonic() - started_at)
+        if remaining_s <= 0:
+            if inspect.iscoroutine(result):
+                result.close()
+            raise asyncio.TimeoutError
+        await asyncio.wait_for(result, timeout=remaining_s)
 
 
 def _error_result(exc: BaseException) -> dict[str, Any]:
@@ -88,8 +189,16 @@ async def _probe_entry(
 
     open_result: dict[str, Any]
     close_result: dict[str, Any]
+    close_deferred = False
     try:
-        await asyncio.wait_for(_invoke_lifecycle(opener), timeout=timeout_s)
+        await _invoke_lifecycle(
+            opener,
+            timeout_s=timeout_s,
+            late_cleanup=closer,
+        )
+    except _SyncLifecycleTimeout:
+        open_result = {"status": "timed_out"}
+        close_deferred = True
     except asyncio.TimeoutError:
         open_result = {"status": "timed_out"}
     except Exception as exc:
@@ -97,14 +206,17 @@ async def _probe_entry(
     else:
         open_result = {"status": "connected"}
 
-    try:
-        await asyncio.wait_for(_invoke_lifecycle(closer), timeout=timeout_s)
-    except asyncio.TimeoutError:
+    if close_deferred:
         close_result = {"status": "timed_out"}
-    except Exception as exc:
-        close_result = _error_result(exc)
     else:
-        close_result = {"status": "closed"}
+        try:
+            await _invoke_lifecycle(closer, timeout_s=timeout_s)
+        except asyncio.TimeoutError:
+            close_result = {"status": "timed_out"}
+        except Exception as exc:
+            close_result = _error_result(exc)
+        else:
+            close_result = {"status": "closed"}
 
     status = (
         "connected"

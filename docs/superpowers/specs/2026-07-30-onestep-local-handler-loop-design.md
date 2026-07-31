@@ -189,6 +189,13 @@ kinds, non-monotonic sequences, or malformed JSON are protocol failures. The
 parent discards the invalid frame, terminates the child, and synthesizes
 `child_failed` from the last previously validated checkpoint.
 
+Target, request, capture, and task validation run only in the supervised child.
+A validation error produces a complete `final` report with
+`completion: validation_failed`; the parent maps that result to exit code `2`.
+The parent never imports a replay target or decodes its capture before starting
+the deadline, so import side effects occur once and target loading cannot bypass
+the overall timeout.
+
 Checkpoint phases cover child startup, target loading, validation, before hook,
 handler, success/failure hook, routing, each sink send, dead-letter publication,
 synthetic delivery action, and cleanup. The partial-field allowlist is limited
@@ -340,6 +347,8 @@ Connectivity checking:
 - checks resources sequentially to avoid connection storms and preserve clear
   attribution;
 - applies `--connect-timeout` independently to each lifecycle operation;
+- invokes synchronous lifecycle methods on a daemon call thread so a blocking
+  method cannot pin the diagnostic event loop beyond that timeout;
 - continues after a resource failure so the report includes every resource;
 - always attempts bounded cleanup after an invoked `open()`, including an open
   failure or timeout that may have left a partially initialized resource;
@@ -381,6 +390,10 @@ synthetic source transition and `delivery_action_basis` is therefore
 dry-run (`published: null`) from an observed `--send` success or failure
 (`published: true` or `false`). This prevents a successful sink publication
 from being presented as proof that a real source delivery was finalized.
+
+`completion: validation_failed` is reserved for target, request, capture, or
+task validation performed by the supervised child. It is a structured
+exit-code `2` result, not a handler execution failure.
 
 Exit codes retain the existing CLI convention:
 
@@ -474,6 +487,12 @@ The codec uses collision-safe recursive type tags rather than `default=str` or
 - set and frozenset, with members ordered by their canonical encoded JSON so
   captures are deterministic.
 
+Only exact built-in scalar and container types are accepted by the plain JSON
+branches. Subclasses of `int`, `str`, `dict`, `list`, and the other supported
+built-ins are rejected unless they have an explicit lossless extension such as
+enum or namedtuple; silently converting a custom subtype to its base type would
+make the capture lossy.
+
 Enum and namedtuple reconstruction is allowed only when the class is importable
 from the already loaded target module graph and its recorded metadata still
 matches. Local classes, dataclasses, arbitrary custom classes, generators,
@@ -527,8 +546,8 @@ successful capture is durable before the runtime proceeds.
 | Codepath | Failure | Behavior | User visibility |
 | --- | --- | --- | --- |
 | Input load | invalid JSON or unreadable file | exit 2 | exact file and validation error |
-| Replay load | unsupported schema/version | exit 2 | supported version and received version |
-| Replay validation | app/task mismatch | exit 2 | expected and captured identity |
+| Replay load | unsupported schema/version | child returns `validation_failed`; exit 2 | supported version and received version |
+| Replay validation | target load or app/task mismatch | child returns `validation_failed`; exit 2 | report has safe exception type/stage; stderr retains validation detail |
 | Handler/hook/route | exception or timeout | compute one retry decision | local failure report with stage |
 | Overall diagnostic session | `--timeout` expires | cooperative cancel, bounded cleanup, then terminate if needed; exit 1 | `timed_out`, last stage, and cleanup status |
 | Diagnostic child/IPC | child exits or status pipe breaks without `final` | parent synthesizes report; exit 1 | `child_failed` and last valid checkpoint |
