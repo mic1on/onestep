@@ -3,15 +3,36 @@ import json
 import logging
 import os
 import sys
+import time
 import types
 from contextlib import contextmanager
 from typing import Optional
 
 import pytest
 
+import onestep.cli as cli_module
 import onestep.config as config_module
-from onestep import MemoryQueue, OneStepApp, StructuredEventLogger, load_app_config
-from onestep.cli import main, parse_args
+from onestep import (
+    FailureCaptureConfig,
+    MemoryQueue,
+    OneStepApp,
+    StructuredEventLogger,
+    load_app_config,
+)
+from onestep.capture.writer import FailureCaptureWriter
+from onestep.cli import (
+    _connectivity_exit_code,
+    _diagnostic_exit_code,
+    main,
+    parse_args,
+)
+from onestep.diagnostics.models import (
+    ConnectivityReport,
+    ConnectivityResourceResult,
+    DiagnosticReport,
+)
+from onestep.envelope import Envelope
+from onestep.retry import FailureInfo, FailureKind
 
 
 @contextmanager
@@ -60,6 +81,28 @@ def isolated_logging():
 def clear_modules(monkeypatch, *names: str) -> None:
     for name in names:
         monkeypatch.delitem(sys.modules, name, raising=False)
+
+
+def make_diagnostic_report(*, completion: str = "succeeded") -> DiagnosticReport:
+    return DiagnosticReport(
+        operation="run",
+        app="cli-diagnostic",
+        task="sync",
+        mode="dry-run",
+        completion=completion,
+        attempts=0,
+        selected_sinks=("result",),
+        delivery_action="would_ack",
+        delivery_action_basis="predicted",
+        dead_letter={"attempted": False, "published": None},
+        events=(),
+        duration_s=0.01,
+        last_checkpoint={
+            "phase": "ack",
+            "transition": "completed",
+            "elapsed_s": 0.01,
+        },
+    )
 
 
 def install_fake_control_plane_reporter(monkeypatch, created: list[object]) -> None:
@@ -201,6 +244,399 @@ def test_cli_run_enables_task_events_by_default() -> None:
 
     assert args.log_level is None
     assert args.task_events is True
+
+
+def test_task_command_bypasses_legacy_run_shorthand() -> None:
+    args = parse_args(
+        [
+            "task",
+            "run",
+            "pkg.jobs:app",
+            "--task",
+            "sync",
+            "--input",
+            "input.json",
+        ]
+    )
+    assert (args.command, args.task_command, args.target) == (
+        "task",
+        "run",
+        "pkg.jobs:app",
+    )
+    assert args.timeout == 60.0
+    assert args.send is False
+
+
+def test_task_replay_parser_defaults_and_legacy_shorthand() -> None:
+    args = parse_args(
+        [
+            "task",
+            "replay",
+            "pkg.jobs:app",
+            "--task",
+            "sync",
+            "--envelope",
+            "capture.json",
+        ]
+    )
+    assert args.timeout == 60.0
+    assert args.send is False
+    assert parse_args(["run", "task"]).target == "task"
+    shorthand = parse_args(["pkg.jobs:app"])
+    assert (shorthand.command, shorthand.target) == ("run", "pkg.jobs:app")
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_task_parser_rejects_non_positive_or_non_finite_timeout(value: str) -> None:
+    with pytest.raises(SystemExit) as raised:
+        parse_args(
+            [
+                "task",
+                "run",
+                "pkg.jobs:app",
+                "--task",
+                "sync",
+                "--input",
+                "input.json",
+                "--timeout",
+                value,
+            ]
+        )
+    assert raised.value.code == 2
+
+
+def test_check_connect_parser_defaults() -> None:
+    args = parse_args(["check", "pkg.jobs:app", "--connect"])
+    assert args.connect is True
+    assert args.connect_timeout == 10.0
+
+
+def test_task_run_accepts_any_single_json_value(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    input_path = tmp_path / "input.json"
+    input_path.write_text("42", encoding="utf-8")
+    observed = {}
+
+    def supervise(request, *, timeout_s):
+        observed["request"] = request
+        observed["timeout_s"] = timeout_s
+        return make_diagnostic_report()
+
+    monkeypatch.setattr(cli_module, "supervise_diagnostic", supervise)
+    exit_code = main(
+        [
+            "task",
+            "run",
+            "pkg.jobs:app",
+            "--task",
+            "sync",
+            "--input",
+            str(input_path),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert exit_code == 0
+    assert document["schema"] == "onestep/diagnostic-result"
+    assert observed["request"].envelope.body == 42
+    assert observed["timeout_s"] == 60.0
+    assert "handler and task hooks" in captured.err
+
+
+def test_task_replay_defers_validation_and_passes_capture_path(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    capture_path = tmp_path / "capture.json"
+    capture_path.write_text("{}", encoding="utf-8")
+    observed = {}
+
+    def reject_parent_target_load(target):
+        raise AssertionError("replay target must load only in the supervised child")
+
+    def reject_parent_capture_load(*args, **kwargs):
+        raise AssertionError("replay capture must load only in the supervised child")
+
+    def supervise(request, *, timeout_s):
+        observed["request"] = request
+        return make_diagnostic_report()
+
+    monkeypatch.setattr(
+        cli_module,
+        "load_diagnostic_target",
+        reject_parent_target_load,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "load_capture",
+        reject_parent_capture_load,
+        raising=False,
+    )
+    monkeypatch.setattr(cli_module, "supervise_diagnostic", supervise)
+    assert (
+        main(
+            [
+                "task",
+                "replay",
+                "pkg.jobs:app",
+                "--task",
+                "sync",
+                "--envelope",
+                str(capture_path),
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert observed["request"].capture_path == str(capture_path)
+    assert "Completion: succeeded" in captured.out
+    assert "Warning:" in captured.out
+
+
+def test_task_replay_json_does_not_load_target_in_parent(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    capture_path = tmp_path / "capture.json"
+    capture_path.write_text("{}", encoding="utf-8")
+
+    def load_target(target):
+        raise AssertionError("target must load only in the supervised child")
+
+    monkeypatch.setattr(
+        cli_module,
+        "load_diagnostic_target",
+        load_target,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "supervise_diagnostic",
+        lambda request, *, timeout_s: make_diagnostic_report(),
+    )
+    assert (
+        main(
+            [
+                "task",
+                "replay",
+                "pkg.jobs:app",
+                "--task",
+                "sync",
+                "--envelope",
+                str(capture_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["completion"] == "succeeded"
+    assert "target import output" not in captured.err
+
+
+def test_task_replay_imports_target_once_and_bounds_parent_wall_time(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    capture_path = asyncio.run(
+        FailureCaptureWriter(
+            FailureCaptureConfig(directory=tmp_path / "captures")
+        ).write(
+            app="diagnostic-replay-import",
+            task="replay",
+            stage="handler",
+            terminal=True,
+            failure=FailureInfo(
+                kind=FailureKind.ERROR,
+                exception_type="ValueError",
+                message="expected",
+            ),
+            envelope=Envelope(body={"value": 1}),
+        )
+    )
+    marker = tmp_path / "imports.log"
+    monkeypatch.setenv("ONESTEP_REPLAY_IMPORT_MARKER", str(marker))
+    monkeypatch.setenv("ONESTEP_REPLAY_IMPORT_DELAY_S", "0.4")
+
+    started = time.monotonic()
+    exit_code = main(
+        [
+            "task",
+            "replay",
+            "tests.assets.diagnostic_replay_import:app",
+            "--task",
+            "replay",
+            "--envelope",
+            str(capture_path),
+            "--timeout",
+            "0.05",
+            "--json",
+        ]
+    )
+    elapsed = time.monotonic() - started
+
+    document = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert document["completion"] == "timed_out"
+    assert elapsed < 0.7
+    assert marker.read_text(encoding="utf-8").splitlines() == ["imported"]
+
+
+def test_task_replay_validation_failure_is_reported_from_child(
+    tmp_path,
+    capsys,
+) -> None:
+    capture_path = asyncio.run(
+        FailureCaptureWriter(
+            FailureCaptureConfig(directory=tmp_path / "captures")
+        ).write(
+            app="wrong-app",
+            task="success",
+            stage="handler",
+            terminal=True,
+            failure=FailureInfo(
+                kind=FailureKind.ERROR,
+                exception_type="ValueError",
+                message="expected",
+            ),
+            envelope=Envelope(body={"value": 1}),
+        )
+    )
+
+    exit_code = main(
+        [
+            "task",
+            "replay",
+            "tests.assets.diagnostic_app:app",
+            "--task",
+            "success",
+            "--envelope",
+            str(capture_path),
+            "--timeout",
+            "2",
+            "--json",
+        ]
+    )
+
+    document = json.loads(capsys.readouterr().out)
+    assert exit_code == 2
+    assert document["completion"] == "validation_failed"
+    assert document["failure_stage"] == "child_start"
+
+
+@pytest.mark.parametrize(
+    "completion,expected",
+    [
+        ("succeeded", 0),
+        ("failed", 1),
+        ("timed_out", 1),
+        ("child_failed", 1),
+        ("validation_failed", 2),
+    ],
+)
+def test_task_exit_codes(completion: str, expected: int) -> None:
+    assert _diagnostic_exit_code(
+        make_diagnostic_report(completion=completion)
+    ) == expected
+
+
+@pytest.mark.parametrize("contents", ["{", ""])
+def test_task_run_invalid_json_returns_validation_error(
+    contents,
+    tmp_path,
+    capsys,
+) -> None:
+    input_path = tmp_path / "input.json"
+    input_path.write_text(contents, encoding="utf-8")
+    assert (
+        main(
+            [
+                "task",
+                "run",
+                "pkg.jobs:app",
+                "--task",
+                "sync",
+                "--input",
+                str(input_path),
+            ]
+        )
+        == 2
+    )
+    assert "task diagnostic failed" in capsys.readouterr().err
+
+
+def test_task_run_unreadable_input_returns_validation_error(tmp_path, capsys) -> None:
+    missing = tmp_path / "missing.json"
+    assert (
+        main(
+            [
+                "task",
+                "run",
+                "pkg.jobs:app",
+                "--task",
+                "sync",
+                "--input",
+                str(missing),
+            ]
+        )
+        == 2
+    )
+    assert "task diagnostic failed" in capsys.readouterr().err
+
+
+def test_check_connect_renders_all_resources_and_exit_code(
+    monkeypatch,
+    capsys,
+) -> None:
+    app = OneStepApp("connect-cli")
+    report = ConnectivityReport(
+        app="connect-cli",
+        resources=(
+            ConnectivityResourceResult(
+                aliases=("queue",),
+                roles=("source",),
+                type_name="example.Queue",
+                probe_kind="lifecycle",
+                status="failed",
+                open={"status": "connected"},
+                close={"status": "failed", "exception_type": "RuntimeError"},
+            ),
+        ),
+        ok=False,
+    )
+
+    async def check(app_value, *, timeout_s):
+        assert app_value is app
+        assert timeout_s == 2.0
+        return report
+
+    monkeypatch.setattr(cli_module, "check_connectivity", check)
+    with registered_module("testsupport_connect_cli", app=app):
+        exit_code = main(
+            [
+                "check",
+                "testsupport_connect_cli:app",
+                "--connect",
+                "--connect-timeout",
+                "2",
+            ]
+        )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "queue roles=source" in captured.out
+    assert "open: status=connected" in captured.out
+    assert "close: status=failed exception_type=RuntimeError" in captured.out
+    assert _connectivity_exit_code(
+        ConnectivityReport(app="ok", resources=(), ok=True)
+    ) == 0
 
 
 def test_cli_run_configures_info_stdout_logging_and_task_events(capsys) -> None:

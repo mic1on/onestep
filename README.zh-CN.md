@@ -85,6 +85,51 @@ CLI 自行安装 stdout handler 时，解析后的级别同时适用于任意名
 直接调用 `app.run()` 或 `app.serve()` 不会修改宿主进程日志，也不会自动安装
 任务事件 logger；嵌入式应用仍完全控制自己的日志配置。
 
+## 本地任务诊断
+
+无需启动 worker 或控制面，即可用 JSON 执行一次任务，或重放捕获的失败：
+
+```bash
+onestep task run your_package.tasks:app --task sync_billing --input input.json
+onestep task replay your_package.tasks:app --task sync_billing --envelope captures/failure.json
+onestep check your_package.tasks:app --connect
+```
+
+诊断会执行真实的 handler、任务 hooks、重试决策和 sink 路由。默认不调用 sink；
+传入 `--send` 后才会打开、发送并关闭选中的 sink。无论哪种模式，handler 和 hook
+仍可能产生外部副作用。`--timeout` 默认 60 秒，并通过独立子进程限制整体执行
+时间，同步阻塞代码也在限制范围内。
+
+`delivery_action` 始终是预测，因为 source 的 `ack`/`retry`/`fail` 是合成动作。
+dry-run 中的 `would_dead_letter` 表示“若死信 sink 发布成功，则会进入死信”；使用
+`--send` 才能观察实际发布结果。`--send` 过程中被超时强杀，可能留下部分外部
+写入，后续重试也可能产生重复。
+
+`check --connect` 只对同时具有可调用 `open()` 和 `close()` 的资源执行生命周期
+探测。不具备该生命周期的 state/cursor store 会报告为 `not_probeable`；命令不会
+用 `load()`、`save()` 或 `delete()` 进行连接探测。
+
+失败捕获是显式启用的生产能力：
+
+```python
+from onestep import FailureCaptureConfig, OneStepApp
+
+app = OneStepApp(
+    "billing-sync",
+    failure_capture=FailureCaptureConfig(
+        directory="captures",
+        mode="terminal",
+        redact_paths=("/body/customer/token",),
+    ),
+)
+```
+
+捕获文件带版本、使用私有权限并原子写入，且拒绝有损序列化。`terminal` 只记录
+最终有效的终止失败；`all` 还会记录可重试 attempt。datetime、UUID、bytes、
+Decimal、enum、tuple/namedtuple、set 和 frozenset 等常见值可无损往返。遇到不
+支持的自定义值时会明确记录 capture 错误且不生成有损文件。YAML 策略见
+[`docs/yaml-task-definition.md`](docs/yaml-task-definition.md)。
+
 ## 能做什么
 
 | 能力 | 入口 |

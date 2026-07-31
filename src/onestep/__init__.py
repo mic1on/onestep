@@ -2,6 +2,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from importlib.util import find_spec as _find_spec
 
 from .app import OneStepApp
+from .capture import FailureCaptureConfig
 from .config import load_app_config, load_resource_catalog, load_yaml_app
 from .context import TaskContext
 from .envelope import Envelope
@@ -90,6 +91,7 @@ _CORE_EXPORTS = [
     "Delivery",
     "Envelope",
     "FailureInfo",
+    "FailureCaptureConfig",
     "FailureKind",
     "GaugeMetric",
     "HttpSink",

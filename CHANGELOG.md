@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+## 1.8.0
+
 - Adds `elasticsearch`, `clickhouse`, and `mongodb` optional extras for the three independently published connector plugins.
 - Bundles the three plugins in the worker image and adds isolated reliability/live compatibility gates.
 - Adds a pytest-independent `onestep.testing` connector conformance toolkit without changing runtime, reporter, or control-plane behavior.
+- Adds opt-in, versioned, lossless failure capture with private atomic persistence, redaction, and strict replay identity validation.
+- Adds `onestep task run` and `onestep task replay` for one-attempt local diagnostics with dry-run sink suppression, opt-in real sends, spawned-process isolation, incremental JSON IPC checkpoints, and an overall timeout.
+- Adds capability-based `onestep check --connect`; lifecycle resources are opened and closed while state/cursor stores without `open()` and `close()` are reported as `not_probeable`.
+- Extracts the internal single-delivery executor while preserving production delivery order, retry/dead-letter behavior, public task events, reporter payloads, remote controls, and control-plane protocols.
 
 ## 1.7.3
 

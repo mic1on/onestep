@@ -123,6 +123,7 @@ from onestep import (
     CronSource,
     Delivery,
     Envelope,
+    FailureCaptureConfig,
     HttpSink,
     InMemoryMetrics,
     IntervalSource,
@@ -158,6 +159,7 @@ assert callable(load_resource_plugins)
 assert callable(register_resource_type)
 assert Delivery is not None
 assert Envelope is not None
+assert FailureCaptureConfig is not None
 assert HttpSink is not None
 assert InMemoryMetrics is not None
 assert IntervalSource is not None

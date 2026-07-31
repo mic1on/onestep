@@ -78,6 +78,10 @@ blocked by test-kit API design.
 
 ## P2: Local Handler Loop
 
+Status: complete in core 1.8.0 after focused feature tests, production delivery
+contracts, the full non-integration suite, and all repository reliability gates
+passed.
+
 Committed CLI surface:
 
 ```text
@@ -96,9 +100,19 @@ Design constraints:
 - keep YAML as wiring; do not add transform expressions;
 - generate handler tests and fixtures, not reusable business handlers.
 
-The first P2 design must decide whether `run_task_once()` can be generalized or
-whether a separate diagnostic runner is required. It must not overload the
-existing remote manual-run semantics.
+P2 uses a separate diagnostic runner backed by the production single-delivery
+executor. Diagnostics run in a spawned child process with strict versioned JSON
+IPC, a 60-second default overall timeout, incremental checkpoints, and parent
+report synthesis after forced termination. Existing `run_task_once()`, remote
+manual-run semantics, task events, reporter payloads, and control-plane
+protocols remain unchanged.
+
+Connectivity probes are capability-based: only resources with callable
+`open()` and `close()` are probed. State/cursor stores without those methods are
+reported as `not_probeable` and are never tested through data access methods.
+Dry-run dead-letter actions are explicitly predictions; `--send` observes
+publication but accepts the risk of partial or duplicate external writes if the
+child must be forcibly terminated.
 
 ## P3: Delivery Observability
 

@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from .app import OneStepApp
+from .capture.config import FailureCaptureConfig
 from .connectors.base import Sink, Source
 from .reporter_registry import (
     ReporterRegistry,
@@ -72,7 +73,18 @@ _STRICT_TOP_LEVEL_FIELDS = frozenset(
         *_LEGACY_APP_FIELDS,
     }
 )
-_STRICT_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state", "logging", "env_file", "strict_env"})
+_STRICT_APP_FIELDS = frozenset(
+    {
+        "name",
+        "shutdown_timeout_s",
+        "config",
+        "state",
+        "logging",
+        "env_file",
+        "strict_env",
+        "failure_capture",
+    }
+)
 _STRICT_APP_LOGGING_FIELDS = frozenset({"level"})
 _STRICT_HANDLER_FIELDS = frozenset({"ref", "params"})
 _STRICT_EMIT_ROUTE_FIELDS = frozenset({"when", "then", "otherwise"})
@@ -323,10 +335,20 @@ def load_app_config(
     if not isinstance(app_config, Mapping):
         raise TypeError("'config' must be a mapping when provided")
 
+    raw_failure_capture = (
+        app_section.get("failure_capture") if app_section is not None else None
+    )
+    failure_capture = None
+    if raw_failure_capture is not None:
+        if not isinstance(raw_failure_capture, Mapping):
+            raise TypeError("'app.failure_capture' must be a mapping")
+        failure_capture = FailureCaptureConfig.from_mapping(raw_failure_capture)
+
     app = OneStepApp(
         app_name,
         config=dict(app_config),
         shutdown_timeout_s=shutdown_timeout_s,
+        failure_capture=failure_capture,
     )
     if source_path is not None:
         app.config.setdefault("config_path", source_path)
@@ -646,6 +668,11 @@ def validate_app_config(config: Mapping[str, Any], *, registry: ResourceRegistry
         _validate_app_logging(app_section.get("logging"))
         _validate_app_env_file(app_section.get("env_file"))
         _validate_app_strict_env(app_section.get("strict_env"))
+        raw_failure_capture = app_section.get("failure_capture")
+        if raw_failure_capture is not None:
+            if not isinstance(raw_failure_capture, Mapping):
+                raise TypeError("'app.failure_capture' must be a mapping")
+            FailureCaptureConfig.from_mapping(raw_failure_capture)
         legacy_fields = sorted(field for field in _LEGACY_APP_FIELDS if field in config)
         if legacy_fields:
             raise ValueError(
