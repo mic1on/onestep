@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import zlib
 from collections.abc import Awaitable, Callable
@@ -32,6 +33,13 @@ SleepFn = Callable[[float], Awaitable[None]]
 # never stall the event loop.
 DrainFn = Callable[[Session], int]
 LeaseFactory = Callable[[], WorkerLease]
+
+
+def _supports_progress_cb(drain_fn: DrainFn) -> bool:
+    try:
+        return "progress_cb" in inspect.signature(drain_fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _resolve_engine(session_factory: SessionFactory) -> Engine | None:
@@ -72,7 +80,14 @@ async def run_notification_outbox_worker(
     """
     session_factory = getattr(app.state, "session_factory")
     state = app.state.background_task_states[NOTIFICATION_OUTBOX_WORKER_NAME]
-    drain = drain_fn if drain_fn is not None else drain_notification_outbox
+    raw_drain = drain_fn if drain_fn is not None else drain_notification_outbox
+    if _supports_progress_cb(raw_drain):
+        def drain_with_progress(db: Session) -> int:
+            return raw_drain(db, progress_cb=state.mark_tick)
+
+        drain = drain_with_progress
+    else:
+        drain = raw_drain
     interval_s = float(
         settings.notification_outbox_drain_interval_s
         if drain_interval_s is None

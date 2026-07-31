@@ -496,17 +496,21 @@ def process_outbox_row(
     timeout_s: float | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Deliver a single claimed outbox row and apply its outcome."""
+    """Deliver a single claimed outbox row and apply its outcome.
+
+    The outcome timestamp is taken at outcome-application time (after the HTTP
+    attempt completes) so retry backoff is scheduled from this row's actual
+    attempt, not from the batch-start clock.
+    """
     deliver = deliver_fn if deliver_fn is not None else _post_webhook
     effective_timeout = (
         timeout_s if timeout_s is not None else settings.notification_delivery_timeout_s
     )
-    current_time = _normalize_scan_now(now)
     delivery = outbox.delivery
     # Ensure the channel is loaded for providers that inspect it (e.g. custom).
     _ = delivery.channel
     deliver(delivery, webhook_url=outbox.webhook_url, timeout_s=effective_timeout)
-    _apply_delivery_outcome(outbox, delivery, now=current_time)
+    _apply_delivery_outcome(outbox, delivery, now=_normalize_scan_now(now))
     db.commit()
 
 
@@ -516,18 +520,23 @@ def drain_notification_outbox(
     now: datetime | None = None,
     batch_size: int | None = None,
     deliver_fn: Callable[..., None] | None = None,
+    progress_cb: Callable[[], None] | None = None,
 ) -> int:
     """Claim and deliver one batch of pending outbox rows.
 
     This performs the blocking HTTP POSTs via ``deliver_fn`` (default
     ``_post_webhook``) and must therefore be invoked off the event loop. The
     ``notification_outbox_worker`` runs it inside ``asyncio.to_thread``.
+    ``progress_cb`` (if given) is invoked after each row is processed so a
+    long drain can keep its background-task readiness tick fresh.
     Returns the number of rows processed in this drain.
     """
     current_time = _normalize_scan_now(now)
     rows = claim_pending_outbox_rows(db, now=current_time, batch_size=batch_size)
     for outbox in rows:
-        process_outbox_row(db, outbox, deliver_fn=deliver_fn, now=current_time)
+        process_outbox_row(db, outbox, deliver_fn=deliver_fn)
+        if progress_cb is not None:
+            progress_cb()
     return len(rows)
 
 
