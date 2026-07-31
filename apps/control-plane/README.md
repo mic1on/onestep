@@ -95,6 +95,18 @@ Service health summaries use a separate participation window so long-stale histo
 instances eventually stop counting toward fleet health; the default is `3600` seconds and
 can be overridden with `ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S`.
 
+## Webhook Delivery Reliability
+
+Webhook notifications use at-least-once delivery. The control plane retries transient
+failures with exponential backoff, and a worker crash after the receiver accepts a request
+can cause the same frozen request to be delivered again. Deleting or editing a notification
+channel does not cancel requests that were already accepted into the outbox.
+
+Webhook receivers must handle duplicate requests idempotently. Persist a digest of the
+request method and complete payload for at least the configured retry window, or make the
+receiver's resulting operation naturally idempotent. Return a successful response for an
+already-processed request instead of repeating its side effects.
+
 ## Environment Variables
 
 The table below centralizes the `ONESTEP_CP_*` variables used by the current backend,

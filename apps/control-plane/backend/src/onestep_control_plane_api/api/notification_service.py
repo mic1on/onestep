@@ -331,6 +331,7 @@ def _persist_pending_delivery(
     scheduled_at: datetime | None,
 ) -> NotificationDelivery | None:
     savepoint = db.begin_nested()
+    request_payload = _build_delivery_request_payload(channel, notification_event)
     delivery = NotificationDelivery(
         channel=channel,
         dedupe_key=dedupe_key,
@@ -341,7 +342,7 @@ def _persist_pending_delivery(
         task_event_id=task_event_id,
         scheduled_at=scheduled_at,
         status="pending",
-        request_payload_json=_build_delivery_request_payload(channel, notification_event),
+        request_payload_json=request_payload,
     )
     db.add(delivery)
     try:
@@ -356,6 +357,12 @@ def _persist_pending_delivery(
         NotificationOutbox(
             delivery=delivery,
             webhook_url=channel.webhook_url,
+            provider=channel.provider,
+            webhook_method=(
+                str(request_payload.get("method", "POST")).upper()
+                if channel.provider == "custom"
+                else "POST"
+            ),
             status="pending",
             attempts=0,
             max_attempts=settings.notification_outbox_max_attempts,
@@ -386,14 +393,16 @@ def _post_webhook(
     webhook_url: str,
     timeout_s: float = DEFAULT_WEBHOOK_TIMEOUT_S,
 ) -> None:
+    outbox = delivery.outbox_entry
+    if outbox is None:
+        raise RuntimeError("notification delivery has no outbox entry")
     try:
         with httpx.Client(timeout=timeout_s) as client:
-            if delivery.channel.provider == "custom":
+            if outbox.provider == "custom":
                 request_payload = delivery.request_payload_json or {}
-                method = str(request_payload.get("method", "POST")).upper()
                 query = request_payload.get("query") or {}
                 body = request_payload.get("body") or {}
-                if method == "GET":
+                if outbox.webhook_method == "GET":
                     response = client.get(webhook_url, params=query)
                 else:
                     response = client.post(webhook_url, params=query, json=body)
@@ -507,8 +516,6 @@ def process_outbox_row(
         timeout_s if timeout_s is not None else settings.notification_delivery_timeout_s
     )
     delivery = outbox.delivery
-    # Ensure the channel is loaded for providers that inspect it (e.g. custom).
-    _ = delivery.channel
     deliver(delivery, webhook_url=outbox.webhook_url, timeout_s=effective_timeout)
     _apply_delivery_outcome(outbox, delivery, now=_normalize_scan_now(now))
     db.commit()

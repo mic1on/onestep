@@ -161,6 +161,34 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "sent_at",
     }
+    delivery_columns = {
+        column["name"]: column
+        for column in inspector.get_columns("notification_deliveries")
+    }
+    assert delivery_columns["channel_id"]["nullable"] is True
+    delivery_channel_fk = next(
+        foreign_key
+        for foreign_key in inspector.get_foreign_keys("notification_deliveries")
+        if foreign_key["constrained_columns"] == ["channel_id"]
+    )
+    assert delivery_channel_fk["options"]["ondelete"] == "SET NULL"
+    assert {column["name"] for column in inspector.get_columns("notification_outbox")} == {
+        "id",
+        "delivery_id",
+        "webhook_url",
+        "provider",
+        "webhook_method",
+        "status",
+        "attempts",
+        "max_attempts",
+        "next_attempt_at",
+        "last_error",
+        "last_response_status_code",
+        "last_response_body",
+        "last_attempt_at",
+        "created_at",
+        "updated_at",
+    }
     assert {
         column["name"] for column in inspector.get_columns("notification_instance_states")
     } == {

@@ -106,6 +106,7 @@ async def run_notification_outbox_worker(
 
     state.mark_started()
     state.mark_starting(lease.mode)
+    in_flight_drain: asyncio.Task[int] | None = None
 
     try:
         while True:
@@ -142,7 +143,10 @@ async def run_notification_outbox_worker(
             try:
                 # Drain off the event loop: the blocking webhook POSTs run in a
                 # worker thread, never stalling telemetry/command traffic.
-                delivered = await asyncio.to_thread(_drain_in_session, session_factory, drain)
+                in_flight_drain = asyncio.create_task(
+                    asyncio.to_thread(_drain_in_session, session_factory, drain)
+                )
+                delivered = await asyncio.shield(in_flight_drain)
                 state.mark_success()
                 if delivered:
                     logger.info(
@@ -152,9 +156,18 @@ async def run_notification_outbox_worker(
             except Exception as exc:
                 state.mark_failure(exc)
                 logger.exception("notification outbox worker drain failed")
+            finally:
+                if in_flight_drain is not None and in_flight_drain.done():
+                    in_flight_drain = None
 
             await sleep_fn(interval_s)
     finally:
+        if in_flight_drain is not None:
+            try:
+                await in_flight_drain
+            except Exception as exc:
+                state.mark_failure(exc)
+                logger.exception("notification outbox worker drain failed during shutdown")
         if state.leadership_status == "leader":
             logger.info(
                 "notification outbox worker released leadership",

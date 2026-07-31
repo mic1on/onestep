@@ -33,45 +33,75 @@ def _has_table(table_name: str) -> bool:
     return table_name in set(inspector.get_table_names())
 
 
-def upgrade() -> None:
-    if _has_table("notification_outbox"):
-        return
+def _delivery_channel_foreign_key() -> dict[str, object] | None:
+    inspector = sa.inspect(op.get_bind())
+    for foreign_key in inspector.get_foreign_keys("notification_deliveries"):
+        if foreign_key["constrained_columns"] == ["channel_id"]:
+            return foreign_key
+    return None
 
-    op.create_table(
-        "notification_outbox",
-        sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("delivery_id", sa.Uuid(), nullable=False),
-        sa.Column("webhook_url", sa.Text(), nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False),
-        sa.Column("attempts", sa.Integer(), nullable=False),
-        sa.Column("max_attempts", sa.Integer(), nullable=False),
-        sa.Column("next_attempt_at", UTCDateTime(), nullable=False),
-        sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("last_response_status_code", sa.Integer(), nullable=True),
-        sa.Column("last_response_body", sa.Text(), nullable=True),
-        sa.Column("last_attempt_at", UTCDateTime(), nullable=True),
-        sa.Column("created_at", UTCDateTime(), nullable=False),
-        sa.Column("updated_at", UTCDateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["delivery_id"],
-            ["notification_deliveries.id"],
-            name="fk_notification_outbox_delivery_id_notification_deliveries",
-            ondelete="CASCADE",
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_notification_outbox")),
-        sa.UniqueConstraint(
-            "delivery_id",
-            name="uq_notification_outbox_delivery_id",
-        ),
-    )
-    op.create_index(
-        "ix_notification_outbox_status_next_attempt_at",
-        "notification_outbox",
-        ["status", "next_attempt_at"],
-        unique=False,
-    )
+
+def _set_delivery_channel_ownership(*, nullable: bool, ondelete: str) -> None:
+    foreign_key = _delivery_channel_foreign_key()
+    with op.batch_alter_table("notification_deliveries") as batch_op:
+        if foreign_key is not None:
+            batch_op.drop_constraint(str(foreign_key["name"]), type_="foreignkey")
+        batch_op.alter_column(
+            "channel_id",
+            existing_type=sa.Uuid(),
+            nullable=nullable,
+        )
+        batch_op.create_foreign_key(
+            "fk_notification_deliveries_channel_id_notification_channels",
+            "notification_channels",
+            ["channel_id"],
+            ["id"],
+            ondelete=ondelete,
+        )
+
+
+def upgrade() -> None:
+    if not _has_table("notification_outbox"):
+        op.create_table(
+            "notification_outbox",
+            sa.Column("id", sa.Uuid(), nullable=False),
+            sa.Column("delivery_id", sa.Uuid(), nullable=False),
+            sa.Column("webhook_url", sa.Text(), nullable=False),
+            sa.Column("provider", sa.String(length=32), nullable=False),
+            sa.Column("webhook_method", sa.String(length=8), nullable=False),
+            sa.Column("status", sa.String(length=32), nullable=False),
+            sa.Column("attempts", sa.Integer(), nullable=False),
+            sa.Column("max_attempts", sa.Integer(), nullable=False),
+            sa.Column("next_attempt_at", UTCDateTime(), nullable=False),
+            sa.Column("last_error", sa.Text(), nullable=True),
+            sa.Column("last_response_status_code", sa.Integer(), nullable=True),
+            sa.Column("last_response_body", sa.Text(), nullable=True),
+            sa.Column("last_attempt_at", UTCDateTime(), nullable=True),
+            sa.Column("created_at", UTCDateTime(), nullable=False),
+            sa.Column("updated_at", UTCDateTime(), nullable=False),
+            sa.ForeignKeyConstraint(
+                ["delivery_id"],
+                ["notification_deliveries.id"],
+                name="fk_notification_outbox_delivery_id_notification_deliveries",
+                ondelete="CASCADE",
+            ),
+            sa.PrimaryKeyConstraint("id", name=op.f("pk_notification_outbox")),
+            sa.UniqueConstraint(
+                "delivery_id",
+                name="uq_notification_outbox_delivery_id",
+            ),
+        )
+        op.create_index(
+            "ix_notification_outbox_status_next_attempt_at",
+            "notification_outbox",
+            ["status", "next_attempt_at"],
+            unique=False,
+        )
+    _set_delivery_channel_ownership(nullable=True, ondelete="SET NULL")
 
 
 def downgrade() -> None:
     if _has_table("notification_outbox"):
         op.drop_table("notification_outbox")
+    op.execute(sa.text("DELETE FROM notification_deliveries WHERE channel_id IS NULL"))
+    _set_delivery_channel_ownership(nullable=False, ondelete="CASCADE")

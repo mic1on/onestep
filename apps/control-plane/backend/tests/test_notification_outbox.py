@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_events_request
 from onestep_control_plane_api.api.notification_service import (
     claim_pending_outbox_rows,
+    delete_notification_channel,
     dispatch_runtime_task_event_notifications,
     drain_notification_outbox,
 )
@@ -230,6 +232,107 @@ def test_outbox_snapshots_webhook_url_at_enqueue(db_session, monkeypatch) -> Non
     assert outbox.webhook_url == original_url
 
 
+def test_outbox_uses_frozen_provider_contract_after_channel_edit(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_service_and_instance(db_session)
+    channel = NotificationChannel(
+        name=f"ops-custom-{uuid4().hex[:6]}",
+        provider="custom",
+        webhook_url="https://example.com/custom",
+        enabled=True,
+        service_scopes_json=[{"name": "billing-sync", "environment": "prod"}],
+        event_types_json=["task_failed"],
+        missed_start_grace_seconds=300,
+        custom_config_json={
+            "method": "GET",
+            "query_params": [{"key": "service", "value": "{{ service_name }}"}],
+            "body_params": [],
+        },
+    )
+    db_session.add(channel)
+    db_session.commit()
+    task_event = seed_failed_task_event(db_session, service, instance)
+
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    outbox = db_session.query(NotificationOutbox).one()
+    assert outbox.provider == "custom"
+    assert outbox.webhook_method == "GET"
+    channel.provider = "feishu"
+    channel.custom_config_json = None
+    db_session.commit()
+
+    sent_requests: list[tuple[str, str, dict[str, object]]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+        is_success = True
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback) -> None:
+            return None
+
+        def get(self, url: str, *, params: dict[str, object]):
+            sent_requests.append(("GET", url, params))
+            return FakeResponse()
+
+        def post(
+            self,
+            url: str,
+            *,
+            params: dict[str, object] | None = None,
+            json: dict[str, object] | None = None,
+        ):
+            sent_requests.append(("POST", url, params or json or {}))
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service.httpx.Client",
+        FakeClient,
+    )
+
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    assert sent_requests == [
+        ("GET", "https://example.com/custom", {"service": "billing-sync"})
+    ]
+
+
+def test_channel_delete_preserves_and_drains_accepted_delivery(
+    db_session, monkeypatch
+) -> None:
+    service, instance = seed_service_and_instance(db_session)
+    channel = seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    delete_notification_channel(db_session, channel.id)
+
+    delivery = db_session.query(NotificationDelivery).one()
+    assert delivery.channel_id is None
+    assert db_session.query(NotificationOutbox).count() == 1
+
+    def ok_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "succeeded"
+        delivery.response_status_code = 200
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        ok_post_webhook,
+    )
+
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    assert db_session.query(NotificationOutbox).one().status == "delivered"
+
+
 def test_outbox_drain_delivers_and_marks_succeeded(db_session, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -419,6 +522,51 @@ def _seed_pending_outbox(session_factory) -> None:
             db,
             task_events=db.query(TaskEvent).all(),
         )
+
+
+def test_worker_waits_for_in_flight_drain_before_releasing_lease() -> None:
+    drain_started = threading.Event()
+    finish_drain = threading.Event()
+
+    def blocking_drain(db: Session) -> int:
+        drain_started.set()
+        if not finish_drain.wait(timeout=5):
+            raise TimeoutError("test drain was not released")
+        return 0
+
+    async def scenario() -> None:
+        session_factory, engine = _build_session_factory()
+        try:
+            coordinator = SharedLeaseCoordinator()
+            lease = CoordinatedLease(coordinator=coordinator, replica_id="one")
+            app = _build_memory_app(session_factory)
+            task = asyncio.create_task(
+                run_notification_outbox_worker(
+                    app,
+                    sleep_fn=_yield_once,
+                    drain_fn=blocking_drain,
+                    lease_factory=lambda: lease,
+                    drain_interval_s=0,
+                    leader_poll_interval_s=0,
+                )
+            )
+
+            await _wait_until(drain_started.is_set)
+            task.cancel()
+            await asyncio.sleep(0)
+
+            assert not task.done()
+            assert lease.release_count == 0
+
+            finish_drain.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert lease.release_count == 1
+        finally:
+            finish_drain.set()
+            engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_only_one_replica_drains_outbox_when_leases_contend(monkeypatch) -> None:
