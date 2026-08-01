@@ -10,9 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-DEFAULT_DATABASE_URL = (
-    "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
-)
+DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/onestep_control_plane"
 
 
 class Settings(BaseSettings):
@@ -23,9 +21,7 @@ class Settings(BaseSettings):
     instance_health_participation_window_s: int = Field(default=3600, ge=1)
     database_url: str = DEFAULT_DATABASE_URL
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(
-        default_factory=list
-    )
+    worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
     worker_package_storage_dir: str = ".onestep-control-plane/packages"
     console_auth_username: str = ""
     console_auth_password: str = ""
@@ -42,6 +38,11 @@ class Settings(BaseSettings):
     api_response_timezone: str = ""
     notification_missed_start_scan_interval_s: int = Field(default=60, ge=5)
     notification_delivery_timeout_s: float = Field(default=5.0, gt=0)
+    notification_outbox_max_attempts: int = Field(default=5, ge=1)
+    notification_outbox_batch_size: int = Field(default=50, ge=1)
+    notification_outbox_drain_interval_s: float = Field(default=2.0, ge=0.1)
+    notification_outbox_backoff_base_s: float = Field(default=2.0, ge=0.1)
+    notification_outbox_backoff_max_s: float = Field(default=300.0, ge=1.0)
     background_worker_leader_poll_interval_s: int = Field(default=5, ge=1)
     readiness_task_stale_after_s: int = Field(default=120, ge=5)
     retention_task_events_days: int = Field(default=30, ge=1)

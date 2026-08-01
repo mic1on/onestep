@@ -95,6 +95,18 @@ Service health summaries use a separate participation window so long-stale histo
 instances eventually stop counting toward fleet health; the default is `3600` seconds and
 can be overridden with `ONESTEP_CP_INSTANCE_HEALTH_PARTICIPATION_WINDOW_S`.
 
+## Webhook Delivery Reliability
+
+Webhook notifications use at-least-once delivery. The control plane retries transient
+failures with exponential backoff, and a worker crash after the receiver accepts a request
+can cause the same frozen request to be delivered again. Deleting or editing a notification
+channel does not cancel requests that were already accepted into the outbox.
+
+Webhook receivers must handle duplicate requests idempotently. Persist a digest of the
+request method and complete payload for at least the configured retry window, or make the
+receiver's resulting operation naturally idempotent. Return a successful response for an
+already-processed request instead of repeating its side effects.
+
 ## Environment Variables
 
 The table below centralizes the `ONESTEP_CP_*` variables used by the current backend,
@@ -114,6 +126,11 @@ Docker Compose files, deploy flow, and `scripts/start-local.sh`.
 | `ONESTEP_CP_CONSOLE_LOGIN_LOCKOUT_S` | Backend auth | `900` | Temporary console-login lockout duration in seconds after reaching the failure limit. |
 | `ONESTEP_CP_PROMETHEUS_CACHE_TTL_S` | Backend metrics | `15` | Maximum in-process cache lifetime in seconds for the Prometheus scrape response. Set to `0` to disable caching. |
 | `ONESTEP_CP_CONSOLE_BASE_URL` | Backend notifications | empty / `https://cp.example.com` | Optional public base URL for the monitoring console. When set, webhook notifications render clickable absolute detail links instead of relative paths. |
+| `ONESTEP_CP_NOTIFICATION_OUTBOX_MAX_ATTEMPTS` | Backend notifications | `5` | Maximum webhook delivery attempts before an outbox request is marked permanently failed. |
+| `ONESTEP_CP_NOTIFICATION_OUTBOX_BATCH_SIZE` | Backend notifications | `50` | Maximum number of due webhook requests processed in one outbox drain. |
+| `ONESTEP_CP_NOTIFICATION_OUTBOX_DRAIN_INTERVAL_S` | Backend notifications | `2.0` | Delay in seconds between notification outbox drains. |
+| `ONESTEP_CP_NOTIFICATION_OUTBOX_BACKOFF_BASE_S` | Backend notifications | `2.0` | Initial retry delay in seconds after a failed webhook attempt. |
+| `ONESTEP_CP_NOTIFICATION_OUTBOX_BACKOFF_MAX_S` | Backend notifications | `300.0` | Maximum retry delay in seconds after exponential backoff. |
 | `ONESTEP_CP_PIPELINE_CREDENTIALS_FERNET_KEY` | Backend pipeline builder | empty | Fernet key used to encrypt Pipeline Builder credentials. Required for production persistence across restarts and replicas. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. |
 | `ONESTEP_CP_CORS_ALLOW_ORIGINS` | Backend CORS | empty | Browser origins allowed to call the query API. Use explicit origins instead of `*` when console auth is enabled across origins. |
 | `ONESTEP_CP_INSTANCE_OFFLINE_AFTER_S` | Backend health | `90` | Threshold after which an instance with no fresh heartbeat is considered `offline`. |

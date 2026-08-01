@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202607230001"
+HEAD_REVISION = "202607240001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -41,6 +41,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "notification_channels",
         "notification_deliveries",
         "notification_instance_states",
+        "notification_outbox",
         "task_definitions",
         "task_custom_metric_windows",
         "task_events",
@@ -160,9 +161,34 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "created_at",
         "sent_at",
     }
-    assert {
-        column["name"] for column in inspector.get_columns("notification_instance_states")
-    } == {
+    delivery_columns = {
+        column["name"]: column for column in inspector.get_columns("notification_deliveries")
+    }
+    assert delivery_columns["channel_id"]["nullable"] is True
+    delivery_channel_fk = next(
+        foreign_key
+        for foreign_key in inspector.get_foreign_keys("notification_deliveries")
+        if foreign_key["constrained_columns"] == ["channel_id"]
+    )
+    assert delivery_channel_fk["options"]["ondelete"] == "SET NULL"
+    assert {column["name"] for column in inspector.get_columns("notification_outbox")} == {
+        "id",
+        "delivery_id",
+        "webhook_url",
+        "provider",
+        "webhook_method",
+        "status",
+        "attempts",
+        "max_attempts",
+        "next_attempt_at",
+        "last_error",
+        "last_response_status_code",
+        "last_response_body",
+        "last_attempt_at",
+        "created_at",
+        "updated_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("notification_instance_states")} == {
         "id",
         "channel_id",
         "instance_id",
@@ -341,8 +367,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         column["name"]: column for column in inspector.get_columns("notification_deliveries")
     }
     notification_instance_state_columns = {
-        column["name"]: column
-        for column in inspector.get_columns("notification_instance_states")
+        column["name"]: column for column in inspector.get_columns("notification_instance_states")
     }
     worker_agent_columns = {
         column["name"]: column for column in inspector.get_columns("worker_agents")
@@ -356,9 +381,7 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     worker_deployment_columns = {
         column["name"]: column for column in inspector.get_columns("worker_deployments")
     }
-    worker_columns = {
-        column["name"]: column for column in inspector.get_columns("workers")
-    }
+    worker_columns = {column["name"]: column for column in inspector.get_columns("workers")}
     worker_agent_command_columns = {
         column["name"]: column for column in inspector.get_columns("worker_agent_commands")
     }
@@ -532,9 +555,9 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
     }
 
     with engine.connect() as connection:
-        role_names = connection.execute(
-            text("SELECT name FROM local_roles ORDER BY name")
-        ).scalars().all()
+        role_names = (
+            connection.execute(text("SELECT name FROM local_roles ORDER BY name")).scalars().all()
+        )
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
     assert role_names == ["admin", "operator", "viewer"]
@@ -717,9 +740,7 @@ def test_alembic_upgrade_head_reconciles_missing_task_description_column(tmp_pat
     upgraded_engine = create_engine(database_url)
     inspector = inspect(upgraded_engine)
 
-    assert "description" in {
-        column["name"] for column in inspector.get_columns("task_definitions")
-    }
+    assert "description" in {column["name"] for column in inspector.get_columns("task_definitions")}
 
     with upgraded_engine.connect() as connection:
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()

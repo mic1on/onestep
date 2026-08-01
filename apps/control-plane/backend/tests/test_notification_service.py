@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from onestep_control_plane_api.api.notification_service import (
     dispatch_runtime_task_event_notifications,
+    drain_notification_outbox,
     scan_and_dispatch_instance_connectivity_notifications,
     scan_and_dispatch_missed_start_notifications,
 )
@@ -134,6 +135,7 @@ def test_custom_webhook_get_sends_rendered_query_params(db_session, monkeypatch)
         now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert sent_requests == [
         {
@@ -204,6 +206,7 @@ def test_custom_webhook_post_sends_rendered_query_and_body(db_session, monkeypat
         task_events=[task_event],
     )
 
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert sent_payloads == [
         {
@@ -261,6 +264,7 @@ def test_runtime_notifications_build_absolute_console_url_when_base_url_configur
         created_count = dispatch_runtime_task_event_notifications(
             db_session, task_events=[task_event]
         )
+        drain_notification_outbox(db_session)
         assert created_count == 1
         payload = sent_payloads[0]
         assert payload is not None
@@ -314,6 +318,7 @@ def test_dispatch_runtime_task_event_notifications_creates_one_delivery_per_new_
         db_session,
         task_events=[task_event],
     )
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -376,6 +381,7 @@ def test_dispatch_runtime_task_event_notifications_renders_success_summary_and_m
     )
 
     created_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
 
@@ -437,6 +443,7 @@ def test_dispatch_runtime_task_event_notifications_ignores_malformed_success_not
     )
 
     created_count = dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     assert db_session.query(NotificationDelivery).count() == 1
@@ -484,6 +491,7 @@ def test_scan_and_dispatch_missed_start_notifications_creates_single_delivery(
         db_session,
         now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
     )
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -661,6 +669,7 @@ def test_missed_start_scan_keeps_interval_missed_start_when_no_started_event(
         db_session,
         now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
     )
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -812,6 +821,7 @@ def test_scan_and_dispatch_missed_start_notifications_uses_restart_interval_slot
         now=datetime(2026, 4, 30, 2, 13, 0, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -887,6 +897,7 @@ def test_scan_and_dispatch_missed_start_notifications_checks_pre_plane_restart_i
         min_last_seen_at=datetime(2026, 4, 30, 2, 8, 0, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -931,6 +942,7 @@ def test_scan_and_dispatch_missed_start_notifications_checks_pre_plane_restart_c
         min_last_seen_at=datetime(2026, 4, 30, 2, 8, 30, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert len(sent_payloads) == 1
     deliveries = db_session.query(NotificationDelivery).all()
@@ -985,6 +997,7 @@ def test_scan_and_dispatch_missed_start_notifications_falls_back_to_control_plan
             now=datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC),
         )
 
+        drain_notification_outbox(db_session)
         assert created_count == 1
         assert len(sent_payloads) == 1
         detail_content = sent_payloads[0]["card"]["body"]["elements"][0]["content"]
@@ -994,9 +1007,7 @@ def test_scan_and_dispatch_missed_start_notifications_falls_back_to_control_plan
         settings.api_response_timezone = original_api_timezone
 
 
-def test_instance_connectivity_scan_seeds_state_without_delivery(
-    db_session, monkeypatch
-) -> None:
+def test_instance_connectivity_scan_seeds_state_without_delivery(db_session, monkeypatch) -> None:
     service, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["instance_online", "instance_offline"])
@@ -1023,9 +1034,7 @@ def test_instance_connectivity_scan_seeds_state_without_delivery(
     assert service.name == "billing-sync"
 
 
-def test_instance_connectivity_scan_sends_offline_once(
-    db_session, monkeypatch
-) -> None:
+def test_instance_connectivity_scan_sends_offline_once(db_session, monkeypatch) -> None:
     _, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["instance_offline"])
@@ -1057,6 +1066,7 @@ def test_instance_connectivity_scan_sends_offline_once(
         now=datetime(2026, 4, 30, 2, 12, 30, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert seed_count == 0
     assert created_count == 1
     assert duplicate_count == 0
@@ -1077,9 +1087,7 @@ def test_instance_connectivity_scan_sends_offline_once(
     assert state.last_transition_at == datetime(2026, 4, 30, 2, 11, 30, tzinfo=UTC)
 
 
-def test_instance_connectivity_scan_sends_online_recovery_once(
-    db_session, monkeypatch
-) -> None:
+def test_instance_connectivity_scan_sends_online_recovery_once(db_session, monkeypatch) -> None:
     _, instance = seed_runtime_service(db_session)
     instance.last_seen_at = datetime(2026, 4, 30, 2, 10, 0, tzinfo=UTC)
     seed_channel(db_session, event_types=["instance_online", "instance_offline"])
@@ -1119,14 +1127,13 @@ def test_instance_connectivity_scan_sends_online_recovery_once(
         now=datetime(2026, 4, 30, 2, 13, 20, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert created_count == 1
     assert duplicate_count == 0
     assert len(sent_payloads) == 2
 
     deliveries = (
-        db_session.query(NotificationDelivery)
-        .order_by(NotificationDelivery.created_at)
-        .all()
+        db_session.query(NotificationDelivery).order_by(NotificationDelivery.created_at).all()
     )
     assert [delivery.event_type for delivery in deliveries] == [
         "instance_offline",
@@ -1185,6 +1192,7 @@ def test_instance_connectivity_scan_updates_state_for_unsubscribed_recovery(
         now=datetime(2026, 4, 30, 2, 15, 0, tzinfo=UTC),
     )
 
+    drain_notification_outbox(db_session)
     assert first_offline_count == 1
     assert recovery_count == 0
     assert second_offline_count == 1

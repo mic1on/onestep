@@ -206,7 +206,6 @@ class NotificationChannel(Base):
 
     deliveries: Mapped[list[NotificationDelivery]] = relationship(
         back_populates="channel",
-        cascade="all, delete-orphan",
     )
     instance_states: Mapped[list[NotificationInstanceState]] = relationship(
         back_populates="channel",
@@ -795,9 +794,8 @@ class NotificationDelivery(Base):
     )
 
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    channel_id: Mapped[UUID] = mapped_column(
-        sa.ForeignKey("notification_channels.id", ondelete="CASCADE"),
-        nullable=False,
+    channel_id: Mapped[UUID | None] = mapped_column(
+        sa.ForeignKey("notification_channels.id", ondelete="SET NULL"),
     )
     dedupe_key: Mapped[str] = mapped_column(sa.String(512), nullable=False)
     event_type: Mapped[str] = mapped_column(sa.String(64), nullable=False)
@@ -814,7 +812,69 @@ class NotificationDelivery(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
-    channel: Mapped[NotificationChannel] = relationship(back_populates="deliveries")
+    channel: Mapped[NotificationChannel | None] = relationship(back_populates="deliveries")
+    outbox_entry: Mapped[NotificationOutbox | None] = relationship(
+        back_populates="delivery",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class NotificationOutbox(Base):
+    """Outbox queue for off-event-loop webhook delivery.
+
+    One row per ``NotificationDelivery``. Enqueued synchronously by the
+    notification dispatch/scan paths (fast DB insert only) and drained by the
+    leader-gated ``notification_outbox_worker``, which performs the actual HTTP
+    POSTs in a worker thread (``asyncio.to_thread``) so a slow/hung webhook can
+    never block the asyncio event loop.
+
+    Delivery is at-least-once: a worker crash after claiming a row but before
+    marking it delivered leaves the row ``pending`` and it will be retried, so
+    downstream webhooks MUST be idempotent (documented in the project README).
+    """
+
+    __tablename__ = "notification_outbox"
+    __table_args__ = (
+        sa.UniqueConstraint("delivery_id", name="uq_notification_outbox_delivery_id"),
+        sa.Index(
+            "ix_notification_outbox_status_next_attempt_at",
+            "status",
+            "next_attempt_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    delivery_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("notification_deliveries.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Snapshot of the webhook target frozen at enqueue time so a later channel
+    # edit cannot change a delivery already queued for dispatch.
+    webhook_url: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    provider: Mapped[str] = mapped_column(sa.String(32), nullable=False)
+    webhook_method: Mapped[str] = mapped_column(sa.String(8), nullable=False)
+    status: Mapped[str] = mapped_column(sa.String(32), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+    )
+    last_error: Mapped[str | None] = mapped_column(sa.Text)
+    last_response_status_code: Mapped[int | None] = mapped_column(sa.Integer)
+    last_response_body: Mapped[str | None] = mapped_column(sa.Text)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    delivery: Mapped[NotificationDelivery] = relationship(back_populates="outbox_entry")
 
 
 class NotificationInstanceState(Base):
@@ -872,9 +932,7 @@ class Connector(Base):
 
 class Worker(Base):
     __tablename__ = "workers"
-    __table_args__ = (
-        sa.UniqueConstraint("name", name="uq_workers_name"),
-    )
+    __table_args__ = (sa.UniqueConstraint("name", name="uq_workers_name"),)
 
     id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
     name: Mapped[str] = mapped_column(sa.String(255), nullable=False)
