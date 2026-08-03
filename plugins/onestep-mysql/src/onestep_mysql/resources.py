@@ -157,7 +157,7 @@ _MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("update_expr", "mapping"),
         ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
     ),
-    topology_fields=("table", "mode", "keys", "update_columns", "update_expr"),
+    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json"),
 )
 
 

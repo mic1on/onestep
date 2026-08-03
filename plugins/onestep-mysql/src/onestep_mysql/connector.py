@@ -754,19 +754,23 @@ class TableSink(Sink):
             raise ValueError("mode must be either 'insert' or 'upsert'")
         if update_columns is not None and mode != "upsert":
             raise ValueError("update_columns only applies to upsert mode")
-        if update_expr:
+        update_columns_tuple = tuple(update_columns) if update_columns is not None else None
+        update_expr_dict = dict(update_expr or {})
+        if update_expr is not None:
             if mode != "upsert":
                 raise ValueError("update_expr only applies to upsert mode")
             if not all(isinstance(key, str) and isinstance(value, str) for key, value in update_expr.items()):
                 raise TypeError("update_expr keys and values must be strings")
+        if mode == "upsert" and update_columns_tuple == () and not update_expr_dict:
+            raise ValueError("upsert mode requires update_expr when update_columns is empty")
         if serialize_json not in {"auto", "always", "never"}:
             raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
         self.connector = connector
         self.table_name = table
         self.mode = mode
         self.keys = keys
-        self.update_columns = tuple(update_columns) if update_columns is not None else None
-        self.update_expr = dict(update_expr or {})
+        self.update_columns = update_columns_tuple
+        self.update_expr = update_expr_dict
         self.serialize_json = serialize_json
 
     async def send(self, envelope: Envelope) -> None:
@@ -804,6 +808,8 @@ class TableSink(Sink):
             update_payload = {key: value for key, value in payload.items() if key not in self.keys}
         for column, expr in self.update_expr.items():
             update_payload[column] = sa.literal_column(expr)
+        if not update_payload:
+            raise ValueError("upsert mode requires at least one update column or update_expr")
         dialect = self.connector.engine.dialect.name
         if dialect == "mysql":
             from sqlalchemy.dialects.mysql import insert as mysql_insert

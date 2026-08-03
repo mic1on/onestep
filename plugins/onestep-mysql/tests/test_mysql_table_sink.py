@@ -225,6 +225,31 @@ def test_empty_update_columns_limits_updates_to_update_expr() -> None:
 
 
 @pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_empty_update_columns_requires_update_expr() -> None:
+    with pytest.raises(ValueError, match="update_expr"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="upsert",
+            keys=("id",),
+            update_columns=(),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_upsert_rejects_empty_update_payload() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="upsert",
+        keys=("article_identity",),
+    )
+
+    with pytest.raises(ValueError, match="at least one update column"):
+        sink._build_statement({"article_identity": "article-1"}, _candidate_table())
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
 def test_update_expr_only_valid_in_upsert_mode() -> None:
     with pytest.raises(ValueError, match="update_expr"):
         TableSink(

@@ -838,11 +838,17 @@ class ControlPlaneReporter:
                 "state_key": resource.state_key,
             }
         if class_name == "TableSink":
-            return {
+            config = {
                 "table": resource.table_name,
                 "mode": resource.mode,
                 "keys": list(resource.keys),
             }
+            if resource.update_columns is not None:
+                config["update_columns"] = list(resource.update_columns)
+            if resource.update_expr:
+                config["update_expr"] = dict(resource.update_expr)
+            config["serialize_json"] = resource.serialize_json
+            return config
         return {}
 
     def _build_connector_descriptor(self, resource: Any) -> dict[str, Any]:
