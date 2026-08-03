@@ -344,3 +344,38 @@ def test_mysql_connector_initializes_cache_and_collects_engine_option_secrets() 
 
     assert connector._tables == {}
     assert "engine-option-secret" in connector._secret_tokens()
+
+
+def test_mysql_connector_defaults_pool_pre_ping_but_accepts_engine_option() -> None:
+    default_connector = MySQLConnector("sqlite://")
+    assert default_connector.engine.pool._pre_ping is True
+
+    explicit_connector = MySQLConnector("sqlite://", pool_pre_ping=False)
+    assert explicit_connector.engine.pool._pre_ping is False
+
+
+def test_mysql_connector_error_preserves_original_exception_as_cause() -> None:
+    import asyncio
+
+    import sqlalchemy as sa
+    from onestep.envelope import Envelope
+
+    connector = MySQLConnector("sqlite://")
+    sink = TableSink(connector=connector, table="orders", mode="insert")
+    original = sa.exc.OperationalError(
+        statement="INSERT INTO orders (ts) VALUES (?)",
+        params={},
+        orig=Exception("Incorrect datetime value: '2026-07-31 17:37 '"),
+    )
+    sink._send_sync = lambda payload: (_ for _ in ()).throw(original)
+
+    async def scenario() -> None:
+        try:
+            await sink.send(Envelope(body={"ts": "2026-07-31 17:37 "}))
+        except ConnectorOperationError as exc:
+            assert exc.__cause__ is original
+            assert "Incorrect datetime value" in str(exc.cause)
+        else:
+            pytest.fail("expected ConnectorOperationError")
+
+    asyncio.run(scenario())

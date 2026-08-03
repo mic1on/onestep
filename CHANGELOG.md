@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## onestep-mysql 0.3.5
+
+- Preserves the original MySQL exception as the cause of raised connector operation errors so root-cause messages such as invalid datetime values are visible in tracebacks.
+- Accepts a user-configured `pool_pre_ping` engine option instead of failing with a duplicated keyword argument.
+
 ## onestep-mysql 0.3.4
 
 - Adds selective upsert updates with configurable update columns and raw SQL update expressions.

@@ -42,7 +42,8 @@ class MySQLConnector:
             raise RuntimeError("MySQLConnector requires SQLAlchemy. Install onestep-mysql.")
         self.dsn = dsn
         self._sensitive_tokens = collect_sensitive_tokens(dsn, engine_options)
-        self.engine = create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
+        engine_options.setdefault("pool_pre_ping", True)
+        self.engine = create_engine(dsn, future=True, **engine_options)
         self._tables: dict[str, Any] = {}
 
     def _secret_tokens(self) -> list[str]:
@@ -304,7 +305,7 @@ class TableQueueSource(Source):
             )
             if connector_error is None:
                 raise
-            raise connector_error from None
+            raise connector_error from exc
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
@@ -453,7 +454,7 @@ class BinlogSource(Source):
             )
             if connector_error is None:
                 raise
-            raise connector_error from None
+            raise connector_error from exc
 
         deliveries: list[Delivery] = []
         for payload, token in rows:
@@ -687,7 +688,7 @@ class IncrementalTableSource(Source):
             )
             if connector_error is None:
                 raise
-            raise connector_error from None
+            raise connector_error from exc
         deliveries: list[Delivery] = []
         for row in rows:
             token = _CursorToken(tuple(row[column] for column in self.cursor))
@@ -788,7 +789,7 @@ class TableSink(Sink):
             )
             if connector_error is None:
                 raise
-            raise connector_error from None
+            raise connector_error from exc
 
     def _send_sync(self, payload: dict[str, Any]) -> None:
         table = self.connector._table(self.table_name)

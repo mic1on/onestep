@@ -33,7 +33,8 @@ class SQLAlchemyStateStore:
             raise ValueError("dsn or engine is required")
         if engine is not None and dsn is not None:
             raise ValueError("pass either dsn or engine, not both")
-        self.engine = engine or create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
+        engine_options.setdefault("pool_pre_ping", True)
+        self.engine = engine or create_engine(dsn, future=True, **engine_options)
         self._owns_engine = engine is None
         self.table_name = table
         self.key_column_name = key_column
