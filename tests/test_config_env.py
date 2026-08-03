@@ -259,6 +259,40 @@ def test_expand_env_vars_type_coercion_empty_string(monkeypatch):
     assert result["value"] == ""
 
 
+def test_expand_env_vars_json_string_forces_string_type(monkeypatch):
+    monkeypatch.setenv("VALUE", '"123"')
+
+    result = _expand_env_vars({"value": "${VALUE}"})
+
+    assert result["value"] == "123"
+    assert isinstance(result["value"], str)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "yes",
+        "no",
+        "on",
+        "off",
+        "2026-08-03",
+        "0123",
+        "00123",
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        '{"threshold": NaN}',
+    ],
+)
+def test_expand_env_vars_preserves_non_json_yaml_scalars(monkeypatch, value):
+    monkeypatch.setenv("VALUE", value)
+
+    result = _expand_env_vars({"value": "${VALUE}"})
+
+    assert result["value"] == value
+    assert isinstance(result["value"], str)
+
+
 def test_expand_env_vars_type_coercion_default_with_type(monkeypatch):
     monkeypatch.delenv("PREFETCH", raising=False)
     result = _expand_env_vars({"prefetch": "${PREFETCH:-5}"})
@@ -302,6 +336,16 @@ def test_expand_env_vars_mixed_string_preserved(monkeypatch):
     assert isinstance(result["dsn"], str)
 
 
+def test_expand_env_vars_multiple_references_preserved(monkeypatch):
+    monkeypatch.setenv("MAJOR", "1")
+    monkeypatch.setenv("MINOR", "2")
+
+    result = _expand_env_vars({"version": "${MAJOR}${MINOR}"})
+
+    assert result["version"] == "12"
+    assert isinstance(result["version"], str)
+
+
 def test_expand_env_vars_non_string_values_unchanged(monkeypatch):
     result = _expand_env_vars({"count": 5, "enabled": True, "ratio": 3.14})
     assert result["count"] == 5
@@ -317,7 +361,7 @@ def test_expand_env_vars_recursive(monkeypatch):
         "tasks": [{"config": {"key": "${B}"}}],
     }
     result = _expand_env_vars(config)
-    # Pure ${VAR} references are YAML-coerced: "1" → 1 (int)
+    # Pure ${VAR} references decode JSON literals: "1" -> 1 (int).
     assert result["app"]["name"] == 1
     assert isinstance(result["app"]["name"], int)
     assert result["tasks"][0]["config"]["key"] == 2
@@ -327,6 +371,18 @@ def test_expand_env_vars_recursive(monkeypatch):
 # ---------------------------------------------------------------------------
 # load_yaml_app with env_file
 # ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("app_name", ["yes", "off", "2026-08-03", "0123"])
+def test_load_yaml_app_preserves_string_env_name(tmp_path, monkeypatch, app_name):
+    pytest.importorskip("yaml")
+    monkeypatch.setenv("APP_NAME", app_name)
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text("name: ${APP_NAME}\ntasks: []\n", encoding="utf-8")
+
+    app = load_yaml_app(str(config_path))
+
+    assert app.name == app_name
+
 
 def test_load_yaml_app_with_env_file(tmp_path, monkeypatch):
     env_file = tmp_path / "test.env"
