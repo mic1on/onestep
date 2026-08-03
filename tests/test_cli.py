@@ -1400,6 +1400,30 @@ def test_load_app_config_strict_rejects_unknown_yaml_logging_fields() -> None:
         )
 
 
+def test_load_app_config_strict_rejects_unknown_nested_retry_fields() -> None:
+    with pytest.raises(ValueError, match=r"unsupported fields for tasks\[0\]\.retry\.error: unexpected"):
+        config_module.validate_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "nested-retry-invalid"},
+                "tasks": [
+                    {
+                        "handler": "testsupport_nested_retry:consume",
+                        "retry": {
+                            "type": "by_failure_kind",
+                            "error": {
+                                "type": "max_attempts",
+                                "max_attempts": 2,
+                                "unexpected": True,
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+
+
 def test_yaml_target_reuses_connector_instances_and_binds_handler_params(tmp_path) -> None:
     config_path = tmp_path / "pipeline.yaml"
     config_path.write_text(

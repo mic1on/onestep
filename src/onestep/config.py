@@ -918,16 +918,16 @@ def _validate_retry(raw_retry: Any, *, field: str) -> None:
         if allowed is None:
             raise ValueError(f"unsupported retry type {retry_type!r}")
         _validate_unknown_fields(raw_retry, allowed, field=field)
+        if normalized == "by_failure_kind":
+            for key in ("default", "error", "timeout", "cancelled"):
+                raw_sub = raw_retry.get(key)
+                if raw_sub is not None:
+                    _validate_retry(raw_sub, field=f"{field}.{key}")
         return
     else:
         raise TypeError(f"'{field}' must be a string or mapping")
     if normalized not in _STRICT_RETRY_FIELDS:
         raise ValueError(f"unsupported retry type {raw_retry!r}")
-    if normalized == "by_failure_kind" and isinstance(raw_retry, Mapping):
-        for key in ("default", "error", "timeout", "cancelled"):
-            raw_sub = raw_retry.get(key)
-            if raw_sub is not None:
-                _validate_retry(raw_sub, field=f"{field}.{key}")
 
 
 def _task_emit_configured(raw_emit: Any) -> bool:
