@@ -34,12 +34,16 @@ def _registered_module(name: str, **attrs):
             sys.modules[name] = previous
 
 
+def _yaml_safe_load(stream):
+    """Mock yaml.safe_load that handles both file handles and strings."""
+    if hasattr(stream, "read"):
+        return json.loads(stream.read())
+    return json.loads(stream)
+
+
 @contextmanager
 def _registered_yaml_module():
-    def safe_load(handle):
-        return json.loads(handle.read())
-
-    with _registered_module("yaml", safe_load=safe_load) as module:
+    with _registered_module("yaml", safe_load=_yaml_safe_load, YAMLError=Exception) as module:
         yield module
 
 
@@ -207,6 +211,148 @@ def test_expand_env_var_present_takes_precedence_over_default(monkeypatch):
     assert _expand_env_var(match) == "bar"
 
 
+def test_expand_env_vars_type_coercion_int(monkeypatch):
+    monkeypatch.setenv("PREFETCH", "5")
+    result = _expand_env_vars({"prefetch": "${PREFETCH}"})
+    assert result["prefetch"] == 5
+    assert isinstance(result["prefetch"], int)
+
+
+def test_expand_env_vars_type_coercion_bool(monkeypatch):
+    monkeypatch.setenv("ENABLED", "true")
+    result = _expand_env_vars({"enabled": "${ENABLED}"})
+    assert result["enabled"] is True
+    assert isinstance(result["enabled"], bool)
+
+
+def test_expand_env_vars_type_coercion_float(monkeypatch):
+    monkeypatch.setenv("RATIO", "3.14")
+    result = _expand_env_vars({"ratio": "${RATIO}"})
+    assert result["ratio"] == 3.14
+    assert isinstance(result["ratio"], float)
+
+
+def test_expand_env_vars_type_coercion_dict(monkeypatch):
+    monkeypatch.setenv("ENGINE_OPTIONS", '{"connect_args": {"timeout": 5}}')
+    result = _expand_env_vars({"engine_options": "${ENGINE_OPTIONS}"})
+    assert result["engine_options"] == {"connect_args": {"timeout": 5}}
+    assert isinstance(result["engine_options"], dict)
+
+
+def test_expand_env_vars_type_coercion_list(monkeypatch):
+    monkeypatch.setenv("ITEMS", "[1, 2, 3]")
+    result = _expand_env_vars({"items": "${ITEMS}"})
+    assert result["items"] == [1, 2, 3]
+    assert isinstance(result["items"], list)
+
+
+def test_expand_env_vars_type_coercion_null(monkeypatch):
+    monkeypatch.setenv("NOT_SET", "null")
+    result = _expand_env_vars({"value": "${NOT_SET}"})
+    # null parsed to None → returns original string
+    assert result["value"] == "null"
+
+
+def test_expand_env_vars_type_coercion_empty_string(monkeypatch):
+    monkeypatch.setenv("EMPTY", "")
+    result = _expand_env_vars({"value": "${EMPTY}"})
+    assert result["value"] == ""
+
+
+def test_expand_env_vars_json_string_forces_string_type(monkeypatch):
+    monkeypatch.setenv("VALUE", '"123"')
+
+    result = _expand_env_vars({"value": "${VALUE}"})
+
+    assert result["value"] == "123"
+    assert isinstance(result["value"], str)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "yes",
+        "no",
+        "on",
+        "off",
+        "2026-08-03",
+        "0123",
+        "00123",
+        "NaN",
+        "Infinity",
+        "-Infinity",
+        '{"threshold": NaN}',
+    ],
+)
+def test_expand_env_vars_preserves_non_json_yaml_scalars(monkeypatch, value):
+    monkeypatch.setenv("VALUE", value)
+
+    result = _expand_env_vars({"value": "${VALUE}"})
+
+    assert result["value"] == value
+    assert isinstance(result["value"], str)
+
+
+def test_expand_env_vars_type_coercion_default_with_type(monkeypatch):
+    monkeypatch.delenv("PREFETCH", raising=False)
+    result = _expand_env_vars({"prefetch": "${PREFETCH:-5}"})
+    assert result["prefetch"] == 5
+    assert isinstance(result["prefetch"], int)
+
+
+def test_expand_env_vars_type_coercion_default_colon_syntax(monkeypatch):
+    monkeypatch.delenv("PREFETCH", raising=False)
+    result = _expand_env_vars({"prefetch": "${PREFETCH:5}"})
+    assert result["prefetch"] == 5
+    assert isinstance(result["prefetch"], int)
+
+
+def test_expand_env_vars_type_coercion_default_bool(monkeypatch):
+    monkeypatch.delenv("ENABLED", raising=False)
+    result = _expand_env_vars({"enabled": "${ENABLED:-true}"})
+    assert result["enabled"] is True
+    assert isinstance(result["enabled"], bool)
+
+
+def test_expand_env_vars_type_coercion_default_float(monkeypatch):
+    monkeypatch.delenv("RATIO", raising=False)
+    result = _expand_env_vars({"ratio": "${RATIO:3.14}"})
+    assert result["ratio"] == 3.14
+    assert isinstance(result["ratio"], float)
+
+
+def test_expand_env_vars_type_coercion_default_string(monkeypatch):
+    monkeypatch.delenv("NAME", raising=False)
+    result = _expand_env_vars({"name": "${NAME:-hello}"})
+    assert result["name"] == "hello"
+    assert isinstance(result["name"], str)
+
+
+def test_expand_env_vars_mixed_string_preserved(monkeypatch):
+    monkeypatch.setenv("HOST", "localhost")
+    # Mixed string with prefix/suffix should stay as string
+    result = _expand_env_vars({"dsn": "mysql://${HOST}:3306/mydb"})
+    assert result["dsn"] == "mysql://localhost:3306/mydb"
+    assert isinstance(result["dsn"], str)
+
+
+def test_expand_env_vars_multiple_references_preserved(monkeypatch):
+    monkeypatch.setenv("MAJOR", "1")
+    monkeypatch.setenv("MINOR", "2")
+
+    result = _expand_env_vars({"version": "${MAJOR}${MINOR}"})
+
+    assert result["version"] == "12"
+    assert isinstance(result["version"], str)
+
+
+def test_expand_env_vars_non_string_values_unchanged(monkeypatch):
+    result = _expand_env_vars({"count": 5, "enabled": True, "ratio": 3.14})
+    assert result["count"] == 5
+    assert result["enabled"] is True
+    assert result["ratio"] == 3.14
+
+
 def test_expand_env_vars_recursive(monkeypatch):
     monkeypatch.setenv("A", "1")
     monkeypatch.setenv("B", "2")
@@ -215,13 +361,28 @@ def test_expand_env_vars_recursive(monkeypatch):
         "tasks": [{"config": {"key": "${B}"}}],
     }
     result = _expand_env_vars(config)
-    assert result["app"]["name"] == "1"
-    assert result["tasks"][0]["config"]["key"] == "2"
+    # Pure ${VAR} references decode JSON literals: "1" -> 1 (int).
+    assert result["app"]["name"] == 1
+    assert isinstance(result["app"]["name"], int)
+    assert result["tasks"][0]["config"]["key"] == 2
+    assert isinstance(result["tasks"][0]["config"]["key"], int)
 
 
 # ---------------------------------------------------------------------------
 # load_yaml_app with env_file
 # ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("app_name", ["yes", "off", "2026-08-03", "0123"])
+def test_load_yaml_app_preserves_string_env_name(tmp_path, monkeypatch, app_name):
+    pytest.importorskip("yaml")
+    monkeypatch.setenv("APP_NAME", app_name)
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text("name: ${APP_NAME}\ntasks: []\n", encoding="utf-8")
+
+    app = load_yaml_app(str(config_path))
+
+    assert app.name == app_name
+
 
 def test_load_yaml_app_with_env_file(tmp_path, monkeypatch):
     env_file = tmp_path / "test.env"

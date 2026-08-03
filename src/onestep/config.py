@@ -4,6 +4,7 @@ import copy
 import functools
 import importlib
 import inspect
+import json
 import logging
 import os
 import re
@@ -146,14 +147,46 @@ def _expand_env_vars(value: Any) -> Any:
     """Recursively expand environment variables in a configuration value.
     
     Supports ${VAR}, ${VAR:-default}, ${VAR:default} syntax in strings.
+
+    When a string value is entirely a single env var reference like ${VAR},
+    JSON literals are decoded to preserve typed values (int, bool, dict, list,
+    etc.). Mixed strings like "prefix-${VAR}-suffix" remain as plain strings.
     """
     if isinstance(value, str):
-        return _expand_env_vars_in_string(value)
+        expanded = _expand_env_vars_in_string(value)
+        if _is_pure_env_reference(value):
+            return _coerce_expanded_value(expanded)
+        return expanded
     if isinstance(value, Mapping):
         return {k: _expand_env_vars(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_expand_env_vars(item) for item in value]
     return value
+
+
+def _is_pure_env_reference(value: str) -> bool:
+    """Check if a string is entirely a single ${...} env var reference."""
+    return _ENV_VAR_PATTERN.fullmatch(value.strip()) is not None
+
+
+def _reject_non_standard_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _coerce_expanded_value(value: str) -> Any:
+    """Decode typed JSON literals while preserving ordinary strings.
+
+    JSON has predictable scalar rules for environment variables. In particular,
+    values such as ``yes``, ``0123``, and ISO dates stay strings instead of
+    receiving PyYAML's implicit boolean, integer, or date types.
+    """
+    if value == "":
+        return value
+    try:
+        parsed = json.loads(value, parse_constant=_reject_non_standard_json_constant)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return value
+    return value if parsed is None else parsed
 
 
 def _load_dotenv(path: str) -> int:
