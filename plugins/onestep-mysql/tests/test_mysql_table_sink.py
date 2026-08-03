@@ -207,6 +207,47 @@ def test_update_columns_only_valid_in_upsert_mode() -> None:
 
 
 @pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_empty_update_columns_limits_updates_to_update_expr() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="upsert",
+        keys=("article_identity",),
+        update_columns=(),
+        update_expr={"updated_at": "NOW(6)"},
+    )
+
+    update = _update_clause(_compile(sink._build_statement(_payload(), _candidate_table())))
+
+    assert "updated_at = NOW(6)" in update
+    assert "title = " not in update
+    assert "trace_id = " not in update
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_expr_only_valid_in_upsert_mode() -> None:
+    with pytest.raises(ValueError, match="update_expr"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="insert",
+            update_expr={"updated_at": "NOW(6)"},
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_expr_rejects_non_string_values() -> None:
+    with pytest.raises(TypeError, match="update_expr"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="upsert",
+            keys=("id",),
+            update_expr={"updated_at": 123},
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
 def test_invalid_serialize_json_value_rejected() -> None:
     with pytest.raises(ValueError, match="serialize_json"):
         TableSink(

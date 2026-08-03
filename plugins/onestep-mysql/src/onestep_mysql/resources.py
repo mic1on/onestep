@@ -335,7 +335,7 @@ def _build_mysql_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) 
         keys=tuple(ctx.string_list(keys, field=f"{ctx.field}.keys")) if keys is not None else (),
         update_columns=tuple(ctx.string_list(update_columns, field=f"{ctx.field}.update_columns"))
         if update_columns is not None
-        else (),
+        else None,
         update_expr=ctx.mapping_value(update_expr, field=f"{ctx.field}.update_expr")
         if update_expr is not None
         else None,

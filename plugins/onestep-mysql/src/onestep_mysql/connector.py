@@ -180,7 +180,7 @@ class MySQLConnector:
         table: str,
         mode: str = "insert",
         keys: Sequence[str] = (),
-        update_columns: Sequence[str] = (),
+        update_columns: Sequence[str] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
     ) -> "TableSink":
@@ -189,7 +189,7 @@ class MySQLConnector:
             table=table,
             mode=mode,
             keys=tuple(keys),
-            update_columns=tuple(update_columns),
+            update_columns=tuple(update_columns) if update_columns is not None else None,
             update_expr=update_expr,
             serialize_json=serialize_json,
         )
@@ -745,22 +745,27 @@ class TableSink(Sink):
         table: str,
         mode: str = "insert",
         keys: tuple[str, ...] = (),
-        update_columns: tuple[str, ...] = (),
+        update_columns: tuple[str, ...] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
     ) -> None:
         super().__init__(f"mysql.table_sink:{table}")
         if mode not in {"insert", "upsert"}:
             raise ValueError("mode must be either 'insert' or 'upsert'")
-        if update_columns and mode != "upsert":
+        if update_columns is not None and mode != "upsert":
             raise ValueError("update_columns only applies to upsert mode")
+        if update_expr:
+            if mode != "upsert":
+                raise ValueError("update_expr only applies to upsert mode")
+            if not all(isinstance(key, str) and isinstance(value, str) for key, value in update_expr.items()):
+                raise TypeError("update_expr keys and values must be strings")
         if serialize_json not in {"auto", "always", "never"}:
             raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
         self.connector = connector
         self.table_name = table
         self.mode = mode
         self.keys = keys
-        self.update_columns = update_columns
+        self.update_columns = tuple(update_columns) if update_columns is not None else None
         self.update_expr = dict(update_expr or {})
         self.serialize_json = serialize_json
 
@@ -793,7 +798,7 @@ class TableSink(Sink):
             return sa.insert(table).values(**payload)
         if not self.keys:
             raise ValueError("upsert mode requires keys")
-        if self.update_columns:
+        if self.update_columns is not None:
             update_payload = {key: value for key, value in payload.items() if key in self.update_columns}
         else:
             update_payload = {key: value for key, value in payload.items() if key not in self.keys}

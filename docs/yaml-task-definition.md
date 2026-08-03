@@ -237,9 +237,11 @@ tasks:
 | `update_expr` | optional | For `upsert` only: mapping of column to a raw SQL expression rendered on conflict (for example `updated_at: NOW(6)`). |
 | `serialize_json` | `auto` | `auto`, `always`, or `never`. When `auto`, list/dict payload values are JSON-serialized unless the target column is a JSON type. |
 
-In `upsert` mode, only the fields selected by `update_columns` (or every
-non-key field when unset) are rewritten on conflict; `update_expr` entries are
-rendered as raw SQL expressions such as `updated_at=NOW(6)`. Payload values
+In `upsert` mode, only the fields selected by `update_columns` are rewritten on
+conflict; when `update_columns` is unset, every non-key field is rewritten.
+Setting `update_columns: []` disables payload updates entirely, leaving only
+`update_expr` entries (for example `updated_at=NOW(6)`) to run on conflict.
+`update_expr` values are rendered as raw SQL expressions. Payload values
 that are lists or dicts are serialized to JSON strings before binding unless
 the column type is JSON (`auto`) or serialization is forced off (`never`).
 

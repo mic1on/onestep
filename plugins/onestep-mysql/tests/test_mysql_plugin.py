@@ -196,6 +196,88 @@ def test_yaml_builds_table_sink_with_update_control(tmp_path) -> None:
     assert sink.serialize_json == "auto"
 
 
+def test_yaml_empty_update_columns_is_distinct_from_unset(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {"name": "mysql-plugin"},
+            "resources": {
+                "db": {"type": "mysql", "dsn": dsn},
+                "processed": {
+                    "type": "mysql_table_sink",
+                    "connector": "db",
+                    "table": "processed_users",
+                    "mode": "upsert",
+                    "keys": ["id"],
+                    "update_columns": [],
+                    "update_expr": {"updated_at": "NOW(6)"},
+                },
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+
+    sink = app.resources["processed"]
+    assert isinstance(sink, TableSink)
+    assert sink.update_columns == ()
+    assert sink.update_expr == {"updated_at": "NOW(6)"}
+
+
+def test_yaml_rejects_update_expr_in_insert_mode(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    with pytest.raises(ValueError, match="update_expr"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "mysql-plugin"},
+                "resources": {
+                    "db": {"type": "mysql", "dsn": dsn},
+                    "processed": {
+                        "type": "mysql_table_sink",
+                        "connector": "db",
+                        "table": "processed_users",
+                        "mode": "insert",
+                        "update_expr": {"updated_at": "NOW(6)"},
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_yaml_rejects_non_string_update_expr_values(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    with pytest.raises(TypeError, match="update_expr"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "mysql-plugin"},
+                "resources": {
+                    "db": {"type": "mysql", "dsn": dsn},
+                    "processed": {
+                        "type": "mysql_table_sink",
+                        "connector": "db",
+                        "table": "processed_users",
+                        "mode": "upsert",
+                        "keys": ["id"],
+                        "update_expr": {"updated_at": 123},
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:
     entry_points = importlib_metadata.entry_points()
     if hasattr(entry_points, "select"):
