@@ -35,6 +35,8 @@ from .resilience import (
     ConnectorOperationError,
 )
 from .retry import (
+    ByFailureKind,
+    ExponentialBackoff,
     FailureInfo,
     FailureKind,
     MaxAttempts,
@@ -103,6 +105,8 @@ _CORE_EXPORTS = [
     "InMemoryCursorStore",
     "InMemoryStateStore",
     "IntervalSource",
+    "ByFailureKind",
+    "ExponentialBackoff",
     "MaxAttempts",
     "MemoryQueue",
     "NoRetry",
