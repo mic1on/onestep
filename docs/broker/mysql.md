@@ -164,6 +164,45 @@ sink = db.table_sink(
 )
 ```
 
+### 更新控制（Upsert 冲突行为）
+
+`upsert` 模式下，可通过 `update_columns`、`update_expr` 精确控制冲突时的
+更新行为：
+
+```python
+sink = db.table_sink(
+    table="results",
+    mode="upsert",
+    keys=("id",),
+    update_columns=("data",),          # 冲突时只重写这些列
+    update_expr={"updated_at": "NOW(6)"},  # 冲突时执行的原始 SQL 表达式
+)
+```
+
+- `update_columns`：冲突时允许重写的白名单列；默认重写除 `keys` 外的所有
+  载荷列。设为空列表 `()` 表示冲突时不更新任何载荷列，只应用
+  `update_expr`。
+- `update_expr`：列名到原始 SQL 表达式的映射，在冲突时渲染执行（例如
+  `updated_at=NOW(6)`）。
+- 两者仅适用于 `upsert` 模式；`update_columns` 为空且没有 `update_expr`
+  时配置无效。
+
+### JSON 序列化控制
+
+载荷中的 list/dict 值默认按目标列类型自动处理（`serialize_json="auto"`）：
+列类型为 JSON 时原样写入，否则序列化为 JSON 字符串：
+
+```python
+sink = db.table_sink(
+    table="results",
+    mode="insert",
+    serialize_json="always",  # 强制序列化为 JSON 字符串
+)
+```
+
+`serialize_json` 可选值：`auto`（默认）、`always`（始终序列化为字符串）、
+`never`（永不序列化）。
+
 ## 状态存储
 
 ### State Store
@@ -222,6 +261,11 @@ resources:
     mode: "upsert"
     keys:
       - "id"
+    update_columns:
+      - "data"
+    update_expr:
+      updated_at: "NOW(6)"
+    serialize_json: "auto"
   
   cursor:
     type: mysql_cursor_store
