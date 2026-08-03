@@ -1620,7 +1620,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
     { name = "mysql-replication" },

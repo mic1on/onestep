@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## onestep-mysql 0.3.4
+
+- Adds selective upsert updates with configurable update columns and raw SQL update expressions.
+- Adds configurable JSON coercion for list and mapping values written through `mysql_table_sink`.
+
 ## 1.8.0
 
 - Adds `elasticsearch`, `clickhouse`, and `mongodb` optional extras for the three independently published connector plugins.
