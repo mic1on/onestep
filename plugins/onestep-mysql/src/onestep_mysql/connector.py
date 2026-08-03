@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -179,8 +180,19 @@ class MySQLConnector:
         table: str,
         mode: str = "insert",
         keys: Sequence[str] = (),
+        update_columns: Sequence[str] | None = None,
+        update_expr: Mapping[str, str] | None = None,
+        serialize_json: str = "auto",
     ) -> "TableSink":
-        return TableSink(connector=self, table=table, mode=mode, keys=tuple(keys))
+        return TableSink(
+            connector=self,
+            table=table,
+            mode=mode,
+            keys=tuple(keys),
+            update_columns=tuple(update_columns) if update_columns is not None else None,
+            update_expr=update_expr,
+            serialize_json=serialize_json,
+        )
 
     def _table(self, table_name: str):
         table = self._tables.get(table_name)
@@ -726,14 +738,40 @@ class IncrementalTableSource(Source):
 
 
 class TableSink(Sink):
-    def __init__(self, *, connector: MySQLConnector, table: str, mode: str, keys: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        connector: MySQLConnector,
+        table: str,
+        mode: str = "insert",
+        keys: tuple[str, ...] = (),
+        update_columns: tuple[str, ...] | None = None,
+        update_expr: Mapping[str, str] | None = None,
+        serialize_json: str = "auto",
+    ) -> None:
         super().__init__(f"mysql.table_sink:{table}")
         if mode not in {"insert", "upsert"}:
             raise ValueError("mode must be either 'insert' or 'upsert'")
+        if update_columns is not None and mode != "upsert":
+            raise ValueError("update_columns only applies to upsert mode")
+        update_columns_tuple = tuple(update_columns) if update_columns is not None else None
+        update_expr_dict = dict(update_expr or {})
+        if update_expr is not None:
+            if mode != "upsert":
+                raise ValueError("update_expr only applies to upsert mode")
+            if not all(isinstance(key, str) and isinstance(value, str) for key, value in update_expr.items()):
+                raise TypeError("update_expr keys and values must be strings")
+        if mode == "upsert" and update_columns_tuple == () and not update_expr_dict:
+            raise ValueError("upsert mode requires update_expr when update_columns is empty")
+        if serialize_json not in {"auto", "always", "never"}:
+            raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
         self.connector = connector
         self.table_name = table
         self.mode = mode
         self.keys = keys
+        self.update_columns = update_columns_tuple
+        self.update_expr = update_expr_dict
+        self.serialize_json = serialize_json
 
     async def send(self, envelope: Envelope) -> None:
         if not isinstance(envelope.body, Mapping):
@@ -754,24 +792,48 @@ class TableSink(Sink):
 
     def _send_sync(self, payload: dict[str, Any]) -> None:
         table = self.connector._table(self.table_name)
-        dialect = self.connector.engine.dialect.name
+        stmt = self._build_statement(payload, table)
         with self.connector.engine.begin() as conn:
-            if self.mode == "insert":
-                conn.execute(sa.insert(table).values(**payload))
-                return
-            if not self.keys:
-                raise ValueError("upsert mode requires keys")
+            conn.execute(stmt)
+
+    def _build_statement(self, payload: dict[str, Any], table: sa.Table):
+        payload = self._coerce_json_values(payload, table)
+        if self.mode == "insert":
+            return sa.insert(table).values(**payload)
+        if not self.keys:
+            raise ValueError("upsert mode requires keys")
+        if self.update_columns is not None:
+            update_payload = {key: value for key, value in payload.items() if key in self.update_columns}
+        else:
             update_payload = {key: value for key, value in payload.items() if key not in self.keys}
-            if dialect == "mysql":
-                from sqlalchemy.dialects.mysql import insert as mysql_insert
+        for column, expr in self.update_expr.items():
+            update_payload[column] = sa.literal_column(expr)
+        if not update_payload:
+            raise ValueError("upsert mode requires at least one update column or update_expr")
+        dialect = self.connector.engine.dialect.name
+        if dialect == "mysql":
+            from sqlalchemy.dialects.mysql import insert as mysql_insert
 
-                stmt = mysql_insert(table).values(**payload)
-                conn.execute(stmt.on_duplicate_key_update(**update_payload))
-                return
-            if dialect == "sqlite":
-                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+            stmt = mysql_insert(table).values(**payload)
+            return stmt.on_duplicate_key_update(**update_payload)
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-                stmt = sqlite_insert(table).values(**payload)
-                conn.execute(stmt.on_conflict_do_update(index_elements=list(self.keys), set_=update_payload))
-                return
-            conn.execute(sa.insert(table).values(**payload))
+            stmt = sqlite_insert(table).values(**payload)
+            return stmt.on_conflict_do_update(index_elements=list(self.keys), set_=update_payload)
+        return sa.insert(table).values(**payload)
+
+    def _coerce_json_values(self, payload: dict[str, Any], table: sa.Table) -> dict[str, Any]:
+        if self.serialize_json == "never":
+            return payload
+        coerced = dict(payload)
+        for column_name, value in list(payload.items()):
+            if not isinstance(value, (list, dict)):
+                continue
+            column = table.columns.get(column_name)
+            if column is None:
+                continue
+            is_json_column = isinstance(column.type, sa.JSON)
+            if self.serialize_json == "always" or not is_json_column:
+                coerced[column_name] = json.dumps(value, ensure_ascii=False)
+        return coerced

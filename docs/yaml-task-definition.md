@@ -224,6 +224,27 @@ tasks:
       delay_s: 10
 ```
 
+`mysql_table_sink` fields:
+
+| Field | Required/default | Meaning |
+| --- | --- | --- |
+| `type` | required: `mysql_table_sink` | Resource type. |
+| `connector` | required | Reference to a `mysql` connector. |
+| `table` | required | Non-empty existing table name. |
+| `mode` | `insert` | `insert` or `upsert`. |
+| `keys` | required for `upsert` | Unique key columns used to detect conflicts. |
+| `update_columns` | optional | For `upsert` only: whitelist of columns to update on conflict. Defaults to every payload column except `keys`. |
+| `update_expr` | optional | For `upsert` only: mapping of column to a raw SQL expression rendered on conflict (for example `updated_at: NOW(6)`). |
+| `serialize_json` | `auto` | `auto`, `always`, or `never`. When `auto`, list/dict payload values are JSON-serialized unless the target column is a JSON type. |
+
+In `upsert` mode, only the fields selected by `update_columns` are rewritten on
+conflict; when `update_columns` is unset, every non-key field is rewritten.
+Setting `update_columns: []` disables payload updates entirely, leaving only
+`update_expr` entries (for example `updated_at=NOW(6)`) to run on conflict.
+`update_expr` values are rendered as raw SQL expressions. Payload values
+that are lists or dicts are serialized to JSON strings before binding unless
+the column type is JSON (`auto`) or serialization is forced off (`never`).
+
 ### Conditional Sink Routing
 
 `emit` entries can mix unconditional sinks with conditional route mappings.

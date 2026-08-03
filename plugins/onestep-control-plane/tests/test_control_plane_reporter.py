@@ -12,9 +12,11 @@ from onestep import (
     MaxAttempts,
     MemoryQueue,
     OneStepApp,
+    Sink,
     TaskEvent,
     TaskEventKind,
 )
+from onestep.envelope import Envelope
 from onestep.task import EmitRoute
 from onestep_control_plane import ControlPlaneReporter, ControlPlaneReporterConfig
 
@@ -47,6 +49,29 @@ def _make_config() -> ControlPlaneReporterConfig:
         reconnect_base_delay_s=0.01,
         reconnect_max_delay_s=0.02,
     )
+
+
+class TableSink(Sink):
+    def __init__(
+        self,
+        *,
+        table: str,
+        mode: str,
+        keys: tuple[str, ...],
+        update_columns: tuple[str, ...] | None = None,
+        update_expr: dict[str, str] | None = None,
+        serialize_json: str = "auto",
+    ) -> None:
+        super().__init__(f"mysql.table_sink:{table}")
+        self.table_name = table
+        self.mode = mode
+        self.keys = keys
+        self.update_columns = update_columns
+        self.update_expr = update_expr or {}
+        self.serialize_json = serialize_json
+
+    async def send(self, envelope: Envelope) -> None:
+        return None
 
 
 def test_reporter_startup_sends_heartbeat() -> None:
@@ -89,6 +114,51 @@ def test_reporter_startup_sends_heartbeat() -> None:
     }
     assert sync_payload["sequence"] == 1
     assert sync_payload["app"]["topology_hash"].startswith("sha256:")
+
+
+def test_reporter_sync_payload_includes_mysql_table_sink_update_controls() -> None:
+    def render(update_columns: tuple[str, ...]) -> dict:
+        recorder = SenderRecorder()
+        app = OneStepApp("billing-sync")
+        sink = TableSink(
+            table="articles",
+            mode="upsert",
+            keys=("id",),
+            update_columns=update_columns,
+            update_expr={"updated_at": "NOW(6)"},
+            serialize_json="always",
+        )
+
+        @app.task(source=MemoryQueue("incoming"), emit=sink)
+        async def sync_articles(ctx, payload):
+            return payload
+
+        reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+        reporter.attach(app)
+
+        async def scenario() -> None:
+            await reporter.send_sync_now()
+
+        asyncio.run(scenario())
+        return next(payload for channel, payload in recorder.calls if channel == "sync")
+
+    first_payload = render(("title",))
+    second_payload = render(("body",))
+    emit = first_payload["app"]["tasks"][0]["emit"][0]
+
+    assert emit == {
+        "kind": "mysql_table_sink",
+        "name": "mysql.table_sink:articles",
+        "config": {
+            "table": "articles",
+            "mode": "upsert",
+            "keys": ["id"],
+            "update_columns": ["title"],
+            "update_expr": {"updated_at": "NOW(6)"},
+            "serialize_json": "always",
+        },
+    }
+    assert first_payload["app"]["topology_hash"] != second_payload["app"]["topology_hash"]
 
 
 def test_reporter_sync_payload_includes_task_topology() -> None:
