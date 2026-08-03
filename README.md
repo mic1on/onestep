@@ -310,7 +310,7 @@ Use `--json` to emit the build report for automation.
   docker run --rm \
     -e ONESTEP_TARGET=/workspace/worker.yaml \
     -v "$PWD:/workspace" \
-    ghcr.io/mic1on/onestep-worker:1.7.1
+    ghcr.io/mic1on/onestep-worker:1.7.2
   ```
   See [`deploy/worker-runtime-image.md`](deploy/worker-runtime-image.md).
 - **Embed in a web app** — recommended shape for FastAPI/Django in

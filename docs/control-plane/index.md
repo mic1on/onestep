@@ -151,6 +151,17 @@ docker compose up --build -d
 | `GET /api/v1/services/{name}/events?environment=` | 事件流 |
 | `GET /api/v1/services/{name}/commands?environment=` | 命令历史 |
 | `GET /api/v1/services/{name}/sessions?environment=` | 会话记录 |
+| `GET /api/v1/events?environment=` | 跨服务近期事件流 |
+
+`GET /api/v1/services/{name}/events` 支持以下过滤参数：
+
+| 参数 | 说明 |
+|---|---|
+| `task_name` | 按任务名过滤 |
+| `kind` | 按事件类型过滤（如 `succeeded` / `failed` / `retried` / `dead_lettered`） |
+| `instance_id` | 按 Worker 实例过滤 |
+| `occurred_after` / `occurred_before` | 按发生时间范围过滤（UTC ISO 时间） |
+| `limit` / `offset` | 分页 |
 
 所有查询接口均需 Console Auth（用户名/密码）认证。
 
