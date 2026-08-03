@@ -146,14 +146,44 @@ def _expand_env_vars(value: Any) -> Any:
     """Recursively expand environment variables in a configuration value.
     
     Supports ${VAR}, ${VAR:-default}, ${VAR:default} syntax in strings.
+    
+    When a string value is entirely a single env var reference like ${VAR},
+    the expanded value is parsed through YAML to preserve the original type
+    (int, bool, dict, list, etc.). Mixed strings like "prefix-${VAR}-suffix"
+    remain as plain strings.
     """
     if isinstance(value, str):
-        return _expand_env_vars_in_string(value)
+        expanded = _expand_env_vars_in_string(value)
+        if _is_pure_env_reference(value):
+            return _coerce_expanded_value(expanded)
+        return expanded
     if isinstance(value, Mapping):
         return {k: _expand_env_vars(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_expand_env_vars(item) for item in value]
     return value
+
+
+def _is_pure_env_reference(value: str) -> bool:
+    """Check if a string is entirely a single ${...} env var reference."""
+    stripped = value.strip()
+    return stripped.startswith("${") and stripped.endswith("}")
+
+
+def _coerce_expanded_value(value: str) -> Any:
+    """Parse an expanded env var value through YAML to preserve type.
+    
+    Returns the YAML-parsed value for proper types (int, bool, dict, list, None),
+    or the original string if the expanded value is empty or fails to parse.
+    """
+    if value == "":
+        return value
+    yaml = _import_yaml()
+    try:
+        parsed = yaml.safe_load(value)
+    except yaml.YAMLError:
+        return value
+    return value if parsed is None else parsed
 
 
 def _load_dotenv(path: str) -> int:
