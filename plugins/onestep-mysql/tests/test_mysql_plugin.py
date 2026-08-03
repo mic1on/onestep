@@ -154,6 +154,48 @@ def test_yaml_builds_mysql_resources_via_plugin_entry_point(tmp_path) -> None:
     assert app.state is app.resources["app_state"]
 
 
+def test_yaml_builds_table_sink_with_update_control(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {
+                "name": "mysql-plugin",
+            },
+            "resources": {
+                "db": {
+                    "type": "mysql",
+                    "dsn": dsn,
+                },
+                "processed": {
+                    "type": "mysql_table_sink",
+                    "connector": "db",
+                    "table": "processed_users",
+                    "mode": "upsert",
+                    "keys": ["id"],
+                    "update_columns": ["name", "email"],
+                    "update_expr": {
+                        "updated_at": "NOW(6)",
+                    },
+                    "serialize_json": "auto",
+                },
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+
+    sink = app.resources["processed"]
+    assert isinstance(sink, TableSink)
+    assert sink.mode == "upsert"
+    assert sink.keys == ("id",)
+    assert sink.update_columns == ("name", "email")
+    assert sink.update_expr == {"updated_at": "NOW(6)"}
+    assert sink.serialize_json == "auto"
+
+
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:
     entry_points = importlib_metadata.entry_points()
     if hasattr(entry_points, "select"):

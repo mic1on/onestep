@@ -41,7 +41,9 @@ _MYSQL_BINLOG_FIELDS = frozenset(
         "blocking",
     }
 )
-_MYSQL_TABLE_SINK_FIELDS = frozenset({"type", "connector", "table", "mode", "keys"})
+_MYSQL_TABLE_SINK_FIELDS = frozenset(
+    {"type", "connector", "table", "mode", "keys", "update_columns", "update_expr", "serialize_json"}
+)
 _MYSQL_CATALOG = ResourceCatalogEntry(
     type="mysql",
     roles=("connector",),
@@ -151,8 +153,11 @@ _MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("table", "string", required=True),
         ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert")),
         ResourceCatalogField("keys", "string_list"),
+        ResourceCatalogField("update_columns", "string_list"),
+        ResourceCatalogField("update_expr", "mapping"),
+        ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
     ),
-    topology_fields=("table", "mode", "keys"),
+    topology_fields=("table", "mode", "keys", "update_columns", "update_expr"),
 )
 
 
@@ -322,8 +327,17 @@ def _build_mysql_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) 
     if not hasattr(connector, "table_sink"):
         raise TypeError(f"resource {spec['connector']!r} cannot build mysql_table_sink")
     keys = spec.get("keys")
+    update_columns = spec.get("update_columns")
+    update_expr = spec.get("update_expr")
     return connector.table_sink(
         table=ctx.require_string(spec, "table"),
         mode=spec.get("mode", "insert"),
         keys=tuple(ctx.string_list(keys, field=f"{ctx.field}.keys")) if keys is not None else (),
+        update_columns=tuple(ctx.string_list(update_columns, field=f"{ctx.field}.update_columns"))
+        if update_columns is not None
+        else (),
+        update_expr=ctx.mapping_value(update_expr, field=f"{ctx.field}.update_expr")
+        if update_expr is not None
+        else None,
+        serialize_json=spec.get("serialize_json", "auto"),
     )
