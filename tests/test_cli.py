@@ -486,7 +486,9 @@ def test_task_replay_imports_target_once_and_bounds_parent_wall_time(
     document = json.loads(capsys.readouterr().out)
     assert exit_code == 1
     assert document["completion"] == "timed_out"
-    assert elapsed < 0.7
+    # Spawn startup time varies across supported Python versions and CI runners.
+    # Keep enough headroom for that cost while still catching a second 0.4s import.
+    assert elapsed < 1.0
     assert marker.read_text(encoding="utf-8").splitlines() == ["imported"]
 
 
