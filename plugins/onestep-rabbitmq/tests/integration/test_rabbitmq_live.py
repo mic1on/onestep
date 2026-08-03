@@ -11,14 +11,22 @@ if not os.getenv("ONESTEP_RABBITMQ_URL"):
     pytest.skip("set ONESTEP_RABBITMQ_URL to run RabbitMQ integration tests", allow_module_level=True)
 
 
+async def wait_for_consumer(queue):
+    while queue._consumer_tag is None:
+        await asyncio.sleep(0)
+
+
 @pytest.mark.integration
 def test_rabbitmq_round_trip_live():
     async def scenario():
         connector = RabbitMQConnector(os.environ["ONESTEP_RABBITMQ_URL"])
         queue_name = f"{os.getenv('ONESTEP_RABBITMQ_QUEUE', 'onestep.integration')}.{uuid.uuid4().hex}"
-        queue = connector.queue(queue_name, poll_interval_s=1.0, auto_delete=True, durable=False, exclusive=True)
+        queue = connector.queue(queue_name, poll_interval_s=10.0, auto_delete=True, durable=False, exclusive=True)
+        waiting_fetch = asyncio.create_task(queue.fetch(1))
+        await asyncio.wait_for(wait_for_consumer(queue), timeout=1.0)
+
         await queue.publish({"value": 1})
-        batch = await queue.fetch(1)
+        batch = await asyncio.wait_for(waiting_fetch, timeout=1.0)
         assert len(batch) == 1
         assert batch[0].payload == {"value": 1}
         await batch[0].ack()

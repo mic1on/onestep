@@ -26,6 +26,9 @@ class RabbitMQDelivery(Delivery):
     async def ack(self) -> None:
         await self._message.ack()
 
+    async def release_unstarted(self) -> None:
+        await self._message.nack(requeue=True)
+
     async def retry(self, *, delay_s: float | None = None) -> None:
         if delay_s:
             await asyncio.sleep(delay_s)
@@ -179,6 +182,11 @@ class RabbitMQQueue(Source, Sink):
         self._publish_channel: Any | None = None
         self._queue: Any | None = None
         self._exchange: Any | None = None
+        self._consumer_tag: str | None = None
+        self._consumer_messages: asyncio.Queue[Any] | None = None
+        self._consumer_lock: asyncio.Lock | None = None
+        self._consumer_loop: asyncio.AbstractEventLoop | None = None
+        self._consumer_accepting = False
         self._opened = False
 
     def _connection_secrets(self) -> list[str]:
@@ -193,6 +201,7 @@ class RabbitMQQueue(Source, Sink):
             connection = await self.connector.acquire()
             acquired = True
             self._receive_channel = await connection.channel()
+            self._receive_channel.close_callbacks.add(self._on_receive_channel_closed)
             await self._receive_channel.set_qos(prefetch_count=self.prefetch)
             self._publish_channel = await connection.channel(publisher_confirms=self.publisher_confirms)
             self._queue = await self._receive_channel.declare_queue(
@@ -244,16 +253,12 @@ class RabbitMQQueue(Source, Sink):
         if not self._opened:
             return
         try:
-            if self._publish_channel is not None:
-                await self._publish_channel.close()
-            if self._receive_channel is not None:
-                await self._receive_channel.close()
+            try:
+                await self._cancel_consumer()
+            finally:
+                await self._close_channels()
         finally:
-            self._publish_channel = None
-            self._receive_channel = None
-            self._queue = None
-            self._exchange = None
-            self._opened = False
+            self._clear_transport_state()
             await self.connector.release()
 
     async def fetch(self, limit: int) -> list[Delivery]:
@@ -261,18 +266,21 @@ class RabbitMQQueue(Source, Sink):
             await self.open()
             if self._queue is None:
                 return []
+            messages = await self._ensure_consumer()
             deliveries: list[Delivery] = []
             fetch_limit = max(1, min(limit, self.batch_size))
-            for index in range(fetch_limit):
-                timeout = self.poll_interval_s if index == 0 else 0
+            message = await messages.get()
+            deliveries.append(RabbitMQDelivery(message))
+            while len(deliveries) < fetch_limit:
                 try:
-                    message = await self._queue.get(fail=False, timeout=timeout)
-                except asyncio.TimeoutError:
-                    break
-                if message is None:
+                    message = messages.get_nowait()
+                except asyncio.QueueEmpty:
                     break
                 deliveries.append(RabbitMQDelivery(message))
             return deliveries
+        except asyncio.CancelledError:
+            await self._reset_transport_state(release_connection=True)
+            raise
         except ConnectorOperationError:
             raise
         except Exception as exc:
@@ -287,6 +295,76 @@ class RabbitMQQueue(Source, Sink):
                 raise
             await self._reset_transport_state(release_connection=True)
             raise connector_error from None
+
+    async def _ensure_consumer(self) -> asyncio.Queue[Any]:
+        messages, lock = self._ensure_consumer_state()
+        if self._consumer_tag is not None:
+            return messages
+        async with lock:
+            if self._consumer_tag is None:
+                if self._queue is None:
+                    raise RuntimeError("RabbitMQ queue is not open")
+                self._consumer_accepting = True
+                try:
+                    self._consumer_tag = await self._queue.consume(self._on_message)
+                except BaseException:
+                    self._consumer_accepting = False
+                    raise
+        return messages
+
+    def _ensure_consumer_state(self) -> tuple[asyncio.Queue[Any], asyncio.Lock]:
+        current_loop = asyncio.get_running_loop()
+        if self._consumer_loop is not current_loop:
+            maxsize = self.prefetch if self.prefetch > 0 else 0
+            self._consumer_messages = asyncio.Queue(maxsize=maxsize)
+            self._consumer_lock = asyncio.Lock()
+            self._consumer_loop = current_loop
+        assert self._consumer_messages is not None
+        assert self._consumer_lock is not None
+        return self._consumer_messages, self._consumer_lock
+
+    async def _on_message(self, message: Any) -> None:
+        if not self._consumer_accepting:
+            await message.nack(requeue=True)
+            return
+        messages, _ = self._ensure_consumer_state()
+        try:
+            messages.put_nowait(message)
+        except asyncio.QueueFull:
+            await message.nack(requeue=True)
+
+    async def _on_receive_channel_closed(
+        self, _channel: Any, _exc: BaseException | None
+    ) -> None:
+        if self._consumer_messages is None:
+            return
+        while not self._consumer_messages.empty():
+            self._consumer_messages.get_nowait()
+
+    async def _cancel_consumer(self) -> None:
+        self._consumer_accepting = False
+        consumer_tag = self._consumer_tag
+        self._consumer_tag = None
+        try:
+            if consumer_tag is not None and self._queue is not None:
+                await self._queue.cancel(consumer_tag)
+        finally:
+            await self._requeue_buffered_messages()
+
+    async def _requeue_buffered_messages(self) -> None:
+        if self._consumer_messages is None:
+            return
+        while not self._consumer_messages.empty():
+            message = self._consumer_messages.get_nowait()
+            await message.nack(requeue=True)
+
+    async def _close_channels(self) -> None:
+        try:
+            if self._publish_channel is not None:
+                await self._publish_channel.close()
+        finally:
+            if self._receive_channel is not None:
+                await self._receive_channel.close()
 
     async def send(self, envelope: Envelope) -> None:
         try:
@@ -320,17 +398,25 @@ class RabbitMQQueue(Source, Sink):
 
     async def _reset_transport_state(self, *, release_connection: bool) -> None:
         try:
-            if self._publish_channel is not None:
-                await self._publish_channel.close()
-            if self._receive_channel is not None:
-                await self._receive_channel.close()
+            try:
+                await self._cancel_consumer()
+            finally:
+                await self._close_channels()
         except Exception:
             pass
         finally:
-            self._publish_channel = None
-            self._receive_channel = None
-            self._queue = None
-            self._exchange = None
-            self._opened = False
+            self._clear_transport_state()
             if release_connection:
                 await self.connector.release()
+
+    def _clear_transport_state(self) -> None:
+        self._publish_channel = None
+        self._receive_channel = None
+        self._queue = None
+        self._exchange = None
+        self._consumer_tag = None
+        self._consumer_messages = None
+        self._consumer_lock = None
+        self._consumer_loop = None
+        self._consumer_accepting = False
+        self._opened = False

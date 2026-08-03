@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## onestep-mq 0.2.3
+
+- Uses RabbitMQ `basic.consume` push delivery with a prefetch-bounded buffer instead of per-message `basic.get` polling, while preserving batching, acknowledgement, retry, and cancellation semantics.
+
 ## onestep-mysql 0.3.5
 
 - Preserves the original MySQL exception as the cause of raised connector operation errors so root-cause messages such as invalid datetime values are visible in tracebacks.
