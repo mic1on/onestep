@@ -8,6 +8,12 @@ on:
     paths:
       - ".github/workflows/deploy-docs.yml"
       - "docs/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
 
 permissions:
@@ -68,12 +74,7 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs
-        run: |
-          if [ -f pnpm-lock.yaml ]; then
-            pnpm install --frozen-lockfile
-          else
-            pnpm install --no-frozen-lockfile
-          fi
+        run: pnpm install --frozen-lockfile
 
       - name: Build VitePress site
         working-directory: docs

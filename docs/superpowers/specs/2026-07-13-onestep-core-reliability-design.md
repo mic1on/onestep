@@ -221,4 +221,3 @@ The implementation plan should make these decisions before editing code:
 - whether to solve plugin all-tests verification with a runner script or test renames
 - whether low-level control-plane WebSocket classes should remain a stable public API or be documented as advanced/operational API
 - whether ack-failure behavior needs a new contract test after inspecting current backend implementations
-

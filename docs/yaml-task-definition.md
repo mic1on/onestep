@@ -185,7 +185,33 @@ This is the default mental model:
 - no hooks
 - no extra config
 
-### Level 2: Add Sinks And Runtime Policy
+### Level 2: Add Passthrough Sinks
+
+If a task only forwards the incoming payload to one or more sinks, `handler` can be omitted. The runtime will use a passthrough handler that returns the source payload unchanged.
+
+```yaml
+app:
+  name: event-forwarder
+
+resources:
+  incoming:
+    type: memory
+
+  notify:
+    type: http_sink
+    url: "https://example.com/hooks/events"
+    headers:
+      X-Api-Key: "${NOTIFY_TOKEN}"
+
+tasks:
+  - name: forward_events
+    source: incoming
+    emit: notify
+```
+
+Strict mode still requires each task to define either `handler` or a non-empty `emit`. Use a Python handler when the payload needs transform, validation, signing, or enrichment.
+
+### Level 3: Add Sinks And Runtime Policy
 
 ```yaml
 app:
@@ -245,7 +271,7 @@ Setting `update_columns: []` disables payload updates entirely, leaving only
 that are lists or dicts are serialized to JSON strings before binding unless
 the column type is JSON (`auto`) or serialization is forced off (`never`).
 
-### Conditional Sink Routing
+### Level 4: Add Conditional Sink Routing
 
 `emit` entries can mix unconditional sinks with conditional route mappings.
 YAML only names the predicate callable and target sinks; Python evaluates the
@@ -285,7 +311,7 @@ Rules:
 - predicate exceptions are task failures and use the task retry/dead-letter policy.
 - already completed sink sends are not rolled back if a later route or sink fails.
 
-### Level 3: Add Task Config
+### Level 5: Add Task Config
 
 Use `tasks[].config` for task definition data that should be visible at runtime through `ctx.task_config`.
 
@@ -308,7 +334,7 @@ Rule of thumb:
 - `handler.params`: call-time parameters for the Python function
 - `task.config`: task definition data the runtime and handler may inspect
 
-### Level 4: Add Hooks
+### Level 6: Add Hooks
 
 Only add hooks when task wiring or lifecycle behavior cannot live inside the main handler.
 
@@ -332,7 +358,7 @@ tasks:
         - ref: worker.task_hooks:on_sync_users_failed
 ```
 
-### Level 5: Add Control-Plane Reporter
+### Level 7: Add Control-Plane Reporter
 
 Use the control-plane reporter plugin only when you need control-plane telemetry. Start with the smallest shape:
 
@@ -364,7 +390,7 @@ reporter:
 - It can also be supplied with `ONESTEP_SERVICE_DESCRIPTION`.
 - Task-level `tasks[].description` remains separate and describes an individual task.
 
-### Level 6: Full Wiring Example
+### Level 8: Full Wiring Example
 
 ```yaml
 apiVersion: onestep/v1alpha1
@@ -410,6 +436,13 @@ resources:
     mode: upsert
     keys: [id]
 
+  notify_api:
+    type: http_sink
+    url: "${NOTIFY_URL}"
+    headers:
+      Authorization: "Bearer ${NOTIFY_TOKEN}"
+    success_statuses: [200, 202]
+
   audit_stream:
     type: redis_stream
     connector: redis_main
@@ -441,7 +474,7 @@ tasks:
   - name: sync_users
     description: Sync incremental users into DW
     source: users_source
-    emit: [users_sink, audit_stream]
+    emit: [users_sink, audit_stream, notify_api]
     dead_letter: [users_dead]
     config:
       target_table: dw_users
@@ -563,7 +596,7 @@ Scheduled `interval` and `cron` resources accept `max_queued_runs` for
 `http_sink` sends task results as JSON by default. Configure `body` only when
 the outbound payload should be reshaped. `url`, `headers`, `params`, and
 configured `body` values can reference `body`, `payload`, `meta`, and
-`attempts` with `{{ ... }}` variables.
+`attempts` with `&#123;&#123; ... &#125;&#125;` variables.
 
 Plugin resource types:
 

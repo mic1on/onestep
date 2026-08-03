@@ -621,4 +621,3 @@ git commit -m "docs: codify onestep core reliability contract"
 ```
 
 Expected: one commit containing the reliability contract, local verification script, and focused tests.
-

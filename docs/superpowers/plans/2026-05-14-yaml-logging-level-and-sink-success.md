@@ -359,4 +359,3 @@ Expected:
 git add tests/test_cli.py tests/contract/test_runtime_contract.py tests/test_http_sink.py
 git commit -m "test: cover yaml logging level and sink success logs"
 ```
-

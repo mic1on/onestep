@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>onestep 框架演进计划 | 当前状态</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #64748b;
+      --line: #dbe3ee;
+      --surface: #ffffff;
+      --surface-soft: #f6f8fb;
+      --primary: #4f46e5;
+      --primary-soft: #eef2ff;
+      --success: #047857;
+      --success-soft: #ecfdf5;
+      --warning: #a16207;
+      --warning-soft: #fefce8;
+      --danger: #b91c1c;
+      --danger-soft: #fef2f2;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { background: var(--surface); scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--surface);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace; }
+    p, li, td, th, code { overflow-wrap: anywhere; }
+    .shell { width: min(1160px, calc(100% - 40px)); margin: 0 auto; min-width: 0; }
+    .band { border-bottom: 1px solid var(--line); }
+    .hero { padding: 48px 0 38px; background: var(--surface-soft); }
+    .brand { display: flex; align-items: center; gap: 12px; color: var(--primary); font-weight: 700; }
+    .mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 7px; color: #fff; background: var(--primary); }
+    h1 { max-width: 860px; margin: 24px 0 12px; font-size: 52px; line-height: 1.08; }
+    .lead { max-width: 880px; margin: 0; color: #334155; font-size: 19px; line-height: 1.7; }
+    .snapshot { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+    .badge { display: inline-flex; min-height: 26px; align-items: center; padding: 3px 9px; border-radius: 6px; font-size: 12px; font-weight: 700; }
+    .badge-done { color: var(--success); background: var(--success-soft); }
+    .badge-next { color: var(--primary); background: var(--primary-soft); }
+    .badge-later { color: var(--warning); background: var(--warning-soft); }
+    section { padding: 40px 0; }
+    h2 { margin: 0 0 10px; font-size: 26px; line-height: 1.25; }
+    h3 { margin: 0 0 8px; font-size: 17px; line-height: 1.35; }
+    .section-lead { max-width: 820px; margin: 0 0 22px; color: var(--muted); line-height: 1.65; }
+    .status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .status-item { min-width: 0; padding: 20px; border-right: 1px solid var(--line); }
+    .status-item:last-child { border-right: 0; }
+    .status-item strong { display: block; margin: 10px 0 6px; }
+    .status-item p { margin: 0; color: var(--muted); line-height: 1.55; }
+    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+    table { width: 100%; min-width: 860px; border-collapse: collapse; background: var(--surface); }
+    th, td { padding: 15px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: #475569; background: var(--surface-soft); font-size: 13px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td { color: #334155; line-height: 1.55; }
+    .phase-id { color: var(--primary); font-weight: 700; }
+    .mermaid-wrap { min-width: 0; padding: 20px; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+    .mermaid { min-width: 760px; }
+    .decisions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .decision { min-width: 0; padding: 18px; border-top: 3px solid var(--primary); background: var(--surface-soft); }
+    .decision p { margin: 0; color: #475569; line-height: 1.6; }
+    .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .metric { min-width: 0; padding: 20px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .metric:nth-child(3n) { border-right: 0; }
+    .metric:nth-last-child(-n+3) { border-bottom: 0; }
+    .metric b { display: block; margin-bottom: 6px; color: var(--primary); font-size: 23px; }
+    .metric span { color: var(--muted); line-height: 1.5; }
+    .non-goals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; margin: 0; padding: 0; list-style: none; }
+    .non-goals li { padding: 12px 0; color: #334155; border-bottom: 1px solid var(--line); }
+    .non-goals li::before { content: "不做"; display: inline-block; margin-right: 9px; padding: 2px 6px; border-radius: 4px; color: var(--danger); background: var(--danger-soft); font-size: 11px; font-weight: 700; }
+    footer { padding: 26px 0 42px; color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 820px) {
+      .shell { width: min(100% - 24px, 720px); }
+      h1 { font-size: 38px; }
+      .lead { font-size: 17px; }
+      .status-grid, .decisions, .metrics, .non-goals { grid-template-columns: 1fr; }
+      .status-item, .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .status-item:last-child, .metric:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero band">
+    <div class="shell">
+      <div class="brand"><span class="mark">1</span><span>onestep</span></div>
+      <h1>框架演进计划</h1>
+      <p class="lead">onestep 继续作为代码优先的数据任务运行时演进。优先级不是增加 YAML 表达力或堆叠连接器，而是先保证可靠交付、失败可复现和故障可恢复。</p>
+      <div class="snapshot">
+        <span class="badge badge-done">P0 已完成</span>
+        <span class="badge badge-done">P1 已完成</span>
+        <span class="badge badge-next">P2 下一阶段</span>
+        <span class="badge badge-later">P3-P5 后续</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="band">
+    <div class="shell">
+      <h2>截至 2026-07-30 的状态</h2>
+      <p class="section-lead">状态依据 main 分支提交、核心版本与公开 CLI/API 搜索结果核对。</p>
+      <div class="status-grid">
+        <article class="status-item"><span class="badge badge-done">已落地</span><strong>P0 连接器正确性</strong><p>MongoDB 游标与持久化边界、Elasticsearch 模糊重试已在插件补丁版本中修复。</p></article>
+        <article class="status-item"><span class="badge badge-done">已落地</span><strong>P1 一致性契约</strong><p>核心 v1.7.3 提供能力声明和共享契约运行器，并覆盖十个官方连接器。</p></article>
+        <article class="status-item"><span class="badge badge-next">当前焦点</span><strong>P2 本地 Handler 闭环</strong><p><code>run_task_once()</code> 可作为基础，但路线图承诺的 CLI、捕获格式和连接检查仍待设计实现。</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>有序路线图</h2>
+      <p class="section-lead">每一阶段都有明确退出门槛。只有前一阶段把质量能力固化后，才扩大框架表面或连接器数量。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>阶段</th><th>状态</th><th>主要交付</th><th>退出门槛</th></tr></thead>
+          <tbody>
+            <tr><td class="phase-id">P0</td><td><span class="badge badge-done">已完成</span></td><td>修复模糊重试、游标状态、持久化失败与 Python 直连校验缺口。</td><td>受影响插件回归与可靠性套件通过。</td></tr>
+            <tr><td class="phase-id">P1</td><td><span class="badge badge-done">已完成</span></td><td>按 source、checkpoint、claim release、sink ACK、重放安全与公开错误声明能力。</td><td>全部官方插件声明能力并通过适用契约。</td></tr>
+            <tr><td class="phase-id">P2</td><td><span class="badge badge-next">下一阶段</span></td><td>单条本地执行、Envelope 捕获/重放、<code>check --connect</code>、Handler 测试脚手架。</td><td>无需 Worker 或 Control Plane 即可复现已捕获的生产 Handler 失败。</td></tr>
+            <tr><td class="phase-id">P3</td><td><span class="badge badge-later">规划中</span></td><td>稳定 delivery 关联值、独立 attempt、lag/cursor/retry 指标、恢复操作审计。</td><td>操作员可在 Control Plane 定位失败投递及完整尝试链路。</td></tr>
+            <tr><td class="phase-id">P4</td><td><span class="badge badge-later">规划中</span></td><td><code>create-plugin</code> 脚手架、目录校验、兼容矩阵、支持等级、CI 模板。</td><td>社区插件无需复制官方插件即可通过契约套件。</td></tr>
+            <tr><td class="phase-id">P5</td><td><span class="badge badge-later">需求驱动</span></td><td>S3/MinIO 优先候选；NATS JetStream 及云/SaaS 连接器需真实用户证据。</td><td>已确认工作负载无法由现有连接器干净覆盖。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>阶段依赖</h2>
+      <p class="section-lead">路线的关键逻辑是：先把正确性变成可机械验证的契约，再把契约用于本地诊断、运营恢复和生态扩张。</p>
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+flowchart LR
+  P0["P0 正确性修复<br/>已完成"] --> P1["P1 一致性契约<br/>已完成"]
+  P1 --> P2["P2 本地复现<br/>下一阶段"]
+  P2 --> P3["P3 交付可观测"]
+  P2 --> P4["P4 插件开发平台"]
+  P3 --> P4
+  P4 --> P5["P5 按需扩展连接器"]
+  classDef done fill:#ecfdf5,stroke:#047857,color:#172033;
+  classDef next fill:#eef2ff,stroke:#4f46e5,color:#172033;
+  classDef later fill:#fefce8,stroke:#a16207,color:#172033;
+  class P0,P1 done;
+  class P2 next;
+  class P3,P4,P5 later;
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>下一阶段需要先定的三个决策</h2>
+      <div class="decisions">
+        <article class="decision"><h3>P2 运行器边界</h3><p>泛化现有 <code>run_task_once()</code>，还是引入独立 diagnostic runner；不能复用远程 manual-run 语义造成耦合。</p></article>
+        <article class="decision"><h3>P2 捕获安全</h3><p>Envelope 格式必须版本化、JSON-safe，并默认脱敏；本地重放默认 dry-run，显式选择才发送到 sink。</p></article>
+        <article class="decision"><h3>P3 协调窗口</h3><p>delivery/attempt 字段会穿过 runtime、reporter、后端存储与前端，必须以 additive payload 同步演进。</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>成功指标</h2>
+      <div class="metrics">
+        <div class="metric"><b>&lt; 10 分钟</b><span>新任务到首次本地成功投递</span></div>
+        <div class="metric"><b>&ge; 90%</b><span>生产 Handler 失败可本地复现</span></div>
+        <div class="metric"><b>100%</b><span>官方连接器声明 conformance profile</span></div>
+        <div class="metric"><b>&ge; 95%</b><span>公开连接器错误归一化分类</span></div>
+        <div class="metric"><b>&lt; 5 分钟</b><span>失败投递定位并重放</span></div>
+        <div class="metric"><b>&lt; 1 工作日</b><span>社区插件到通过契约套件</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>明确不进入路线图</h2>
+      <ul class="non-goals">
+        <li>YAML 字段转换语言</li><li>官方领域业务 Handler 库</li>
+        <li>Airflow/Temporal 式 DAG 编排</li><li>file-tail/syslog 日志 Agent 定位</li>
+        <li>数据库 DDL 或迁移所有权</li><li>exactly-once 承诺</li>
+        <li>连接器数量 KPI</li><li>恢复能力未落地前新增 Control Plane 表面</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer><div class="shell">依据 <code>docs/framework-evolution-roadmap.md</code>、CHANGELOG、main 分支提交与源码检索生成。</div></footer>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "strict" });
+  </script>
+</body>
+</html>

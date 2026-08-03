@@ -1,0 +1,24 @@
+### Build ###
+node_modules
+.vitepress/cache
+dist*
+dist-ssr
+*.local
+auto-imports.d.ts
+.eslintrc-auto-import.json
+src/assets/sprites/*.*
+!src/assets/sprites/.gitkeep
+*.log
+package-lock.json
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### MAC ###
+.DS_Store
+
+### version check ###
+version.json

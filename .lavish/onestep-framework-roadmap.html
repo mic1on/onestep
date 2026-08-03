@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>onestep 框架演进路线图</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #dbe3ee;
+      --soft: #f6f8fb;
+      --indigo: #4f46e5;
+      --indigo-soft: #eef2ff;
+      --green: #047857;
+      --green-soft: #ecfdf5;
+      --amber: #b45309;
+      --amber-soft: #fffbeb;
+      --red: #b91c1c;
+      --red-soft: #fef2f2;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: #fff; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #fff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    code { font-family: "SFMono-Regular", Consolas, monospace; }
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+    .band { border-bottom: 1px solid var(--line); }
+    .hero { padding: 48px 0 36px; background: var(--soft); }
+    .brand { display: flex; align-items: center; gap: 12px; color: var(--indigo); font-weight: 800; }
+    .mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 7px; background: var(--indigo); color: #fff; }
+    h1 { margin: 24px 0 12px; max-width: 850px; font-size: clamp(34px, 5vw, 58px); line-height: 1.05; }
+    .lead { max-width: 850px; margin: 0; color: #334155; font-size: 19px; line-height: 1.7; }
+    .position { margin-top: 26px; padding-left: 18px; border-left: 4px solid var(--indigo); font-size: 17px; line-height: 1.7; }
+    section { padding: 38px 0; }
+    h2 { margin: 0 0 18px; font-size: 25px; }
+    h3 { margin: 0 0 8px; font-size: 17px; }
+    p { line-height: 1.65; }
+    .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .fact { min-width: 0; padding: 20px; background: #fff; border-right: 1px solid var(--line); }
+    .fact:last-child { border-right: 0; }
+    .fact strong { display: block; margin-bottom: 7px; }
+    .fact span { color: var(--muted); line-height: 1.55; }
+    .roadmap { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .phase { display: grid; grid-template-columns: 80px 210px minmax(0, 1fr) 230px; min-width: 0; align-items: start; border-bottom: 1px solid var(--line); }
+    .phase:last-child { border-bottom: 0; }
+    .phase > div { min-width: 0; padding: 18px; }
+    .phase .id { align-self: stretch; display: grid; place-items: center; font-weight: 800; color: var(--indigo); background: var(--indigo-soft); }
+    .phase .deliver { color: #334155; line-height: 1.55; }
+    .phase .gate { color: var(--muted); line-height: 1.55; border-left: 1px solid var(--line); }
+    .now .id { color: #fff; background: var(--indigo); }
+    .now { box-shadow: inset 4px 0 var(--indigo); }
+    .badge { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 750; }
+    .badge-now { color: var(--indigo); background: var(--indigo-soft); }
+    .badge-done { color: var(--green); background: var(--green-soft); }
+    .badge-risk { color: var(--amber); background: var(--amber-soft); }
+    .p0-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .risk { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 8px; }
+    .risk .label { margin-bottom: 10px; font-size: 12px; color: var(--red); font-weight: 800; text-transform: uppercase; }
+    .risk p { margin: 0; color: #475569; }
+    .sequence { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+    .step { position: relative; min-width: 0; padding: 17px; border-top: 3px solid var(--indigo); background: var(--soft); }
+    .step:not(:last-child)::after { content: "→"; position: absolute; top: 50%; right: -13px; z-index: 2; color: var(--muted); font-weight: 800; transform: translateY(-50%); }
+    .step small { color: var(--muted); }
+    .metrics { width: 100%; border-collapse: collapse; border: 1px solid var(--line); }
+    .metrics th, .metrics td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .metrics th { background: var(--soft); color: #475569; font-size: 13px; }
+    .metrics tr:last-child td { border-bottom: 0; }
+    .no-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; margin: 0; padding: 0; list-style: none; }
+    .no-list li { padding: 12px 0; border-bottom: 1px solid var(--line); color: #334155; }
+    .no-list li::before { content: "不做"; display: inline-block; margin-right: 10px; padding: 2px 6px; color: var(--red); background: var(--red-soft); border-radius: 4px; font-size: 11px; font-weight: 800; }
+    footer { padding: 28px 0 44px; color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 860px) {
+      .shell { width: min(100% - 24px, 720px); }
+      .facts, .p0-grid, .sequence, .no-list { grid-template-columns: 1fr; }
+      .fact { border-right: 0; border-bottom: 1px solid var(--line); }
+      .fact:last-child { border-bottom: 0; }
+      .phase { grid-template-columns: 58px minmax(0, 1fr); }
+      .phase .deliver, .phase .gate { grid-column: 2; padding-top: 0; border-left: 0; }
+      .step:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -17px; transform: translateX(50%); }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero band">
+    <div class="shell">
+      <div class="brand"><span class="mark">1</span><span>onestep</span></div>
+      <h1>从“能连接”走向“可信运行”</h1>
+      <p class="lead">接下来的竞争力不来自更多 YAML 语法或更多插件，而来自数据不会被静默跳过、生产失败能够本地复现、故障能够被快速恢复。</p>
+      <div class="position"><strong>产品定位：</strong>代码优先的数据任务运行时。Python 负责业务转换；YAML 只负责资源、策略与 <code>handler.ref</code> 的装配。</div>
+    </div>
+  </header>
+
+  <section class="band">
+    <div class="shell">
+      <h2>当前判断</h2>
+      <div class="facts">
+        <div class="fact"><strong><span class="badge badge-done">已完成</span> 连接器广度</strong><span>Elasticsearch、ClickHouse、MongoDB 已进入 main；现阶段无需用插件数量证明框架价值。</span></div>
+        <div class="fact"><strong><span class="badge badge-done">已完成</span> 凭据脱敏</strong><span>最近提交已覆盖九类连接器，旧审查结论不再作为未完成项。</span></div>
+        <div class="fact"><strong><span class="badge badge-risk">仍有风险</span> 正确性边界</strong><span>模糊写入重试、游标 generation gap、持久化失败和直接 API 校验仍需先解决。</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>有序路线图</h2>
+      <div class="roadmap">
+        <div class="phase now"><div class="id">P0</div><div><h3>连接器正确性修复</h3><span class="badge badge-now">现在</span></div><div class="deliver">修复已确认的数据跳过、重复写与状态不一致风险。</div><div class="gate"><strong>退出门槛</strong><br>回归测试、受影响插件套件、全仓可靠性门禁通过。</div></div>
+        <div class="phase"><div class="id">P1</div><div><h3>Conformance Kit</h3></div><div class="deliver">按 source、checkpoint、claimed delivery、acknowledged sink 等能力组合契约。</div><div class="gate"><strong>退出门槛</strong><br>全部官方插件声明能力并通过适用契约。</div></div>
+        <div class="phase"><div class="id">P2</div><div><h3>本地 Handler 闭环</h3></div><div class="deliver">单条执行、Envelope 捕获/重放、<code>check --connect</code>、测试脚手架。</div><div class="gate"><strong>退出门槛</strong><br>无需 Worker 或 Control Plane 即可复现生产 Handler 失败。</div></div>
+        <div class="phase"><div class="id">P3</div><div><h3>Delivery 可观测性</h3></div><div class="deliver">投递与 attempt 关联、lag/cursor/retry 指标、恢复审计。</div><div class="gate"><strong>退出门槛</strong><br>操作员可以定位一条失败投递的完整尝试链路。</div></div>
+        <div class="phase"><div class="id">P4</div><div><h3>插件开发平台</h3></div><div class="deliver">插件脚手架、支持等级、CI 模板、兼容矩阵。</div><div class="gate"><strong>退出门槛</strong><br>社区插件无需复制官方插件即可通过契约。</div></div>
+        <div class="phase"><div class="id">P5</div><div><h3>按需求扩展连接器</h3></div><div class="deliver">默认候选为 S3/MinIO；NATS 与云厂商插件由真实工作负载驱动。</div><div class="gate"><strong>退出门槛</strong><br>现有连接器无法干净覆盖已确认的用户场景。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>P0 已确认的四类缺口</h2>
+      <div class="p0-grid">
+        <article class="risk"><div class="label">Elasticsearch / 重复风险</div><h3>模糊网关响应不应自动重放 auto-ID 写入</h3><p>请求体发送后收到 502/503/504，后端是否已提交无法确定。没有稳定 ID 时，内部重试可能制造重复文档。</p></article>
+        <article class="risk"><div class="label">MongoDB / 跳数风险</div><h3>later ACK 后的 earlier retry 必须作废整个 generation</h3><p>后一个 token 已 ACK、前一个随后 retry 时，不能把后一个 token 写入持久游标。</p></article>
+        <article class="risk"><div class="label">MongoDB / 状态风险</div><h3>状态保存失败不能先推进内存游标</h3><p>只有 durable state 确认保存后，才能移除 contiguous prefix 并更新内存 committed token。</p></article>
+        <article class="risk"><div class="label">MongoDB / 配置风险</div><h3>Python 直连 API 与 strict YAML 必须同样严格</h3><p><code>batch_size=0</code>、非法时间参数和排除 cursor 字段的 projection 应在构造阶段失败。</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>阶段依赖</h2>
+      <div class="sequence">
+        <div class="step"><h3>正确性</h3><small>先消除已知风险</small></div>
+        <div class="step"><h3>契约化</h3><small>把经验固化为门禁</small></div>
+        <div class="step"><h3>可复现</h3><small>缩短开发与排障闭环</small></div>
+        <div class="step"><h3>可运营</h3><small>贯通运行时与控制面</small></div>
+        <div class="step"><h3>可扩展</h3><small>再开放插件增长</small></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>衡量是否真的变好</h2>
+      <table class="metrics">
+        <thead><tr><th>指标</th><th>首个目标</th><th>它证明什么</th></tr></thead>
+        <tbody>
+          <tr><td>新任务到首次本地成功投递</td><td>&lt; 10 分钟</td><td>代码优先没有牺牲易用性</td></tr>
+          <tr><td>生产 Handler 失败可本地复现</td><td>≥ 90%</td><td>诊断能力优于堆叠内置函数</td></tr>
+          <tr><td>官方插件声明 conformance profile</td><td>100%</td><td>插件质量可机械验证</td></tr>
+          <tr><td>失败投递定位并重放</td><td>&lt; 5 分钟</td><td>Control Plane 真正缩短恢复时间</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="shell">
+      <h2>这条路线明确不做</h2>
+      <ul class="no-list">
+        <li>YAML 字段转换语言</li><li>官方领域 Handler 大礼包</li>
+        <li>Airflow / Temporal 式 DAG 编排</li><li>Logstash 式日志 Agent 定位</li>
+        <li>数据库 DDL 与迁移管理</li><li>Exactly-once 宣称</li>
+        <li>以插件数量作为 KPI</li><li>先做界面、后补恢复能力</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer><div class="shell">依据 2026-07-29 main 分支核对结果。执行细节以仓库中的 Markdown 计划为准。</div></footer>
+</body>
+</html>
