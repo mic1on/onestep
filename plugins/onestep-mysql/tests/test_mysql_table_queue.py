@@ -2,10 +2,10 @@ import asyncio
 from pathlib import Path
 
 import sqlalchemy as sa
+from onestep_mysql import MySQLConnector
 
 from onestep import OneStepApp
 from onestep.testing import ReplaySafeSinkHarness, run_replay_safe_sink_contract
-from onestep_mysql import MySQLConnector
 
 
 def test_mysql_table_queue_round_trip(tmp_path: Path) -> None:

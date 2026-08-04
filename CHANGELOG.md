@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## onestep-mysql 0.4.0
+
+- Migrates MySQL table, queue, incremental, state, and cursor SQLAlchemy
+  operations to `AsyncEngine` with the `asyncmy` driver instead of wrapping
+  synchronous `create_engine` calls in `asyncio.to_thread`.
+- Accepts existing `mysql://` and `mysql+pymysql://` DSNs while adapting them
+  to asyncmy; SQLite test/local DSNs use `aiosqlite`.
+- Keeps the synchronous `mysql-replication` binlog reader isolated in a thread
+  because that dependency does not expose an async API.
+
 ## 1.8.1
 
 - Adds `ExponentialBackoff` and `ByFailureKind` retry policies, exported from the public API and validated/built from YAML retry type schemas.

@@ -346,18 +346,47 @@ def test_mysql_connector_initializes_cache_and_collects_engine_option_secrets() 
     assert "engine-option-secret" in connector._secret_tokens()
 
 
+def test_mysql_connector_does_not_create_asyncio_lock_during_sync_construction() -> None:
+    import asyncio
+
+    asyncio.set_event_loop(None)
+    connector = MySQLConnector("sqlite://")
+
+    assert connector._table_lock is None
+
+    asyncio.run(connector.close())
+
+
+def test_mysql_connector_uses_async_sqlalchemy_dialects() -> None:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    sqlite_connector = MySQLConnector("sqlite://")
+    mysql_connector = MySQLConnector("mysql+pymysql://user:pass@localhost/app")
+
+    assert isinstance(sqlite_connector.engine, AsyncEngine)
+    assert sqlite_connector.engine.dialect.driver == "aiosqlite"
+    assert isinstance(mysql_connector.engine, AsyncEngine)
+    assert mysql_connector.engine.dialect.driver == "asyncmy"
+
+    import asyncio
+
+    asyncio.run(sqlite_connector.close())
+    asyncio.run(mysql_connector.close())
+
+
 def test_mysql_connector_defaults_pool_pre_ping_but_accepts_engine_option() -> None:
     default_connector = MySQLConnector("sqlite://")
-    assert default_connector.engine.pool._pre_ping is True
+    assert default_connector.engine.sync_engine.pool._pre_ping is True
 
     explicit_connector = MySQLConnector("sqlite://", pool_pre_ping=False)
-    assert explicit_connector.engine.pool._pre_ping is False
+    assert explicit_connector.engine.sync_engine.pool._pre_ping is False
 
 
 def test_mysql_connector_error_preserves_original_exception_as_cause() -> None:
     import asyncio
 
     import sqlalchemy as sa
+
     from onestep.envelope import Envelope
 
     connector = MySQLConnector("sqlite://")
@@ -367,7 +396,10 @@ def test_mysql_connector_error_preserves_original_exception_as_cause() -> None:
         params={},
         orig=Exception("Incorrect datetime value: '2026-07-31 17:37 '"),
     )
-    sink._send_sync = lambda payload: (_ for _ in ()).throw(original)
+    async def raise_original(payload):
+        raise original
+
+    sink._send = raise_original
 
     async def scenario() -> None:
         try:

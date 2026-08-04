@@ -22,3 +22,9 @@ Python usage:
 ```python
 from onestep_mysql import MySQLConnector
 ```
+
+SQLAlchemy database operations use `AsyncEngine` and async drivers. Existing
+`mysql://` and `mysql+pymysql://` DSNs are accepted and are automatically
+adapted to the `asyncmy` dialect. SQLite is supported in tests and local
+development through `aiosqlite`. The binlog reader remains isolated behind a
+thread boundary because `mysql-replication` is a synchronous library.
