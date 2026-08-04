@@ -13,6 +13,7 @@ from onestep.config import (
     _expand_env_var,
     _expand_env_vars,
     _load_dotenv,
+    _make_expand_env_var,
     load_yaml_app,
 )
 from onestep.cli import main
@@ -809,3 +810,158 @@ def test_load_yaml_app_env_file_type_error(tmp_path):
     with _registered_yaml_module():
         with pytest.raises(TypeError, match="'app.env_file' must be a string"):
             load_yaml_app(str(config_path))
+
+
+# ---------------------------------------------------------------------------
+# _make_expand_env_var
+# ---------------------------------------------------------------------------
+
+def test_make_expand_env_var_uses_env_over_os_environ(monkeypatch):
+    monkeypatch.setenv("FOO", "from-shell")
+    expand = _make_expand_env_var({"FOO": "from-env"})
+    import re
+    match = re.compile(r"\$\{([^}]+)\}").search("${FOO}")
+    assert expand(match) == "from-env"
+
+
+def test_make_expand_env_var_falls_back_to_os_environ(monkeypatch):
+    monkeypatch.setenv("FOO", "from-shell")
+    expand = _make_expand_env_var({"OTHER": "other"})
+    import re
+    match = re.compile(r"\$\{([^}]+)\}").search("${FOO}")
+    assert expand(match) == "from-shell"
+
+
+def test_make_expand_env_var_default_with_env(monkeypatch):
+    monkeypatch.delenv("MISSING", raising=False)
+    expand = _make_expand_env_var({"MISSING": "from-env"})
+    import re
+    match = re.compile(r"\$\{([^}]+)\}").search("${MISSING:-default}")
+    assert expand(match) == "from-env"
+
+
+def test_make_expand_env_var_default_fallback(monkeypatch):
+    monkeypatch.delenv("MISSING", raising=False)
+    expand = _make_expand_env_var({})
+    import re
+    match = re.compile(r"\$\{([^}]+)\}").search("${MISSING:-default}")
+    assert expand(match) == "default"
+
+
+def test_make_expand_env_var_none_env_uses_os_environ(monkeypatch):
+    monkeypatch.setenv("FOO", "from-shell")
+    expand = _make_expand_env_var(None)
+    import re
+    match = re.compile(r"\$\{([^}]+)\}").search("${FOO}")
+    assert expand(match) == "from-shell"
+
+
+# ---------------------------------------------------------------------------
+# _expand_env_vars with env
+# ---------------------------------------------------------------------------
+
+def test_expand_env_vars_env_overrides_os_environ(monkeypatch):
+    monkeypatch.setenv("PREFETCH", "100")
+    result = _expand_env_vars({"prefetch": "${PREFETCH}"}, env={"PREFETCH": "5"})
+    assert result["prefetch"] == 5
+
+
+def test_expand_env_vars_env_falls_back_to_os_environ(monkeypatch):
+    monkeypatch.setenv("PREFETCH", "5")
+    result = _expand_env_vars({"prefetch": "${PREFETCH}"}, env={"OTHER": "x"})
+    assert result["prefetch"] == 5
+
+
+def test_expand_env_vars_env_mixed_string(monkeypatch):
+    monkeypatch.setenv("HOST", "from-shell")
+    result = _expand_env_vars(
+        {"dsn": "mysql://${HOST}:3306/db"},
+        env={"HOST": "from-env"},
+    )
+    assert result["dsn"] == "mysql://from-env:3306/db"
+
+
+# ---------------------------------------------------------------------------
+# _collect_env_refs with env
+# ---------------------------------------------------------------------------
+
+def test_collect_env_refs_env_satisfies_variable(monkeypatch):
+    monkeypatch.delenv("SECRET", raising=False)
+    config = {"resources": {"db": {"dsn": "${SECRET}"}}}
+    missing = _collect_env_refs(config, env={"SECRET": "present"})
+    assert "SECRET" not in missing
+
+
+def test_collect_env_refs_env_missing_both(monkeypatch):
+    monkeypatch.delenv("SECRET", raising=False)
+    config = {"resources": {"db": {"dsn": "${SECRET}"}}}
+    missing = _collect_env_refs(config, env={"OTHER": "x"})
+    assert "SECRET" in missing
+
+
+# ---------------------------------------------------------------------------
+# load_yaml_app with env
+# ---------------------------------------------------------------------------
+
+def test_load_yaml_app_with_env_param(tmp_path, monkeypatch):
+    monkeypatch.delenv("MY_DSN", raising=False)
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "env-param-test",
+                "resources": {
+                    "db": {"type": "memory", "dsn": "${MY_DSN}"},
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with _registered_yaml_module():
+        app = load_yaml_app(str(config_path), env={"MY_DSN": "db://localhost"})
+    assert app.name == "env-param-test"
+
+
+def test_load_yaml_app_env_param_overrides_os_environ(tmp_path, monkeypatch):
+    monkeypatch.setenv("MY_DSN", "from-shell")
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "override-test",
+                "resources": {
+                    "db": {"type": "memory", "dsn": "${MY_DSN}"},
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with _registered_yaml_module():
+        app = load_yaml_app(str(config_path), env={"MY_DSN": "from-env-param"})
+    assert app.name == "override-test"
+
+
+def test_load_yaml_app_strict_env_with_env_param(tmp_path, monkeypatch):
+    monkeypatch.delenv("SECRET", raising=False)
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "strict-env-param",
+                "resources": {
+                    "db": {"type": "memory", "dsn": "${SECRET}"},
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with _registered_yaml_module():
+        app = load_yaml_app(
+            str(config_path),
+            strict_env=True,
+            env={"SECRET": "from-env-param"},
+        )
+    assert app.name == "strict-env-param"

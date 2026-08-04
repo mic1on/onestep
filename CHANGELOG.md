@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Adds optional `env` parameter to `OneStepApp.load()` and `load_yaml_app()`, allowing callers to inject a `Mapping[str, str]` of variable overrides that are checked before `os.environ` during `${VAR}` expansion. This eliminates the need for callers to export values to `os.environ` before loading an app.
+
 ## onestep-mysql 0.4.0
 
 - Migrates MySQL table, queue, incremental, state, and cursor SQLAlchemy

@@ -142,29 +142,65 @@ def _expand_env_var(match: re.Match[str]) -> str:
     return os.environ.get(content, "")
 
 
-def _expand_env_vars_in_string(value: str) -> str:
+def _make_expand_env_var(
+    env: Mapping[str, str] | None = None,
+) -> Callable[[re.Match[str]], str]:
+    """Create an env var expander that checks *env* first, then ``os.environ``.
+
+    When *env* is ``None`` (the default), only ``os.environ`` is consulted.
+    """
+
+    def _expand(match: re.Match[str]) -> str:
+        content = match.group(1)
+        if ":-" in content:
+            var_name, default = content.split(":-", 1)
+            if env is not None and var_name in env:
+                return env[var_name]
+            return os.environ.get(var_name, default)
+        if ":" in content:
+            var_name, default = content.split(":", 1)
+            if env is not None and var_name in env:
+                return env[var_name]
+            return os.environ.get(var_name, default)
+        if env is not None and content in env:
+            return env[content]
+        return os.environ.get(content, "")
+
+    return _expand
+
+
+def _expand_env_vars_in_string(
+    value: str,
+    env: Mapping[str, str] | None = None,
+) -> str:
     """Expand all environment variable references in a string."""
-    return _ENV_VAR_PATTERN.sub(_expand_env_var, value)
+    return _ENV_VAR_PATTERN.sub(_make_expand_env_var(env), value)
 
 
-def _expand_env_vars(value: Any) -> Any:
-    """Recursively expand environment variables in a configuration value.
-    
+def _expand_env_vars(
+    value: Any,
+    env: Mapping[str, str] | None = None,
+) -> Any:
+    """Recursively expand environment variable references in a configuration value.
+
     Supports ${VAR}, ${VAR:-default}, ${VAR:default} syntax in strings.
 
     When a string value is entirely a single env var reference like ${VAR},
     JSON literals are decoded to preserve typed values (int, bool, dict, list,
     etc.). Mixed strings like "prefix-${VAR}-suffix" remain as plain strings.
+
+    If *env* is provided, it is checked first for each variable reference;
+    ``os.environ`` is used as a fallback.
     """
     if isinstance(value, str):
-        expanded = _expand_env_vars_in_string(value)
+        expanded = _expand_env_vars_in_string(value, env=env)
         if _is_pure_env_reference(value):
             return _coerce_expanded_value(expanded)
         return expanded
     if isinstance(value, Mapping):
-        return {k: _expand_env_vars(v) for k, v in value.items()}
+        return {k: _expand_env_vars(v, env=env) for k, v in value.items()}
     if isinstance(value, list):
-        return [_expand_env_vars(item) for item in value]
+        return [_expand_env_vars(item, env=env) for item in value]
     return value
 
 
@@ -235,8 +271,13 @@ def _load_dotenv(path: str) -> int:
     return loaded
 
 
-def _collect_env_refs(config: Any) -> dict[str, list[str]]:
-    """Collect all ${VAR} references without defaults that are missing from the environment.
+def _collect_env_refs(
+    config: Any,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, list[str]]:
+    """Collect all ${VAR} references without defaults that are missing.
+
+    Checks *env* first (when provided), then ``os.environ``.
 
     Returns a dict mapping missing variable names to their field paths.
     """
@@ -251,8 +292,11 @@ def _collect_env_refs(config: Any) -> dict[str, list[str]]:
                 if ":-" in content or ":" in content:
                     continue
                 var_name = content.strip()
-                if var_name and var_name not in os.environ:
-                    missing.setdefault(var_name, []).append(field_path)
+                if not var_name:
+                    continue
+                if (env is not None and var_name in env) or var_name in os.environ:
+                    continue
+                missing.setdefault(var_name, []).append(field_path)
         elif isinstance(value, Mapping):
             for k, v in value.items():
                 _walk(v, f"{field_path}.{k}")
@@ -274,6 +318,7 @@ def load_yaml_app(
     strict: bool = False,
     env_file: str | None = None,
     strict_env: bool | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> OneStepApp:
     logger = logging.getLogger("onestep")
     yaml = _import_yaml()
@@ -327,7 +372,7 @@ def load_yaml_app(
             raise TypeError("'app.strict_env' must be a boolean")
 
     if effective_strict_env:
-        missing = _collect_env_refs(loaded)
+        missing = _collect_env_refs(loaded, env=env)
         if missing:
             parts = ["strict_env: missing required environment variable(s):"]
             for var_name in sorted(missing):
@@ -340,7 +385,7 @@ def load_yaml_app(
             raise ValueError("\n".join(parts))
 
     # Expand environment variables in the loaded config
-    expanded = _expand_env_vars(loaded)
+    expanded = _expand_env_vars(loaded, env=env)
     return load_app_config(expanded, source_path=resolved_path, strict=strict)
 
 
