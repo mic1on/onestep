@@ -346,6 +346,17 @@ def test_mysql_connector_initializes_cache_and_collects_engine_option_secrets() 
     assert "engine-option-secret" in connector._secret_tokens()
 
 
+def test_mysql_connector_does_not_create_asyncio_lock_during_sync_construction() -> None:
+    import asyncio
+
+    asyncio.set_event_loop(None)
+    connector = MySQLConnector("sqlite://")
+
+    assert connector._table_lock is None
+
+    asyncio.run(connector.close())
+
+
 def test_mysql_connector_uses_async_sqlalchemy_dialects() -> None:
     from sqlalchemy.ext.asyncio import AsyncEngine
 

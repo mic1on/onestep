@@ -49,7 +49,7 @@ class MySQLConnector:
         engine_options.setdefault("pool_pre_ping", True)
         self.engine: AsyncEngine = create_async_engine(_async_dsn(dsn), **engine_options)
         self._tables: dict[str, Any] = {}
-        self._table_lock = asyncio.Lock()
+        self._table_lock: asyncio.Lock | None = None
 
     def _secret_tokens(self) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
@@ -203,7 +203,11 @@ class MySQLConnector:
     async def _table(self, table_name: str):
         table = self._tables.get(table_name)
         if table is None:
-            async with self._table_lock:
+            lock = self._table_lock
+            if lock is None:
+                lock = asyncio.Lock()
+                self._table_lock = lock
+            async with lock:
                 table = self._tables.get(table_name)
                 if table is None:
                     metadata = sa.MetaData()
@@ -544,7 +548,7 @@ class BinlogSource(Source):
         async with self.connector.engine.begin() as conn:
             try:
                 row = (await conn.exec_driver_sql("SHOW BINARY LOG STATUS")).mappings().first()
-            except Exception:  # noqa: BLE001 - fallback works across MySQL server versions
+            except sa.exc.SQLAlchemyError:
                 row = (await conn.exec_driver_sql("SHOW MASTER STATUS")).mappings().first()
         if row is None:
             raise RuntimeError("MySQL binary log is not enabled")
@@ -826,7 +830,8 @@ class TableSink(Sink):
             update_payload[column] = sa.literal_column(expr)
         if not update_payload:
             raise ValueError("upsert mode requires at least one update column or update_expr")
-        dialect = self.connector.engine.dialect.name
+        sync_engine = getattr(self.connector.engine, "sync_engine", self.connector.engine)
+        dialect = sync_engine.dialect.name
         if dialect == "mysql":
             from sqlalchemy.dialects.mysql import insert as mysql_insert
 

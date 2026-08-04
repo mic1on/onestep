@@ -62,7 +62,7 @@ class SQLAlchemyStateStore:
             sa.Column(updated_at_column, sa.DateTime(timezone=True), nullable=False),
         )
         self._ready = False
-        self._ready_lock = asyncio.Lock()
+        self._ready_lock: asyncio.Lock | None = None
 
     async def load(self, key: str) -> Any | None:
         await self._ensure_ready()
@@ -115,7 +115,11 @@ class SQLAlchemyStateStore:
     async def _ensure_ready(self) -> None:
         if self._ready or not self.auto_create:
             return
-        async with self._ready_lock:
+        lock = self._ready_lock
+        if lock is None:
+            lock = asyncio.Lock()
+            self._ready_lock = lock
+        async with lock:
             if self._ready:
                 return
             async with self.engine.begin() as conn:
