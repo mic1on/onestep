@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.8.1
+
+- Adds `ExponentialBackoff` and `ByFailureKind` retry policies, exported from the public API and validated/built from YAML retry type schemas.
+- Adds typed env var expansion: a value that is entirely a single `${VAR}` reference is decoded as JSON to preserve the original type (int, bool, dict, list, float, etc.), while mixed strings stay plain.
+
 ## onestep-mq 0.2.3a1
 
 - Uses RabbitMQ `basic.consume` push delivery with a prefetch-bounded buffer instead of per-message `basic.get` polling, while preserving batching, acknowledgement, retry, and cancellation semantics.
