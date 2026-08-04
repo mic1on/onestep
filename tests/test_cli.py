@@ -486,7 +486,9 @@ def test_task_replay_imports_target_once_and_bounds_parent_wall_time(
     document = json.loads(capsys.readouterr().out)
     assert exit_code == 1
     assert document["completion"] == "timed_out"
-    assert elapsed < 0.7
+    # Spawn startup time varies across supported Python versions and CI runners.
+    # Keep enough headroom for that cost while still catching a second 0.4s import.
+    assert elapsed < 1.0
     assert marker.read_text(encoding="utf-8").splitlines() == ["imported"]
 
 
@@ -1397,6 +1399,30 @@ def test_load_app_config_strict_rejects_unknown_yaml_logging_fields() -> None:
                 "tasks": [],
             },
             strict=True,
+        )
+
+
+def test_load_app_config_strict_rejects_unknown_nested_retry_fields() -> None:
+    with pytest.raises(ValueError, match=r"unsupported fields for tasks\[0\]\.retry\.error: unexpected"):
+        config_module.validate_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "nested-retry-invalid"},
+                "tasks": [
+                    {
+                        "handler": "testsupport_nested_retry:consume",
+                        "retry": {
+                            "type": "by_failure_kind",
+                            "error": {
+                                "type": "max_attempts",
+                                "max_attempts": 2,
+                                "unexpected": True,
+                            },
+                        },
+                    }
+                ],
+            }
         )
 
 

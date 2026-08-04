@@ -39,7 +39,7 @@ from .resource_registry import (
     string_value as _string_value,
     validate_unknown_fields as _validate_unknown_fields,
 )
-from .retry import MaxAttempts, NoRetry, RetryPolicy
+from .retry import ByFailureKind, ExponentialBackoff, MaxAttempts, NoRetry, RetryPolicy
 from .task import EmitRoute, TaskHooks
 
 _YAML_SUFFIXES = (".yaml", ".yml")
@@ -111,6 +111,10 @@ _STRICT_RETRY_FIELDS: dict[str, frozenset[str]] = {
     "no_retry": frozenset({"type"}),
     "none": frozenset({"type"}),
     "max_attempts": frozenset({"type", "max_attempts", "delay_s"}),
+    "exponential_backoff": frozenset(
+        {"type", "max_attempts", "min_delay_s", "max_delay_s", "multiplier", "jitter"}
+    ),
+    "by_failure_kind": frozenset({"type", "default", "error", "timeout", "cancelled"}),
 }
 
 
@@ -579,6 +583,21 @@ def _build_retry(raw_retry: Any) -> RetryPolicy | None:
             max_attempts=config.get("max_attempts", 3),
             delay_s=config.get("delay_s"),
         )
+    if normalized == "exponential_backoff":
+        return ExponentialBackoff(
+            max_attempts=config.get("max_attempts", 3),
+            min_delay_s=config.get("min_delay_s", 1.0),
+            max_delay_s=config.get("max_delay_s", 60.0),
+            multiplier=config.get("multiplier", 2.0),
+            jitter=config.get("jitter", "none"),
+        )
+    if normalized == "by_failure_kind":
+        policies: dict[str, RetryPolicy] = {}
+        for key in ("default", "error", "timeout", "cancelled"):
+            raw = config.get(key)
+            if raw is not None:
+                policies[key] = _build_retry(raw)
+        return ByFailureKind(**policies)
     raise ValueError(f"unsupported retry type {retry_type!r}")
 
 
@@ -899,6 +918,11 @@ def _validate_retry(raw_retry: Any, *, field: str) -> None:
         if allowed is None:
             raise ValueError(f"unsupported retry type {retry_type!r}")
         _validate_unknown_fields(raw_retry, allowed, field=field)
+        if normalized == "by_failure_kind":
+            for key in ("default", "error", "timeout", "cancelled"):
+                raw_sub = raw_retry.get(key)
+                if raw_sub is not None:
+                    _validate_retry(raw_sub, field=f"{field}.{key}")
         return
     else:
         raise TypeError(f"'{field}' must be a string or mapping")
