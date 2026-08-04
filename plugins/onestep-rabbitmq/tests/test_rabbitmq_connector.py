@@ -20,7 +20,7 @@ class FakeIncomingMessage:
     async def nack(self, requeue=True):
         self.nacked = requeue
         if requeue:
-            self._queue.messages.append(FakeIncomingMessage(self._queue, self.body))
+            self._queue.put(FakeIncomingMessage(self._queue, self.body))
 
     async def reject(self, requeue=False):
         self.rejected = not requeue
@@ -31,17 +31,40 @@ class FakeQueue:
         self.name = name
         self.messages = []
         self.bindings = []
+        self.consumer_callback = None
+        self.consumer_tag = None
+        self.consume_calls = 0
+        self.cancelled_consumer_tags = []
+        self.cancel_error = None
         self.durable = None
         self.auto_delete = None
         self.exclusive = None
         self.arguments = None
 
     async def get(self, fail=False, timeout=None):
-        if self.messages:
-            return self.messages.pop(0)
-        if timeout and timeout > 0:
-            raise asyncio.TimeoutError
-        return None
+        raise AssertionError("RabbitMQ sources must use basic.consume, not basic.get")
+
+    async def consume(self, callback):
+        self.consume_calls += 1
+        self.consumer_callback = callback
+        self.consumer_tag = f"consumer-{self.consume_calls}"
+        pending, self.messages = self.messages, []
+        for message in pending:
+            asyncio.create_task(callback(message))
+        return self.consumer_tag
+
+    async def cancel(self, consumer_tag):
+        self.cancelled_consumer_tags.append(consumer_tag)
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        self.consumer_callback = None
+        self.consumer_tag = None
+
+    def put(self, message):
+        if self.consumer_callback is None:
+            self.messages.append(message)
+            return
+        asyncio.create_task(self.consumer_callback(message))
 
     async def bind(self, exchange, routing_key=None, arguments=None, timeout=None):
         self.bindings.append(
@@ -63,12 +86,12 @@ class FakeExchange:
         self.published.append((message, routing_key))
         if self.name == "__default__":
             queue = self.queue_registry.setdefault(routing_key, FakeQueue(routing_key))
-            queue.messages.append(FakeIncomingMessage(queue, message.body))
+            queue.put(FakeIncomingMessage(queue, message.body))
             return
         for queue in self.queue_registry.values():
             for binding in queue.bindings:
                 if binding["exchange"] is self and binding["routing_key"] == routing_key:
-                    queue.messages.append(FakeIncomingMessage(queue, message.body))
+                    queue.put(FakeIncomingMessage(queue, message.body))
 
 
 class FakeChannel:
@@ -76,6 +99,7 @@ class FakeChannel:
         self.queue_registry = queue_registry
         self.exchange_registry = exchange_registry
         self.default_exchange = FakeExchange("__default__", queue_registry)
+        self.close_callbacks = FakeCallbackCollection(self)
         self.prefetch_count = None
         self.closed = False
 
@@ -103,6 +127,20 @@ class FakeChannel:
 
     async def close(self):
         self.closed = True
+        await self.close_callbacks(None)
+
+
+class FakeCallbackCollection:
+    def __init__(self, sender):
+        self.sender = sender
+        self.callbacks = []
+
+    def add(self, callback):
+        self.callbacks.append(callback)
+
+    async def __call__(self, exc):
+        for callback in self.callbacks:
+            await callback(self.sender, exc)
 
 
 class FakeConnection:
@@ -129,6 +167,11 @@ class FakeMessage:
 
 async def fake_connect_robust(url, **kwargs):
     return FakeConnection()
+
+
+async def wait_for_consumer(queue):
+    while queue._consumer_tag is None:
+        await asyncio.sleep(0)
 
 
 def test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding(monkeypatch):
@@ -190,6 +233,132 @@ def test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding(monkeypatch):
 
         await events.close()
         await queue.close()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_fetch_uses_one_long_lived_consumer(monkeypatch):
+    fake_driver = SimpleNamespace(
+        connect_robust=fake_connect_robust,
+        Message=FakeMessage,
+        DeliveryMode=SimpleNamespace(PERSISTENT="persistent"),
+    )
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", fake_driver)
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://guest:guest@localhost/")
+        queue = connector.queue("jobs", prefetch=5, batch_size=3, poll_interval_s=0.5)
+
+        waiting_fetch = asyncio.create_task(queue.fetch(3))
+
+        async def wait_for_consumer():
+            while queue._queue is None or queue._queue.consume_calls == 0:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_consumer(), timeout=0.1)
+        broker_queue = queue._queue
+
+        await queue.publish({"value": 1})
+        first_batch = await asyncio.wait_for(waiting_fetch, timeout=0.1)
+        assert [delivery.payload for delivery in first_batch] == [{"value": 1}]
+        await first_batch[0].release_unstarted()
+        released = await queue.fetch(1)
+        assert [delivery.payload for delivery in released] == [{"value": 1}]
+        await released[0].ack()
+
+        await queue.publish({"value": 2})
+        await queue.publish({"value": 3})
+        second_batch = await queue.fetch(3)
+        assert [delivery.payload for delivery in second_batch] == [
+            {"value": 2},
+            {"value": 3},
+        ]
+        assert broker_queue.consume_calls == 1
+
+        await queue.close()
+        assert broker_queue.cancelled_consumer_tags == ["consumer-1"]
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_empty_fetch_is_cancel_safe(monkeypatch):
+    fake_driver = SimpleNamespace(
+        connect_robust=fake_connect_robust,
+        Message=FakeMessage,
+        DeliveryMode=SimpleNamespace(PERSISTENT="persistent"),
+    )
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", fake_driver)
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://guest:guest@localhost/")
+        queue = connector.queue("jobs", poll_interval_s=10.0)
+
+        fetch = asyncio.create_task(queue.fetch(1))
+        await asyncio.wait_for(wait_for_consumer(queue), timeout=0.1)
+        broker_queue = queue._queue
+        fetch.cancel()
+        await asyncio.gather(fetch, return_exceptions=True)
+
+        assert fetch.cancelled()
+        assert queue._consumer_tag is None
+        assert broker_queue.cancelled_consumer_tags == ["consumer-1"]
+        assert queue._opened is False
+        assert connector._ref_count == 0
+        await queue.close()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_discards_stale_buffer_when_receive_channel_closes(monkeypatch):
+    fake_driver = SimpleNamespace(
+        connect_robust=fake_connect_robust,
+        Message=FakeMessage,
+        DeliveryMode=SimpleNamespace(PERSISTENT="persistent"),
+    )
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", fake_driver)
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://guest:guest@localhost/")
+        queue = connector.queue("jobs")
+        await queue.open()
+        messages, _ = queue._ensure_consumer_state()
+        broker_queue = queue._queue
+        messages.put_nowait(FakeIncomingMessage(broker_queue, b"stale"))
+
+        await queue._receive_channel.close_callbacks(ConnectionError("closed"))
+
+        assert messages.empty()
+        await queue.close()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_cancel_failure_resets_transport(monkeypatch):
+    fake_driver = SimpleNamespace(
+        connect_robust=fake_connect_robust,
+        Message=FakeMessage,
+        DeliveryMode=SimpleNamespace(PERSISTENT="persistent"),
+    )
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", fake_driver)
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://guest:guest@localhost/")
+        queue = connector.queue("jobs")
+        fetch = asyncio.create_task(queue.fetch(1))
+        await asyncio.wait_for(wait_for_consumer(queue), timeout=0.1)
+        queue._queue.cancel_error = ConnectionError("connection closed")
+
+        fetch.cancel()
+        await asyncio.gather(fetch, return_exceptions=True)
+
+        assert fetch.cancelled()
+        assert queue._opened is False
+        assert queue._receive_channel is None
+        assert connector._ref_count == 0
         await connector.close()
 
     asyncio.run(scenario())

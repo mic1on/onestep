@@ -1591,7 +1591,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mq"
-version = "0.2.2"
+version = "0.2.3a1"
 source = { editable = "plugins/onestep-rabbitmq" }
 dependencies = [
     { name = "aio-pika", version = "9.5.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
