@@ -4,9 +4,7 @@ import uuid
 
 import pytest
 import sqlalchemy as sa
-
 from onestep_mysql import MySQLConnector
-
 
 if not os.getenv("ONESTEP_MYSQL_DSN"):
     pytest.skip("set ONESTEP_MYSQL_DSN to run MySQL integration tests", allow_module_level=True)
@@ -59,7 +57,7 @@ def test_mysql_table_queue_claim_ack_and_retry_live():
         await batch[0].ack()
         await batch[1].retry()
 
-        with db.engine.begin() as conn:
+        with engine.begin() as conn:
             rows = conn.execute(sa.select(orders).order_by(orders.c.id)).mappings().all()
         assert [dict(row)["status"] for row in rows] == [1, 0]
 
@@ -133,7 +131,7 @@ def test_mysql_incremental_cursor_recovers_after_restart_live():
         empty = await restarted_source.fetch(10)
         assert empty == []
 
-        with restarted.engine.begin() as conn:
+        with engine.begin() as conn:
             conn.execute(sa.insert(users), [{"id": 3, "name": "C", "updated_at": 11, "deleted": 0}])
 
         next_batch = await restarted_source.fetch(10)

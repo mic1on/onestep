@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from datetime import datetime, timezone
 from typing import Any
 
 try:
     import sqlalchemy as sa
-    from sqlalchemy import create_engine
+    from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 except ImportError:  # pragma: no cover - exercised when optional deps are missing
     sa = None
-    create_engine = None
+    AsyncEngine = None
+    create_async_engine = None
+
+
+def _async_dsn(dsn: str) -> str:
+    """Return a SQLAlchemy URL backed by an asyncio-compatible dialect."""
+    if sa is None:
+        return dsn
+    url = sa.engine.make_url(dsn)
+    if url.drivername == "mysql" or url.drivername.startswith("mysql+"):
+        return url.set(drivername="mysql+asyncmy").render_as_string(hide_password=False)
+    if url.drivername == "sqlite" or url.drivername == "sqlite+pysqlite":
+        return url.set(drivername="sqlite+aiosqlite").render_as_string(hide_password=False)
+    return dsn
 
 
 class SQLAlchemyStateStore:
@@ -27,14 +39,14 @@ class SQLAlchemyStateStore:
         auto_create: bool = True,
         **engine_options: Any,
     ) -> None:
-        if create_engine is None or sa is None:
+        if create_async_engine is None or sa is None:
             raise RuntimeError("SQLAlchemyStateStore requires SQLAlchemy. Install SQLAlchemy or onestep-mysql.")
         if engine is None and dsn is None:
             raise ValueError("dsn or engine is required")
         if engine is not None and dsn is not None:
             raise ValueError("pass either dsn or engine, not both")
         engine_options.setdefault("pool_pre_ping", True)
-        self.engine = engine or create_engine(dsn, future=True, **engine_options)
+        self.engine = engine or create_async_engine(_async_dsn(dsn), **engine_options)
         self._owns_engine = engine is None
         self.table_name = table
         self.key_column_name = key_column
@@ -50,45 +62,36 @@ class SQLAlchemyStateStore:
             sa.Column(updated_at_column, sa.DateTime(timezone=True), nullable=False),
         )
         self._ready = False
-        self._ready_lock = threading.Lock()
+        self._ready_lock = asyncio.Lock()
 
     async def load(self, key: str) -> Any | None:
-        return await asyncio.to_thread(self._load_sync, key)
-
-    async def save(self, key: str, value: Any) -> None:
-        await asyncio.to_thread(self._save_sync, key, value)
-
-    async def delete(self, key: str) -> None:
-        await asyncio.to_thread(self._delete_sync, key)
-
-    async def close(self) -> None:
-        if self._owns_engine:
-            await asyncio.to_thread(self.engine.dispose)
-
-    def _load_sync(self, key: str) -> Any | None:
-        self._ensure_ready_sync()
+        await self._ensure_ready()
         key_column = self._table.c[self.key_column_name]
         value_column = self._table.c[self.value_column_name]
-        with self.engine.begin() as conn:
-            row = conn.execute(sa.select(value_column).where(key_column == key)).scalar_one_or_none()
+        async with self.engine.begin() as conn:
+            row = (
+                await conn.execute(sa.select(value_column).where(key_column == key))
+            ).scalar_one_or_none()
         if row is None:
             return None
         return json.loads(row)
 
-    def _save_sync(self, key: str, value: Any) -> None:
-        self._ensure_ready_sync()
+    async def save(self, key: str, value: Any) -> None:
+        await self._ensure_ready()
         key_column = self._table.c[self.key_column_name]
         payload = {
             self.key_column_name: key,
             self.value_column_name: json.dumps(value, ensure_ascii=False),
             self.updated_at_column_name: datetime.now(timezone.utc),
         }
-        with self.engine.begin() as conn:
-            exists = conn.execute(sa.select(key_column).where(key_column == key)).scalar_one_or_none()
+        async with self.engine.begin() as conn:
+            exists = (
+                await conn.execute(sa.select(key_column).where(key_column == key))
+            ).scalar_one_or_none()
             if exists is None:
-                conn.execute(sa.insert(self._table).values(**payload))
+                await conn.execute(sa.insert(self._table).values(**payload))
                 return
-            conn.execute(
+            await conn.execute(
                 sa.update(self._table)
                 .where(key_column == key)
                 .values(
@@ -99,19 +102,28 @@ class SQLAlchemyStateStore:
                 )
             )
 
-    def _delete_sync(self, key: str) -> None:
-        self._ensure_ready_sync()
+    async def delete(self, key: str) -> None:
+        await self._ensure_ready()
         key_column = self._table.c[self.key_column_name]
-        with self.engine.begin() as conn:
-            conn.execute(sa.delete(self._table).where(key_column == key))
+        async with self.engine.begin() as conn:
+            await conn.execute(sa.delete(self._table).where(key_column == key))
 
-    def _ensure_ready_sync(self) -> None:
+    async def close(self) -> None:
+        if self._owns_engine:
+            await self.engine.dispose()
+
+    async def _ensure_ready(self) -> None:
         if self._ready or not self.auto_create:
             return
-        with self._ready_lock:
+        async with self._ready_lock:
             if self._ready:
                 return
-            self._metadata.create_all(self.engine, tables=[self._table], checkfirst=True)
+            async with self.engine.begin() as conn:
+                await conn.run_sync(
+                    lambda sync_conn: self._metadata.create_all(
+                        sync_conn, tables=[self._table], checkfirst=True
+                    )
+                )
             self._ready = True
 
 

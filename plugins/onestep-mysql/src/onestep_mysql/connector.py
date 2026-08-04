@@ -8,27 +8,31 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation
 from onestep.state import CursorStore, InMemoryCursorStore
 
-from onestep.connectors.base import Delivery, Sink, Source
-
 from .resilience import as_mysql_connector_operation_error, collect_sensitive_tokens
-from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
+from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore, _async_dsn
 
 try:
     import sqlalchemy as sa
-    from sqlalchemy import create_engine
     from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 except ImportError:  # pragma: no cover - exercised when optional deps are missing
     sa = None
-    create_engine = None
+    AsyncEngine = None
+    create_async_engine = None
     make_url = None
 
 try:
     from pymysqlreplication import BinLogStreamReader
-    from pymysqlreplication.row_event import DeleteRowsEvent, UpdateRowsEvent, WriteRowsEvent
+    from pymysqlreplication.row_event import (
+        DeleteRowsEvent,
+        UpdateRowsEvent,
+        WriteRowsEvent,
+    )
 except ImportError:  # pragma: no cover - exercised when optional deps are missing
     BinLogStreamReader = None
     DeleteRowsEvent = None
@@ -38,20 +42,21 @@ except ImportError:  # pragma: no cover - exercised when optional deps are missi
 
 class MySQLConnector:
     def __init__(self, dsn: str, **engine_options: Any) -> None:
-        if create_engine is None:
+        if create_async_engine is None:
             raise RuntimeError("MySQLConnector requires SQLAlchemy. Install onestep-mysql.")
         self.dsn = dsn
         self._sensitive_tokens = collect_sensitive_tokens(dsn, engine_options)
         engine_options.setdefault("pool_pre_ping", True)
-        self.engine = create_engine(dsn, future=True, **engine_options)
+        self.engine: AsyncEngine = create_async_engine(_async_dsn(dsn), **engine_options)
         self._tables: dict[str, Any] = {}
+        self._table_lock = asyncio.Lock()
 
     def _secret_tokens(self) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
         return list(self._sensitive_tokens)
 
     async def close(self) -> None:
-        await asyncio.to_thread(self.engine.dispose)
+        await self.engine.dispose()
 
     def state_store(
         self,
@@ -100,7 +105,7 @@ class MySQLConnector:
         nack: Mapping[str, Any] | None = None,
         batch_size: int = 100,
         poll_interval_s: float = 1.0,
-    ) -> "TableQueueSource":
+    ) -> TableQueueSource:
         return TableQueueSource(
             connector=self,
             table=table,
@@ -124,7 +129,7 @@ class MySQLConnector:
         poll_interval_s: float = 1.0,
         state: CursorStore | None = None,
         state_key: str | None = None,
-    ) -> "IncrementalTableSource":
+    ) -> IncrementalTableSource:
         if len(cursor) < 1:
             raise ValueError("cursor must contain at least one column")
         effective_cursor = tuple(cursor) if key in cursor else (*tuple(cursor), key)
@@ -157,7 +162,7 @@ class MySQLConnector:
         state: CursorStore | None = None,
         state_key: str | None = None,
         blocking: bool = False,
-    ) -> "BinlogSource":
+    ) -> BinlogSource:
         return BinlogSource(
             connector=self,
             server_id=server_id,
@@ -184,7 +189,7 @@ class MySQLConnector:
         update_columns: Sequence[str] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
-    ) -> "TableSink":
+    ) -> TableSink:
         return TableSink(
             connector=self,
             table=table,
@@ -195,12 +200,20 @@ class MySQLConnector:
             serialize_json=serialize_json,
         )
 
-    def _table(self, table_name: str):
+    async def _table(self, table_name: str):
         table = self._tables.get(table_name)
         if table is None:
-            metadata = sa.MetaData()
-            table = sa.Table(table_name, metadata, autoload_with=self.engine)
-            self._tables[table_name] = table
+            async with self._table_lock:
+                table = self._tables.get(table_name)
+                if table is None:
+                    metadata = sa.MetaData()
+                    async with self.engine.connect() as conn:
+                        table = await conn.run_sync(
+                            lambda sync_conn: sa.Table(
+                                table_name, metadata, autoload_with=sync_conn
+                            )
+                        )
+                    self._tables[table_name] = table
         return table
 
 
@@ -241,7 +254,7 @@ class _TableRowRef:
 
 
 class TableQueueDelivery(Delivery):
-    def __init__(self, source: "TableQueueSource", envelope: Envelope, row_ref: _TableRowRef) -> None:
+    def __init__(self, source: TableQueueSource, envelope: Envelope, row_ref: _TableRowRef) -> None:
         super().__init__(envelope)
         self._source = source
         self._row_ref = row_ref
@@ -294,7 +307,7 @@ class TableQueueSource(Source):
 
     async def fetch(self, limit: int) -> list[Delivery]:
         try:
-            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+            rows = await self._fetch(max(1, min(limit, self.batch_size)))
         except Exception as exc:
             connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -314,20 +327,20 @@ class TableQueueSource(Source):
             deliveries.append(TableQueueDelivery(self, envelope, row_ref))
         return deliveries
 
-    def _fetch_sync(self, limit: int) -> list[dict[str, Any]]:
-        table = self.connector._table(self.table_name)
-        with self.connector.engine.begin() as conn:
+    async def _fetch(self, limit: int) -> list[dict[str, Any]]:
+        table = await self.connector._table(self.table_name)
+        async with self.connector.engine.begin() as conn:
             stmt = sa.select(table).where(sa.text(self.where)).order_by(table.c[self.key]).limit(limit)
             try:
                 stmt = stmt.with_for_update(skip_locked=True)
             except TypeError:
                 stmt = stmt.with_for_update()
-            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
+            rows = [dict(row) for row in (await conn.execute(stmt)).mappings().all()]
             if not rows:
                 return []
             ids = [row[self.key] for row in rows]
-            conn.execute(sa.update(table).where(table.c[self.key].in_(ids)).values(**self.claim))
-            refreshed = conn.execute(
+            await conn.execute(sa.update(table).where(table.c[self.key].in_(ids)).values(**self.claim))
+            refreshed = await conn.execute(
                 sa.select(table).where(table.c[self.key].in_(ids)).order_by(table.c[self.key])
             )
             return [dict(row) for row in refreshed.mappings().all()]
@@ -347,14 +360,14 @@ class TableQueueSource(Source):
         await self.update_row(row_ref, self.nack)
 
     async def update_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
-        await asyncio.to_thread(self._update_row_sync, row_ref, dict(values))
+        await self._update_row(row_ref, dict(values))
 
-    def _update_row_sync(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
+    async def _update_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
         if not values:
             return
-        table = self.connector._table(row_ref.table)
-        with self.connector.engine.begin() as conn:
-            conn.execute(
+        table = await self.connector._table(row_ref.table)
+        async with self.connector.engine.begin() as conn:
+            await conn.execute(
                 sa.update(table)
                 .where(table.c[row_ref.key] == row_ref.key_value)
                 .values(**dict(values))
@@ -370,7 +383,7 @@ class _BinlogToken:
 
 
 class BinlogDelivery(Delivery):
-    def __init__(self, source: "BinlogSource", envelope: Envelope, token: _BinlogToken) -> None:
+    def __init__(self, source: BinlogSource, envelope: Envelope, token: _BinlogToken) -> None:
         super().__init__(envelope)
         self._source = source
         self._token = token
@@ -436,7 +449,7 @@ class BinlogSource(Source):
             if isinstance(file, str) and isinstance(pos, int):
                 self._committed = _BinlogToken(file=file, pos=pos)
         if self._committed is None:
-            self._committed = await asyncio.to_thread(self._current_binlog_token_sync)
+            self._committed = await self._current_binlog_token()
             await self.state.save(self.state_key, {"file": self._committed.file, "pos": self._committed.pos})
         self._loaded = True
 
@@ -527,18 +540,20 @@ class BinlogSource(Source):
         )
         return self._stream
 
-    def _current_binlog_token_sync(self) -> _BinlogToken:
-        with self.connector.engine.begin() as conn:
+    async def _current_binlog_token(self) -> _BinlogToken:
+        async with self.connector.engine.begin() as conn:
             try:
-                row = conn.exec_driver_sql("SHOW BINARY LOG STATUS").mappings().first()
-            except Exception:
-                row = conn.exec_driver_sql("SHOW MASTER STATUS").mappings().first()
+                row = (await conn.exec_driver_sql("SHOW BINARY LOG STATUS")).mappings().first()
+            except Exception:  # noqa: BLE001 - fallback works across MySQL server versions
+                row = (await conn.exec_driver_sql("SHOW MASTER STATUS")).mappings().first()
         if row is None:
             raise RuntimeError("MySQL binary log is not enabled")
         file = row.get("File")
         pos = row.get("Position")
         if not isinstance(file, str) or not isinstance(pos, int):
-            raise RuntimeError("MySQL did not return a binary log file and position")
+            raise RuntimeError(  # noqa: TRY004 - preserve the connector's public error type
+                "MySQL did not return a binary log file and position"
+            )
         return _BinlogToken(file=file, pos=pos)
 
     def _runtime_commit_lock(self) -> asyncio.Lock:
@@ -617,7 +632,7 @@ class _CursorToken:
 
 
 class IncrementalDelivery(Delivery):
-    def __init__(self, source: "IncrementalTableSource", envelope: Envelope, token: _CursorToken) -> None:
+    def __init__(self, source: IncrementalTableSource, envelope: Envelope, token: _CursorToken) -> None:
         super().__init__(envelope)
         self._source = source
         self._token = token
@@ -677,7 +692,7 @@ class IncrementalTableSource(Source):
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
         try:
-            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+            rows = await self._fetch(max(1, min(limit, self.batch_size)))
         except Exception as exc:
             connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -698,8 +713,8 @@ class IncrementalTableSource(Source):
             deliveries.append(IncrementalDelivery(self, envelope, token))
         return deliveries
 
-    def _fetch_sync(self, limit: int) -> list[dict[str, Any]]:
-        table = self.connector._table(self.table_name)
+    async def _fetch(self, limit: int) -> list[dict[str, Any]]:
+        table = await self.connector._table(self.table_name)
         stmt = sa.select(table)
         predicates = []
         if self.where:
@@ -712,8 +727,8 @@ class IncrementalTableSource(Source):
             stmt = stmt.where(*predicates)
         order_columns = [table.c[name] for name in self.cursor]
         stmt = stmt.order_by(*order_columns).limit(limit)
-        with self.connector.engine.begin() as conn:
-            rows = conn.execute(stmt).mappings().all()
+        async with self.connector.engine.begin() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
         return [dict(row) for row in rows]
 
     async def ack_token(self, token: _CursorToken) -> None:
@@ -778,7 +793,7 @@ class TableSink(Sink):
         if not isinstance(envelope.body, Mapping):
             raise TypeError("TableSink only accepts mapping payloads")
         try:
-            await asyncio.to_thread(self._send_sync, dict(envelope.body))
+            await self._send(dict(envelope.body))
         except Exception as exc:
             connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.SEND,
@@ -791,11 +806,11 @@ class TableSink(Sink):
                 raise
             raise connector_error from exc
 
-    def _send_sync(self, payload: dict[str, Any]) -> None:
-        table = self.connector._table(self.table_name)
+    async def _send(self, payload: dict[str, Any]) -> None:
+        table = await self.connector._table(self.table_name)
         stmt = self._build_statement(payload, table)
-        with self.connector.engine.begin() as conn:
-            conn.execute(stmt)
+        async with self.connector.engine.begin() as conn:
+            await conn.execute(stmt)
 
     def _build_statement(self, payload: dict[str, Any], table: sa.Table):
         payload = self._coerce_json_values(payload, table)

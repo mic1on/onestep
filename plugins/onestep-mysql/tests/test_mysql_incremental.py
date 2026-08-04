@@ -2,7 +2,6 @@ import asyncio
 from pathlib import Path
 
 import sqlalchemy as sa
-
 from onestep_mysql import MySQLConnector
 
 
@@ -69,8 +68,10 @@ def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
         empty_batch = await restarted_source.fetch(10)
         assert empty_batch == []
 
-        with restarted_db.engine.begin() as conn:
+        verify_engine = sa.create_engine(db_url, future=True)
+        with verify_engine.begin() as conn:
             conn.execute(sa.insert(users), [{"id": 3, "name": "C", "updated_at": 11, "deleted": 0}])
+        verify_engine.dispose()
 
         next_batch = await restarted_source.fetch(10)
         assert [item.payload["id"] for item in next_batch] == [3]
@@ -173,8 +174,10 @@ def test_mysql_incremental_uses_key_as_tie_breaker_when_cursor_is_not_unique(tmp
         await batch[1].ack()
         assert await state.load("users-updated-at") == [10, 2]
 
-        with db.engine.begin() as conn:
+        verify_engine = sa.create_engine(db_url, future=True)
+        with verify_engine.begin() as conn:
             conn.execute(sa.insert(users), [{"id": 3, "name": "C", "updated_at": 10, "deleted": 0}])
+        verify_engine.dispose()
 
         next_batch = await source.fetch(10)
         assert [item.payload["id"] for item in next_batch] == [3]
