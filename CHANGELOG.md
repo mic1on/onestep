@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-## onestep-mq 0.2.3
+## onestep-mq 0.2.3a1
 
 - Uses RabbitMQ `basic.consume` push delivery with a prefetch-bounded buffer instead of per-message `basic.get` polling, while preserving batching, acknowledgement, retry, and cancellation semantics.
+- Alpha pre-release for limited-batch rollout. Start with a small number of workers or task instances and expand only after validating latency, throughput, unacked messages, requeue behavior, reconnect stability, and duplicate-delivery handling.
 
 ## onestep-mysql 0.3.5
 
