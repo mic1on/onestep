@@ -4,6 +4,25 @@
 
 - Adds optional `env` parameter to `OneStepApp.load()` and `load_yaml_app()`, allowing callers to inject a `Mapping[str, str]` of variable overrides that are checked before `os.environ` during `${VAR}` expansion. This eliminates the need for callers to export values to `os.environ` before loading an app.
 
+## onestep 1.9.0
+
+- Adds the `ExecutionClient`, immutable execution snapshots, typed result
+  exceptions, backend protocol, and optional managed completion protocol.
+- Adds an optional runtime branch for managed deliveries while preserving the
+  ordinary `Delivery.ack/retry/fail` API and success ordering.
+- Adds additive `onestep.execution` TaskEvent correlation metadata without
+  changing TaskEvent kinds.
+- Execution remains at-least-once and cancellation remains cooperative.
+
+## onestep-postgres 0.2.0
+
+- Adds PostgreSQL execution storage for task state, results, attempts, leases,
+  heartbeats, cancellation, retry recovery, and fencing.
+- Adds the `postgres_execution_source` YAML resource and Python backend/source
+  factories for separate FastAPI and worker processes.
+- Adds live PostgreSQL concurrency and fencing gates; inline payload/result
+  values default to 1 MiB and metadata to 64 KiB.
+
 ## onestep-mysql 0.4.0
 
 - Migrates MySQL table, queue, incremental, state, and cursor SQLAlchemy
