@@ -85,6 +85,30 @@ class PostgresExecutionBackend(ExecutionBackend):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
 
+    def source(
+        self,
+        *,
+        namespace: str,
+        task_names: Sequence[str],
+        batch_size: int = 100,
+        poll_interval_s: float = 1.0,
+        lease_duration_s: float = 90.0,
+        heartbeat_interval_s: float = 30.0,
+        worker_id: str = "onestep-worker",
+    ) -> Any:
+        from .execution_source import PostgresExecutionSource
+
+        return PostgresExecutionSource(
+            backend=self,
+            namespace=namespace,
+            task_names=task_names,
+            batch_size=batch_size,
+            poll_interval_s=poll_interval_s,
+            lease_duration_s=lease_duration_s,
+            heartbeat_interval_s=heartbeat_interval_s,
+            worker_id=worker_id,
+        )
+
     async def open(self) -> None:
         await asyncio.to_thread(self._ensure_ready_sync)
 

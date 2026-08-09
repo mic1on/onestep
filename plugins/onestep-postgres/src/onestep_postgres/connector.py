@@ -140,6 +140,28 @@ class PostgresConnector:
     ) -> "PostgresTableSink":
         return PostgresTableSink(connector=self, table=table, mode=mode, keys=tuple(keys))
 
+    def execution_backend(
+        self,
+        *,
+        table: str = "onestep_executions",
+        attempts_table: str = "onestep_execution_attempts",
+        auto_create: bool = True,
+        max_payload_bytes: int = 1024 * 1024,
+        max_metadata_bytes: int = 64 * 1024,
+        max_result_bytes: int = 1024 * 1024,
+    ) -> "PostgresExecutionBackend":
+        from .execution_backend import PostgresExecutionBackend
+
+        return PostgresExecutionBackend(
+            connector=self,
+            table=table,
+            attempts_table=attempts_table,
+            auto_create=auto_create,
+            max_payload_bytes=max_payload_bytes,
+            max_metadata_bytes=max_metadata_bytes,
+            max_result_bytes=max_result_bytes,
+        )
+
     def _table(self, table_name: str):
         table = self._tables.get(table_name)
         if table is None:

@@ -12,6 +12,8 @@ from onestep.resilience import ConnectorErrorKind, ConnectorOperation, Connector
 from onestep.resource_registry import ResourceRegistry
 from onestep_postgres import (
     PostgresConnector,
+    PostgresExecutionBackend,
+    PostgresExecutionSource,
     PostgresIncrementalSource,
     PostgresTableSink,
     SQLAlchemyCursorStore,
@@ -49,6 +51,20 @@ def test_postgres_plugin_registers_catalog_metadata() -> None:
     assert catalog["postgres_incremental"].connector_types == ("postgres",)
     assert catalog["postgres_table_sink"].roles == ("sink",)
     assert catalog["postgres_table_sink"].connector_types == ("postgres",)
+    assert catalog["postgres_execution_source"].roles == ("source",)
+    assert catalog["postgres_execution_source"].connector_types == ("postgres",)
+
+
+def test_postgres_connector_builds_execution_backend_and_source(tmp_path) -> None:
+    connector = PostgresConnector(f"sqlite:///{tmp_path / 'execution.db'}")
+    backend = connector.execution_backend(auto_create=True)
+    source = backend.source(
+        namespace="agent-api",
+        task_names=("run_agent",),
+        worker_id="worker-1",
+    )
+    assert isinstance(backend, PostgresExecutionBackend)
+    assert isinstance(source, PostgresExecutionSource)
 
 
 def test_sqlalchemy_state_store_is_not_exposed_by_core() -> None:
@@ -136,6 +152,123 @@ def test_yaml_builds_postgres_resources_via_plugin_entry_point(tmp_path) -> None
     assert app.resources["users"].state is app.resources["cursor"]
     assert isinstance(app.resources["processed"], PostgresTableSink)
     assert app.state is app.resources["app_state"]
+
+
+def test_strict_yaml_builds_execution_source_with_shared_connector(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'postgres-execution-plugin.db'}"
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {"name": "postgres-execution-plugin"},
+            "resources": {
+                "db": {"type": "postgres", "dsn": dsn},
+                "jobs": {
+                    "type": "postgres_execution_source",
+                    "connector": "db",
+                    "namespace": "agent-api",
+                    "task_names": ["run_agent"],
+                    "worker_id": "worker-1",
+                },
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+    assert isinstance(app.resources["jobs"], PostgresExecutionSource)
+    assert app.resources["jobs"].backend.connector is app.resources["db"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("task_names", [], "task_names"),
+        ("batch_size", 0, "batch_size"),
+        ("poll_interval_s", 0, "poll_interval_s"),
+        ("lease_duration_s", 0, "lease_duration_s"),
+        ("heartbeat_interval_s", 31, "heartbeat_interval_s"),
+    ],
+)
+def test_strict_execution_source_validation_is_field_qualified(
+    field,
+    value,
+    match,
+    tmp_path,
+) -> None:
+    spec = {
+        "type": "postgres_execution_source",
+        "connector": "db",
+        "namespace": "agent-api",
+        "task_names": ["run_agent"],
+        field: value,
+    }
+    if field == "heartbeat_interval_s":
+        spec["lease_duration_s"] = 90
+    with pytest.raises((TypeError, ValueError), match=match):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "invalid-postgres-execution"},
+                "resources": {
+                    "db": {
+                        "type": "postgres",
+                        "dsn": f"sqlite:///{tmp_path / 'invalid.db'}",
+                    },
+                    "jobs": spec,
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_strict_execution_source_rejects_unknown_fields(tmp_path) -> None:
+    with pytest.raises(ValueError, match="unsupported fields"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "invalid-postgres-execution"},
+                "resources": {
+                    "db": {
+                        "type": "postgres",
+                        "dsn": f"sqlite:///{tmp_path / 'invalid.db'}",
+                    },
+                    "jobs": {
+                        "type": "postgres_execution_source",
+                        "connector": "db",
+                        "namespace": "agent-api",
+                        "task_names": ["run_agent"],
+                        "unknown": True,
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_execution_source_requires_postgres_connector(tmp_path) -> None:
+    with pytest.raises(TypeError, match="must be a PostgresConnector"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "invalid-postgres-dependency"},
+                "resources": {
+                    "queue": {"type": "memory", "maxsize": 1},
+                    "jobs": {
+                        "type": "postgres_execution_source",
+                        "connector": "queue",
+                        "namespace": "agent-api",
+                        "task_names": ["run_agent"],
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
 
 
 def _entry_points_for_group(group: str) -> tuple[Any, ...]:
