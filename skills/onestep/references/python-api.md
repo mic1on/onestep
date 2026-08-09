@@ -101,6 +101,33 @@ async def consume(ctx, item):
 
 For YAML apps, resources are bound from the YAML resource registry.
 
+## Execution client
+
+Use `ExecutionClient` when an API process needs to submit and query a durable
+long-running task through a plugin backend:
+
+```python
+from onestep import ExecutionClient
+
+step = ExecutionClient(backend, namespace="agent-api")
+execution = await step.submit(
+    "run_agent",
+    payload,
+    idempotency_key=request_id,
+    metadata={"requested_by": user_id},
+)
+current = await step.get(execution.id)
+page = await step.list(task_name="run_agent", limit=50)
+cancelled = await step.cancel(execution.id, reason="user requested cancellation")
+result = await step.result(execution.id)
+```
+
+`Execution` values are immutable snapshots and never auto-refresh. `result()`
+does not poll or wait: it returns a successful result, or raises
+`ExecutionNotReady`, `ExecutionFailed`, `ExecutionCancelled`,
+`ExecutionExpired`, or `ExecutionNotFound`. Use an idempotency key for repeated
+HTTP requests, and treat handler side effects as at-least-once.
+
 ## Manual Run And Control Commands
 
 Some sources support manual runs. The app exposes runtime control helpers such as `run_task_once`, drain, pause/resume, and dead-letter replay/discard. Use these when integrating with the control plane or operational tooling; do not add them to simple workers by default.

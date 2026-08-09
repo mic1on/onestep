@@ -124,6 +124,45 @@ resources:
     table: onestep_state
 ```
 
+## PostgreSQL execution source
+
+The Python API process uses `ExecutionClient` and `pg.execution_backend()`.
+YAML is the worker wiring layer and registers a source that claims only the
+configured task names:
+
+```yaml
+resources:
+  pg:
+    type: postgres
+    dsn: "${POSTGRES_DSN}"
+
+  agent_jobs:
+    type: postgres_execution_source
+    connector: pg
+    namespace: agent-api
+    task_names: [run_agent]
+    table: onestep_executions
+    attempts_table: onestep_execution_attempts
+    batch_size: 4
+    poll_interval_s: 0.5
+    lease_duration_s: 90
+    heartbeat_interval_s: 30
+    worker_id: "${HOSTNAME:-agent-worker}"
+    auto_create: false
+
+tasks:
+  - name: run_agent
+    source: agent_jobs
+    handler:
+      ref: agent_worker.tasks:run_agent
+```
+
+The invariant is `0 < heartbeat_interval_s <= lease_duration_s / 3`.
+PostgreSQL execution stores eight observable states, attempt history, leases and
+results. Payload/result inline values default to 1 MiB and metadata to 64 KiB.
+It provides at-least-once execution and cooperative cancellation; use stable
+idempotency keys for API retries and idempotent downstream writes.
+
 ## RabbitMQ
 
 ```yaml

@@ -104,6 +104,46 @@ tasks:
 - `table_sink(mode="upsert")` 需要配置 `keys`。
 - 需要 CDC 时继续使用 MySQL binlog 或为 PostgreSQL 单独设计 logical replication 流程。
 
+## 跟踪长任务执行
+
+`onestep-postgres` 也可以把 PostgreSQL 作为任务状态、结果和租约的单一
+事实源。FastAPI 使用 core 的 `ExecutionClient`，worker 使用同一个 backend
+创建 `PostgresExecutionSource`：
+
+```python
+from onestep import ExecutionClient
+from onestep_postgres import PostgresConnector
+
+pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
+backend = pg.execution_backend(auto_create=True)
+step = ExecutionClient(backend, namespace="agent-api")
+execution = await step.submit(
+    "run_agent",
+    payload,
+    idempotency_key=request_id,
+)
+```
+
+```python
+source = backend.source(
+    namespace="agent-api",
+    task_names=("run_agent",),
+    worker_id="agent-worker-1",
+)
+```
+
+状态共有 `queued`、`running`、`retrying`、`succeeded`、`failed`、
+`cancel_requested`、`cancelled` 和 `expired`。`Execution` 是不可变快照，
+不会在属性访问时自动刷新；需要最新状态时重新调用 `get()` 或 `list()`。
+`result()` 只查询一次，未完成状态抛出 `ExecutionNotReady`，失败、取消、
+过期分别抛出对应类型异常，成功结果可以是 `None`。
+
+默认 payload/result 内联上限各为 1 MiB，metadata 上限为 64 KiB。任务提交
+通过 namespace、task 名和幂等键去重；相同内容返回原记录，不同内容抛出
+冲突。租约要求 `0 < heartbeat_interval_s <= lease_duration_s / 3`。系统是
+at-least-once，取消是协作式的，handler 的外部副作用仍需要业务幂等。生产
+部署建议先建表，再将 `auto_create=False`，避免运行身份需要 DDL 权限。
+
 ## 下一步
 
 - [YAML 任务定义](/yaml-task-definition) - 查看插件资源注册和严格校验
