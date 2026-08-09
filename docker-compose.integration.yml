@@ -43,6 +43,21 @@ services:
       timeout: 5s
       retries: 30
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: onestep-postgres
+    environment:
+      POSTGRES_DB: onestep
+      POSTGRES_USER: onestep
+      POSTGRES_PASSWORD: onestep
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onestep -d onestep"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   localstack:
     image: localstack/localstack:4.13.0
     container_name: onestep-localstack

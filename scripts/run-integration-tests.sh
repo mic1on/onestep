@@ -33,6 +33,7 @@ for path in \
   plugins/onestep-rabbitmq/tests/integration \
   plugins/onestep-redis/tests/integration \
   plugins/onestep-mysql/tests/integration \
+  plugins/onestep-postgres/tests/integration \
   plugins/onestep-sqs/tests/integration \
   plugins/onestep-kafka/tests/integration
 do
