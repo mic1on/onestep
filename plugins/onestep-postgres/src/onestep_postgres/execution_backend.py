@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -17,7 +18,6 @@ from onestep.capture.codec import CaptureEncodingError, decode_value, encode_val
 from onestep.execution import (
     Execution,
     ExecutionBackend,
-    ExecutionClient,
     ExecutionCompletion,
     ExecutionConflict,
     ExecutionEncodingError,
@@ -110,6 +110,66 @@ class PostgresExecutionBackend(ExecutionBackend):
             namespace,
             execution_id,
             reason,
+        )
+
+    async def claim(
+        self,
+        namespace: str,
+        task_names: Sequence[str],
+        limit: int,
+        lease_duration_s: float,
+        worker_id: str,
+    ) -> tuple[ExecutionLease, ...]:
+        return await asyncio.to_thread(
+            self._claim_sync,
+            namespace,
+            tuple(task_names),
+            limit,
+            lease_duration_s,
+            worker_id,
+        )
+
+    async def heartbeat(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+        lease_duration_s: float,
+    ) -> HeartbeatResult:
+        return await asyncio.to_thread(
+            self._heartbeat_sync,
+            execution_id,
+            attempt_id,
+            lease_token,
+            lease_duration_s,
+        )
+
+    async def complete(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+        completion: ExecutionCompletion,
+    ) -> Execution:
+        return await asyncio.to_thread(
+            self._complete_sync,
+            execution_id,
+            attempt_id,
+            lease_token,
+            completion,
+        )
+
+    async def release(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+    ) -> Execution:
+        return await asyncio.to_thread(
+            self._release_sync,
+            execution_id,
+            attempt_id,
+            lease_token,
         )
 
     def _now(self) -> datetime:
@@ -330,6 +390,396 @@ class PostgresExecutionBackend(ExecutionBackend):
                 )
             ).mappings().one()
         return self._row_to_execution(refreshed)
+
+    def _claim_sync(
+        self,
+        namespace: str,
+        task_names: tuple[str, ...],
+        limit: int,
+        lease_duration_s: float,
+        worker_id: str,
+    ) -> tuple[ExecutionLease, ...]:
+        if not task_names or len(set(task_names)) != len(task_names):
+            raise ValueError("task_names must be non-empty and unique")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be >= 1")
+        if isinstance(lease_duration_s, bool) or lease_duration_s <= 0:
+            raise ValueError("lease_duration_s must be > 0")
+        if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > 255:
+            raise ValueError("worker_id must be non-empty and <= 255 characters")
+        self._ensure_ready_sync()
+        now = self._now()
+        executions = self.tables.executions
+        attempts = self.tables.attempts
+        leases: list[ExecutionLease] = []
+        with self.engine.begin() as conn:
+            self._expire_queued_sync(conn, now)
+            self._expire_cancel_requests_sync(conn, attempts, now)
+            self._release_expired_leases_sync(conn, attempts, now)
+            stmt = (
+                sa.select(executions)
+                .where(
+                    executions.c.namespace == namespace,
+                    executions.c.task_name.in_(task_names),
+                    executions.c.status.in_((
+                        ExecutionStatus.QUEUED.value,
+                        ExecutionStatus.RETRYING.value,
+                    )),
+                    executions.c.available_at <= now,
+                    sa.or_(executions.c.expires_at.is_(None), executions.c.expires_at > now),
+                )
+                .order_by(
+                    executions.c.available_at,
+                    executions.c.created_at,
+                    executions.c.id,
+                )
+                .limit(limit)
+            )
+            try:
+                stmt = stmt.with_for_update(skip_locked=True)
+            except TypeError:
+                stmt = stmt.with_for_update()
+            rows = conn.execute(stmt).mappings().all()
+            for row in rows:
+                attempt_id = uuid4()
+                lease_token = uuid4()
+                lease_expires_at = now + timedelta(seconds=lease_duration_s)
+                attempt_no = row["attempts"] + 1
+                conn.execute(
+                    sa.update(executions)
+                    .where(executions.c.id == row["id"])
+                    .values(
+                        status=ExecutionStatus.RUNNING.value,
+                        attempts=attempt_no,
+                        lease_token=lease_token,
+                        lease_expires_at=lease_expires_at,
+                        worker_id=worker_id.strip(),
+                        started_at=row["started_at"] or now,
+                        updated_at=now,
+                        version=row["version"] + 1,
+                    )
+                )
+                conn.execute(
+                    sa.insert(attempts).values(
+                        id=attempt_id,
+                        execution_id=row["id"],
+                        attempt_no=attempt_no,
+                        lease_token=lease_token,
+                        worker_id=worker_id.strip(),
+                        status="running",
+                        started_at=now,
+                        heartbeat_at=now,
+                    )
+                )
+                refreshed = conn.execute(
+                    sa.select(executions).where(executions.c.id == row["id"])
+                ).mappings().one()
+                leases.append(
+                    ExecutionLease(
+                        execution=self._row_to_execution(refreshed),
+                        attempt_id=attempt_id,
+                        lease_token=lease_token,
+                        lease_expires_at=_aware_utc(lease_expires_at),
+                    )
+                )
+        return tuple(leases)
+
+    def _expire_queued_sync(self, conn: Any, now: datetime) -> None:
+        executions = self.tables.executions
+        rows = conn.execute(
+            sa.select(executions.c.id, executions.c.version).where(
+                executions.c.status.in_((
+                    ExecutionStatus.QUEUED.value,
+                    ExecutionStatus.RETRYING.value,
+                )),
+                executions.c.expires_at.is_not(None),
+                executions.c.expires_at <= now,
+            )
+        ).all()
+        for row in rows:
+            conn.execute(
+                sa.update(executions)
+                .where(executions.c.id == row.id)
+                .values(
+                    status=ExecutionStatus.EXPIRED.value,
+                    finished_at=now,
+                    updated_at=now,
+                    version=row.version + 1,
+                )
+            )
+
+    def _expire_cancel_requests_sync(self, conn: Any, attempts: sa.Table, now: datetime) -> None:
+        executions = self.tables.executions
+        rows = conn.execute(
+            sa.select(executions.c.id, executions.c.lease_token, executions.c.version).where(
+                executions.c.status == ExecutionStatus.CANCEL_REQUESTED.value,
+                executions.c.lease_expires_at.is_not(None),
+                executions.c.lease_expires_at <= now,
+            )
+        ).all()
+        for row in rows:
+            conn.execute(
+                sa.update(attempts)
+                .where(
+                    attempts.c.execution_id == row.id,
+                    attempts.c.lease_token == row.lease_token,
+                    attempts.c.status == "running",
+                )
+                .values(status="cancelled", finished_at=now)
+            )
+            conn.execute(
+                sa.update(executions)
+                .where(executions.c.id == row.id)
+                .values(
+                    status=ExecutionStatus.CANCELLED.value,
+                    finished_at=now,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    worker_id=None,
+                    updated_at=now,
+                    version=row.version + 1,
+                )
+            )
+
+    def _release_expired_leases_sync(self, conn: Any, attempts: sa.Table, now: datetime) -> None:
+        executions = self.tables.executions
+        rows = conn.execute(
+            sa.select(
+                executions.c.id,
+                executions.c.lease_token,
+                executions.c.expires_at,
+                executions.c.version,
+            ).where(
+                executions.c.status == ExecutionStatus.RUNNING.value,
+                executions.c.lease_expires_at.is_not(None),
+                executions.c.lease_expires_at <= now,
+            )
+        ).all()
+        for row in rows:
+            attempt_update = (
+                sa.update(attempts)
+                .where(
+                    attempts.c.execution_id == row.id,
+                    attempts.c.lease_token == row.lease_token,
+                    attempts.c.status == "running",
+                )
+                .values(status="lease_lost", finished_at=now)
+            )
+            conn.execute(attempt_update)
+            if row.expires_at is not None and _aware_utc(row.expires_at) <= now:
+                values = {
+                    "status": ExecutionStatus.EXPIRED.value,
+                    "finished_at": now,
+                }
+            else:
+                values = {
+                    "status": ExecutionStatus.RETRYING.value,
+                    "available_at": now,
+                }
+            values.update(
+                {
+                    "lease_token": None,
+                    "lease_expires_at": None,
+                    "worker_id": None,
+                    "updated_at": now,
+                    "version": row.version + 1,
+                }
+            )
+            conn.execute(
+                sa.update(executions).where(executions.c.id == row.id).values(**values)
+            )
+
+    def _heartbeat_sync(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+        lease_duration_s: float,
+    ) -> HeartbeatResult:
+        if lease_duration_s <= 0:
+            raise ValueError("lease_duration_s must be > 0")
+        self._ensure_ready_sync()
+        now = self._now()
+        expires = now + timedelta(seconds=lease_duration_s)
+        executions = self.tables.executions
+        attempts = self.tables.attempts
+        with self.engine.begin() as conn:
+            updated = conn.execute(
+                sa.update(executions)
+                .where(
+                    executions.c.id == execution_id,
+                    executions.c.lease_token == lease_token,
+                    executions.c.status.in_((
+                        ExecutionStatus.RUNNING.value,
+                        ExecutionStatus.CANCEL_REQUESTED.value,
+                    )),
+                )
+                .values(lease_expires_at=expires, updated_at=now)
+            )
+            attempt_updated = conn.execute(
+                sa.update(attempts)
+                .where(
+                    attempts.c.id == attempt_id,
+                    attempts.c.execution_id == execution_id,
+                    attempts.c.lease_token == lease_token,
+                    attempts.c.status == "running",
+                )
+                .values(heartbeat_at=now)
+            )
+            if updated.rowcount != 1 or attempt_updated.rowcount != 1:
+                raise StaleExecutionLease("execution lease is no longer valid")
+            row = conn.execute(
+                sa.select(executions.c.status).where(executions.c.id == execution_id)
+            ).one()
+        return HeartbeatResult(
+            lease_expires_at=_aware_utc(expires),
+            cancel_requested=row.status == ExecutionStatus.CANCEL_REQUESTED.value,
+        )
+
+    def _complete_sync(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+        completion: ExecutionCompletion,
+    ) -> Execution:
+        self._ensure_ready_sync()
+        encoded_result = None
+        if completion.status is ExecutionStatus.SUCCEEDED:
+            encoded_result = self._encode_value(completion.result, "result")
+            if self._encoded_size(encoded_result) > self.max_result_bytes:
+                raise ExecutionEncodingError("execution result exceeds the configured limit")
+        error = None if completion.error is None else asdict(completion.error)
+        now = self._now()
+        executions = self.tables.executions
+        attempts = self.tables.attempts
+        expected_statuses = {
+            ExecutionStatus.SUCCEEDED: (ExecutionStatus.RUNNING.value,),
+            ExecutionStatus.RETRYING: (ExecutionStatus.RUNNING.value,),
+            ExecutionStatus.FAILED: (ExecutionStatus.RUNNING.value,),
+            ExecutionStatus.CANCELLED: (
+                ExecutionStatus.RUNNING.value,
+                ExecutionStatus.CANCEL_REQUESTED.value,
+            ),
+        }[completion.status]
+        values: dict[str, Any] = {
+            "status": completion.status.value,
+            "updated_at": now,
+            "version": executions.c.version + 1,
+            "lease_token": None,
+            "lease_expires_at": None,
+            "worker_id": None,
+            "result": encoded_result if completion.status is ExecutionStatus.SUCCEEDED else None,
+            "error": error,
+        }
+        if completion.status is ExecutionStatus.RETRYING:
+            values.update(
+                {
+                    "available_at": now + timedelta(seconds=completion.delay_s or 0),
+                    "finished_at": None,
+                }
+            )
+        else:
+            values["finished_at"] = now
+        attempt_status = {
+            ExecutionStatus.SUCCEEDED: "succeeded",
+            ExecutionStatus.RETRYING: "retrying",
+            ExecutionStatus.FAILED: "failed",
+            ExecutionStatus.CANCELLED: "cancelled",
+        }[completion.status]
+        with self.engine.begin() as conn:
+            current = conn.execute(
+                sa.select(executions).where(executions.c.id == execution_id)
+            ).mappings().one_or_none()
+            if current is None:
+                raise StaleExecutionLease("execution does not exist")
+            updated = conn.execute(
+                sa.update(executions)
+                .where(
+                    executions.c.id == execution_id,
+                    executions.c.lease_token == lease_token,
+                    executions.c.status.in_(expected_statuses),
+                )
+                .values(**values)
+            )
+            if updated.rowcount != 1:
+                if current["status"] == completion.status.value and current["status"] in {
+                    status.value for status in (
+                        ExecutionStatus.SUCCEEDED,
+                        ExecutionStatus.FAILED,
+                        ExecutionStatus.CANCELLED,
+                    )
+                }:
+                    return self._row_to_execution(current)
+                raise StaleExecutionLease("execution lease is no longer valid")
+            attempt_updated = conn.execute(
+                sa.update(attempts)
+                .where(
+                    attempts.c.id == attempt_id,
+                    attempts.c.execution_id == execution_id,
+                    attempts.c.lease_token == lease_token,
+                    attempts.c.status == "running",
+                )
+                .values(status=attempt_status, error=error, finished_at=now)
+            )
+            if attempt_updated.rowcount != 1:
+                raise StaleExecutionLease("execution attempt is no longer valid")
+            row = conn.execute(
+                sa.select(executions).where(executions.c.id == execution_id)
+            ).mappings().one()
+        return self._row_to_execution(row)
+
+    def _release_sync(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+    ) -> Execution:
+        self._ensure_ready_sync()
+        now = self._now()
+        executions = self.tables.executions
+        attempts = self.tables.attempts
+        with self.engine.begin() as conn:
+            current = conn.execute(
+                sa.select(executions).where(executions.c.id == execution_id)
+            ).mappings().one_or_none()
+            if current is None:
+                raise StaleExecutionLease("execution does not exist")
+            updated = conn.execute(
+                sa.update(executions)
+                .where(
+                    executions.c.id == execution_id,
+                    executions.c.lease_token == lease_token,
+                    executions.c.status == ExecutionStatus.RUNNING.value,
+                )
+                .values(
+                    status=ExecutionStatus.QUEUED.value,
+                    available_at=now,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    worker_id=None,
+                    updated_at=now,
+                    version=executions.c.version + 1,
+                )
+            )
+            if updated.rowcount != 1:
+                raise StaleExecutionLease("execution lease is no longer valid")
+            attempt_updated = conn.execute(
+                sa.update(attempts)
+                .where(
+                    attempts.c.id == attempt_id,
+                    attempts.c.execution_id == execution_id,
+                    attempts.c.lease_token == lease_token,
+                    attempts.c.status == "running",
+                )
+                .values(status="lease_lost", finished_at=now)
+            )
+            if attempt_updated.rowcount != 1:
+                raise StaleExecutionLease("execution attempt is no longer valid")
+            row = conn.execute(
+                sa.select(executions).where(executions.c.id == execution_id)
+            ).mappings().one()
+        return self._row_to_execution(row)
 
     def _row_to_execution(self, row: Mapping[str, Any]) -> Execution:
         try:
