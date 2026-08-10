@@ -265,12 +265,14 @@ class PostgresExecutionDelivery(Delivery):
                 remaining = (
                     self.lease_expires_at - datetime.now(timezone.utc)
                 ).total_seconds()
+                if attempt == 2 or remaining <= 0:
+                    return None
+                # Keep each retry inside the remaining lease; the caller cancels
+                # the owner when no retry can be made before the deadline.
                 delay_s = min(
                     self.source.heartbeat_interval_s * (2**attempt),
-                    max(0.0, remaining / 4),
+                    remaining / 4,
                 )
-                if attempt == 2 or delay_s <= 0:
-                    return None
                 try:
                     await asyncio.wait_for(self._heartbeat_stop.wait(), timeout=delay_s)
                     return None
