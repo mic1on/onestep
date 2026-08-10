@@ -178,6 +178,8 @@ def test_validation_and_boundary_copies() -> None:
             await step.list(limit=201)
         with pytest.raises(ValueError):
             await step.get("not-a-uuid")
+        with pytest.raises(TypeError, match="reason must be a string or None"):
+            await step.cancel(uuid4(), reason=123)
         with pytest.raises(ValueError):
             await step.cancel(uuid4(), reason="x" * 501)
 

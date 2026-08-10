@@ -60,6 +60,8 @@ def _validate_execution_source_options(
         for task in normalized_tasks
     ):
         raise ValueError(f"{prefix}task_names must be non-empty strings <= 255 characters")
+    if len(normalized_tasks) != 1:
+        raise ValueError(f"{prefix}task_names must contain exactly one task name")
     if len(set(normalized_tasks)) != len(normalized_tasks):
         raise ValueError(f"{prefix}task_names must be unique")
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
@@ -123,11 +125,19 @@ class PostgresExecutionSource(Source):
         self.backend = backend
         self.namespace = namespace.strip()
         self.task_names = normalized_tasks
+        self.task_name = normalized_tasks[0]
         self.batch_size = batch_size
         self.poll_interval_s = float(poll_interval_s)
         self.lease_duration_s = float(lease_duration_s)
         self.heartbeat_interval_s = float(heartbeat_interval_s)
         self.worker_id = worker_id.strip()
+
+    def validate_task(self, task_name: str) -> None:
+        if task_name != self.task_name:
+            raise ValueError(
+                f"{self.name} is configured for task {self.task_name!r}, "
+                f"not {task_name!r}"
+            )
 
     async def open(self) -> None:
         await self.backend.open()
@@ -290,13 +300,19 @@ class PostgresExecutionDelivery(Delivery):
         await self._stop_heartbeat()
         if self._completed:
             return
-        await self.source.backend.complete(
+        completed = await self.source.backend.complete(
             self.execution_id,
             self.attempt_id,
             self.lease_token,
             completion,
         )
         self._completed = True
+        if (
+            completion.status is ExecutionStatus.SUCCEEDED
+            and completed.status is ExecutionStatus.CANCELLED
+        ):
+            self.cancel_requested = True
+            raise asyncio.CancelledError
 
     async def release_unstarted(self) -> None:
         await self.source.backend.release(

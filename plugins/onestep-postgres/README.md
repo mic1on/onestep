@@ -55,6 +55,9 @@ source = backend.source(
 )
 ```
 
+Each execution source accepts exactly one task name, which must match the app
+task bound to that source. Create a separate source for each additional task.
+
 Execution statuses are `queued`, `running`, `retrying`, `succeeded`, `failed`,
 `cancel_requested`, `cancelled`, and `expired`. Inline payload and result values
 are limited to 1 MiB each; metadata is limited to 64 KiB. Use

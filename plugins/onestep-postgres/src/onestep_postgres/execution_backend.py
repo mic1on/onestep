@@ -767,16 +767,15 @@ class PostgresExecutionBackend(ExecutionBackend):
     ) -> Execution:
         self._ensure_ready_sync()
         encoded_result = None
-        if completion.status is ExecutionStatus.SUCCEEDED:
-            encoded_result = self._encode_value(completion.result, "result")
-            if self._encoded_size(encoded_result) > self.max_result_bytes:
-                raise ExecutionEncodingError("execution result exceeds the configured limit")
         error = None if completion.error is None else asdict(completion.error)
         now = self._now()
         executions = self.tables.executions
         attempts = self.tables.attempts
         expected_statuses = {
-            ExecutionStatus.SUCCEEDED: (ExecutionStatus.RUNNING.value,),
+            ExecutionStatus.SUCCEEDED: (
+                ExecutionStatus.RUNNING.value,
+                ExecutionStatus.CANCEL_REQUESTED.value,
+            ),
             ExecutionStatus.RETRYING: (ExecutionStatus.RUNNING.value,),
             ExecutionStatus.FAILED: (ExecutionStatus.RUNNING.value,),
             ExecutionStatus.CANCELLED: (
@@ -784,32 +783,53 @@ class PostgresExecutionBackend(ExecutionBackend):
                 ExecutionStatus.CANCEL_REQUESTED.value,
             ),
         }[completion.status]
-        values: dict[str, Any] = {
-            "status": completion.status.value,
-            "updated_at": now,
-            "version": executions.c.version + 1,
-            "lease_token": None,
-            "lease_expires_at": None,
-            "worker_id": None,
-            "result": encoded_result if completion.status is ExecutionStatus.SUCCEEDED else None,
-            "error": error,
-        }
-        if completion.status is ExecutionStatus.RETRYING:
-            values.update(
-                {
-                    "available_at": now + timedelta(seconds=completion.delay_s or 0),
-                    "finished_at": None,
-                }
-            )
-        else:
-            values["finished_at"] = now
-        attempt_status = {
-            ExecutionStatus.SUCCEEDED: "succeeded",
-            ExecutionStatus.RETRYING: "retrying",
-            ExecutionStatus.FAILED: "failed",
-            ExecutionStatus.CANCELLED: "cancelled",
-        }[completion.status]
         with self.engine.begin() as conn:
+            current = conn.execute(
+                sa.select(executions).where(executions.c.id == execution_id).with_for_update()
+            ).mappings().one_or_none()
+            if current is None:
+                raise StaleExecutionLease("execution does not exist")
+
+            cancel_won = (
+                completion.status is ExecutionStatus.SUCCEEDED
+                and current["status"] == ExecutionStatus.CANCEL_REQUESTED.value
+            )
+            if completion.status is ExecutionStatus.SUCCEEDED and not cancel_won:
+                encoded_result = self._encode_value(completion.result, "result")
+                if self._encoded_size(encoded_result) > self.max_result_bytes:
+                    raise ExecutionEncodingError(
+                        "execution result exceeds the configured limit"
+                    )
+            effective_status = (
+                ExecutionStatus.CANCELLED if cancel_won else completion.status
+            )
+            effective_result = None if cancel_won else encoded_result
+            effective_error = None if cancel_won else error
+            values: dict[str, Any] = {
+                "status": effective_status.value,
+                "updated_at": now,
+                "version": executions.c.version + 1,
+                "lease_token": None,
+                "lease_expires_at": None,
+                "worker_id": None,
+                "result": effective_result,
+                "error": effective_error,
+            }
+            if effective_status is ExecutionStatus.RETRYING:
+                values.update(
+                    {
+                        "available_at": now + timedelta(seconds=completion.delay_s or 0),
+                        "finished_at": None,
+                    }
+                )
+            else:
+                values["finished_at"] = now
+            attempt_status = {
+                ExecutionStatus.SUCCEEDED: "succeeded",
+                ExecutionStatus.RETRYING: "retrying",
+                ExecutionStatus.FAILED: "failed",
+                ExecutionStatus.CANCELLED: "cancelled",
+            }[effective_status]
             updated = conn.execute(
                 sa.update(executions)
                 .where(
@@ -859,7 +879,7 @@ class PostgresExecutionBackend(ExecutionBackend):
                     attempts.c.lease_token == lease_token,
                     attempts.c.status == "running",
                 )
-                .values(status=attempt_status, error=error, finished_at=now)
+                .values(status=attempt_status, error=effective_error, finished_at=now)
             )
             if attempt_updated.rowcount != 1:
                 raise StaleExecutionLease("execution attempt is no longer valid")

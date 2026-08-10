@@ -361,6 +361,8 @@ class ExecutionClient:
         *,
         reason: str | None = None,
     ) -> Execution | None:
+        if reason is not None and not isinstance(reason, str):
+            raise TypeError("reason must be a string or None")
         normalized_reason = None if reason is None or not reason.strip() else reason.strip()
         if normalized_reason is not None and len(normalized_reason) > 500:
             raise ValueError("reason must be at most 500 characters")

@@ -75,6 +75,23 @@ def test_postgres_connector_builds_execution_backend_and_source(tmp_path) -> Non
     assert isinstance(source, PostgresExecutionSource)
 
 
+def test_app_task_must_match_postgres_execution_source(tmp_path) -> None:
+    from onestep import OneStepApp
+
+    connector = PostgresConnector(f"sqlite:///{tmp_path / 'task-binding.db'}")
+    source = connector.execution_backend().source(
+        namespace="agent-api",
+        task_names=("task_a",),
+        worker_id="worker-1",
+    )
+    app = OneStepApp("task-binding")
+
+    with pytest.raises(ValueError, match="configured for task 'task_a'"):
+        @app.task(name="task_b", source=source)
+        async def task_b(ctx, payload):
+            return payload
+
+
 def test_sqlalchemy_state_store_is_not_exposed_by_core() -> None:
     import onestep
 
@@ -193,6 +210,7 @@ def test_strict_yaml_builds_execution_source_with_shared_connector(tmp_path) -> 
     ("field", "value", "match"),
     [
         ("task_names", [], "task_names"),
+        ("task_names", ["task_a", "task_b"], "exactly one task name"),
         ("batch_size", 0, "batch_size"),
         ("poll_interval_s", 0, "poll_interval_s"),
         ("poll_interval_s", float("nan"), "poll_interval_s"),

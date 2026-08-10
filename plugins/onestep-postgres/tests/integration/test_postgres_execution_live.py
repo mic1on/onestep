@@ -338,16 +338,12 @@ def test_cancel_and_complete_race_has_one_terminal_winner_live():
             complete_task = asyncio.create_task(complete())
             start.set()
             cancelled, completed = await asyncio.gather(cancel_task, complete_task)
-            if cancelled is not None and cancelled.status is ExecutionStatus.CANCEL_REQUESTED:
-                await first.complete(
-                    lease.execution.id,
-                    lease.attempt_id,
-                    lease.lease_token,
-                    ExecutionCompletion(status=ExecutionStatus.CANCELLED),
-                )
             final = await first.get("agent-api", submitted.id)
             assert final is not None and final.terminal
-            assert completed is None or completed.status is ExecutionStatus.SUCCEEDED
+            assert final.status in {ExecutionStatus.SUCCEEDED, ExecutionStatus.CANCELLED}
+            assert completed is None or completed.status is final.status
+            if final.status is ExecutionStatus.CANCELLED:
+                assert final.result is None
         finally:
             await _close_and_drop([first_connector, second_connector], (execution_table, attempts_table))
 

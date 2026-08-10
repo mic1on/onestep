@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 import sqlalchemy as sa
 
+from onestep import OneStepApp
 from onestep.envelope import Envelope
 from onestep.execution import (
     Execution,
@@ -21,6 +22,7 @@ from onestep.resilience import (
     ConnectorOperation,
     ConnectorOperationError,
 )
+from onestep.runtime import TaskRunner
 from onestep_postgres import PostgresConnector
 from onestep_postgres.execution_backend import (
     ExecutionLease,
@@ -69,6 +71,28 @@ def _request(task_name="run_agent", **kwargs):
         metadata=kwargs.pop("metadata", {"requested_by": "u-1"}),
         **kwargs,
     )
+
+
+def test_source_rejects_multiple_task_names() -> None:
+    with pytest.raises(ValueError, match="exactly one task name"):
+        PostgresExecutionSource(
+            backend=object(),
+            namespace="agent-api",
+            task_names=("task_a", "task_b"),
+            worker_id="worker-1",
+        )
+
+
+def test_source_rejects_task_name_mismatch() -> None:
+    source = PostgresExecutionSource(
+        backend=object(),
+        namespace="agent-api",
+        task_names=("task_a",),
+        worker_id="worker-1",
+    )
+
+    with pytest.raises(ValueError, match="configured for task 'task_a'"):
+        source.validate_task("task_b")
 
 
 def test_claim_skips_delayed_execution_until_available_at(tmp_path: Path) -> None:
@@ -280,6 +304,76 @@ def test_complete_success_updates_execution_and_attempt_in_one_transaction(tmp_p
                 )
             ).mappings().one()
         assert attempt["status"] == "succeeded"
+
+    asyncio.run(scenario())
+
+
+def test_cancel_request_wins_over_late_success_completion(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / "cancel-success-race.db", clock)
+        [lease] = await _claim_one(backend)
+        requested = await backend.request_cancel(
+            "agent-api", lease.execution.id, reason="stop"
+        )
+        assert requested is not None
+        assert requested.status is ExecutionStatus.CANCEL_REQUESTED
+
+        completed = await backend.complete(
+            lease.execution.id,
+            lease.attempt_id,
+            lease.lease_token,
+            ExecutionCompletion(
+                status=ExecutionStatus.SUCCEEDED,
+                result=object(),
+            ),
+        )
+
+        assert completed.status is ExecutionStatus.CANCELLED
+        assert completed.result is None
+        current = await backend.get("agent-api", lease.execution.id)
+        assert current == completed
+        with backend.engine.begin() as conn:
+            attempt = conn.execute(
+                sa.select(backend.tables.attempts).where(
+                    backend.tables.attempts.c.id == lease.attempt_id
+                )
+            ).mappings().one()
+        assert attempt["status"] == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_runner_converges_cancel_and_success_race_to_cancelled(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / "cancel-success-runner.db", clock)
+        submitted = await backend.submit(_request())
+        source = PostgresExecutionSource(
+            backend=backend,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+        [delivery] = await source.fetch(1)
+        app = OneStepApp("cancel-success-race")
+
+        @app.task(name="run_agent", source=source)
+        async def run_agent(ctx, payload):
+            requested = await backend.request_cancel(
+                "agent-api", submitted.id, reason="stop"
+            )
+            assert requested is not None
+            assert requested.status is ExecutionStatus.CANCEL_REQUESTED
+            return {"must_not_persist": True}
+
+        with pytest.raises(asyncio.CancelledError):
+            await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        current = await backend.get("agent-api", submitted.id)
+        assert current is not None
+        assert current.status is ExecutionStatus.CANCELLED
+        assert current.result is None
 
     asyncio.run(scenario())
 

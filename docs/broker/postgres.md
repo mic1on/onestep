@@ -132,6 +132,9 @@ source = backend.source(
 )
 ```
 
+每个 execution source 只能配置一个任务名，并且必须与绑定该 source 的 app
+task 名一致。需要处理多个任务时，为每个任务创建独立的 source。
+
 状态共有 `queued`、`running`、`retrying`、`succeeded`、`failed`、
 `cancel_requested`、`cancelled` 和 `expired`。`Execution` 是不可变快照，
 不会在属性访问时自动刷新；需要最新状态时重新调用 `get()` 或 `list()`。
