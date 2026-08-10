@@ -21,6 +21,7 @@ from onestep.execution import (
     ExecutionConflict,
     ExecutionEncodingError,
     ExecutionError,
+    ExecutionLeaseLost,
     ExecutionPage,
     ExecutionQuery,
     ExecutionRequest,
@@ -30,7 +31,7 @@ from onestep.execution import (
 from .execution_schema import ExecutionTables, build_execution_tables
 
 
-class StaleExecutionLease(RuntimeError):
+class StaleExecutionLease(ExecutionLeaseLost):
     pass
 
 

@@ -14,6 +14,7 @@ from onestep import (
     ConnectorOperation,
     ConnectorOperationError,
     ExecutionCompletion,
+    ExecutionLeaseLost,
     ExecutionStatus,
     FailureKind,
     InMemoryMetrics,
@@ -51,7 +52,14 @@ class _StubDelivery(Delivery):
 
 
 class _RecordingManagedDelivery(Delivery):
-    def __init__(self, payload, steps, *, cancel_requested=False):
+    def __init__(
+        self,
+        payload,
+        steps,
+        *,
+        cancel_requested=False,
+        completion_errors=None,
+    ):
         super().__init__(
             Envelope(
                 body=payload,
@@ -68,6 +76,7 @@ class _RecordingManagedDelivery(Delivery):
         self.cancel_requested = cancel_requested
         self.steps = steps
         self.completions: list[ExecutionCompletion] = []
+        self.completion_errors = completion_errors or {}
 
     async def ack(self):
         self.steps.append("legacy:ack")
@@ -81,6 +90,9 @@ class _RecordingManagedDelivery(Delivery):
     async def complete_execution(self, completion):
         self.completions.append(completion)
         self.steps.append(f"managed:{completion.status.value}")
+        error = self.completion_errors.get(completion.status)
+        if error is not None:
+            raise error
 
 
 def test_managed_success_uses_completion_and_preserves_correlation_contract() -> None:
@@ -168,6 +180,143 @@ def test_managed_cancellation_distinguishes_business_and_worker_contract() -> No
             assert delivery.completions[0].status is expected
             if expected is ExecutionStatus.RETRYING:
                 assert delivery.completions[0].delay_s == 0
+
+    asyncio.run(scenario())
+
+
+def test_managed_cancellation_preserves_original_error_after_lease_loss_contract() -> None:
+    async def scenario() -> None:
+        cancellation = asyncio.CancelledError("worker cancelled")
+        app = OneStepApp("managed-cancel-lease-lost")
+
+        @app.task()
+        async def consume(ctx, payload):
+            raise cancellation
+
+        delivery = _RecordingManagedDelivery(
+            {},
+            [],
+            completion_errors={
+                ExecutionStatus.RETRYING: ExecutionLeaseLost("lease lost")
+            },
+        )
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        assert raised.value is cancellation
+        assert [item.status for item in delivery.completions] == [
+            ExecutionStatus.RETRYING
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_managed_success_ignores_lease_loss_contract() -> None:
+    async def scenario() -> None:
+        steps: list[str] = []
+        app = OneStepApp("managed-success-lease-lost")
+
+        @app.on_event
+        def event(item):
+            steps.append(f"event:{item.kind.value}")
+
+        @app.task()
+        async def consume(ctx, payload):
+            steps.append("handler")
+            return {"answer": 42}
+
+        delivery = _RecordingManagedDelivery(
+            {},
+            steps,
+            completion_errors={
+                ExecutionStatus.SUCCEEDED: ExecutionLeaseLost("lease lost")
+            },
+        )
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        assert [item.status for item in delivery.completions] == [
+            ExecutionStatus.SUCCEEDED
+        ]
+        assert steps == [
+            "event:started",
+            "handler",
+            "managed:succeeded",
+            "event:succeeded",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_managed_retry_ignores_lease_loss_contract() -> None:
+    async def scenario() -> None:
+        app = OneStepApp("managed-retry-lease-lost")
+
+        @app.task(retry=MaxAttempts(max_attempts=2))
+        async def consume(ctx, payload):
+            raise ValueError("handler failed")
+
+        delivery = _RecordingManagedDelivery(
+            {},
+            [],
+            completion_errors={
+                ExecutionStatus.RETRYING: ExecutionLeaseLost("lease lost")
+            },
+        )
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        assert [item.status for item in delivery.completions] == [
+            ExecutionStatus.RETRYING
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_managed_failure_does_not_retry_after_lease_loss_contract() -> None:
+    async def scenario() -> None:
+        app = OneStepApp("managed-failure-lease-lost")
+
+        @app.task(retry=NoRetry())
+        async def consume(ctx, payload):
+            raise ValueError("handler failed")
+
+        delivery = _RecordingManagedDelivery(
+            {},
+            [],
+            completion_errors={
+                ExecutionStatus.FAILED: ExecutionLeaseLost("lease lost")
+            },
+        )
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        assert [item.status for item in delivery.completions] == [
+            ExecutionStatus.FAILED
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_managed_failure_fallback_ignores_lease_loss_contract() -> None:
+    async def scenario() -> None:
+        app = OneStepApp("managed-failure-fallback-lease-lost")
+
+        @app.task(retry=NoRetry())
+        async def consume(ctx, payload):
+            raise ValueError("handler failed")
+
+        delivery = _RecordingManagedDelivery(
+            {},
+            [],
+            completion_errors={
+                ExecutionStatus.FAILED: RuntimeError("completion failed"),
+                ExecutionStatus.RETRYING: ExecutionLeaseLost("lease lost"),
+            },
+        )
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        assert [item.status for item in delivery.completions] == [
+            ExecutionStatus.FAILED,
+            ExecutionStatus.RETRYING,
+        ]
 
     asyncio.run(scenario())
 

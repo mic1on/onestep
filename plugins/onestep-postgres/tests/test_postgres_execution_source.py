@@ -14,6 +14,7 @@ from onestep.execution import (
     Execution,
     ExecutionCompletion,
     ExecutionError,
+    ExecutionLeaseLost,
     ExecutionQuery,
     ExecutionStatus,
 )
@@ -45,6 +46,10 @@ class MutableClock:
 
     def advance(self, **kwargs) -> None:
         self.current += timedelta(**kwargs)
+
+
+def test_stale_execution_lease_uses_core_lease_loss_contract() -> None:
+    assert issubclass(StaleExecutionLease, ExecutionLeaseLost)
 
 
 def _backend(

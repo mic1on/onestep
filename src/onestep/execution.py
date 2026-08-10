@@ -307,6 +307,10 @@ class ExecutionEncodingError(ExecutionException):
     pass
 
 
+class ExecutionLeaseLost(RuntimeError):
+    pass
+
+
 class ExecutionClient:
     def __init__(self, backend: ExecutionBackend, *, namespace: str) -> None:
         self.backend = backend
@@ -401,6 +405,7 @@ __all__ = [
     "ExecutionException",
     "ExecutionExpired",
     "ExecutionFailed",
+    "ExecutionLeaseLost",
     "ExecutionNotFound",
     "ExecutionNotReady",
     "ExecutionPage",

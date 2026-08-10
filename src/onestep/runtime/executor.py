@@ -19,6 +19,7 @@ from onestep.events import TaskEvent, TaskEventKind
 from onestep.execution import (
     ExecutionCompletion,
     ExecutionError,
+    ExecutionLeaseLost,
     ExecutionStatus,
     ManagedExecutionDelivery,
 )
@@ -284,7 +285,8 @@ class DeliveryExecutor:
             if managed is None:
                 await delivery.retry()
             else:
-                await managed.complete_execution(
+                await self._complete_managed_execution(
+                    managed,
                     ExecutionCompletion(
                         status=managed_status,
                         error=error,
@@ -452,7 +454,8 @@ class DeliveryExecutor:
             if managed is None:
                 await delivery.retry(delay_s=delay_s)
             else:
-                await managed.complete_execution(
+                await self._complete_managed_execution(
+                    managed,
                     ExecutionCompletion(
                         status=ExecutionStatus.RETRYING,
                         error=error,
@@ -474,7 +477,8 @@ class DeliveryExecutor:
         managed = self._managed_delivery(delivery)
         if managed is not None:
             try:
-                await managed.complete_execution(
+                await self._complete_managed_execution(
+                    managed,
                     ExecutionCompletion(
                         status=ExecutionStatus.FAILED,
                         error=error,
@@ -484,14 +488,15 @@ class DeliveryExecutor:
                 ctx.logger.exception(
                     "managed execution failure completion failed; retrying original delivery"
                 )
-                await managed.complete_execution(
+                retried = await self._complete_managed_execution(
+                    managed,
                     ExecutionCompletion(
                         status=ExecutionStatus.RETRYING,
                         error=error,
                     )
                 )
                 await self.checkpoint("delivery_action", "completed", {})
-                return False
+                return not retried
             await self.checkpoint("delivery_action", "completed", {})
             return True
         try:
@@ -514,12 +519,24 @@ class DeliveryExecutor:
             return delivery
         return None
 
+    async def _complete_managed_execution(
+        self,
+        delivery: ManagedExecutionDelivery,
+        completion: ExecutionCompletion,
+    ) -> bool:
+        try:
+            await delivery.complete_execution(completion)
+        except ExecutionLeaseLost:
+            return False
+        return True
+
     async def _apply_success(self, delivery: Delivery, result: Any) -> None:
         managed = self._managed_delivery(delivery)
         if managed is None:
             await delivery.ack()
             return
-        await managed.complete_execution(
+        await self._complete_managed_execution(
+            managed,
             ExecutionCompletion(
                 status=ExecutionStatus.SUCCEEDED,
                 result=result,

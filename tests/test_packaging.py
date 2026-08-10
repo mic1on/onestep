@@ -127,6 +127,7 @@ from onestep import (
     ExecutionBackend,
     ExecutionClient,
     ExecutionCompletion,
+    ExecutionLeaseLost,
     ExecutionStatus,
     FailureCaptureConfig,
     HttpSink,
@@ -169,6 +170,7 @@ assert Execution is not None
 assert ExecutionBackend is not None
 assert ExecutionClient is not None
 assert ExecutionCompletion is not None
+assert issubclass(ExecutionLeaseLost, RuntimeError)
 assert ExecutionStatus.QUEUED.value == "queued"
 assert ManagedExecutionDelivery is not None
 assert FailureCaptureConfig is not None
