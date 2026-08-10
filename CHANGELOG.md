@@ -3,6 +3,12 @@
 ## Unreleased
 
 - Adds optional `env` parameter to `OneStepApp.load()` and `load_yaml_app()`, allowing callers to inject a `Mapping[str, str]` of variable overrides that are checked before `os.environ` during `${VAR}` expansion. This eliminates the need for callers to export values to `os.environ` before loading an app.
+- Adds async lifecycle management to `ExecutionClient` and a lazy DSN constructor
+  for `PostgresExecutionBackend`; the connector-first factory remains available
+  for applications that need to share a PostgreSQL pool.
+- Makes direct PostgreSQL execution backends process-safe for pre-fork deployments:
+  each child creates its own pool, while externally supplied connectors are rejected
+  when reused across a process boundary.
 
 ## onestep 1.9.0
 

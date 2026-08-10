@@ -126,7 +126,10 @@ resources:
 
 ## PostgreSQL execution source
 
-The Python API process uses `ExecutionClient` and `pg.execution_backend()`.
+The Python API process uses `ExecutionClient` with the backend plugin's direct DSN
+constructor, such as `PostgresExecutionBackend(dsn=...)`. `PostgresConnector` and
+`PostgresExecutionBackend.from_connector()` remain available when one application
+needs to share a pool with table queues, sinks, or state stores.
 YAML is the worker wiring layer and registers a source that claims only the
 configured task names:
 

@@ -108,20 +108,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from onestep import ExecutionClient
-from onestep_postgres import PostgresConnector
+from onestep_postgres import PostgresExecutionBackend
 
-pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
-backend = pg.execution_backend(auto_create=False)
+backend = PostgresExecutionBackend(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=False,
+)
 step = ExecutionClient(backend, namespace="agent-api")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await backend.open()
-    try:
+    async with step:
         yield
-    finally:
-        await pg.close()
 
 
 api = FastAPI(lifespan=lifespan)
@@ -166,11 +165,13 @@ names it can handle:
 
 ```python
 from onestep import OneStepApp
-from onestep_postgres import PostgresConnector
+from onestep_postgres import PostgresExecutionBackend
 
 app = OneStepApp("agent-worker")
-pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
-backend = pg.execution_backend(auto_create=False)
+backend = PostgresExecutionBackend(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=False,
+)
 jobs = backend.source(
     namespace="agent-api",
     task_names=("run_agent",),

@@ -7,6 +7,8 @@ outline: deep
 
 `onestep-postgres` 提供 PostgreSQL 版的表队列、增量轮询、表输出，以及 SQLAlchemy-backed 状态/游标存储。第一版不包含 logical replication 或 CDC。
 
+长任务的完整业务接入流程见 [PostgreSQL Tracked Execution](/broker/postgres-execution)。
+
 ## 安装
 
 ```bash
@@ -112,16 +114,21 @@ tasks:
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresConnector
+from onestep_postgres import PostgresExecutionBackend
 
-pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
-backend = pg.execution_backend(auto_create=True, reclaim_batch_size=100)
-step = ExecutionClient(backend, namespace="agent-api")
-execution = await step.submit(
-    "run_agent",
-    payload,
-    idempotency_key=request_id,
+backend = PostgresExecutionBackend(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=True,
+    reclaim_batch_size=100,
 )
+step = ExecutionClient(backend, namespace="agent-api")
+
+async with step:
+    execution = await step.submit(
+        "run_agent",
+        payload,
+        idempotency_key=request_id,
+    )
 ```
 
 ```python

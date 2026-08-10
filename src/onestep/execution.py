@@ -242,6 +242,10 @@ class ExecutionCompletion:
 
 
 class ExecutionBackend(Protocol):
+    async def open(self) -> None: ...
+
+    async def close(self) -> None: ...
+
     async def submit(self, request: ExecutionRequest) -> Execution: ...
 
     async def get(self, namespace: str, execution_id: UUID) -> Execution | None: ...
@@ -315,6 +319,18 @@ class ExecutionClient:
     def __init__(self, backend: ExecutionBackend, *, namespace: str) -> None:
         self.backend = backend
         self.namespace = _text(namespace, "namespace", maximum=255)
+
+    async def __aenter__(self) -> "ExecutionClient":
+        await self.backend.open()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        await self.backend.close()
 
     async def submit(
         self,

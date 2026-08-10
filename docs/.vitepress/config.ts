@@ -98,6 +98,7 @@ export default defineConfig({
           { text: 'AWS SQS', link: '/broker/sqs' },
           { text: 'MySQL', link: '/broker/mysql' },
           { text: 'PostgreSQL', link: '/broker/postgres' },
+          { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
           { text: 'Kafka', link: '/broker/kafka' },
           { text: 'Feishu Bitable', link: '/broker/feishu-bitable' },
           { text: '自定义 Source/Sink', link: '/broker/custom' },

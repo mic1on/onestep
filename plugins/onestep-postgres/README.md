@@ -41,12 +41,17 @@ SQLAlchemy-backed state/cursor stores, and tracked PostgreSQL executions.
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresConnector
+from onestep_postgres import PostgresExecutionBackend
 
-pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
-backend = pg.execution_backend(auto_create=True, reclaim_batch_size=100)
+backend = PostgresExecutionBackend(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=True,
+    reclaim_batch_size=100,
+)
 step = ExecutionClient(backend, namespace="agent-api")
-execution = await step.submit("run_agent", payload, idempotency_key=request_id)
+
+async with step:
+    execution = await step.submit("run_agent", payload, idempotency_key=request_id)
 
 source = backend.source(
     namespace="agent-api",
@@ -54,6 +59,12 @@ source = backend.source(
     worker_id="agent-worker-1",
 )
 ```
+
+`PostgresConnector` remains available when an application also needs table queues,
+sinks, state stores, or one shared pool. In that advanced path use
+`PostgresExecutionBackend.from_connector(pg, ...)`; the connector remains owned and
+closed by the caller. For the direct DSN path, `ExecutionClient` and
+`PostgresExecutionSource` manage the backend lifecycle for their process.
 
 Each execution source accepts exactly one task name, which must match the app
 task bound to that source. Create a separate source for each additional task.

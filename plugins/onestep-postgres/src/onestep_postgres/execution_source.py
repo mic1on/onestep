@@ -183,7 +183,9 @@ class PostgresExecutionSource(Source):
         return deliveries
 
     async def close(self) -> None:
-        return None
+        closer = getattr(self.backend, "close", None)
+        if callable(closer):
+            await closer()
 
 
 class PostgresExecutionDelivery(Delivery):

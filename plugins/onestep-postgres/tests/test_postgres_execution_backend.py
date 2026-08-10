@@ -46,6 +46,89 @@ def _request(**overrides):
     return ExecutionRequest(**values)
 
 
+def test_direct_dsn_backend_lazily_creates_and_reopens_owned_connector(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        backend = PostgresExecutionBackend(
+            dsn=f"sqlite:///{tmp_path / 'direct.db'}",
+            auto_create=True,
+        )
+        assert backend.connector is None
+
+        await backend.open()
+        first_connector = backend.connector
+        assert first_connector is not None
+        await backend.open()
+
+        await backend.close()
+        assert backend.connector is first_connector
+
+        await backend.close()
+        assert backend.connector is None
+
+        await backend.open()
+        assert backend.connector is not first_connector
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_backend_from_connector_preserves_external_ownership(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        connector = PostgresConnector(f"sqlite:///{tmp_path / 'shared.db'}")
+        backend = PostgresExecutionBackend.from_connector(
+            connector,
+            auto_create=True,
+        )
+        compatibility_backend = connector.execution_backend(auto_create=True)
+
+        assert backend.connector is connector
+        assert compatibility_backend.connector is connector
+
+        await backend.open()
+        await backend.close()
+        assert backend.connector is connector
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_owned_backend_rebuilds_pool_after_process_boundary(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        backend = PostgresExecutionBackend(
+            dsn=f"sqlite:///{tmp_path / 'fork-safe.db'}",
+            auto_create=True,
+        )
+        await backend.open()
+        first_connector = backend.connector
+        first_engine = backend.engine
+        assert first_connector is not None
+
+        backend._pid -= 1
+        await backend.open()
+
+        assert backend.connector is not first_connector
+        assert backend.engine is not first_engine
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_external_connector_rejects_use_after_process_boundary(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        connector = PostgresConnector(f"sqlite:///{tmp_path / 'external-fork.db'}")
+        backend = PostgresExecutionBackend.from_connector(connector)
+        backend._pid -= 1
+
+        with pytest.raises(RuntimeError, match="externally supplied connector"):
+            await backend.open()
+
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
 def test_submit_get_and_successful_none_result_round_trip(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = _backend(tmp_path / "execution.db")

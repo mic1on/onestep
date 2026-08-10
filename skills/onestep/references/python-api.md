@@ -110,16 +110,17 @@ long-running task through a plugin backend:
 from onestep import ExecutionClient
 
 step = ExecutionClient(backend, namespace="agent-api")
-execution = await step.submit(
-    "run_agent",
-    payload,
-    idempotency_key=request_id,
-    metadata={"requested_by": user_id},
-)
-current = await step.get(execution.id)
-page = await step.list(task_name="run_agent", limit=50)
-cancelled = await step.cancel(execution.id, reason="user requested cancellation")
-result = await step.result(execution.id)
+async with step:
+    execution = await step.submit(
+        "run_agent",
+        payload,
+        idempotency_key=request_id,
+        metadata={"requested_by": user_id},
+    )
+    current = await step.get(execution.id)
+    page = await step.list(task_name="run_agent", limit=50)
+    cancelled = await step.cancel(execution.id, reason="user requested cancellation")
+    result = await step.result(execution.id)
 ```
 
 `Execution` values are immutable snapshots and never auto-refresh. `result()`

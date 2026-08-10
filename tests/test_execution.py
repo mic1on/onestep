@@ -56,6 +56,14 @@ class FakeBackend:
         self.submissions = []
         self.queries = []
         self.cancel_requests = []
+        self.open_count = 0
+        self.close_count = 0
+
+    async def open(self) -> None:
+        self.open_count += 1
+
+    async def close(self) -> None:
+        self.close_count += 1
 
     async def submit(self, request):
         self.submissions.append(request)
@@ -98,6 +106,27 @@ def test_submit_binds_namespace_and_returns_frozen_snapshot() -> None:
         assert request.idempotency_key == "request-1"
         with pytest.raises(AttributeError):
             actual.status = ExecutionStatus.RUNNING
+
+    asyncio.run(scenario())
+
+
+def test_execution_client_manages_backend_lifecycle() -> None:
+    async def scenario() -> None:
+        backend = FakeBackend(snapshot(ExecutionStatus.QUEUED))
+        client = ExecutionClient(backend, namespace="agent-api")
+
+        async with client as managed:
+            assert managed is client
+            assert backend.open_count == 1
+            assert backend.close_count == 0
+
+        assert backend.close_count == 1
+
+        with pytest.raises(RuntimeError, match="handler failed"):
+            async with client:
+                raise RuntimeError("handler failed")
+        assert backend.open_count == 2
+        assert backend.close_count == 2
 
     asyncio.run(scenario())
 

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -53,7 +54,8 @@ class PostgresExecutionBackend(ExecutionBackend):
     def __init__(
         self,
         *,
-        connector: Any,
+        dsn: str | None = None,
+        connector: Any | None = None,
         table: str = "onestep_executions",
         attempts_table: str = "onestep_execution_attempts",
         auto_create: bool = True,
@@ -62,9 +64,22 @@ class PostgresExecutionBackend(ExecutionBackend):
         max_result_bytes: int = 1024 * 1024,
         reclaim_batch_size: int = 100,
         clock: Callable[[], datetime] | None = None,
+        **engine_options: Any,
     ) -> None:
-        self.connector = connector
-        self.engine = connector.engine
+        if (dsn is None) == (connector is None):
+            raise ValueError("pass exactly one of dsn or connector")
+        if dsn is not None:
+            if not isinstance(dsn, str):
+                raise TypeError("dsn must be a string")
+            if not dsn.strip():
+                raise ValueError("dsn must not be empty")
+        if connector is not None and engine_options:
+            raise ValueError("engine options require a dsn")
+        self._dsn = dsn
+        self._engine_options = dict(engine_options)
+        self._connector = connector
+        self._owns_connector = dsn is not None
+        self._pid = os.getpid()
         self.tables: ExecutionTables = build_execution_tables(
             executions_table=table,
             attempts_table=attempts_table,
@@ -78,6 +93,7 @@ class PostgresExecutionBackend(ExecutionBackend):
         self.reclaim_batch_size = reclaim_batch_size
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._ready = False
+        self._open_count = 0
         self._ready_lock = threading.Lock()
         for name, value in (
             ("max_payload_bytes", max_payload_bytes),
@@ -87,6 +103,23 @@ class PostgresExecutionBackend(ExecutionBackend):
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+
+    @classmethod
+    def from_connector(
+        cls,
+        connector: Any,
+        **kwargs: Any,
+    ) -> "PostgresExecutionBackend":
+        return cls(connector=connector, **kwargs)
+
+    @property
+    def connector(self) -> Any | None:
+        return self._connector
+
+    @property
+    def engine(self) -> Any:
+        connector = self._ensure_connector_sync()
+        return connector.engine
 
     def source(
         self,
@@ -113,7 +146,10 @@ class PostgresExecutionBackend(ExecutionBackend):
         )
 
     async def open(self) -> None:
-        await asyncio.to_thread(self._ensure_ready_sync)
+        await asyncio.to_thread(self._open_sync)
+
+    async def close(self) -> None:
+        await asyncio.to_thread(self._close_sync)
 
     async def submit(self, request: ExecutionRequest) -> Execution:
         encoded = self._encode_submission(request)
@@ -205,46 +241,113 @@ class PostgresExecutionBackend(ExecutionBackend):
             raise ValueError("clock must return a timezone-aware datetime")
         return value.astimezone(timezone.utc)
 
+    def _open_sync(self) -> None:
+        with self._ready_lock:
+            self._ensure_ready_locked()
+            self._open_count += 1
+
+    def _close_sync(self) -> None:
+        with self._ready_lock:
+            current_pid = os.getpid()
+            if current_pid != self._pid:
+                if not self._owns_connector:
+                    raise self._fork_error(current_pid)
+                self._discard_inherited_connector_locked(current_pid)
+                return
+            if self._open_count > 0:
+                self._open_count -= 1
+            if self._open_count > 0:
+                return
+            self._ready = False
+            if self._owns_connector and self._connector is not None:
+                self._dispose_engine(self._connector.engine)
+                self._connector = None
+
+    def _ensure_connector_sync(self) -> Any:
+        with self._ready_lock:
+            return self._ensure_connector_locked()
+
+    def _ensure_connector_locked(self) -> Any:
+        current_pid = os.getpid()
+        if current_pid != self._pid:
+            if not self._owns_connector:
+                raise self._fork_error(current_pid)
+            self._discard_inherited_connector_locked(current_pid)
+        if self._connector is None:
+            from .connector import PostgresConnector
+
+            assert self._dsn is not None
+            self._connector = PostgresConnector(self._dsn, **self._engine_options)
+        return self._connector
+
+    def _discard_inherited_connector_locked(self, current_pid: int) -> None:
+        if self._connector is not None:
+            self._dispose_engine(self._connector.engine, close=False)
+        self._connector = None
+        self._ready = False
+        self._open_count = 0
+        self._pid = current_pid
+
+    def _fork_error(self, current_pid: int) -> RuntimeError:
+        return RuntimeError(
+            "PostgresExecutionBackend cannot reuse an externally supplied connector "
+            f"across a process boundary (created in pid {self._pid}, current pid "
+            f"{current_pid}); create the PostgresConnector in the child process"
+        )
+
+    @staticmethod
+    def _dispose_engine(engine: Any, *, close: bool = True) -> None:
+        disposer = getattr(engine, "dispose", None)
+        if not callable(disposer):
+            return
+        if close:
+            disposer()
+        else:
+            disposer(close=False)
+
     def _ensure_ready_sync(self) -> None:
+        with self._ready_lock:
+            self._ensure_ready_locked()
+
+    def _ensure_ready_locked(self) -> None:
+        connector = self._ensure_connector_locked()
         if self._ready:
             return
-        with self._ready_lock:
-            if self._ready:
-                return
-            if self.auto_create:
-                tables = [self.tables.executions, self.tables.attempts]
-                if self.engine.dialect.name == "postgresql":
-                    lock_name = f"{self.table_name}\0{self.attempts_table_name}"
-                    lock_key = int.from_bytes(
-                        hashlib.sha256(lock_name.encode("utf-8")).digest()[:8],
-                        byteorder="big",
-                        signed=True,
-                    )
-                    with self.engine.begin() as conn:
-                        conn.execute(sa.select(sa.func.pg_advisory_xact_lock(lock_key)))
-                        self.tables.metadata.create_all(
-                            conn,
-                            tables=tables,
-                            checkfirst=True,
-                        )
-                else:
+        engine = connector.engine
+        if self.auto_create:
+            tables = [self.tables.executions, self.tables.attempts]
+            if engine.dialect.name == "postgresql":
+                lock_name = f"{self.table_name}\0{self.attempts_table_name}"
+                lock_key = int.from_bytes(
+                    hashlib.sha256(lock_name.encode("utf-8")).digest()[:8],
+                    byteorder="big",
+                    signed=True,
+                )
+                with engine.begin() as conn:
+                    conn.execute(sa.select(sa.func.pg_advisory_xact_lock(lock_key)))
                     self.tables.metadata.create_all(
-                        self.engine,
+                        conn,
                         tables=tables,
                         checkfirst=True,
                     )
             else:
-                inspector = sa.inspect(self.engine)
-                missing = [
-                    name
-                    for name in (self.table_name, self.attempts_table_name)
-                    if not inspector.has_table(name)
-                ]
-                if missing:
-                    raise RuntimeError(
-                        "missing execution tables: " + ", ".join(missing)
-                    )
-            self._ready = True
+                self.tables.metadata.create_all(
+                    engine,
+                    tables=tables,
+                    checkfirst=True,
+                )
+        else:
+            inspector = sa.inspect(engine)
+            missing = [
+                name
+                for name in (self.table_name, self.attempts_table_name)
+                if not inspector.has_table(name)
+            ]
+            if missing:
+                raise RuntimeError(
+                    "missing execution tables: " + ", ".join(missing)
+                )
+        self._ready = True
 
     def _encode_submission(self, request: ExecutionRequest) -> dict[str, Any]:
         if "onestep.execution" in request.metadata:

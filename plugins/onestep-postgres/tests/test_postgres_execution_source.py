@@ -548,10 +548,14 @@ class FakeRuntimeBackend:
             cancel_requested=False,
         )
         self.opened = False
+        self.closed = False
         self.released = False
 
     async def open(self) -> None:
         self.opened = True
+
+    async def close(self) -> None:
+        self.closed = True
 
     async def claim(self, namespace, task_names, limit, lease_duration_s, worker_id):
         self.claim_calls.append((namespace, task_names, limit, lease_duration_s, worker_id))
@@ -665,6 +669,8 @@ def test_source_fetch_returns_managed_execution_delivery_with_correlation_meta()
         assert delivery.envelope.meta["onestep.execution"]["id"] == str(lease.execution.id)
         assert backend.claim_calls[0][2] == 2
         assert backend.opened is True
+        await source.close()
+        assert backend.closed is True
 
     asyncio.run(scenario())
 

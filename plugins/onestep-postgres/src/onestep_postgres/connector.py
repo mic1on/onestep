@@ -156,8 +156,8 @@ class PostgresConnector:
     ) -> "PostgresExecutionBackend":
         from .execution_backend import PostgresExecutionBackend
 
-        return PostgresExecutionBackend(
-            connector=self,
+        return PostgresExecutionBackend.from_connector(
+            self,
             table=table,
             attempts_table=attempts_table,
             auto_create=auto_create,
