@@ -5,7 +5,7 @@ import copy
 import math
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from onestep.connectors.base import Delivery, Source
 from onestep.envelope import Envelope
@@ -103,7 +103,16 @@ class PostgresExecutionSource(Source):
     def __init__(
         self,
         *,
-        backend: PostgresExecutionBackend,
+        dsn: str | None = None,
+        backend: Any | None = None,
+        table: str = "onestep_executions",
+        attempts_table: str = "onestep_execution_attempts",
+        auto_create: bool = True,
+        max_payload_bytes: int = 1024 * 1024,
+        max_metadata_bytes: int = 64 * 1024,
+        max_result_bytes: int = 1024 * 1024,
+        reclaim_batch_size: int = 100,
+        clock: Callable[[], datetime] | None = None,
         namespace: str,
         task_names: Sequence[str],
         batch_size: int = 100,
@@ -111,6 +120,7 @@ class PostgresExecutionSource(Source):
         lease_duration_s: float = 90.0,
         heartbeat_interval_s: float = 30.0,
         worker_id: str = "onestep-worker",
+        **engine_options: Any,
     ) -> None:
         normalized_tasks = _validate_execution_source_options(
             namespace=namespace,
@@ -121,6 +131,33 @@ class PostgresExecutionSource(Source):
             heartbeat_interval_s=heartbeat_interval_s,
             worker_id=worker_id,
         )
+        if (dsn is None) == (backend is None):
+            raise ValueError("pass exactly one of dsn or backend")
+        if backend is None:
+            backend = PostgresExecutionBackend(
+                dsn=dsn,
+                table=table,
+                attempts_table=attempts_table,
+                auto_create=auto_create,
+                max_payload_bytes=max_payload_bytes,
+                max_metadata_bytes=max_metadata_bytes,
+                max_result_bytes=max_result_bytes,
+                reclaim_batch_size=reclaim_batch_size,
+                clock=clock,
+                **engine_options,
+            )
+        elif (
+            engine_options
+            or clock is not None
+            or table != "onestep_executions"
+            or attempts_table != "onestep_execution_attempts"
+            or not auto_create
+            or max_payload_bytes != 1024 * 1024
+            or max_metadata_bytes != 64 * 1024
+            or max_result_bytes != 1024 * 1024
+            or reclaim_batch_size != 100
+        ):
+            raise ValueError("backend configuration requires a dsn")
         super().__init__(f"postgres.execution:{namespace.strip()}")
         self.backend = backend
         self.namespace = namespace.strip()
@@ -131,6 +168,49 @@ class PostgresExecutionSource(Source):
         self.lease_duration_s = float(lease_duration_s)
         self.heartbeat_interval_s = float(heartbeat_interval_s)
         self.worker_id = worker_id.strip()
+
+    @classmethod
+    def from_connector(
+        cls,
+        connector: Any,
+        *,
+        table: str = "onestep_executions",
+        attempts_table: str = "onestep_execution_attempts",
+        auto_create: bool = True,
+        max_payload_bytes: int = 1024 * 1024,
+        max_metadata_bytes: int = 64 * 1024,
+        max_result_bytes: int = 1024 * 1024,
+        reclaim_batch_size: int = 100,
+        clock: Callable[[], datetime] | None = None,
+        namespace: str,
+        task_names: Sequence[str],
+        batch_size: int = 100,
+        poll_interval_s: float = 1.0,
+        lease_duration_s: float = 90.0,
+        heartbeat_interval_s: float = 30.0,
+        worker_id: str = "onestep-worker",
+    ) -> "PostgresExecutionSource":
+        backend = PostgresExecutionBackend.from_connector(
+            connector,
+            table=table,
+            attempts_table=attempts_table,
+            auto_create=auto_create,
+            max_payload_bytes=max_payload_bytes,
+            max_metadata_bytes=max_metadata_bytes,
+            max_result_bytes=max_result_bytes,
+            reclaim_batch_size=reclaim_batch_size,
+            clock=clock,
+        )
+        return cls(
+            backend=backend,
+            namespace=namespace,
+            task_names=task_names,
+            batch_size=batch_size,
+            poll_interval_s=poll_interval_s,
+            lease_duration_s=lease_duration_s,
+            heartbeat_interval_s=heartbeat_interval_s,
+            worker_id=worker_id,
+        )
 
     def validate_task(self, task_name: str) -> None:
         if task_name != self.task_name:

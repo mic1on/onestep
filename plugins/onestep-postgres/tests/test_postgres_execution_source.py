@@ -101,6 +101,78 @@ def test_source_rejects_task_name_mismatch() -> None:
         source.validate_task("task_b")
 
 
+def test_source_requires_exactly_one_dsn_or_backend() -> None:
+    source_options = {
+        "namespace": "agent-api",
+        "task_names": ("run_agent",),
+        "worker_id": "worker-1",
+    }
+
+    with pytest.raises(ValueError, match="exactly one of dsn or backend"):
+        PostgresExecutionSource(**source_options)
+    with pytest.raises(ValueError, match="exactly one of dsn or backend"):
+        PostgresExecutionSource(
+            dsn="sqlite:///unused.db",
+            backend=object(),
+            **source_options,
+        )
+
+
+def test_direct_dsn_source_lazily_owns_backend_lifecycle(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        source = PostgresExecutionSource(
+            dsn=f"sqlite:///{tmp_path / 'direct-source.db'}",
+            table="executions",
+            attempts_table="attempts",
+            auto_create=True,
+            reclaim_batch_size=7,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+
+        assert source.backend.connector is None
+        assert source.backend.table_name == "executions"
+        assert source.backend.attempts_table_name == "attempts"
+        assert source.backend.reclaim_batch_size == 7
+
+        await source.open()
+        first_connector = source.backend.connector
+        assert first_connector is not None
+
+        await source.close()
+        assert source.backend.connector is None
+
+        await source.open()
+        assert source.backend.connector is not first_connector
+        await source.close()
+
+    asyncio.run(scenario())
+
+
+def test_direct_dsn_source_rebuilds_backend_after_process_boundary(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        source = PostgresExecutionSource(
+            dsn=f"sqlite:///{tmp_path / 'direct-source-fork.db'}",
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+        await source.open()
+        first_connector = source.backend.connector
+        first_engine = source.backend.engine
+        assert first_connector is not None
+
+        source.backend._pid -= 1
+        await source.open()
+
+        assert source.backend.connector is not first_connector
+        assert source.backend.engine is not first_engine
+        await source.close()
+
+    asyncio.run(scenario())
+
+
 def test_claim_skips_delayed_execution_until_available_at(tmp_path: Path) -> None:
     async def scenario() -> None:
         clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))

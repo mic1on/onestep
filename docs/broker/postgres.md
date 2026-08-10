@@ -109,12 +109,12 @@ tasks:
 ## 跟踪长任务执行
 
 `onestep-postgres` 也可以把 PostgreSQL 作为任务状态、结果和租约的单一
-事实源。FastAPI 使用 core 的 `ExecutionClient`，worker 使用同一个 backend
-创建 `PostgresExecutionSource`：
+事实源。FastAPI 使用 core 的 `ExecutionClient`，worker 直接使用
+`PostgresExecutionSource`：
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresExecutionBackend
+from onestep_postgres import PostgresExecutionBackend, PostgresExecutionSource
 
 backend = PostgresExecutionBackend(
     dsn="postgresql+psycopg://app:secret@db/app",
@@ -132,7 +132,9 @@ async with step:
 ```
 
 ```python
-source = backend.source(
+source = PostgresExecutionSource(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=False,
     namespace="agent-api",
     task_names=("run_agent",),
     worker_id="agent-worker-1",

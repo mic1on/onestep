@@ -40,7 +40,7 @@ POST /executions/{id}/cancel         heartbeat + lease completion
 | 对象 | 进程 | 用途 |
 | --- | --- | --- |
 | `ExecutionClient` | API | 提交、查询、分页查询、取消、读取结果 |
-| `PostgresExecutionBackend` | API 和 worker | 连接同一组 execution 表 |
+| `PostgresExecutionBackend` | API、高级共享连接池场景 | 连接同一组 execution 表 |
 | `PostgresExecutionSource` | worker | 按 namespace 和 task name 领取任务 |
 | `OneStepApp` | worker | 调度 handler、重试、取消和关闭流程 |
 
@@ -426,11 +426,11 @@ import os
 from typing import Any
 
 from onestep import ExponentialBackoff, OneStepApp
-from onestep_postgres import PostgresExecutionBackend
+from onestep_postgres import PostgresExecutionSource
 
 
 app = OneStepApp("agent-worker", shutdown_timeout_s=30.0)
-backend = PostgresExecutionBackend(
+jobs = PostgresExecutionSource(
     dsn=os.environ["POSTGRES_EXECUTION_DSN"],
     table=os.getenv("POSTGRES_EXECUTIONS_TABLE", "onestep_executions"),
     attempts_table=os.getenv(
@@ -439,8 +439,6 @@ backend = PostgresExecutionBackend(
     ),
     auto_create=False,
     reclaim_batch_size=100,
-)
-jobs = backend.source(
     namespace=os.getenv("POSTGRES_EXECUTION_NAMESPACE", "agent-api"),
     task_names=("run_agent",),
     batch_size=4,
@@ -495,9 +493,10 @@ onestep run app.worker:app
 
 handler 返回值会由 managed runtime 写入 execution 的 `result`。业务 handler 不需要也不应该手动调用 `ack()`、`retry()` 或 `fail()`。
 
-Python worker 的 `OneStepApp` 会打开和关闭 source，source 会配对管理 backend 的生命周期。
-DSN 方式创建的 backend 会在当前 worker 进程内创建并关闭自己的连接池。需要把
-`PostgresConnector` 同时用于 table queue、sink 或 state store 时，可以使用
+Python worker 的 `OneStepApp` 会打开和关闭 source。直接传入 DSN 的
+`PostgresExecutionSource` 会在当前 worker 进程内惰性创建并关闭自己的连接池。
+需要把 `PostgresConnector` 同时用于 table queue、sink 或 state store 时，可以使用
+`PostgresExecutionSource.from_connector(pg, ...)` 或先创建
 `PostgresExecutionBackend.from_connector(pg, ...)`；这种共享 connector 仍由调用方关闭，
 YAML resource 的生命周期由 app resource 管理器处理。
 
@@ -509,8 +508,9 @@ YAML resource 的生命周期由 app resource 管理器处理。
 
 多个 worker 副本可以使用同一 source 配置，但 `worker_id` 应使用 pod name、hostname 或其他实例唯一标识，便于诊断 lease 和 attempt。
 
-多进程或 pre-fork 部署时，推荐每个进程使用 `PostgresExecutionBackend(dsn=...)`。
-DSN 方式是惰性的，即使 backend 对象在 fork 前创建，连接池也会在子进程中独立创建。
+多进程或 pre-fork 部署时，推荐每个进程使用
+`PostgresExecutionSource(dsn=...)` 或 `PostgresExecutionBackend(dsn=...)`。
+DSN 方式是惰性的，即使对象在 fork 前创建，连接池也会在子进程中独立创建。
 不要把 `PostgresConnector` 或 `from_connector()` 创建的外部连接池跨进程复用；应在每个
 子进程内创建 connector。数据库最大连接数需要按 API/worker 进程数和每个进程的池配置
 统一核算。

@@ -165,14 +165,12 @@ names it can handle:
 
 ```python
 from onestep import OneStepApp
-from onestep_postgres import PostgresExecutionBackend
+from onestep_postgres import PostgresExecutionSource
 
 app = OneStepApp("agent-worker")
-backend = PostgresExecutionBackend(
+jobs = PostgresExecutionSource(
     dsn="postgresql+psycopg://app:secret@db/app",
     auto_create=False,
-)
-jobs = backend.source(
     namespace="agent-api",
     task_names=("run_agent",),
     worker_id="agent-worker-1",

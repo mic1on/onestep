@@ -26,6 +26,9 @@
   heartbeats, cancellation, retry recovery, and fencing.
 - Adds the `postgres_execution_source` YAML resource and Python backend/source
   factories for separate FastAPI and worker processes.
+- Adds `PostgresExecutionSource(dsn=...)` as the concise worker-facing constructor;
+  `backend.source()` and connector-based factories remain available for compatibility
+  and shared-pool integrations.
 - Adds live PostgreSQL concurrency and fencing gates; inline payload/result
   values default to 1 MiB and metadata to 64 KiB.
 - Bounds claim-driven stale recovery, retries transient heartbeats within the

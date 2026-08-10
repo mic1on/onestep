@@ -75,6 +75,27 @@ def test_postgres_connector_builds_execution_backend_and_source(tmp_path) -> Non
     assert isinstance(source, PostgresExecutionSource)
 
 
+def test_postgres_execution_source_can_wrap_existing_connector(tmp_path) -> None:
+    async def scenario() -> None:
+        connector = PostgresConnector(f"sqlite:///{tmp_path / 'source-connector.db'}")
+        source = PostgresExecutionSource.from_connector(
+            connector,
+            auto_create=True,
+            reclaim_batch_size=7,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+
+        assert source.backend.connector is connector
+        await source.open()
+        await source.close()
+        assert source.backend.connector is connector
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
 def test_app_task_must_match_postgres_execution_source(tmp_path) -> None:
     from onestep import OneStepApp
 
