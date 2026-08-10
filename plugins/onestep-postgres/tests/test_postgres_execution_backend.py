@@ -230,6 +230,47 @@ def test_list_rejects_cursor_with_unknown_version(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_list_rejects_malformed_and_noncanonical_cursors(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        backend = _backend(tmp_path / "execution.db")
+        execution = await backend.submit(_request())
+        canonical = backend._encode_cursor(execution.created_at, execution.id)
+        noncanonical_json = base64.urlsafe_b64encode(
+            json.dumps(
+                {
+                    "v": 1,
+                    "created_at": execution.created_at.isoformat(),
+                    "id": str(execution.id),
+                }
+            ).encode()
+        ).decode().rstrip("=")
+        invalid_values = (
+            "not-base64!",
+            f"{canonical}=",
+            noncanonical_json,
+            base64.urlsafe_b64encode(b"[]").decode().rstrip("="),
+            base64.urlsafe_b64encode(
+                json.dumps(
+                    {
+                        "v": True,
+                        "created_at": execution.created_at.isoformat(),
+                        "id": str(execution.id),
+                    },
+                    separators=(",", ":"),
+                ).encode()
+            ).decode().rstrip("="),
+            "x" * 1025,
+        )
+
+        for value in invalid_values:
+            with pytest.raises(ValueError, match="invalid execution cursor"):
+                await backend.list(
+                    ExecutionQuery(namespace="agent-api", cursor=value)
+                )
+
+    asyncio.run(scenario())
+
+
 def test_open_without_auto_create_reports_missing_tables(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = _backend(tmp_path / "missing.db", auto_create=False)

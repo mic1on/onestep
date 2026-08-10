@@ -115,7 +115,7 @@ from onestep import ExecutionClient
 from onestep_postgres import PostgresConnector
 
 pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
-backend = pg.execution_backend(auto_create=True)
+backend = pg.execution_backend(auto_create=True, reclaim_batch_size=100)
 step = ExecutionClient(backend, namespace="agent-api")
 execution = await step.submit(
     "run_agent",
@@ -143,6 +143,17 @@ source = backend.source(
 冲突。租约要求 `0 < heartbeat_interval_s <= lease_duration_s / 3`。系统是
 at-least-once，取消是协作式的，handler 的外部副作用仍需要业务幂等。生产
 部署建议先建表，再将 `auto_create=False`，避免运行身份需要 DDL 权限。
+
+运行时的受管完成路径会把 handler 返回值写入成功记录。直接调用 execution
+delivery 的传统 `ack()` 只能记录 `succeeded` 且 `result=None`，因为公共
+`Delivery.ack()` API 没有结果参数。
+
+worker 会在租约仍有效时，对可重试的 PostgreSQL 心跳错误执行有限指数退避；
+不可重试错误、过期租约或重试耗尽会取消当前处理任务。过期执行和停滞租约的
+恢复由 source 的 `claim()` 驱动，没有独立 reaper。每次 claim 对每类停滞状态
+最多处理 `reclaim_batch_size` 条，活跃轮询会逐批清空积压；没有 worker 轮询时，
+状态会保留到下一次 claim。`PostgresConnector.secret_tokens()` 返回用于错误脱敏
+的独立副本，调用方不应记录其中内容。
 
 ## 下一步
 

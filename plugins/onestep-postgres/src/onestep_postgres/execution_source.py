@@ -4,6 +4,7 @@ import asyncio
 import copy
 import math
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from onestep.connectors.base import Delivery, Source
@@ -13,7 +14,11 @@ from onestep.execution import (
     ExecutionError,
     ExecutionStatus,
 )
-from onestep.resilience import ConnectorOperation
+from onestep.resilience import (
+    ConnectorOperation,
+    ConnectorOperationError,
+    is_retryable_connector_error,
+)
 
 from .execution_backend import (
     ExecutionLease,
@@ -21,6 +26,73 @@ from .execution_backend import (
     PostgresExecutionBackend,
 )
 from .resilience import as_postgres_connector_operation_error
+
+
+def _connector_secret_tokens(connector: Any) -> list[str]:
+    public = getattr(connector, "secret_tokens", None)
+    if callable(public):
+        return public()
+    private = getattr(connector, "_secret_tokens", None)
+    return private() if callable(private) else []
+
+
+def _validate_execution_source_options(
+    *,
+    namespace: str,
+    task_names: Sequence[str],
+    batch_size: int,
+    poll_interval_s: float,
+    lease_duration_s: float,
+    heartbeat_interval_s: float,
+    worker_id: str,
+    field_prefix: str = "",
+) -> tuple[str, ...]:
+    prefix = f"{field_prefix}." if field_prefix else ""
+    if not isinstance(namespace, str) or not namespace.strip() or len(namespace.strip()) > 255:
+        raise ValueError(f"{prefix}namespace must be non-empty and <= 255 characters")
+    if not isinstance(task_names, Sequence) or isinstance(task_names, (str, bytes)):
+        raise TypeError(f"{prefix}task_names must be a sequence of strings")
+    normalized_tasks = tuple(
+        task.strip() if isinstance(task, str) else task for task in task_names
+    )
+    if not normalized_tasks or any(
+        not isinstance(task, str) or not task or len(task) > 255
+        for task in normalized_tasks
+    ):
+        raise ValueError(f"{prefix}task_names must be non-empty strings <= 255 characters")
+    if len(set(normalized_tasks)) != len(normalized_tasks):
+        raise ValueError(f"{prefix}task_names must be unique")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError(f"{prefix}batch_size must be >= 1")
+    for name, value in (
+        ("poll_interval_s", poll_interval_s),
+        ("lease_duration_s", lease_duration_s),
+        ("heartbeat_interval_s", heartbeat_interval_s),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"{prefix}{name} must be a finite number")
+    if poll_interval_s <= 0:
+        raise ValueError(f"{prefix}poll_interval_s must be > 0")
+    if lease_duration_s <= 0:
+        raise ValueError(f"{prefix}lease_duration_s must be > 0")
+    if (
+        heartbeat_interval_s <= 0
+        or (
+            heartbeat_interval_s > lease_duration_s / 3
+            and not math.isclose(heartbeat_interval_s, lease_duration_s / 3)
+        )
+    ):
+        raise ValueError(
+            f"{prefix}heartbeat_interval_s must be > 0 and <= "
+            f"{prefix}lease_duration_s / 3"
+        )
+    if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id.strip()) > 255:
+        raise ValueError(f"{prefix}worker_id must be non-empty and <= 255 characters")
+    return normalized_tasks
 
 
 class PostgresExecutionSource(Source):
@@ -38,38 +110,15 @@ class PostgresExecutionSource(Source):
         heartbeat_interval_s: float = 30.0,
         worker_id: str = "onestep-worker",
     ) -> None:
-        if not isinstance(task_names, Sequence) or isinstance(task_names, (str, bytes)):
-            raise TypeError("task_names must be a sequence of strings")
-        normalized_tasks = tuple(task.strip() if isinstance(task, str) else task for task in task_names)
-        if not normalized_tasks or any(not isinstance(task, str) or not task for task in normalized_tasks):
-            raise ValueError("task_names must be non-empty")
-        if len(set(normalized_tasks)) != len(normalized_tasks):
-            raise ValueError("task_names must be unique")
-        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
-            raise ValueError("batch_size must be >= 1")
-        for field, value in (
-            ("poll_interval_s", poll_interval_s),
-            ("lease_duration_s", lease_duration_s),
-            ("heartbeat_interval_s", heartbeat_interval_s),
-        ):
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise ValueError(f"{field} must be a finite number")
-        if poll_interval_s <= 0:
-            raise ValueError("poll_interval_s must be > 0")
-        if lease_duration_s <= 0:
-            raise ValueError("lease_duration_s must be > 0")
-        if (
-            heartbeat_interval_s <= 0
-            or (
-                heartbeat_interval_s > lease_duration_s / 3
-                and not math.isclose(heartbeat_interval_s, lease_duration_s / 3)
-            )
-        ):
-            raise ValueError("heartbeat_interval_s must be > 0 and <= lease_duration_s / 3")
-        if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id.strip()) > 255:
-            raise ValueError("worker_id must be non-empty and <= 255 characters")
-        if not isinstance(namespace, str) or not namespace.strip():
-            raise ValueError("namespace must be non-empty")
+        normalized_tasks = _validate_execution_source_options(
+            namespace=namespace,
+            task_names=task_names,
+            batch_size=batch_size,
+            poll_interval_s=poll_interval_s,
+            lease_duration_s=lease_duration_s,
+            heartbeat_interval_s=heartbeat_interval_s,
+            worker_id=worker_id,
+        )
         super().__init__(f"postgres.execution:{namespace.strip()}")
         self.backend = backend
         self.namespace = namespace.strip()
@@ -98,7 +147,7 @@ class PostgresExecutionSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
-                secrets=self.backend.connector._secret_tokens(),
+                secrets=_connector_secret_tokens(self.backend.connector),
             )
             if connector_error is None:
                 raise
@@ -158,36 +207,66 @@ class PostgresExecutionDelivery(Delivery):
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def _heartbeat_loop(self) -> None:
-        try:
-            while not self._heartbeat_stop.is_set():
-                try:
-                    await asyncio.wait_for(
-                        self._heartbeat_stop.wait(),
-                        timeout=self.source.heartbeat_interval_s,
+        while not self._heartbeat_stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._heartbeat_stop.wait(),
+                    timeout=self.source.heartbeat_interval_s,
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            result = await self._heartbeat_with_retry()
+            if result is None:
+                self._heartbeat_stop.set()
+                self._cancel_owner()
+                return
+            self._apply_heartbeat_result(result)
+            if result.cancel_requested:
+                self._heartbeat_stop.set()
+                self._cancel_owner()
+                return
+
+    async def _heartbeat_with_retry(self) -> HeartbeatResult | None:
+        for attempt in range(3):
+            try:
+                return await self.source.backend.heartbeat(
+                    self.execution_id,
+                    self.attempt_id,
+                    self.lease_token,
+                    self.source.lease_duration_s,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                connector_error = (
+                    exc
+                    if isinstance(exc, ConnectorOperationError)
+                    else as_postgres_connector_operation_error(
+                        operation=ConnectorOperation.HEARTBEAT,
+                        exc=exc,
+                        source_name=self.source.name,
+                        retry_delay_s=self.source.heartbeat_interval_s,
+                        secrets=_connector_secret_tokens(self.source.backend.connector),
                     )
-                    return
+                )
+                if connector_error is None or not is_retryable_connector_error(connector_error):
+                    return None
+                remaining = (
+                    self.lease_expires_at - datetime.now(timezone.utc)
+                ).total_seconds()
+                delay_s = min(
+                    self.source.heartbeat_interval_s * (2**attempt),
+                    max(0.0, remaining / 4),
+                )
+                if attempt == 2 or delay_s <= 0:
+                    return None
+                try:
+                    await asyncio.wait_for(self._heartbeat_stop.wait(), timeout=delay_s)
+                    return None
                 except asyncio.TimeoutError:
-                    pass
-                try:
-                    result = await self.source.backend.heartbeat(
-                        self.execution_id,
-                        self.attempt_id,
-                        self.lease_token,
-                        self.source.lease_duration_s,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    self._heartbeat_stop.set()
-                    self._cancel_owner()
-                    return
-                self._apply_heartbeat_result(result)
-                if result.cancel_requested:
-                    self._heartbeat_stop.set()
-                    self._cancel_owner()
-                    return
-        finally:
-            return None
+                    continue
+        return None
 
     def _apply_heartbeat_result(self, result: HeartbeatResult) -> None:
         self.lease_expires_at = result.lease_expires_at
@@ -227,6 +306,8 @@ class PostgresExecutionDelivery(Delivery):
         )
 
     async def ack(self) -> None:
+        # Delivery.ack() has no result argument. Runtime-managed execution uses
+        # complete_execution() so handler results are persisted before success.
         await self.complete_execution(
             ExecutionCompletion(status=ExecutionStatus.SUCCEEDED)
         )
@@ -255,4 +336,7 @@ class PostgresExecutionDelivery(Delivery):
         )
 
 
-__all__ = ["PostgresExecutionDelivery", "PostgresExecutionSource"]
+__all__ = [
+    "PostgresExecutionDelivery",
+    "PostgresExecutionSource",
+]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -13,6 +12,7 @@ from onestep.resource_registry import (
 )
 
 from .connector import PostgresConnector
+from .execution_source import _validate_execution_source_options
 
 _POSTGRES_FIELDS = frozenset({"type", "dsn", "engine_options"})
 _POSTGRES_STATE_STORE_FIELDS = frozenset(
@@ -45,6 +45,7 @@ _POSTGRES_EXECUTION_SOURCE_FIELDS = frozenset(
         "max_payload_bytes",
         "max_metadata_bytes",
         "max_result_bytes",
+        "reclaim_batch_size",
     }
 )
 _POSTGRES_CATALOG = ResourceCatalogEntry(
@@ -160,6 +161,7 @@ _POSTGRES_EXECUTION_SOURCE_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("max_payload_bytes", "integer", default=1024 * 1024),
         ResourceCatalogField("max_metadata_bytes", "integer", default=64 * 1024),
         ResourceCatalogField("max_result_bytes", "integer", default=1024 * 1024),
+        ResourceCatalogField("reclaim_batch_size", "integer", default=100),
     ),
     topology_fields=("namespace", "task_names", "batch_size", "poll_interval_s"),
 )
@@ -320,6 +322,7 @@ def _build_postgres_execution_source(ctx: ResourceBuildContext, spec: Mapping[st
         max_payload_bytes=spec.get("max_payload_bytes", 1024 * 1024),
         max_metadata_bytes=spec.get("max_metadata_bytes", 64 * 1024),
         max_result_bytes=spec.get("max_result_bytes", 1024 * 1024),
+        reclaim_batch_size=spec.get("reclaim_batch_size", 100),
     )
     return backend.source(
         namespace=ctx.require_string(spec, "namespace"),
@@ -338,44 +341,36 @@ def _validate_postgres_execution_source(
     ctx: Any,
     spec: Mapping[str, Any],
 ) -> None:
+    namespace = ctx.require_string(spec, "namespace")
     task_names = ctx.require_non_empty_string_list(
-        spec,
-        "task_names",
-        field=f"{ctx.field}.task_names",
+        spec, "task_names", field=f"{ctx.field}.task_names"
     )
-    if len(set(task_names)) != len(task_names):
-        raise ValueError(f"{ctx.field}.task_names must not contain duplicates")
-    ctx.require_string(spec, "namespace")
     for key in ("table", "attempts_table", "worker_id"):
         if spec.get(key) is not None:
             ctx.string_value(spec[key], field=f"{ctx.field}.{key}")
     batch_size = spec.get("batch_size", 100)
-    ctx.validate_positive_integer(batch_size, field=f"{ctx.field}.batch_size")
     poll_interval_s = spec.get("poll_interval_s", 1.0)
     lease_duration_s = spec.get("lease_duration_s", 90.0)
     heartbeat_interval_s = spec.get("heartbeat_interval_s", 30.0)
-    ctx.validate_positive_number(poll_interval_s, field=f"{ctx.field}.poll_interval_s")
-    ctx.validate_positive_number(lease_duration_s, field=f"{ctx.field}.lease_duration_s")
-    ctx.validate_positive_number(
-        heartbeat_interval_s,
-        field=f"{ctx.field}.heartbeat_interval_s",
-    )
-    if (
-        isinstance(lease_duration_s, (int, float))
-        and isinstance(heartbeat_interval_s, (int, float))
-        and math.isfinite(lease_duration_s)
-        and math.isfinite(heartbeat_interval_s)
-        and heartbeat_interval_s > lease_duration_s / 3
-        and not math.isclose(heartbeat_interval_s, lease_duration_s / 3)
-    ):
-        raise ValueError(
-            f"{ctx.field}.heartbeat_interval_s must be <= {ctx.field}.lease_duration_s / 3"
-        )
     for key, default in (
         ("max_payload_bytes", 1024 * 1024),
         ("max_metadata_bytes", 64 * 1024),
         ("max_result_bytes", 1024 * 1024),
     ):
         ctx.validate_positive_integer(spec.get(key, default), field=f"{ctx.field}.{key}")
+    ctx.validate_positive_integer(
+        spec.get("reclaim_batch_size", 100),
+        field=f"{ctx.field}.reclaim_batch_size",
+    )
     if "auto_create" in spec and not isinstance(spec["auto_create"], bool):
         raise TypeError(f"{ctx.field}.auto_create must be a boolean")
+    _validate_execution_source_options(
+        namespace=namespace,
+        task_names=task_names,
+        batch_size=batch_size,
+        poll_interval_s=poll_interval_s,
+        lease_duration_s=lease_duration_s,
+        heartbeat_interval_s=heartbeat_interval_s,
+        worker_id=spec.get("worker_id", "onestep-worker"),
+        field_prefix=ctx.field,
+    )

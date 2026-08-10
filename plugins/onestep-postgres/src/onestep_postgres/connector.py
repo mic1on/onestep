@@ -33,7 +33,10 @@ class PostgresConnector:
         self._tables: dict[str, Any] = {}
 
     def _secret_tokens(self) -> list[str]:
-        """Secret-bearing config tokens used to scrub error messages."""
+        return self.secret_tokens()
+
+    def secret_tokens(self) -> list[str]:
+        """Return a copy of tokens that must be redacted from connector errors."""
         return list(self._sensitive_tokens)
 
     async def close(self) -> None:
@@ -149,6 +152,7 @@ class PostgresConnector:
         max_payload_bytes: int = 1024 * 1024,
         max_metadata_bytes: int = 64 * 1024,
         max_result_bytes: int = 1024 * 1024,
+        reclaim_batch_size: int = 100,
     ) -> "PostgresExecutionBackend":
         from .execution_backend import PostgresExecutionBackend
 
@@ -160,6 +164,7 @@ class PostgresConnector:
             max_payload_bytes=max_payload_bytes,
             max_metadata_bytes=max_metadata_bytes,
             max_result_bytes=max_result_bytes,
+            reclaim_batch_size=reclaim_batch_size,
         )
 
     def _table(self, table_name: str):
@@ -256,7 +261,7 @@ class PostgresTableQueueSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
-                secrets=self.connector._secret_tokens(),
+                secrets=self.connector.secret_tokens(),
             )
             if connector_error is None:
                 raise
@@ -389,7 +394,7 @@ class PostgresIncrementalSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
-                secrets=self.connector._secret_tokens(),
+                secrets=self.connector.secret_tokens(),
             )
             if connector_error is None:
                 raise
@@ -464,7 +469,7 @@ class PostgresTableSink(Sink):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=1.0,
-                secrets=self.connector._secret_tokens(),
+                secrets=self.connector.secret_tokens(),
             )
             if connector_error is None:
                 raise

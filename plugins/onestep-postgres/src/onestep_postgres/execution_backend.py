@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import copy
 import hashlib
 import json
 import threading
@@ -60,6 +59,7 @@ class PostgresExecutionBackend(ExecutionBackend):
         max_payload_bytes: int = 1024 * 1024,
         max_metadata_bytes: int = 64 * 1024,
         max_result_bytes: int = 1024 * 1024,
+        reclaim_batch_size: int = 100,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.connector = connector
@@ -74,6 +74,7 @@ class PostgresExecutionBackend(ExecutionBackend):
         self.max_payload_bytes = max_payload_bytes
         self.max_metadata_bytes = max_metadata_bytes
         self.max_result_bytes = max_result_bytes
+        self.reclaim_batch_size = reclaim_batch_size
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._ready = False
         self._ready_lock = threading.Lock()
@@ -81,6 +82,7 @@ class PostgresExecutionBackend(ExecutionBackend):
             ("max_payload_bytes", max_payload_bytes),
             ("max_metadata_bytes", max_metadata_bytes),
             ("max_result_bytes", max_result_bytes),
+            ("reclaim_batch_size", reclaim_batch_size),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -272,7 +274,7 @@ class PostgresExecutionBackend(ExecutionBackend):
 
     def _encode_value(self, value: Any, field: str) -> Any:
         try:
-            return encode_value(copy.deepcopy(value))
+            return encode_value(value)
         except CaptureEncodingError as exc:
             raise ExecutionEncodingError(f"cannot encode execution {field}: {exc}") from exc
 
@@ -453,9 +455,23 @@ class PostgresExecutionBackend(ExecutionBackend):
         attempts = self.tables.attempts
         leases: list[ExecutionLease] = []
         with self.engine.begin() as conn:
-            self._expire_queued_sync(conn, now)
-            self._expire_cancel_requests_sync(conn, attempts, now)
-            self._release_expired_leases_sync(conn, attempts, now)
+            self._expire_queued_sync(
+                conn,
+                now,
+                limit=self.reclaim_batch_size,
+            )
+            self._expire_cancel_requests_sync(
+                conn,
+                attempts,
+                now,
+                limit=self.reclaim_batch_size,
+            )
+            self._release_expired_leases_sync(
+                conn,
+                attempts,
+                now,
+                limit=self.reclaim_batch_size,
+            )
             stmt = (
                 sa.select(executions)
                 .where(
@@ -524,10 +540,17 @@ class PostgresExecutionBackend(ExecutionBackend):
                 )
         return tuple(leases)
 
-    def _expire_queued_sync(self, conn: Any, now: datetime) -> None:
+    def _expire_queued_sync(
+        self,
+        conn: Any,
+        now: datetime,
+        *,
+        limit: int | None = None,
+    ) -> None:
         executions = self.tables.executions
-        rows = conn.execute(
-            sa.select(executions.c.id, executions.c.version).where(
+        stmt = (
+            sa.select(executions.c.id, executions.c.version)
+            .where(
                 executions.c.status.in_((
                     ExecutionStatus.QUEUED.value,
                     ExecutionStatus.RETRYING.value,
@@ -535,7 +558,10 @@ class PostgresExecutionBackend(ExecutionBackend):
                 executions.c.expires_at.is_not(None),
                 executions.c.expires_at <= now,
             )
-        ).all()
+            .order_by(executions.c.expires_at, executions.c.id)
+            .limit(limit)
+        )
+        rows = conn.execute(stmt).all()
         for row in rows:
             conn.execute(
                 sa.update(executions)
@@ -557,15 +583,30 @@ class PostgresExecutionBackend(ExecutionBackend):
                 )
             )
 
-    def _expire_cancel_requests_sync(self, conn: Any, attempts: sa.Table, now: datetime) -> None:
+    def _expire_cancel_requests_sync(
+        self,
+        conn: Any,
+        attempts: sa.Table,
+        now: datetime,
+        *,
+        limit: int | None = None,
+    ) -> None:
         executions = self.tables.executions
-        rows = conn.execute(
-            sa.select(executions.c.id, executions.c.lease_token, executions.c.version).where(
+        stmt = (
+            sa.select(
+                executions.c.id,
+                executions.c.lease_token,
+                executions.c.version,
+            )
+            .where(
                 executions.c.status == ExecutionStatus.CANCEL_REQUESTED.value,
                 executions.c.lease_expires_at.is_not(None),
                 executions.c.lease_expires_at <= now,
             )
-        ).all()
+            .order_by(executions.c.lease_expires_at, executions.c.id)
+            .limit(limit)
+        )
+        rows = conn.execute(stmt).all()
         for row in rows:
             updated = conn.execute(
                 sa.update(executions)
@@ -599,20 +640,31 @@ class PostgresExecutionBackend(ExecutionBackend):
                 .values(status="cancelled", finished_at=now)
             )
 
-    def _release_expired_leases_sync(self, conn: Any, attempts: sa.Table, now: datetime) -> None:
+    def _release_expired_leases_sync(
+        self,
+        conn: Any,
+        attempts: sa.Table,
+        now: datetime,
+        *,
+        limit: int | None = None,
+    ) -> None:
         executions = self.tables.executions
-        rows = conn.execute(
+        stmt = (
             sa.select(
                 executions.c.id,
                 executions.c.lease_token,
                 executions.c.expires_at,
                 executions.c.version,
-            ).where(
+            )
+            .where(
                 executions.c.status == ExecutionStatus.RUNNING.value,
                 executions.c.lease_expires_at.is_not(None),
                 executions.c.lease_expires_at <= now,
             )
-        ).all()
+            .order_by(executions.c.lease_expires_at, executions.c.id)
+            .limit(limit)
+        )
+        rows = conn.execute(stmt).all()
         for row in rows:
             if row.expires_at is not None and _aware_utc(row.expires_at) <= now:
                 values = {
@@ -790,6 +842,8 @@ class PostgresExecutionBackend(ExecutionBackend):
                     if completion.status is ExecutionStatus.SUCCEEDED
                     else None
                 )
+                # A failed CAS may be an idempotent replay, but only the exact
+                # persisted business result/error is safe to accept.
                 if (
                     same_terminal_status
                     and current["result"] == expected_result
@@ -906,16 +960,36 @@ class PostgresExecutionBackend(ExecutionBackend):
     @staticmethod
     def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         try:
+            if len(cursor) > 1024 or any(char.isspace() for char in cursor):
+                raise ValueError("invalid execution cursor")
             padded = cursor + "=" * (-len(cursor) % 4)
-            raw = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
-            if set(raw) != {"v", "created_at", "id"} or raw["v"] != 1:
+            raw = json.loads(
+                base64.b64decode(
+                    padded.encode("ascii"),
+                    altchars=b"-_",
+                    validate=True,
+                )
+            )
+            if not isinstance(raw, dict) or set(raw) != {"v", "created_at", "id"}:
+                raise ValueError("invalid execution cursor")
+            if isinstance(raw["v"], bool) or not isinstance(raw["v"], int):
+                raise ValueError("invalid execution cursor")
+            if raw["v"] != 1:
                 raise ValueError("unknown cursor version")
+            if not isinstance(raw["created_at"], str) or not isinstance(raw["id"], str):
+                raise ValueError("invalid execution cursor")
             created_at = datetime.fromisoformat(raw["created_at"])
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("cursor created_at must be timezone-aware")
-            return created_at.astimezone(timezone.utc), UUID(str(raw["id"]))
-        except ValueError:
-            raise
+            created_at = created_at.astimezone(timezone.utc)
+            execution_id = UUID(raw["id"])
+            if cursor != PostgresExecutionBackend._encode_cursor(created_at, execution_id):
+                raise ValueError("invalid execution cursor")
+            return created_at, execution_id
+        except ValueError as exc:
+            if str(exc) == "unknown cursor version":
+                raise
+            raise ValueError("invalid execution cursor") from exc
         except Exception as exc:
             raise ValueError("invalid execution cursor") from exc
 

@@ -522,7 +522,7 @@ class DeliveryExecutor:
         await managed.complete_execution(
             ExecutionCompletion(
                 status=ExecutionStatus.SUCCEEDED,
-                result=copy.deepcopy(result),
+                result=result,
             )
         )
 

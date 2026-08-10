@@ -15,6 +15,7 @@ class ConnectorErrorKind(str, Enum):
 class ConnectorOperation(str, Enum):
     OPEN = "open"
     FETCH = "fetch"
+    HEARTBEAT = "heartbeat"
     SEND = "send"
     ACK = "ack"
     RETRY = "retry"

@@ -90,6 +90,24 @@ class ExecutionError:
     operation: str | None = None
     connector_kind: str | None = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", _text(self.kind, "kind", maximum=64))
+        object.__setattr__(
+            self,
+            "exception_type",
+            _text(self.exception_type, "exception_type", maximum=255),
+        )
+        for field_name in ("stage", "backend", "operation", "connector_kind"):
+            object.__setattr__(
+                self,
+                field_name,
+                _optional_text(
+                    getattr(self, field_name),
+                    field_name,
+                    maximum=255,
+                ),
+            )
+
 
 @dataclass(frozen=True)
 class Execution:

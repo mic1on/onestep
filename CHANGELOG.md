@@ -22,6 +22,9 @@
   factories for separate FastAPI and worker processes.
 - Adds live PostgreSQL concurrency and fencing gates; inline payload/result
   values default to 1 MiB and metadata to 64 KiB.
+- Bounds claim-driven stale recovery, retries transient heartbeats within the
+  active lease, validates opaque cursors and execution errors, and documents
+  that direct delivery `ack()` records a successful `None` result.
 
 ## onestep-mysql 0.4.0
 

@@ -45,9 +45,18 @@ class MutableClock:
         self.current += timedelta(**kwargs)
 
 
-def _backend(path: Path, clock: MutableClock) -> PostgresExecutionBackend:
+def _backend(
+    path: Path,
+    clock: MutableClock,
+    *,
+    reclaim_batch_size: int = 100,
+) -> PostgresExecutionBackend:
     connector = PostgresConnector(f"sqlite:///{path}")
-    return PostgresExecutionBackend(connector=connector, clock=clock)
+    return PostgresExecutionBackend(
+        connector=connector,
+        clock=clock,
+        reclaim_batch_size=reclaim_batch_size,
+    )
 
 
 def _request(task_name="run_agent", **kwargs):
@@ -184,6 +193,54 @@ def test_expired_running_lease_creates_new_attempt_and_fences_old_token(tmp_path
                 first.lease_token,
                 ExecutionCompletion(status=ExecutionStatus.SUCCEEDED, result={"stale": True}),
             )
+
+    asyncio.run(scenario())
+
+
+def test_claim_reclaims_stale_leases_in_bounded_batches(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(
+            tmp_path / "bounded-reclaim.db",
+            clock,
+            reclaim_batch_size=1,
+        )
+        await backend.submit(_request(payload={"index": 1}))
+        await backend.submit(_request(payload={"index": 2}))
+        assert len(
+            await backend.claim(
+                "agent-api",
+                ("run_agent",),
+                2,
+                30,
+                "worker-1",
+            )
+        ) == 2
+        clock.advance(seconds=31)
+
+        assert len(
+            await backend.claim(
+                "agent-api",
+                ("run_agent",),
+                1,
+                30,
+                "worker-2",
+            )
+        ) == 1
+        first_pass = await backend.list(ExecutionQuery(namespace="agent-api"))
+        assert sorted(item.attempts for item in first_pass.items) == [1, 2]
+
+        assert len(
+            await backend.claim(
+                "agent-api",
+                ("run_agent",),
+                1,
+                30,
+                "worker-2",
+            )
+        ) == 1
+        second_pass = await backend.list(ExecutionQuery(namespace="agent-api"))
+        assert sorted(item.attempts for item in second_pass.items) == [2, 2]
 
     asyncio.run(scenario())
 
@@ -367,6 +424,13 @@ def test_release_unstarted_returns_claim_to_queue(tmp_path: Path) -> None:
 
 
 class FakeRuntimeBackend:
+    class Connector:
+        @staticmethod
+        def secret_tokens() -> list[str]:
+            return []
+
+    connector = Connector()
+
     def __init__(self, lease: ExecutionLease) -> None:
         self.lease = lease
         self.claim_calls = []
@@ -419,8 +483,24 @@ class FailingClaimBackend(FakeRuntimeBackend):
         raise sa.exc.OperationalError("SELECT 1", {}, Exception("connection reset"))
 
 
-def _fake_lease() -> ExecutionLease:
-    now = datetime(2026, 8, 9, tzinfo=timezone.utc)
+class TransientHeartbeatBackend(FakeRuntimeBackend):
+    def __init__(self, lease: ExecutionLease) -> None:
+        super().__init__(lease)
+        self.heartbeat_attempts = 0
+
+    async def heartbeat(self, *args):
+        self.heartbeat_attempts += 1
+        if self.heartbeat_attempts == 1:
+            raise sa.exc.OperationalError(
+                "UPDATE onestep_executions",
+                {},
+                Exception("connection reset"),
+            )
+        return await super().heartbeat(*args)
+
+
+def _fake_lease(*, now: datetime | None = None) -> ExecutionLease:
+    now = now or datetime(2026, 8, 9, tzinfo=timezone.utc)
     execution = Execution(
         id=uuid4(),
         namespace="agent-api",
@@ -511,6 +591,87 @@ def test_delivery_start_processing_runs_heartbeat_until_completion() -> None:
         await asyncio.wait_for(backend.heartbeat_called.wait(), timeout=1)
         await delivery.complete_execution(ExecutionCompletion(status=ExecutionStatus.SUCCEEDED))
         assert backend.completions[0].status is ExecutionStatus.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
+def test_delivery_retries_transient_heartbeat_failure() -> None:
+    async def scenario() -> None:
+        lease = _fake_lease(now=datetime.now(timezone.utc))
+        backend = TransientHeartbeatBackend(lease)
+        source = PostgresExecutionSource(
+            backend=backend,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            lease_duration_s=0.3,
+            heartbeat_interval_s=0.1,
+            worker_id="worker-1",
+        )
+        delivery = PostgresExecutionDelivery(
+            source=source,
+            lease=lease,
+            envelope=Envelope(body=lease.execution.payload),
+        )
+
+        await delivery.start_processing()
+        await asyncio.wait_for(backend.heartbeat_called.wait(), timeout=1)
+        await delivery.complete_execution(
+            ExecutionCompletion(status=ExecutionStatus.SUCCEEDED)
+        )
+
+        assert backend.heartbeat_attempts == 2
+
+    asyncio.run(scenario())
+
+
+def test_heartbeat_loop_propagates_task_cancellation() -> None:
+    async def scenario() -> None:
+        lease = _fake_lease()
+        source = PostgresExecutionSource(
+            backend=FakeRuntimeBackend(lease),
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+        delivery = PostgresExecutionDelivery(
+            source=source,
+            lease=lease,
+            envelope=Envelope(body=lease.execution.payload),
+        )
+        heartbeat = asyncio.create_task(delivery._heartbeat_loop())
+        await asyncio.sleep(0)
+        heartbeat.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await heartbeat
+
+    asyncio.run(scenario())
+
+
+def test_legacy_ack_completes_success_with_none_result() -> None:
+    async def scenario() -> None:
+        lease = _fake_lease()
+        backend = FakeRuntimeBackend(lease)
+        source = PostgresExecutionSource(
+            backend=backend,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+        delivery = PostgresExecutionDelivery(
+            source=source,
+            lease=lease,
+            envelope=Envelope(body=lease.execution.payload),
+        )
+
+        await delivery.ack()
+
+        assert backend.completions == [
+            ExecutionCompletion(
+                status=ExecutionStatus.SUCCEEDED,
+                result=None,
+            )
+        ]
 
     asyncio.run(scenario())
 

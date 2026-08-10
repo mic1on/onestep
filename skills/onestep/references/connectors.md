@@ -147,6 +147,7 @@ resources:
     poll_interval_s: 0.5
     lease_duration_s: 90
     heartbeat_interval_s: 30
+    reclaim_batch_size: 100
     worker_id: "${HOSTNAME:-agent-worker}"
     auto_create: false
 
@@ -157,11 +158,18 @@ tasks:
       ref: agent_worker.tasks:run_agent
 ```
 
-The invariant is `0 < heartbeat_interval_s <= lease_duration_s / 3`.
-PostgreSQL execution stores eight observable states, attempt history, leases and
-results. Payload/result inline values default to 1 MiB and metadata to 64 KiB.
-It provides at-least-once execution and cooperative cancellation; use stable
-idempotency keys for API retries and idempotent downstream writes.
+The invariant is `0 < heartbeat_interval_s <= lease_duration_s / 3`. The
+PostgreSQL execution backend stores eight observable states, attempt history,
+leases, and results. Payload/result inline values default to 1 MiB and metadata
+to 64 KiB. Retryable heartbeat failures use bounded backoff while the lease is
+valid. Stale recovery runs during source claims, processing at most
+`reclaim_batch_size` rows per stale state category on each claim; there is no
+independent reaper.
+
+The managed runtime completion path persists handler results. A direct legacy
+`Delivery.ack()` records `succeeded` with `result=None` because `ack()` has no
+result argument. Execution is at-least-once and cancellation is cooperative;
+use stable idempotency keys for API retries and idempotent downstream writes.
 
 ## RabbitMQ
 

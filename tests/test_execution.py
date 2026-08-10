@@ -184,6 +184,49 @@ def test_validation_and_boundary_copies() -> None:
     asyncio.run(scenario())
 
 
+def test_execution_error_normalizes_text_fields() -> None:
+    error = ExecutionError(
+        kind="  error  ",
+        exception_type="  ValueError  ",
+        stage="  handler  ",
+        backend="  postgres  ",
+        operation="  heartbeat  ",
+        connector_kind="  transient  ",
+    )
+
+    assert error == ExecutionError(
+        kind="error",
+        exception_type="ValueError",
+        stage="handler",
+        backend="postgres",
+        operation="heartbeat",
+        connector_kind="transient",
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"kind": " "},
+        {"kind": "x" * 65},
+        {"kind": 1},
+        {"exception_type": " "},
+        {"exception_type": "x" * 256},
+        {"exception_type": object()},
+        {"stage": " "},
+        {"backend": "x" * 256},
+        {"operation": object()},
+        {"connector_kind": " "},
+    ],
+)
+def test_execution_error_rejects_invalid_text_fields(overrides) -> None:
+    values = {"kind": "error", "exception_type": "ValueError"}
+    values.update(overrides)
+
+    with pytest.raises((TypeError, ValueError)):
+        ExecutionError(**values)
+
+
 def test_cancel_normalizes_reason_and_forwards_list() -> None:
     async def scenario() -> None:
         execution_id = uuid4()

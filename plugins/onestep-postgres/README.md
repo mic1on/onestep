@@ -44,7 +44,7 @@ from onestep import ExecutionClient
 from onestep_postgres import PostgresConnector
 
 pg = PostgresConnector("postgresql+psycopg://app:secret@db/app")
-backend = pg.execution_backend(auto_create=True)
+backend = pg.execution_backend(auto_create=True, reclaim_batch_size=100)
 step = ExecutionClient(backend, namespace="agent-api")
 execution = await step.submit("run_agent", payload, idempotency_key=request_id)
 
@@ -60,5 +60,15 @@ Execution statuses are `queued`, `running`, `retrying`, `succeeded`, `failed`,
 are limited to 1 MiB each; metadata is limited to 64 KiB. Use
 `auto_create=False` after deployment migrations. Execution is at-least-once
 and cancellation is cooperative; make handler side effects idempotent.
+
+Managed runtime completion persists the handler result. Calling the execution
+delivery's legacy `ack()` directly records `succeeded` with `result=None`
+because the public `Delivery.ack()` API has no result argument. Retryable
+heartbeat failures use bounded exponential backoff while the lease remains
+valid. Stale recovery is claim-driven rather than handled by an independent
+reaper: each claim processes at most `reclaim_batch_size` records per stale
+state category, so active workers drain a backlog incrementally. Connector
+errors use an independent copy returned by `PostgresConnector.secret_tokens()`
+for redaction.
 
 The plugin does not support PostgreSQL logical replication or CDC.

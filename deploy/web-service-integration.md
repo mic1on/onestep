@@ -189,7 +189,7 @@ when downstream writes must converge. `cancel()` is cooperative: queued work
 is cancelled immediately, while running work is asked to stop through the
 heartbeat. It cannot undo a handler that blocks cancellation or has already
 performed an external side effect. Keep `auto_create=False` in production and
-create the execution tables during deployment with a migration identity.
+create the execution tables during deployment with a migration role.
 
 ## Django example
 

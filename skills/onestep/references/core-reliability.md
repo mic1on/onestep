@@ -10,6 +10,7 @@ Stable application API imported from `onestep`:
 
 - `OneStepApp`, `TaskContext`
 - `Source`, `Sink`, `Delivery`, `Envelope`
+- `ExecutionClient`, execution snapshots, and managed completion protocol
 - `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, `HttpSink`
 - `NoRetry`, `MaxAttempts`, `RetryPolicy`, `RetryAction`, `RetryDecision`
 - `TaskEvent`, `TaskEventKind`, `InMemoryMetrics`, `StructuredEventLogger`
@@ -42,6 +43,14 @@ Successful delivery order:
 4. selected sink sends
 5. `delivery.ack()`
 6. success event
+
+For a delivery implementing the optional managed execution protocol, the
+runtime keeps the same handler, hook, sink, and event ordering but replaces the
+final `ack()` call with `complete_execution()`. That completion carries the
+handler result, retry delay, or public error to the execution backend. The
+ordinary `Delivery.ack()` API has no result argument; a direct legacy `ack()`
+cannot persist a handler result and records the connector-specific success value
+defined by that delivery.
 
 Important consequences:
 
