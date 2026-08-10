@@ -344,8 +344,67 @@ def test_cancel_and_complete_race_has_one_terminal_winner_live():
             assert completed is None or completed.status is final.status
             if final.status is ExecutionStatus.CANCELLED:
                 assert final.result is None
+                with first.engine.begin() as conn:
+                    attempt = conn.execute(
+                        sa.select(first.tables.attempts).where(
+                            first.tables.attempts.c.id == lease.attempt_id
+                        )
+                    ).mappings().one()
+                assert attempt["status"] == "cancelled"
+                assert attempt["error"] is None
+                assert "result" not in attempt
         finally:
             await _close_and_drop([first_connector, second_connector], (execution_table, attempts_table))
+
+    asyncio.run(scenario())
+
+
+def test_cancel_won_success_completion_preserves_cancelled_attempt_live():
+    async def scenario() -> None:
+        execution_table, attempts_table = _names("cancelwon")
+        connector = PostgresConnector(_dsn())
+        try:
+            backend = connector.execution_backend(
+                table=execution_table,
+                attempts_table=attempts_table,
+            )
+            await backend.open()
+            submitted = await backend.submit(
+                ExecutionRequest(
+                    namespace="agent-api", task_name="run_agent", payload={"value": 1}
+                )
+            )
+            [lease] = await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-a")
+            requested = await backend.request_cancel(
+                "agent-api", submitted.id, reason="stop"
+            )
+            assert requested is not None
+            assert requested.status is ExecutionStatus.CANCEL_REQUESTED
+
+            completed = await backend.complete(
+                lease.execution.id,
+                lease.attempt_id,
+                lease.lease_token,
+                ExecutionCompletion(
+                    status=ExecutionStatus.SUCCEEDED,
+                    result={"must_not_persist": True},
+                ),
+            )
+
+            assert completed.status is ExecutionStatus.CANCELLED
+            assert completed.result is None
+            assert completed.error is None
+            with backend.engine.begin() as conn:
+                attempt = conn.execute(
+                    sa.select(backend.tables.attempts).where(
+                        backend.tables.attempts.c.id == lease.attempt_id
+                    )
+                ).mappings().one()
+            assert attempt["status"] == "cancelled"
+            assert attempt["error"] is None
+            assert "result" not in attempt
+        finally:
+            await _close_and_drop([connector], (execution_table, attempts_table))
 
     asyncio.run(scenario())
 

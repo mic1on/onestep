@@ -25,6 +25,9 @@
 - Bounds claim-driven stale recovery, retries transient heartbeats within the
   active lease, validates opaque cursors and execution errors, and documents
   that direct delivery `ack()` records a successful `None` result.
+- Documents cancel-won completion semantics: a success submitted after
+  cancellation is stored as `cancelled`; its attempt is `cancelled` with a
+  `NULL` error and no persisted result.
 
 ## onestep-mysql 0.4.0
 

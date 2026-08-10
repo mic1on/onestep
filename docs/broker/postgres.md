@@ -150,6 +150,10 @@ at-least-once，取消是协作式的，handler 的外部副作用仍需要业�
 运行时的受管完成路径会把 handler 返回值写入成功记录。直接调用 execution
 delivery 的传统 `ack()` 只能记录 `succeeded` 且 `result=None`，因为公共
 `Delivery.ack()` API 没有结果参数。
+如果 worker 提交 `succeeded` 时 execution 已是 `cancel_requested`，取消优先
+（cancel-won）：execution 最终为 `cancelled`，worker 返回的 result/error 都不
+写入 execution；对应 attempt 会记为 `cancelled`、`error=NULL`，attempt 表不保存
+result。这是有意的历史语义，不表示 handler 没有返回值。
 
 worker 会在租约仍有效时，对可重试的 PostgreSQL 心跳错误执行有限指数退避；
 不可重试错误、过期租约或重试耗尽会取消当前处理任务。过期执行和停滞租约的

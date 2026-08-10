@@ -336,6 +336,7 @@ def test_cancel_request_wins_over_late_success_completion(tmp_path: Path) -> Non
 
         assert completed.status is ExecutionStatus.CANCELLED
         assert completed.result is None
+        assert completed.error is None
         current = await backend.get("agent-api", lease.execution.id)
         assert current == completed
         with backend.engine.begin() as conn:
@@ -345,6 +346,8 @@ def test_cancel_request_wins_over_late_success_completion(tmp_path: Path) -> Non
                 )
             ).mappings().one()
         assert attempt["status"] == "cancelled"
+        assert attempt["error"] is None
+        assert "result" not in attempt
 
     asyncio.run(scenario())
 
