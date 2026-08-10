@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -16,7 +17,11 @@ from onestep import (
     OneStepApp,
 )
 from onestep.runtime import TaskRunner
-from onestep_postgres import PostgresConnector, StaleExecutionLease
+from onestep_postgres import (
+    PostgresConnector,
+    PostgresExecutionBackend,
+    StaleExecutionLease,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -46,6 +51,48 @@ async def _close_and_drop(connectors: list[PostgresConnector], tables: tuple[str
     await asyncio.gather(*(connector.close() for connector in connectors))
 
 
+class _PauseAfterSelect:
+    def __init__(
+        self,
+        conn,
+        *,
+        selected: threading.Event,
+        resume: threading.Event,
+    ) -> None:
+        self._conn = conn
+        self._selected = selected
+        self._resume = resume
+        self._paused = False
+
+    def execute(self, statement, *args, **kwargs):
+        result = self._conn.execute(statement, *args, **kwargs)
+        if not self._paused and isinstance(statement, sa.sql.Select):
+            self._paused = True
+            self._selected.set()
+            if not self._resume.wait(timeout=10):
+                raise TimeoutError("expired lease cleanup barrier timed out")
+        return result
+
+
+def test_concurrent_auto_create_is_serialized_live():
+    async def scenario() -> None:
+        execution_table, attempts_table = _names("autocreate")
+        connectors = [PostgresConnector(_dsn()) for _ in range(6)]
+        backends = [
+            connector.execution_backend(
+                table=execution_table,
+                attempts_table=attempts_table,
+            )
+            for connector in connectors
+        ]
+        try:
+            await asyncio.gather(*(backend.open() for backend in backends))
+        finally:
+            await _close_and_drop(connectors, (execution_table, attempts_table))
+
+    asyncio.run(scenario())
+
+
 def test_concurrent_submit_with_same_idempotency_key_creates_one_execution_live():
     async def scenario() -> None:
         execution_table, attempts_table = _names("idem")
@@ -71,6 +118,91 @@ def test_concurrent_submit_with_same_idempotency_key_creates_one_execution_live(
             assert results[0].id == results[1].id
         finally:
             await _close_and_drop([first_connector, second_connector], (execution_table, attempts_table))
+
+    asyncio.run(scenario())
+
+
+def test_expired_lease_cleanup_does_not_overwrite_renewal_live():
+    async def scenario() -> None:
+        execution_table, attempts_table = _names("cleanupcas")
+        first_connector = PostgresConnector(_dsn())
+        second_connector = PostgresConnector(_dsn())
+        base_time = datetime(2026, 8, 9, tzinfo=timezone.utc)
+        cleanup_clock = {"now": base_time}
+        heartbeat_clock = {"now": base_time + timedelta(seconds=0.5)}
+        selected = threading.Event()
+        resume = threading.Event()
+        first = PostgresExecutionBackend(
+            connector=first_connector,
+            table=execution_table,
+            attempts_table=attempts_table,
+            clock=lambda: cleanup_clock["now"],
+        )
+        second = PostgresExecutionBackend(
+            connector=second_connector,
+            table=execution_table,
+            attempts_table=attempts_table,
+            clock=lambda: heartbeat_clock["now"],
+        )
+        try:
+            await first.open()
+            await second.open()
+            await first.submit(
+                ExecutionRequest(
+                    namespace="agent-api",
+                    task_name="run_agent",
+                    payload={"value": 1},
+                )
+            )
+            [lease] = await first.claim(
+                "agent-api",
+                ("run_agent",),
+                1,
+                1,
+                "worker-a",
+            )
+            cleanup_clock["now"] = base_time + timedelta(seconds=2)
+
+            def cleanup() -> None:
+                with first.engine.begin() as raw_conn:
+                    conn = _PauseAfterSelect(
+                        raw_conn,
+                        selected=selected,
+                        resume=resume,
+                    )
+                    first._release_expired_leases_sync(
+                        conn,
+                        first.tables.attempts,
+                        cleanup_clock["now"],
+                    )
+
+            cleanup_task = asyncio.create_task(asyncio.to_thread(cleanup))
+            assert await asyncio.to_thread(selected.wait, 10)
+            heartbeat = await second.heartbeat(
+                lease.execution.id,
+                lease.attempt_id,
+                lease.lease_token,
+                30,
+            )
+            resume.set()
+            await cleanup_task
+
+            current = await first.get("agent-api", lease.execution.id)
+            assert current is not None and current.status is ExecutionStatus.RUNNING
+            with first.engine.begin() as conn:
+                attempt_status = conn.execute(
+                    sa.select(first.tables.attempts.c.status).where(
+                        first.tables.attempts.c.id == lease.attempt_id
+                    )
+                ).scalar_one()
+            assert attempt_status == "running"
+            assert heartbeat.lease_expires_at > cleanup_clock["now"]
+        finally:
+            resume.set()
+            await _close_and_drop(
+                [first_connector, second_connector],
+                (execution_table, attempts_table),
+            )
 
     asyncio.run(scenario())
 

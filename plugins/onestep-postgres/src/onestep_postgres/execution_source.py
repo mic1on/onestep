@@ -13,12 +13,14 @@ from onestep.execution import (
     ExecutionError,
     ExecutionStatus,
 )
+from onestep.resilience import ConnectorOperation
 
 from .execution_backend import (
     ExecutionLease,
     HeartbeatResult,
     PostgresExecutionBackend,
 )
+from .resilience import as_postgres_connector_operation_error
 
 
 class PostgresExecutionSource(Source):
@@ -82,13 +84,25 @@ class PostgresExecutionSource(Source):
         await self.backend.open()
 
     async def fetch(self, limit: int) -> list[Delivery]:
-        leases = await self.backend.claim(
-            self.namespace,
-            self.task_names,
-            min(limit, self.batch_size),
-            self.lease_duration_s,
-            self.worker_id,
-        )
+        try:
+            leases = await self.backend.claim(
+                self.namespace,
+                self.task_names,
+                min(limit, self.batch_size),
+                self.lease_duration_s,
+                self.worker_id,
+            )
+        except Exception as exc:
+            connector_error = as_postgres_connector_operation_error(
+                operation=ConnectorOperation.FETCH,
+                exc=exc,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+                secrets=self.backend.connector._secret_tokens(),
+            )
+            if connector_error is None:
+                raise
+            raise connector_error from None
         deliveries: list[Delivery] = []
         for lease in leases:
             metadata = copy.deepcopy(dict(lease.execution.metadata))
@@ -197,13 +211,13 @@ class PostgresExecutionDelivery(Delivery):
         await self._stop_heartbeat()
         if self._completed:
             return
-        self._completed = True
         await self.source.backend.complete(
             self.execution_id,
             self.attempt_id,
             self.lease_token,
             completion,
         )
+        self._completed = True
 
     async def release_unstarted(self) -> None:
         await self.source.backend.release(

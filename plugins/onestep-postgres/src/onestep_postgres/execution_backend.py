@@ -209,11 +209,27 @@ class PostgresExecutionBackend(ExecutionBackend):
             if self._ready:
                 return
             if self.auto_create:
-                self.tables.metadata.create_all(
-                    self.engine,
-                    tables=[self.tables.executions, self.tables.attempts],
-                    checkfirst=True,
-                )
+                tables = [self.tables.executions, self.tables.attempts]
+                if self.engine.dialect.name == "postgresql":
+                    lock_name = f"{self.table_name}\0{self.attempts_table_name}"
+                    lock_key = int.from_bytes(
+                        hashlib.sha256(lock_name.encode("utf-8")).digest()[:8],
+                        byteorder="big",
+                        signed=True,
+                    )
+                    with self.engine.begin() as conn:
+                        conn.execute(sa.select(sa.func.pg_advisory_xact_lock(lock_key)))
+                        self.tables.metadata.create_all(
+                            conn,
+                            tables=tables,
+                            checkfirst=True,
+                        )
+                else:
+                    self.tables.metadata.create_all(
+                        self.engine,
+                        tables=tables,
+                        checkfirst=True,
+                    )
             else:
                 inspector = sa.inspect(self.engine)
                 missing = [
@@ -523,12 +539,21 @@ class PostgresExecutionBackend(ExecutionBackend):
         for row in rows:
             conn.execute(
                 sa.update(executions)
-                .where(executions.c.id == row.id)
+                .where(
+                    executions.c.id == row.id,
+                    executions.c.version == row.version,
+                    executions.c.status.in_((
+                        ExecutionStatus.QUEUED.value,
+                        ExecutionStatus.RETRYING.value,
+                    )),
+                    executions.c.expires_at.is_not(None),
+                    executions.c.expires_at <= now,
+                )
                 .values(
                     status=ExecutionStatus.EXPIRED.value,
                     finished_at=now,
                     updated_at=now,
-                    version=row.version + 1,
+                    version=executions.c.version + 1,
                 )
             )
 
@@ -542,6 +567,28 @@ class PostgresExecutionBackend(ExecutionBackend):
             )
         ).all()
         for row in rows:
+            updated = conn.execute(
+                sa.update(executions)
+                .where(
+                    executions.c.id == row.id,
+                    executions.c.version == row.version,
+                    executions.c.lease_token == row.lease_token,
+                    executions.c.status == ExecutionStatus.CANCEL_REQUESTED.value,
+                    executions.c.lease_expires_at.is_not(None),
+                    executions.c.lease_expires_at <= now,
+                )
+                .values(
+                    status=ExecutionStatus.CANCELLED.value,
+                    finished_at=now,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    worker_id=None,
+                    updated_at=now,
+                    version=executions.c.version + 1,
+                )
+            )
+            if updated.rowcount != 1:
+                continue
             conn.execute(
                 sa.update(attempts)
                 .where(
@@ -550,19 +597,6 @@ class PostgresExecutionBackend(ExecutionBackend):
                     attempts.c.status == "running",
                 )
                 .values(status="cancelled", finished_at=now)
-            )
-            conn.execute(
-                sa.update(executions)
-                .where(executions.c.id == row.id)
-                .values(
-                    status=ExecutionStatus.CANCELLED.value,
-                    finished_at=now,
-                    lease_token=None,
-                    lease_expires_at=None,
-                    worker_id=None,
-                    updated_at=now,
-                    version=row.version + 1,
-                )
             )
 
     def _release_expired_leases_sync(self, conn: Any, attempts: sa.Table, now: datetime) -> None:
@@ -580,16 +614,6 @@ class PostgresExecutionBackend(ExecutionBackend):
             )
         ).all()
         for row in rows:
-            attempt_update = (
-                sa.update(attempts)
-                .where(
-                    attempts.c.execution_id == row.id,
-                    attempts.c.lease_token == row.lease_token,
-                    attempts.c.status == "running",
-                )
-                .values(status="lease_lost", finished_at=now)
-            )
-            conn.execute(attempt_update)
             if row.expires_at is not None and _aware_utc(row.expires_at) <= now:
                 values = {
                     "status": ExecutionStatus.EXPIRED.value,
@@ -606,11 +630,31 @@ class PostgresExecutionBackend(ExecutionBackend):
                     "lease_expires_at": None,
                     "worker_id": None,
                     "updated_at": now,
-                    "version": row.version + 1,
+                    "version": executions.c.version + 1,
                 }
             )
+            updated = conn.execute(
+                sa.update(executions)
+                .where(
+                    executions.c.id == row.id,
+                    executions.c.version == row.version,
+                    executions.c.lease_token == row.lease_token,
+                    executions.c.status == ExecutionStatus.RUNNING.value,
+                    executions.c.lease_expires_at.is_not(None),
+                    executions.c.lease_expires_at <= now,
+                )
+                .values(**values)
+            )
+            if updated.rowcount != 1:
+                continue
             conn.execute(
-                sa.update(executions).where(executions.c.id == row.id).values(**values)
+                sa.update(attempts)
+                .where(
+                    attempts.c.execution_id == row.id,
+                    attempts.c.lease_token == row.lease_token,
+                    attempts.c.status == "running",
+                )
+                .values(status="lease_lost", finished_at=now)
             )
 
     def _heartbeat_sync(
@@ -637,6 +681,8 @@ class PostgresExecutionBackend(ExecutionBackend):
                         ExecutionStatus.RUNNING.value,
                         ExecutionStatus.CANCEL_REQUESTED.value,
                     )),
+                    executions.c.lease_expires_at.is_not(None),
+                    executions.c.lease_expires_at > now,
                 )
                 .values(lease_expires_at=expires, updated_at=now)
             )
@@ -712,28 +758,43 @@ class PostgresExecutionBackend(ExecutionBackend):
             ExecutionStatus.CANCELLED: "cancelled",
         }[completion.status]
         with self.engine.begin() as conn:
-            current = conn.execute(
-                sa.select(executions).where(executions.c.id == execution_id)
-            ).mappings().one_or_none()
-            if current is None:
-                raise StaleExecutionLease("execution does not exist")
             updated = conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == execution_id,
                     executions.c.lease_token == lease_token,
                     executions.c.status.in_(expected_statuses),
+                    executions.c.lease_expires_at.is_not(None),
+                    executions.c.lease_expires_at > now,
                 )
                 .values(**values)
             )
             if updated.rowcount != 1:
-                if current["status"] == completion.status.value and current["status"] in {
-                    status.value for status in (
-                        ExecutionStatus.SUCCEEDED,
-                        ExecutionStatus.FAILED,
-                        ExecutionStatus.CANCELLED,
-                    )
-                }:
+                current = conn.execute(
+                    sa.select(executions).where(executions.c.id == execution_id)
+                ).mappings().one_or_none()
+                if current is None:
+                    raise StaleExecutionLease("execution does not exist")
+                same_terminal_status = (
+                    current["status"] == completion.status.value
+                    and current["status"] in {
+                        status.value for status in (
+                            ExecutionStatus.SUCCEEDED,
+                            ExecutionStatus.FAILED,
+                            ExecutionStatus.CANCELLED,
+                        )
+                    }
+                )
+                expected_result = (
+                    encoded_result
+                    if completion.status is ExecutionStatus.SUCCEEDED
+                    else None
+                )
+                if (
+                    same_terminal_status
+                    and current["result"] == expected_result
+                    and current["error"] == error
+                ):
                     return self._row_to_execution(current)
                 raise StaleExecutionLease("execution lease is no longer valid")
             attempt_updated = conn.execute(
@@ -775,6 +836,8 @@ class PostgresExecutionBackend(ExecutionBackend):
                     executions.c.id == execution_id,
                     executions.c.lease_token == lease_token,
                     executions.c.status == ExecutionStatus.RUNNING.value,
+                    executions.c.lease_expires_at.is_not(None),
+                    executions.c.lease_expires_at > now,
                 )
                 .values(
                     status=ExecutionStatus.QUEUED.value,

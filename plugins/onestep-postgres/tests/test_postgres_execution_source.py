@@ -12,8 +12,14 @@ from onestep.envelope import Envelope
 from onestep.execution import (
     Execution,
     ExecutionCompletion,
+    ExecutionError,
     ExecutionQuery,
     ExecutionStatus,
+)
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
 )
 from onestep_postgres import PostgresConnector
 from onestep_postgres.execution_backend import (
@@ -118,6 +124,45 @@ def test_heartbeat_extends_only_matching_lease(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("operation", ("heartbeat", "complete", "release"))
+def test_expired_lease_rejects_worker_writes(tmp_path: Path, operation: str) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / f"expired-{operation}.db", clock)
+        [lease] = await _claim_one(backend)
+        clock.advance(seconds=31)
+
+        with pytest.raises(StaleExecutionLease):
+            if operation == "heartbeat":
+                await backend.heartbeat(
+                    lease.execution.id,
+                    lease.attempt_id,
+                    lease.lease_token,
+                    30,
+                )
+            elif operation == "complete":
+                await backend.complete(
+                    lease.execution.id,
+                    lease.attempt_id,
+                    lease.lease_token,
+                    ExecutionCompletion(
+                        status=ExecutionStatus.SUCCEEDED,
+                        result={"late": True},
+                    ),
+                )
+            else:
+                await backend.release(
+                    lease.execution.id,
+                    lease.attempt_id,
+                    lease.lease_token,
+                )
+
+        current = await backend.get("agent-api", lease.execution.id)
+        assert current is not None and current.status is ExecutionStatus.RUNNING
+
+    asyncio.run(scenario())
+
+
 async def _claim_one(backend: PostgresExecutionBackend) -> tuple[ExecutionLease, ...]:
     await backend.submit(_request())
     return await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-1")
@@ -178,6 +223,86 @@ def test_complete_success_updates_execution_and_attempt_in_one_transaction(tmp_p
                 )
             ).mappings().one()
         assert attempt["status"] == "succeeded"
+
+    asyncio.run(scenario())
+
+
+def test_terminal_success_replay_requires_identical_result(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / "success-replay.db", clock)
+        [lease] = await _claim_one(backend)
+        completion = ExecutionCompletion(
+            status=ExecutionStatus.SUCCEEDED,
+            result={"answer": 42},
+        )
+
+        completed = await backend.complete(
+            lease.execution.id,
+            lease.attempt_id,
+            lease.lease_token,
+            completion,
+        )
+        replayed = await backend.complete(
+            lease.execution.id,
+            lease.attempt_id,
+            lease.lease_token,
+            completion,
+        )
+        assert replayed == completed
+
+        with pytest.raises(StaleExecutionLease):
+            await backend.complete(
+                lease.execution.id,
+                lease.attempt_id,
+                lease.lease_token,
+                ExecutionCompletion(
+                    status=ExecutionStatus.SUCCEEDED,
+                    result={"answer": 7},
+                ),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_terminal_failure_replay_requires_identical_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / "failure-replay.db", clock)
+        [lease] = await _claim_one(backend)
+        first_error = ExecutionError(kind="error", exception_type="FirstError")
+        completion = ExecutionCompletion(
+            status=ExecutionStatus.FAILED,
+            error=first_error,
+        )
+
+        completed = await backend.complete(
+            lease.execution.id,
+            lease.attempt_id,
+            lease.lease_token,
+            completion,
+        )
+        replayed = await backend.complete(
+            lease.execution.id,
+            lease.attempt_id,
+            lease.lease_token,
+            completion,
+        )
+        assert replayed == completed
+
+        with pytest.raises(StaleExecutionLease):
+            await backend.complete(
+                lease.execution.id,
+                lease.attempt_id,
+                lease.lease_token,
+                ExecutionCompletion(
+                    status=ExecutionStatus.FAILED,
+                    error=ExecutionError(
+                        kind="error",
+                        exception_type="SecondError",
+                    ),
+                ),
+            )
 
     asyncio.run(scenario())
 
@@ -274,6 +399,26 @@ class FakeRuntimeBackend:
         return self.lease.execution
 
 
+class FailingCompletionBackend(FakeRuntimeBackend):
+    async def complete(self, execution_id, attempt_id, lease_token, completion):
+        self.completions.append(completion)
+        if len(self.completions) == 1:
+            raise RuntimeError("completion failed")
+        return self.lease.execution
+
+
+class FailingClaimBackend(FakeRuntimeBackend):
+    class Connector:
+        @staticmethod
+        def _secret_tokens() -> list[str]:
+            return []
+
+    connector = Connector()
+
+    async def claim(self, namespace, task_names, limit, lease_duration_s, worker_id):
+        raise sa.exc.OperationalError("SELECT 1", {}, Exception("connection reset"))
+
+
 def _fake_lease() -> ExecutionLease:
     now = datetime(2026, 8, 9, tzinfo=timezone.utc)
     execution = Execution(
@@ -323,6 +468,28 @@ def test_source_fetch_returns_managed_execution_delivery_with_correlation_meta()
     asyncio.run(scenario())
 
 
+def test_source_fetch_normalizes_postgres_claim_errors() -> None:
+    async def scenario() -> None:
+        source = PostgresExecutionSource(
+            backend=FailingClaimBackend(_fake_lease()),
+            namespace="agent-api",
+            task_names=("run_agent",),
+            poll_interval_s=0.25,
+            worker_id="worker-1",
+        )
+
+        with pytest.raises(ConnectorOperationError) as raised:
+            await source.fetch(1)
+
+        assert raised.value.backend == "postgres"
+        assert raised.value.operation is ConnectorOperation.FETCH
+        assert raised.value.kind is ConnectorErrorKind.DISCONNECTED
+        assert raised.value.source_name == source.name
+        assert raised.value.retry_delay_s == 0.25
+
+    asyncio.run(scenario())
+
+
 def test_delivery_start_processing_runs_heartbeat_until_completion() -> None:
     async def scenario() -> None:
         lease = _fake_lease()
@@ -344,6 +511,38 @@ def test_delivery_start_processing_runs_heartbeat_until_completion() -> None:
         await asyncio.wait_for(backend.heartbeat_called.wait(), timeout=1)
         await delivery.complete_execution(ExecutionCompletion(status=ExecutionStatus.SUCCEEDED))
         assert backend.completions[0].status is ExecutionStatus.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
+def test_failed_completion_can_fall_back_to_retrying() -> None:
+    async def scenario() -> None:
+        lease = _fake_lease()
+        backend = FailingCompletionBackend(lease)
+        source = PostgresExecutionSource(
+            backend=backend,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            worker_id="worker-1",
+        )
+        delivery = PostgresExecutionDelivery(
+            source=source,
+            lease=lease,
+            envelope=Envelope(body=lease.execution.payload),
+        )
+
+        with pytest.raises(RuntimeError, match="completion failed"):
+            await delivery.complete_execution(
+                ExecutionCompletion(status=ExecutionStatus.FAILED)
+            )
+        await delivery.complete_execution(
+            ExecutionCompletion(status=ExecutionStatus.RETRYING)
+        )
+
+        assert [item.status for item in backend.completions] == [
+            ExecutionStatus.FAILED,
+            ExecutionStatus.RETRYING,
+        ]
 
     asyncio.run(scenario())
 
