@@ -246,13 +246,32 @@ class TaskRunner:
         if self.app.shutdown_timeout_s is None:
             await asyncio.gather(*self._inflight, return_exceptions=True)
             return
-        done, pending = await asyncio.wait(self._inflight, timeout=self.app.shutdown_timeout_s)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.app.shutdown_timeout_s
+        done, pending = await asyncio.wait(
+            self._inflight,
+            timeout=self.app.shutdown_timeout_s,
+        )
         if done:
             await asyncio.gather(*done, return_exceptions=True)
         if pending:
             for pending_task in pending:
                 pending_task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            remaining = max(0.0, deadline - loop.time())
+            if remaining <= 0:
+                self._logger.warning(
+                    "inflight delivery cancellation exceeded shutdown timeout"
+                )
+                return
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                self._logger.warning(
+                    "inflight delivery cleanup exceeded shutdown timeout"
+                )
 
     async def _emit_batch_event(self, kind: TaskEventKind, deliveries: list["Delivery"]) -> None:
         for delivery in deliveries:

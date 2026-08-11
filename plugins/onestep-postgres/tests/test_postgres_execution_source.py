@@ -13,7 +13,7 @@ from onestep.envelope import Envelope
 from onestep.execution import (
     Execution,
     ExecutionCompletion,
-    ExecutionError,
+    ExecutionErrorDetail,
     ExecutionLeaseLost,
     ExecutionQuery,
     ExecutionStatus,
@@ -566,7 +566,7 @@ def test_terminal_failure_replay_requires_identical_error(tmp_path: Path) -> Non
         clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
         backend = _backend(tmp_path / "failure-replay.db", clock)
         [lease] = await _claim_one(backend)
-        first_error = ExecutionError(kind="error", exception_type="FirstError")
+        first_error = ExecutionErrorDetail(kind="error", exception_type="FirstError")
         completion = ExecutionCompletion(
             status=ExecutionStatus.FAILED,
             error=first_error,
@@ -593,7 +593,7 @@ def test_terminal_failure_replay_requires_identical_error(tmp_path: Path) -> Non
                 lease.lease_token,
                 ExecutionCompletion(
                     status=ExecutionStatus.FAILED,
-                    error=ExecutionError(
+                    error=ExecutionErrorDetail(
                         kind="error",
                         exception_type="SecondError",
                     ),
@@ -676,6 +676,7 @@ class FakeRuntimeBackend:
         self.completions: list[ExecutionCompletion] = []
         self.heartbeat_called = asyncio.Event()
         self.remaining_lease_s: float | None = None
+        self.remaining_lease_values: list[float] = []
         self.lease_remaining_calls = 0
         self.heartbeat_result = HeartbeatResult(
             lease_expires_at=lease.lease_expires_at,
@@ -701,6 +702,8 @@ class FakeRuntimeBackend:
 
     async def lease_remaining(self, lease_expires_at):
         self.lease_remaining_calls += 1
+        if self.remaining_lease_values:
+            return self.remaining_lease_values.pop(0)
         if self.remaining_lease_s is not None:
             return self.remaining_lease_s
         return (lease_expires_at - datetime.now(timezone.utc)).total_seconds()
@@ -742,6 +745,23 @@ class TransientHeartbeatBackend(FakeRuntimeBackend):
     async def heartbeat(self, *args):
         self.heartbeat_attempts += 1
         if self.heartbeat_attempts == 1:
+            raise sa.exc.OperationalError(
+                "UPDATE onestep_executions",
+                {},
+                Exception("connection reset"),
+            )
+        return await super().heartbeat(*args)
+
+
+class MultiTransientHeartbeatBackend(FakeRuntimeBackend):
+    def __init__(self, lease: ExecutionLease, failures: int) -> None:
+        super().__init__(lease)
+        self.failures = failures
+        self.heartbeat_attempts = 0
+
+    async def heartbeat(self, *args):
+        self.heartbeat_attempts += 1
+        if self.heartbeat_attempts <= self.failures:
             raise sa.exc.OperationalError(
                 "UPDATE onestep_executions",
                 {},
@@ -891,11 +911,37 @@ def test_delivery_retries_transient_heartbeat_failure() -> None:
     asyncio.run(scenario())
 
 
+def test_delivery_retries_heartbeat_failures_until_lease_window_allows_success() -> None:
+    async def scenario() -> None:
+        lease = _fake_lease(now=datetime.now(timezone.utc))
+        backend = MultiTransientHeartbeatBackend(lease, failures=3)
+        source = PostgresExecutionSource(
+            backend=backend,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            lease_duration_s=0.3,
+            heartbeat_interval_s=0.1,
+            worker_id="worker-1",
+        )
+        delivery = PostgresExecutionDelivery(
+            source=source,
+            lease=lease,
+            envelope=Envelope(body=lease.execution.payload),
+        )
+
+        result = await delivery._heartbeat_with_retry()
+
+        assert result is not None
+        assert backend.heartbeat_attempts == 4
+
+    asyncio.run(scenario())
+
+
 def test_heartbeat_retry_backoff_is_clamped_to_remaining_lease(monkeypatch) -> None:
     async def scenario() -> None:
         lease = _fake_lease()
         backend = AlwaysFailingHeartbeatBackend(lease)
-        backend.remaining_lease_s = 0.05
+        backend.remaining_lease_values = [0.05, 0.04, 0.03, 0]
         source = PostgresExecutionSource(
             backend=backend,
             namespace="agent-api",
@@ -918,10 +964,43 @@ def test_heartbeat_retry_backoff_is_clamped_to_remaining_lease(monkeypatch) -> N
 
         monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
         assert await delivery._heartbeat_with_retry() is None
-        assert backend.heartbeat_attempts == 3
-        assert backend.lease_remaining_calls == 3
+        assert backend.heartbeat_attempts == 4
+        assert backend.lease_remaining_calls == 4
         assert waits
         assert max(waits) <= 0.05 / 4
+
+    asyncio.run(scenario())
+
+
+def test_delivery_completion_survives_pending_heartbeat_cancellation() -> None:
+    async def scenario() -> None:
+        lease = _fake_lease()
+        backend = FakeRuntimeBackend(lease)
+        source = PostgresExecutionSource(
+            backend=backend,
+            namespace="agent-api",
+            task_names=("run_agent",),
+            lease_duration_s=0.3,
+            heartbeat_interval_s=0.1,
+            worker_id="worker-1",
+        )
+        delivery = PostgresExecutionDelivery(
+            source=source,
+            lease=lease,
+            envelope=Envelope(body=lease.execution.payload),
+        )
+        await delivery.start_processing()
+
+        delivery._cancel_owner()
+        await delivery.complete_execution(
+            ExecutionCompletion(
+                status=ExecutionStatus.SUCCEEDED,
+                result={"answer": 42},
+            )
+        )
+
+        assert delivery._completed is True
+        assert backend.completions[0].result == {"answer": 42}
 
     asyncio.run(scenario())
 

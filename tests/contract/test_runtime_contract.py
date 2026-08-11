@@ -31,7 +31,7 @@ from onestep import (
 )
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
-from onestep.execution import ExecutionError
+from onestep.execution import ExecutionErrorDetail
 from onestep.runtime import TaskRunner
 from onestep.task import EmitRoute, TaskHooks
 
@@ -135,7 +135,7 @@ def test_managed_failure_completion_contains_only_public_error_fields_contract()
         retry_completion = retry_delivery.completions[0]
         assert retry_completion.status is ExecutionStatus.RETRYING
         assert retry_completion.delay_s == 3
-        assert retry_completion.error == ExecutionError(
+        assert retry_completion.error == ExecutionErrorDetail(
             kind="error",
             exception_type="ValueError",
             stage="handler",
@@ -150,7 +150,7 @@ def test_managed_failure_completion_contains_only_public_error_fields_contract()
         failure_delivery = _RecordingManagedDelivery({}, [])
         await TaskRunner(app, app.tasks[0])._handle_delivery(failure_delivery)
         assert failure_delivery.completions[0].status is ExecutionStatus.FAILED
-        assert failure_delivery.completions[0].error == ExecutionError(
+        assert failure_delivery.completions[0].error == ExecutionErrorDetail(
             kind="error",
             exception_type="ValueError",
             stage="handler",
@@ -2044,6 +2044,40 @@ def test_shutdown_timeout_cancels_inflight_and_retries_delivery() -> None:
         assert len(redelivered) == 1
         assert redelivered[0].payload == {"value": 1}
         assert redelivered[0].envelope.attempts == 1
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_timeout_bounds_stubborn_inflight_cleanup() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        app = OneStepApp("shutdown-stubborn-app", shutdown_timeout_s=0.05)
+
+        @app.task(source=source)
+        async def consume(ctx, item):
+            return item
+
+        runner = TaskRunner(app, app.tasks[0])
+        release = asyncio.Event()
+
+        async def stubborn() -> None:
+            while not release.is_set():
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    continue
+
+        task = asyncio.create_task(stubborn())
+        runner._inflight.add(task)
+        started = asyncio.get_running_loop().time()
+
+        await runner._drain_inflight()
+
+        assert asyncio.get_running_loop().time() - started < 0.2
+        assert not task.done()
+
+        release.set()
+        await task
 
     asyncio.run(scenario())
 

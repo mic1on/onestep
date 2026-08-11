@@ -11,8 +11,12 @@ from onestep import (
     ExecutionCancelled,
     ExecutionClient,
     ExecutionError,
+    ExecutionErrorDetail,
+    ExecutionException,
     ExecutionExpired,
     ExecutionFailed,
+    ExecutionLeaseLost,
+    LeasedExecutionBackend,
     ExecutionNotFound,
     ExecutionNotReady,
     ExecutionPage,
@@ -28,7 +32,7 @@ def snapshot(
     *,
     execution_id: UUID | None = None,
     result: object | None = None,
-    error: ExecutionError | None = None,
+    error: ExecutionErrorDetail | None = None,
 ) -> Execution:
     return Execution(
         id=execution_id or uuid4(),
@@ -145,7 +149,7 @@ def test_execution_client_manages_backend_lifecycle() -> None:
 )
 def test_result_raises_by_status(status, error_type) -> None:
     async def scenario() -> None:
-        error = ExecutionError(kind="error", exception_type="ValueError")
+        error = ExecutionErrorDetail(kind="error", exception_type="ValueError")
         step = ExecutionClient(
             FakeBackend(snapshot(status, error=error)),
             namespace="agent-api",
@@ -215,8 +219,8 @@ def test_validation_and_boundary_copies() -> None:
     asyncio.run(scenario())
 
 
-def test_execution_error_normalizes_text_fields() -> None:
-    error = ExecutionError(
+def test_execution_error_detail_normalizes_text_fields() -> None:
+    error = ExecutionErrorDetail(
         kind="  error  ",
         exception_type="  ValueError  ",
         stage="  handler  ",
@@ -225,7 +229,7 @@ def test_execution_error_normalizes_text_fields() -> None:
         connector_kind="  transient  ",
     )
 
-    assert error == ExecutionError(
+    assert error == ExecutionErrorDetail(
         kind="error",
         exception_type="ValueError",
         stage="handler",
@@ -250,12 +254,19 @@ def test_execution_error_normalizes_text_fields() -> None:
         {"connector_kind": " "},
     ],
 )
-def test_execution_error_rejects_invalid_text_fields(overrides) -> None:
+def test_execution_error_detail_rejects_invalid_text_fields(overrides) -> None:
     values = {"kind": "error", "exception_type": "ValueError"}
     values.update(overrides)
 
     with pytest.raises((TypeError, ValueError)):
-        ExecutionError(**values)
+        ExecutionErrorDetail(**values)
+
+
+def test_execution_errors_have_a_single_exception_hierarchy() -> None:
+    assert ExecutionError is ExecutionException
+    assert issubclass(ExecutionLeaseLost, ExecutionException)
+    assert issubclass(ExecutionLeaseLost, RuntimeError)
+    assert LeasedExecutionBackend is not None
 
 
 def test_cancel_normalizes_reason_and_forwards_list() -> None:

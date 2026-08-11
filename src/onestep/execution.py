@@ -82,7 +82,7 @@ def _parse_execution_id(value: UUID | str) -> UUID:
 
 
 @dataclass(frozen=True)
-class ExecutionError:
+class ExecutionErrorDetail:
     kind: str
     exception_type: str
     stage: str | None = None
@@ -118,7 +118,7 @@ class Execution:
     payload: object
     metadata: Mapping[str, object]
     result: object | None
-    error: ExecutionError | None
+    error: ExecutionErrorDetail | None
     attempts: int
     created_at: datetime
     available_at: datetime
@@ -222,7 +222,7 @@ class ExecutionQuery:
 class ExecutionCompletion:
     status: ExecutionStatus
     result: object | None = None
-    error: ExecutionError | None = None
+    error: ExecutionErrorDetail | None = None
     delay_s: float | None = None
 
     def __post_init__(self) -> None:
@@ -235,10 +235,24 @@ class ExecutionCompletion:
             raise ValueError(
                 "completion status must be succeeded, retrying, failed or cancelled"
             )
-        if self.error is not None and not isinstance(self.error, ExecutionError):
-            raise TypeError("error must be an ExecutionError or None")
+        if self.error is not None and not isinstance(self.error, ExecutionErrorDetail):
+            raise TypeError("error must be an ExecutionErrorDetail or None")
         object.__setattr__(self, "result", copy.deepcopy(self.result))
         object.__setattr__(self, "delay_s", _validate_delay(self.delay_s))
+
+
+@dataclass(frozen=True)
+class ExecutionLease:
+    execution: Execution
+    attempt_id: UUID
+    lease_token: UUID
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class HeartbeatResult:
+    lease_expires_at: datetime
+    cancel_requested: bool
 
 
 class ExecutionBackend(Protocol):
@@ -262,6 +276,43 @@ class ExecutionBackend(Protocol):
 
 
 @runtime_checkable
+class LeasedExecutionBackend(ExecutionBackend, Protocol):
+    async def claim(
+        self,
+        namespace: str,
+        task_names: Sequence[str],
+        limit: int,
+        lease_duration_s: float,
+        worker_id: str,
+    ) -> Sequence[ExecutionLease]: ...
+
+    async def heartbeat(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+        lease_duration_s: float,
+    ) -> HeartbeatResult: ...
+
+    async def complete(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+        completion: ExecutionCompletion,
+    ) -> Execution: ...
+
+    async def release(
+        self,
+        execution_id: UUID,
+        attempt_id: UUID,
+        lease_token: UUID,
+    ) -> Execution: ...
+
+    async def lease_remaining(self, lease_expires_at: datetime) -> float: ...
+
+
+@runtime_checkable
 class ManagedExecutionDelivery(Protocol):
     execution_id: UUID
     attempt_id: UUID
@@ -274,6 +325,11 @@ class ExecutionException(Exception):
     def __init__(self, message: str, execution: Execution | None = None) -> None:
         super().__init__(message)
         self.execution = execution
+
+
+# Keep the old catch name valid now that the persisted error payload has its
+# own unambiguous name.
+ExecutionError = ExecutionException
 
 
 class ExecutionNotFound(ExecutionException):
@@ -311,7 +367,7 @@ class ExecutionEncodingError(ExecutionException):
     pass
 
 
-class ExecutionLeaseLost(RuntimeError):
+class ExecutionLeaseLost(ExecutionException, RuntimeError):
     pass
 
 
@@ -418,10 +474,14 @@ __all__ = [
     "ExecutionConflict",
     "ExecutionEncodingError",
     "ExecutionError",
+    "ExecutionErrorDetail",
     "ExecutionException",
     "ExecutionExpired",
     "ExecutionFailed",
     "ExecutionLeaseLost",
+    "ExecutionLease",
+    "HeartbeatResult",
+    "LeasedExecutionBackend",
     "ExecutionNotFound",
     "ExecutionNotReady",
     "ExecutionPage",

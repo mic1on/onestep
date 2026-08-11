@@ -7,7 +7,7 @@ import json
 import os
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import UUID, uuid4
@@ -17,16 +17,18 @@ import sqlalchemy as sa
 from onestep.capture.codec import CaptureEncodingError, decode_value, encode_value
 from onestep.execution import (
     Execution,
-    ExecutionBackend,
     ExecutionCompletion,
     ExecutionConflict,
     ExecutionEncodingError,
-    ExecutionError,
+    ExecutionErrorDetail,
+    ExecutionLease,
     ExecutionLeaseLost,
     ExecutionPage,
     ExecutionQuery,
     ExecutionRequest,
     ExecutionStatus,
+    HeartbeatResult,
+    LeasedExecutionBackend,
 )
 
 from .execution_schema import ExecutionTables, build_execution_tables
@@ -36,21 +38,7 @@ class StaleExecutionLease(ExecutionLeaseLost):
     pass
 
 
-@dataclass(frozen=True)
-class ExecutionLease:
-    execution: Execution
-    attempt_id: UUID
-    lease_token: UUID
-    lease_expires_at: datetime
-
-
-@dataclass(frozen=True)
-class HeartbeatResult:
-    lease_expires_at: datetime
-    cancel_requested: bool
-
-
-class PostgresExecutionBackend(ExecutionBackend):
+class PostgresExecutionBackend(LeasedExecutionBackend):
     def __init__(
         self,
         *,
@@ -1082,7 +1070,7 @@ class PostgresExecutionBackend(ExecutionBackend):
     def _row_to_execution(self, row: Mapping[str, Any]) -> Execution:
         try:
             raw_error = decode_value(row["error"]) if row["error"] is not None else None
-            error = None if raw_error is None else ExecutionError(**raw_error)
+            error = None if raw_error is None else ExecutionErrorDetail(**raw_error)
             return Execution(
                 id=row["id"],
                 namespace=row["namespace"],

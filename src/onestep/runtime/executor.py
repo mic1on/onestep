@@ -18,7 +18,7 @@ from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
 from onestep.execution import (
     ExecutionCompletion,
-    ExecutionError,
+    ExecutionErrorDetail,
     ExecutionLeaseLost,
     ExecutionStatus,
     ManagedExecutionDelivery,
@@ -446,7 +446,7 @@ class DeliveryExecutor:
         delivery: Delivery,
         *,
         delay_s: float | None = None,
-        error: ExecutionError | None = None,
+        error: ExecutionErrorDetail | None = None,
     ) -> None:
         await self.checkpoint("delivery_action", "entered", {})
         if self.apply_delivery_actions:
@@ -469,7 +469,7 @@ class DeliveryExecutor:
         ctx: TaskContext,
         delivery: Delivery,
         exc: Exception,
-        error: ExecutionError | None = None,
+        error: ExecutionErrorDetail | None = None,
     ) -> bool:
         if not self.apply_delivery_actions:
             return True
@@ -543,11 +543,11 @@ class DeliveryExecutor:
             )
         )
 
-    def _execution_error(self, outcome: ExecutionOutcome) -> ExecutionError | None:
+    def _execution_error(self, outcome: ExecutionOutcome) -> ExecutionErrorDetail | None:
         public_failure = outcome.public_failure
         if public_failure is None:
             return None
-        return ExecutionError(
+        return ExecutionErrorDetail(
             kind=public_failure["failure_kind"],
             exception_type=public_failure["exception_type"],
             stage=outcome.failure_stage,

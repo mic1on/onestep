@@ -11,7 +11,8 @@ from onestep.connectors.base import Delivery, Source
 from onestep.envelope import Envelope
 from onestep.execution import (
     ExecutionCompletion,
-    ExecutionError,
+    ExecutionErrorDetail,
+    LeasedExecutionBackend,
     ExecutionStatus,
 )
 from onestep.resilience import (
@@ -104,7 +105,7 @@ class PostgresExecutionSource(Source):
         self,
         *,
         dsn: str | None = None,
-        backend: Any | None = None,
+        backend: LeasedExecutionBackend | None = None,
         table: str = "onestep_executions",
         attempts_table: str = "onestep_execution_attempts",
         auto_create: bool = True,
@@ -237,7 +238,7 @@ class PostgresExecutionSource(Source):
                 exc=exc,
                 source_name=self.name,
                 retry_delay_s=self.poll_interval_s,
-                secrets=_connector_secret_tokens(self.backend.connector),
+                secrets=_connector_secret_tokens(getattr(self.backend, "connector", None)),
             )
             if connector_error is None:
                 raise
@@ -288,6 +289,7 @@ class PostgresExecutionDelivery(Delivery):
         self._heartbeat_task: asyncio.Task[Any] | None = None
         self._heartbeat_stop = asyncio.Event()
         self._completed = False
+        self._heartbeat_cancel_pending = False
 
     async def start_processing(self) -> None:
         if self._heartbeat_task is not None:
@@ -320,7 +322,8 @@ class PostgresExecutionDelivery(Delivery):
                 return
 
     async def _heartbeat_with_retry(self) -> HeartbeatResult | None:
-        for attempt in range(3):
+        attempt = 0
+        while True:
             try:
                 return await self.source.backend.heartbeat(
                     self.execution_id,
@@ -339,7 +342,9 @@ class PostgresExecutionDelivery(Delivery):
                         exc=exc,
                         source_name=self.source.name,
                         retry_delay_s=self.source.heartbeat_interval_s,
-                        secrets=_connector_secret_tokens(self.source.backend.connector),
+                        secrets=_connector_secret_tokens(
+                            getattr(self.source.backend, "connector", None)
+                        ),
                     )
                 )
                 if connector_error is None or not is_retryable_connector_error(connector_error):
@@ -350,20 +355,23 @@ class PostgresExecutionDelivery(Delivery):
                     )
                 except Exception:
                     return None
-                if attempt == 2 or remaining <= 0:
+                if remaining <= 0:
                     return None
-                # Keep each retry inside the remaining lease; the caller cancels
-                # the owner when no retry can be made before the deadline.
+                # Keep retrying while the lease has time left. The multiplier is
+                # capped only to avoid unbounded float growth; remaining lease
+                # time, not a fixed attempt count, is the stop condition.
                 delay_s = min(
-                    self.source.heartbeat_interval_s * (2**attempt),
+                    self.source.heartbeat_interval_s * (2 ** min(attempt, 10)),
                     remaining / 4,
                 )
+                if delay_s <= 0:
+                    return None
+                attempt += 1
                 try:
                     await asyncio.wait_for(self._heartbeat_stop.wait(), timeout=delay_s)
                     return None
                 except asyncio.TimeoutError:
                     continue
-        return None
 
     def _apply_heartbeat_result(self, result: HeartbeatResult) -> None:
         self.lease_expires_at = result.lease_expires_at
@@ -371,7 +379,21 @@ class PostgresExecutionDelivery(Delivery):
 
     def _cancel_owner(self) -> None:
         if self._owner_task is not None and not self._owner_task.done():
+            self._heartbeat_cancel_pending = True
             self._owner_task.cancel()
+
+    async def _await_critical(self, awaitable: Any) -> Any:
+        task = asyncio.ensure_future(awaitable)
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if task.done():
+                    return task.result()
+                if not self._heartbeat_cancel_pending:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise
 
     async def _stop_heartbeat(self) -> None:
         self._heartbeat_stop.set()
@@ -384,15 +406,22 @@ class PostgresExecutionDelivery(Delivery):
         await asyncio.gather(task, return_exceptions=True)
 
     async def complete_execution(self, completion: ExecutionCompletion) -> None:
-        await self._stop_heartbeat()
         if self._completed:
             return
-        completed = await self.source.backend.complete(
-            self.execution_id,
-            self.attempt_id,
-            self.lease_token,
-            completion,
-        )
+        await self._await_critical(self._stop_heartbeat())
+        if self._completed:
+            return
+        try:
+            completed = await self._await_critical(
+                self.source.backend.complete(
+                    self.execution_id,
+                    self.attempt_id,
+                    self.lease_token,
+                    completion,
+                )
+            )
+        finally:
+            self._heartbeat_cancel_pending = False
         self._completed = True
         if (
             completion.status is ExecutionStatus.SUCCEEDED
@@ -430,7 +459,7 @@ class PostgresExecutionDelivery(Delivery):
                 error=(
                     None
                     if exc is None
-                    else ExecutionError(
+                    else ExecutionErrorDetail(
                         kind="error",
                         exception_type=type(exc).__name__,
                     )

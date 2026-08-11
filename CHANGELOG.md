@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Renames the persisted execution error payload to `ExecutionErrorDetail`,
+  keeps `ExecutionError` as an exception catch alias, and makes lease-loss
+  failures part of the `ExecutionException` hierarchy.
+- Publishes the worker-side `LeasedExecutionBackend` protocol and bounds
+  heartbeat completion and shutdown cleanup by lease or shutdown deadlines.
 - Adds optional `env` parameter to `OneStepApp.load()` and `load_yaml_app()`, allowing callers to inject a `Mapping[str, str]` of variable overrides that are checked before `os.environ` during `${VAR}` expansion. This eliminates the need for callers to export values to `os.environ` before loading an app.
 - Adds async lifecycle management to `ExecutionClient` and a lazy DSN constructor
   for `PostgresExecutionBackend`; the connector-first factory remains available

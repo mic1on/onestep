@@ -12,12 +12,19 @@ in this document should be treated as compatibility commitments.
 - `TaskContext`
 - `Source`, `Sink`, `Delivery`
 - `Envelope`
-- `ExecutionClient`, execution snapshots, and managed completion protocol
+- `ExecutionClient`, execution snapshots, execution backend protocols, and
+  managed completion protocol
 - `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, `HttpSink`
 - `NoRetry`, `MaxAttempts`, `RetryPolicy`, `RetryAction`, `RetryDecision`
 - `TaskEvent`, `TaskEventKind`, `InMemoryMetrics`, `StructuredEventLogger`
 
 Application code may import these names from `onestep`.
+
+`ExecutionBackend` is the client-side protocol for submit, query, and cancel.
+Worker-facing leased sources use `LeasedExecutionBackend`, which adds claim,
+heartbeat, complete, release, and lease-remaining operations. Lease records and
+heartbeat results are `ExecutionLease` and `HeartbeatResult`; a backend may use
+its own concrete subclasses or structurally compatible records.
 
 ## Stable Plugin API
 
