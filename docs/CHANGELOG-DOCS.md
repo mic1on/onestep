@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-08-11 - 同步 1.9.0 与新连接器文档
+
+### 变更概述
+
+将 docs 分支同步到 `main` 的 1.9.0 代码状态，补充 v1.8.0 和 v1.9.0 的全部新增功能和连接器文档。
+
+### 更新内容
+
+- 快速开始页版本号更新为 `1.9.0`，部署与 Worker Runtime Image 示例同步到 `ghcr.io/mic1on/onestep-worker:1.9.0`。
+- 新增 [MongoDB](/broker/mongodb)、[Elasticsearch / OpenSearch](/broker/elasticsearch) 和 [ClickHouse](/broker/clickhouse) 连接器页面。
+- 连接器概览、Connector 表及首页 features 列表补充新增插件。
+- 导航新增 [Connector Conformance](/connector-conformance) 页面。
+- 核心概念页面新增 Managed Execution 章节，覆盖 `ExecutionClient`/`ExecutionBackend`/`PostgresExecutionSource` 架构、状态机、租约和可靠性。
+- 合入本地 handler loop、YAML `cancel_requested` 状态、连接器 conformarce 测试套件、diagnostics 和 failure capture 框架。
+
 ## 2026-07-27 - 同步 1.7.2 与 CLI 日志能力
 
 ### 变更概述
