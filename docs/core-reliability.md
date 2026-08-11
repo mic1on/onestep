@@ -12,11 +12,19 @@ in this document should be treated as compatibility commitments.
 - `TaskContext`
 - `Source`, `Sink`, `Delivery`
 - `Envelope`
+- `ExecutionClient`, execution snapshots, execution backend protocols, and
+  managed completion protocol
 - `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, `HttpSink`
 - `NoRetry`, `MaxAttempts`, `RetryPolicy`, `RetryAction`, `RetryDecision`
 - `TaskEvent`, `TaskEventKind`, `InMemoryMetrics`, `StructuredEventLogger`
 
 Application code may import these names from `onestep`.
+
+`ExecutionBackend` is the client-side protocol for submit, query, and cancel.
+Worker-facing leased sources use `LeasedExecutionBackend`, which adds claim,
+heartbeat, complete, release, and lease-remaining operations. Lease records and
+heartbeat results are `ExecutionLease` and `HeartbeatResult`; a backend may use
+its own concrete subclasses or structurally compatible records.
 
 ## Stable Plugin API
 
@@ -58,6 +66,14 @@ For a successful delivery, the runtime:
 4. sends the handler result to selected sinks
 5. calls `delivery.ack()`
 6. emits a success event
+
+For a delivery implementing the optional managed execution protocol, the
+runtime keeps the same handler, hook, sink, and event ordering but replaces the
+final `ack()` call with `complete_execution()`. That completion carries the
+handler result, retry delay, or public error to the execution backend. The
+ordinary `Delivery.ack()` API has no result argument; a direct legacy `ack()`
+therefore cannot persist a handler result and records the connector-specific
+success value defined by that delivery.
 
 Because sink sends happen before `ack()`, a process crash or `ack()` failure
 after a successful sink send can produce duplicate downstream output.

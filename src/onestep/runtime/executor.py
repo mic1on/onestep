@@ -16,6 +16,13 @@ from onestep.connectors.base import Delivery, Sink
 from onestep.context import TaskContext
 from onestep.envelope import Envelope
 from onestep.events import TaskEvent, TaskEventKind
+from onestep.execution import (
+    ExecutionCompletion,
+    ExecutionErrorDetail,
+    ExecutionLeaseLost,
+    ExecutionStatus,
+    ManagedExecutionDelivery,
+)
 from onestep.invoke import invoke_callback
 from onestep.resilience import (
     ConnectorOperationError,
@@ -144,7 +151,7 @@ class DeliveryExecutor:
             outcome.delivery_action = DeliveryAction.ACK
             await self.checkpoint(active_stage, "entered", {})
             if self.apply_delivery_actions:
-                await delivery.ack()
+                await self._apply_success(delivery, outcome.handler_result)
             await self.checkpoint(active_stage, "completed", {})
             await self.emit(
                 TaskEventKind.SUCCEEDED,
@@ -250,7 +257,18 @@ class DeliveryExecutor:
         self._snapshot_capture_envelope(delivery, outcome)
         outcome.public_failure = self._public_failure(failure, None)
         outcome.delivery_action = DeliveryAction.RETRY
-        outcome.completion = "cancelled"
+        managed = self._managed_delivery(delivery)
+        managed_status = (
+            ExecutionStatus.CANCELLED
+            if managed is not None and managed.cancel_requested
+            else ExecutionStatus.RETRYING
+        )
+        outcome.completion = (
+            "cancelled" if managed is None else managed_status.value
+        )
+        outcome.terminal = (
+            managed is not None and managed_status is ExecutionStatus.CANCELLED
+        )
         self.logger.warning(
             "task cancelled",
             extra={"failure_kind": failure.kind.value},
@@ -263,13 +281,25 @@ class DeliveryExecutor:
             duration_s=duration_s,
         )
         if self.apply_delivery_actions:
-            await delivery.retry()
-        await self.emit(
-            TaskEventKind.RETRIED,
-            delivery,
-            failure=failure,
-            duration_s=duration_s,
-        )
+            error = self._execution_error(outcome)
+            if managed is None:
+                await delivery.retry()
+            else:
+                await self._complete_managed_execution(
+                    managed,
+                    ExecutionCompletion(
+                        status=managed_status,
+                        error=error,
+                        delay_s=0 if managed_status is ExecutionStatus.RETRYING else None,
+                    )
+                )
+        if managed is None or managed_status is ExecutionStatus.RETRYING:
+            await self.emit(
+                TaskEventKind.RETRIED,
+                delivery,
+                failure=failure,
+                duration_s=duration_s,
+            )
         await self._capture_failure(delivery, outcome)
 
     async def _handle_failure(
@@ -307,7 +337,11 @@ class DeliveryExecutor:
         if action.decision is RetryDecision.RETRY:
             outcome.delivery_action = DeliveryAction.RETRY
             outcome.retry_delay_s = action.delay_s
-            await self._apply_retry(delivery, delay_s=action.delay_s)
+            await self._apply_retry(
+                delivery,
+                delay_s=action.delay_s,
+                error=self._execution_error(outcome),
+            )
             await self.emit(
                 TaskEventKind.RETRIED,
                 delivery,
@@ -332,7 +366,12 @@ class DeliveryExecutor:
         else:
             outcome.delivery_action = DeliveryAction.FAIL
 
-        outcome.terminal = await self._fail_delivery(ctx, delivery, exc)
+        outcome.terminal = await self._fail_delivery(
+            ctx,
+            delivery,
+            exc,
+            self._execution_error(outcome),
+        )
         if not outcome.terminal:
             outcome.delivery_action = DeliveryAction.RETRY
         await self.emit(
@@ -381,7 +420,10 @@ class DeliveryExecutor:
             ctx.logger.exception(
                 "dead-letter publish failed; retrying original delivery"
             )
-            await self._apply_retry(delivery)
+            await self._apply_retry(
+                delivery,
+                error=self._execution_error(outcome),
+            )
             await self.emit(
                 TaskEventKind.RETRIED,
                 delivery,
@@ -404,10 +446,22 @@ class DeliveryExecutor:
         delivery: Delivery,
         *,
         delay_s: float | None = None,
+        error: ExecutionErrorDetail | None = None,
     ) -> None:
         await self.checkpoint("delivery_action", "entered", {})
         if self.apply_delivery_actions:
-            await delivery.retry(delay_s=delay_s)
+            managed = self._managed_delivery(delivery)
+            if managed is None:
+                await delivery.retry(delay_s=delay_s)
+            else:
+                await self._complete_managed_execution(
+                    managed,
+                    ExecutionCompletion(
+                        status=ExecutionStatus.RETRYING,
+                        error=error,
+                        delay_s=delay_s,
+                    )
+                )
         await self.checkpoint("delivery_action", "completed", {})
 
     async def _fail_delivery(
@@ -415,10 +469,36 @@ class DeliveryExecutor:
         ctx: TaskContext,
         delivery: Delivery,
         exc: Exception,
+        error: ExecutionErrorDetail | None = None,
     ) -> bool:
         if not self.apply_delivery_actions:
             return True
         await self.checkpoint("delivery_action", "entered", {})
+        managed = self._managed_delivery(delivery)
+        if managed is not None:
+            try:
+                await self._complete_managed_execution(
+                    managed,
+                    ExecutionCompletion(
+                        status=ExecutionStatus.FAILED,
+                        error=error,
+                    )
+                )
+            except Exception:
+                ctx.logger.exception(
+                    "managed execution failure completion failed; retrying original delivery"
+                )
+                retried = await self._complete_managed_execution(
+                    managed,
+                    ExecutionCompletion(
+                        status=ExecutionStatus.RETRYING,
+                        error=error,
+                    )
+                )
+                await self.checkpoint("delivery_action", "completed", {})
+                return not retried
+            await self.checkpoint("delivery_action", "completed", {})
+            return True
         try:
             await delivery.fail(exc)
         except Exception:
@@ -430,6 +510,51 @@ class DeliveryExecutor:
             return False
         await self.checkpoint("delivery_action", "completed", {})
         return True
+
+    def _managed_delivery(
+        self,
+        delivery: Delivery,
+    ) -> ManagedExecutionDelivery | None:
+        if isinstance(delivery, ManagedExecutionDelivery):
+            return delivery
+        return None
+
+    async def _complete_managed_execution(
+        self,
+        delivery: ManagedExecutionDelivery,
+        completion: ExecutionCompletion,
+    ) -> bool:
+        try:
+            await delivery.complete_execution(completion)
+        except ExecutionLeaseLost:
+            return False
+        return True
+
+    async def _apply_success(self, delivery: Delivery, result: Any) -> None:
+        managed = self._managed_delivery(delivery)
+        if managed is None:
+            await delivery.ack()
+            return
+        await self._complete_managed_execution(
+            managed,
+            ExecutionCompletion(
+                status=ExecutionStatus.SUCCEEDED,
+                result=result,
+            )
+        )
+
+    def _execution_error(self, outcome: ExecutionOutcome) -> ExecutionErrorDetail | None:
+        public_failure = outcome.public_failure
+        if public_failure is None:
+            return None
+        return ExecutionErrorDetail(
+            kind=public_failure["failure_kind"],
+            exception_type=public_failure["exception_type"],
+            stage=outcome.failure_stage,
+            backend=public_failure.get("backend"),
+            operation=public_failure.get("operation"),
+            connector_kind=public_failure.get("connector_kind"),
+        )
 
     async def _dispatch_production_sink(
         self,

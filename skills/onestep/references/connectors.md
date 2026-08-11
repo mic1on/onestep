@@ -124,6 +124,57 @@ resources:
     table: onestep_state
 ```
 
+## PostgreSQL execution source
+
+The Python API process uses `ExecutionClient` with the backend plugin's direct DSN
+constructor, such as `PostgresExecutionBackend(dsn=...)`. A Python worker can use
+the single-object `PostgresExecutionSource(dsn=...)` constructor. `PostgresConnector`
+and the `from_connector()` factories remain available when one application needs to
+share a pool with table queues, sinks, or state stores.
+YAML is the worker wiring layer and registers a source that claims only the
+configured task names:
+
+```yaml
+resources:
+  pg:
+    type: postgres
+    dsn: "${POSTGRES_DSN}"
+
+  agent_jobs:
+    type: postgres_execution_source
+    connector: pg
+    namespace: agent-api
+    task_names: [run_agent]
+    table: onestep_executions
+    attempts_table: onestep_execution_attempts
+    batch_size: 4
+    poll_interval_s: 0.5
+    lease_duration_s: 90
+    heartbeat_interval_s: 30
+    reclaim_batch_size: 100
+    worker_id: "${HOSTNAME:-agent-worker}"
+    auto_create: false
+
+tasks:
+  - name: run_agent
+    source: agent_jobs
+    handler:
+      ref: agent_worker.tasks:run_agent
+```
+
+The invariant is `0 < heartbeat_interval_s <= lease_duration_s / 3`. The
+PostgreSQL execution backend stores eight observable states, attempt history,
+leases, and results. Payload/result inline values default to 1 MiB and metadata
+to 64 KiB. Retryable heartbeat failures use bounded backoff while the lease is
+valid. Stale recovery runs during source claims, processing at most
+`reclaim_batch_size` rows per stale state category on each claim; there is no
+independent reaper.
+
+The managed runtime completion path persists handler results. A direct legacy
+`Delivery.ack()` records `succeeded` with `result=None` because `ack()` has no
+result argument. Execution is at-least-once and cancellation is cooperative;
+use stable idempotency keys for API retries and idempotent downstream writes.
+
 ## RabbitMQ
 
 ```yaml

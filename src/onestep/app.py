@@ -664,8 +664,12 @@ class OneStepApp:
         timeout_s: float | None = None,
     ):
         def decorator(func: TaskHandler) -> TaskHandler:
+            task_name = name or func.__name__
+            validate_task = getattr(source, "validate_task", None)
+            if callable(validate_task):
+                validate_task(task_name)
             task = TaskSpec.build(
-                name=name or func.__name__,
+                name=task_name,
                 description=description,
                 handler=func,
                 handler_ref=handler_ref,

@@ -44,9 +44,12 @@ def test_integration_harness_contains_database_services_and_tests() -> None:
     setup = (ROOT / "scripts" / "setup-integration-env.sh").read_text(encoding="utf-8")
     runner = (ROOT / "scripts" / "run-integration-tests.sh").read_text(encoding="utf-8")
     assert "clickhouse:" in compose and "mongo:" in compose
+    assert "postgres:" in compose
     assert "ONESTEP_CLICKHOUSE_DSN" in setup and "ONESTEP_MONGODB_URI" in setup
+    assert "ONESTEP_POSTGRES_DSN" in setup
     assert "plugins/onestep-clickhouse/tests/integration" in runner
     assert "plugins/onestep-mongodb/tests/integration" in runner
+    assert "plugins/onestep-postgres/tests/integration" in runner
     assert "plugins/onestep-elasticsearch/tests/integration" not in runner
 
 
@@ -65,6 +68,12 @@ def test_database_plugin_workflows_gate_build_live_and_publish() -> None:
         assert "id-token: write" in text and secret in text
         assert "needs.test.result == 'success'" in text
         assert "needs.live-compatibility.result == 'success'" in text
+
+    postgres = (ROOT / ".github" / "workflows" / "plugin-postgres.yml").read_text(encoding="utf-8")
+    assert "live-compatibility" in postgres
+    assert "postgres:16" in postgres
+    assert "-m integration" in postgres
+    assert "needs.live-compatibility.result == 'success'" in postgres
 
 
 def test_public_docs_name_database_plugin_resources_and_semantics() -> None:

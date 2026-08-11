@@ -123,6 +123,15 @@ from onestep import (
     CronSource,
     Delivery,
     Envelope,
+    Execution,
+    ExecutionBackend,
+    ExecutionClient,
+    ExecutionCompletion,
+    ExecutionErrorDetail,
+    ExecutionException,
+    ExecutionLeaseLost,
+    LeasedExecutionBackend,
+    ExecutionStatus,
     FailureCaptureConfig,
     HttpSink,
     InMemoryMetrics,
@@ -144,6 +153,7 @@ from onestep import (
     TaskEvent,
     TaskEventKind,
     WebhookSource,
+    ManagedExecutionDelivery,
     build_default_state_dir,
     derive_replica_instance_id,
     load_resource_plugins,
@@ -159,6 +169,17 @@ assert callable(load_resource_plugins)
 assert callable(register_resource_type)
 assert Delivery is not None
 assert Envelope is not None
+assert Execution is not None
+assert ExecutionBackend is not None
+assert ExecutionClient is not None
+assert ExecutionCompletion is not None
+assert ExecutionErrorDetail is not None
+assert ExecutionException is not None
+assert issubclass(ExecutionLeaseLost, RuntimeError)
+assert issubclass(ExecutionLeaseLost, ExecutionException)
+assert ExecutionStatus.QUEUED.value == "queued"
+assert LeasedExecutionBackend is not None
+assert ManagedExecutionDelivery is not None
 assert FailureCaptureConfig is not None
 assert HttpSink is not None
 assert InMemoryMetrics is not None

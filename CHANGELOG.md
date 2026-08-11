@@ -2,7 +2,46 @@
 
 ## Unreleased
 
+- Renames the persisted execution error payload to `ExecutionErrorDetail`,
+  keeps `ExecutionError` as an exception catch alias, and makes lease-loss
+  failures part of the `ExecutionException` hierarchy.
+- Publishes the worker-side `LeasedExecutionBackend` protocol and bounds
+  heartbeat completion and shutdown cleanup by lease or shutdown deadlines.
 - Adds optional `env` parameter to `OneStepApp.load()` and `load_yaml_app()`, allowing callers to inject a `Mapping[str, str]` of variable overrides that are checked before `os.environ` during `${VAR}` expansion. This eliminates the need for callers to export values to `os.environ` before loading an app.
+- Adds async lifecycle management to `ExecutionClient` and a lazy DSN constructor
+  for `PostgresExecutionBackend`; the connector-first factory remains available
+  for applications that need to share a PostgreSQL pool.
+- Makes direct PostgreSQL execution backends process-safe for pre-fork deployments:
+  each child creates its own pool, while externally supplied connectors are rejected
+  when reused across a process boundary.
+
+## onestep 1.9.0
+
+- Adds the `ExecutionClient`, immutable execution snapshots, typed result
+  exceptions, backend protocol, and optional managed completion protocol.
+- Adds an optional runtime branch for managed deliveries while preserving the
+  ordinary `Delivery.ack/retry/fail` API and success ordering.
+- Adds additive `onestep.execution` TaskEvent correlation metadata without
+  changing TaskEvent kinds.
+- Execution remains at-least-once and cancellation remains cooperative.
+
+## onestep-postgres 0.2.0
+
+- Adds PostgreSQL execution storage for task state, results, attempts, leases,
+  heartbeats, cancellation, retry recovery, and fencing.
+- Adds the `postgres_execution_source` YAML resource and Python backend/source
+  factories for separate FastAPI and worker processes.
+- Adds `PostgresExecutionSource(dsn=...)` as the concise worker-facing constructor;
+  `backend.source()` and connector-based factories remain available for compatibility
+  and shared-pool integrations.
+- Adds live PostgreSQL concurrency and fencing gates; inline payload/result
+  values default to 1 MiB and metadata to 64 KiB.
+- Bounds claim-driven stale recovery, retries transient heartbeats within the
+  active lease, validates opaque cursors and execution errors, and documents
+  that direct delivery `ack()` records a successful `None` result.
+- Documents cancel-won completion semantics: a success submitted after
+  cancellation is stored as `cancelled`; its attempt is `cancelled` with a
+  `NULL` error and no persisted result.
 
 ## onestep-mysql 0.4.0
 

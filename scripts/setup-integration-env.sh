@@ -17,6 +17,11 @@ MYSQL_PORT="${ONESTEP_MYSQL_PORT:-3306}"
 MYSQL_DATABASE="${ONESTEP_MYSQL_DATABASE:-onestep}"
 MYSQL_USER="${ONESTEP_MYSQL_USER:-root}"
 MYSQL_PASSWORD="${ONESTEP_MYSQL_PASSWORD:-root}"
+POSTGRES_HOST="${ONESTEP_POSTGRES_HOST:-127.0.0.1}"
+POSTGRES_PORT="${ONESTEP_POSTGRES_PORT:-5432}"
+POSTGRES_DATABASE="${ONESTEP_POSTGRES_DATABASE:-onestep}"
+POSTGRES_USER="${ONESTEP_POSTGRES_USER:-onestep}"
+POSTGRES_PASSWORD="${ONESTEP_POSTGRES_PASSWORD:-onestep}"
 CLICKHOUSE_DSN="${ONESTEP_CLICKHOUSE_DSN:-http://default:clickhouse@127.0.0.1:8123/onestep}"
 MONGODB_URI="${ONESTEP_MONGODB_URI:-mongodb://127.0.0.1:27017/onestep?replicaSet=rs0}"
 PYTHON_BIN="${ONESTEP_PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
@@ -91,6 +96,44 @@ for _ in range(60):
         last_error = exc
         time.sleep(2)
 raise SystemExit(f"Timed out waiting for MySQL: {last_error}")
+PY
+}
+
+wait_for_postgres() {
+  POSTGRES_HOST="$POSTGRES_HOST" \
+  POSTGRES_PORT="$POSTGRES_PORT" \
+  POSTGRES_USER="$POSTGRES_USER" \
+  POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  POSTGRES_DATABASE="$POSTGRES_DATABASE" \
+  "$PYTHON_BIN" - <<'PY'
+import os
+import time
+
+import psycopg
+
+host = os.environ["POSTGRES_HOST"]
+port = int(os.environ["POSTGRES_PORT"])
+user = os.environ["POSTGRES_USER"]
+password = os.environ["POSTGRES_PASSWORD"]
+database = os.environ["POSTGRES_DATABASE"]
+
+last_error = None
+for _ in range(60):
+    try:
+        with psycopg.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            dbname=database,
+            connect_timeout=2,
+        ):
+            pass
+        raise SystemExit(0)
+    except Exception as exc:  # pragma: no cover - shell retry path
+        last_error = exc
+        time.sleep(2)
+raise SystemExit(f"Timed out waiting for PostgreSQL: {last_error}")
 PY
 }
 
@@ -204,6 +247,7 @@ fi
 wait_for_url "$LOCALSTACK_ENDPOINT/_localstack/health" "LocalStack"
 wait_for_rabbitmq
 wait_for_mysql
+wait_for_postgres
 wait_for_redis
 wait_for_kafka
 docker exec -i onestep-mongodb mongosh --quiet < "$ROOT_DIR/docker/mongodb/init-replica-set.js" >/dev/null 2>&1 || true
@@ -213,6 +257,7 @@ wait_for_mongodb
 SQS_QUEUE_JSON="$(LOCALSTACK_ENDPOINT="$LOCALSTACK_ENDPOINT" AWS_REGION_VALUE="$AWS_REGION_VALUE" SQS_QUEUE_NAME="$SQS_QUEUE_NAME" ensure_sqs_queue)"
 SQS_QUEUE_URL="$(printf '%s' "$SQS_QUEUE_JSON" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["QueueUrl"])')"
 MYSQL_DSN="mysql+pymysql://$MYSQL_USER:$MYSQL_PASSWORD@$MYSQL_HOST:$MYSQL_PORT/$MYSQL_DATABASE"
+POSTGRES_DSN="postgresql+psycopg://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DATABASE"
 
 cat <<ENV
 export PYTHONPATH="$ROOT_DIR/src"
@@ -233,6 +278,11 @@ export ONESTEP_MYSQL_HOST="$MYSQL_HOST"
 export ONESTEP_MYSQL_PORT="$MYSQL_PORT"
 export ONESTEP_MYSQL_DATABASE="$MYSQL_DATABASE"
 export ONESTEP_MYSQL_USER="$MYSQL_USER"
+export ONESTEP_POSTGRES_DSN="$POSTGRES_DSN"
+export ONESTEP_POSTGRES_HOST="$POSTGRES_HOST"
+export ONESTEP_POSTGRES_PORT="$POSTGRES_PORT"
+export ONESTEP_POSTGRES_DATABASE="$POSTGRES_DATABASE"
+export ONESTEP_POSTGRES_USER="$POSTGRES_USER"
 export ONESTEP_CLICKHOUSE_DSN="$CLICKHOUSE_DSN"
 export ONESTEP_MONGODB_URI="$MONGODB_URI"
 ENV

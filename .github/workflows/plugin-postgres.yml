@@ -189,15 +189,55 @@ jobs:
           echo "Version exists on PyPI: $VERSION_EXISTS_ON_PYPI"
           echo "Publish plugin: $SHOULD_PUBLISH"
 
+  live-compatibility:
+    name: Live PostgreSQL compatibility
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: onestep
+          POSTGRES_USER: onestep
+          POSTGRES_PASSWORD: onestep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U onestep -d onestep"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      ONESTEP_POSTGRES_DSN: postgresql+psycopg://onestep:onestep@127.0.0.1:5432/onestep
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run live PostgreSQL tests
+        run: |
+          uv sync --frozen --all-packages --extra test
+          uv run --all-packages python -m pytest -q -m integration plugins/onestep-postgres/tests/integration
+
   publish-pypi:
     name: Publish plugin to PyPI
     runs-on: ubuntu-latest
     needs:
       - test
+      - live-compatibility
       - detect-version
     if: >-
       ${{
         needs.test.result == 'success' &&
+        needs.live-compatibility.result == 'success' &&
         needs.detect-version.outputs.should_publish == 'true'
       }}
     permissions:

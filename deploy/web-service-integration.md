@@ -87,6 +87,109 @@ uvicorn your_project.api:api --host 0.0.0.0 --port 8000
 onestep run your_project.onestep_app:app
 ```
 
+## Tracked HTTP tasks with PostgreSQL
+
+For long-running HTTP-triggered tasks that need a durable status and result
+record, use the PostgreSQL execution backend. Keep the API process and worker
+process separate:
+
+```text
+FastAPI process                         OneStep worker process
+POST /agent-runs                        PostgresExecutionSource
+        |                                        |
+        +---- ExecutionClient + PostgreSQL -------+
+                 executions + attempts
+```
+
+The API process owns submission and queries:
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from onestep import ExecutionClient
+from onestep_postgres import PostgresExecutionBackend
+
+backend = PostgresExecutionBackend(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=False,
+)
+step = ExecutionClient(backend, namespace="agent-api")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    async with step:
+        yield
+
+
+api = FastAPI(lifespan=lifespan)
+
+
+@api.post("/agent-runs", status_code=202)
+async def submit_agent_run(request: dict):
+    execution = await step.submit(
+        "run_agent",
+        request["payload"],
+        idempotency_key=request.get("request_id"),
+    )
+    return {"task_id": str(execution.id), "status": execution.status.value}
+
+
+@api.get("/agent-runs/{task_id}")
+async def get_agent_run(task_id):
+    execution = await step.get(task_id)
+    if execution is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return execution
+
+
+@api.post("/agent-runs/{task_id}/cancel")
+async def cancel_agent_run(task_id):
+    execution = await step.cancel(task_id, reason="requested by user")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return execution
+
+
+@api.get("/agent-runs/{task_id}/result")
+async def get_agent_result(task_id):
+    try:
+        return {"result": await step.result(task_id)}
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+```
+
+The separate worker registers the same execution table and only claims task
+names it can handle:
+
+```python
+from onestep import OneStepApp
+from onestep_postgres import PostgresExecutionSource
+
+app = OneStepApp("agent-worker")
+jobs = PostgresExecutionSource(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=False,
+    namespace="agent-api",
+    task_names=("run_agent",),
+    worker_id="agent-worker-1",
+)
+
+
+@app.task(source=jobs, concurrency=4)
+async def run_agent(ctx, payload):
+    return await run_agent_model(payload)
+```
+
+Execution records are at-least-once. A handler or external side effect can be
+run again after a worker crash, so use the execution ID or an idempotency key
+when downstream writes must converge. `cancel()` is cooperative: queued work
+is cancelled immediately, while running work is asked to stop through the
+heartbeat. It cannot undo a handler that blocks cancellation or has already
+performed an external side effect. Keep `auto_create=False` in production and
+create the execution tables during deployment with a migration role.
+
 ## Django example
 
 Use Django views, DRF endpoints, signals, or model save hooks to publish work to
