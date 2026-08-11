@@ -36,7 +36,10 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 | 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
 | [MySQL](/broker/mysql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出，安装 `onestep-mysql` |
-| [PostgreSQL](/broker/postgres) | 支持 | 支持 | 表队列/增量同步/表输出，安装 `onestep-postgres` |
+| [PostgreSQL](/broker/postgres) | 支持 | 支持 | 表队列/增量同步/表输出/跟踪长任务执行，安装 `onestep-postgres` |
+| [MongoDB](/broker/mongodb) | 支持 | 支持 | Collection 轮询/Change Stream/表输出，安装 `onestep-mongodb` |
+| [Elasticsearch / OpenSearch](/broker/elasticsearch) | 不支持 | 支持 | 异步 bulk Sink，安装 `onestep-elasticsearch` |
+| [ClickHouse](/broker/clickhouse) | 不支持 | 支持 | 异步确认表输出 Sink，安装 `onestep-clickhouse` |
 | [Feishu Bitable](/broker/feishu-bitable) | 支持 | 支持 | 飞书多维表格增量同步/表输出，安装 `onestep-feishu-bitable` |
 
 ### Web
@@ -170,7 +173,7 @@ tasks:
       ref: myapp:process_jobs
 ```
 
-YAML 会通过已安装插件注册资源类型。使用 `rabbitmq`、`redis_stream`、`sqs_queue`、`mysql_table_queue`、`postgres_incremental`、`kafka_topic` 或 `feishu_bitable_*` 前，先把对应插件安装到 worker 环境。
+YAML 会通过已安装插件注册资源类型。使用 `rabbitmq`、`redis_stream`、`sqs_queue`、`mysql_table_queue`、`postgres_incremental`、`mongodb_polling`、`elasticsearch_bulk_sink`、`clickhouse_table_sink`、`kafka_topic` 或 `feishu_bitable_*` 前，先把对应插件安装到 worker 环境。
 
 ## 自定义 Source/Sink
 

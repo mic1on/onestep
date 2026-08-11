@@ -138,7 +138,7 @@ onestep build worker.yaml --strict --out dist/worker.zip
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.7.2
+  ghcr.io/mic1on/onestep-worker:1.9.0
 ```
 
 详细说明见 [Worker Runtime Image](/guide/worker-runtime-image)。

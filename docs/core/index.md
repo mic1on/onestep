@@ -203,6 +203,69 @@ async def final(ctx, item):
     print(f"结果：{item}")
 ```
 
+## Managed Execution
+
+onestep 1.9 新增了受管执行（Managed Execution）模式，把任务状态、结果和租约持久化到数据库（当前仅 PostgreSQL），适合长时间运行的任务（如 AI Agent 调用）。
+
+### 架构
+
+```
+FastAPI / Gateway                  Worker
+┌──────────────┐                  ┌──────────────────┐
+│ExecutionClient│  ──submit──►    │ExecutionBackend   │◄── PostgresExecutionSource
+│  .submit()    │                  │  (PostgreSQL)     │     .claim()
+│  .get()       │                  │                   │     heartbeat/complete
+│  .cancel()    │                  └───────────────────┘
+└──────────────┘
+```
+
+### 提交执行
+
+```python
+from onestep import ExecutionClient
+from onestep_postgres import PostgresExecutionBackend
+
+backend = PostgresExecutionBackend(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    auto_create=True,
+)
+client = ExecutionClient(backend, namespace="agent-api")
+
+async with client:
+    execution = await client.submit(
+        "run_agent",
+        {"prompt": "..."},
+        idempotency_key=request_id,
+    )
+    # 轮询结果
+    result = await execution.result()
+```
+
+### Worker 消费
+
+```python
+from onestep_postgres import PostgresExecutionSource
+
+source = PostgresExecutionSource(
+    dsn="postgresql+psycopg://app:secret@db/app",
+    namespace="agent-api",
+    task_names=("run_agent",),
+    worker_id="agent-worker-1",
+)
+```
+
+每个 execution source 只能配置一个任务名，且必须与绑定该 source 的 app task 名一致。
+
+### 状态机
+
+任务状态包括 `queued` → `running` → `succeeded` / `failed` / `cancelled` / `expired`，以及中间状态 `retrying` 和 `cancel_requested`。`Execution` 是不可变快照；需要最新状态时重新调用 `get()` 或 `list()`。
+
+### 租约与可靠性
+
+执行使用租约（lease）保证 at-least-once：worker 通过 `heartbeat()` 续约，过期租约由 `claim()` 回收。系统是协作式取消；handler 的外部副作用仍需业务幂等。
+
+详细说明见 [PostgreSQL Tracked Execution](/broker/postgres-execution) 和 [核心可靠性](/core-reliability)。
+
 ## 错误处理
 
 ### 重试
