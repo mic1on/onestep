@@ -93,6 +93,43 @@ def test_concurrent_auto_create_is_serialized_live():
     asyncio.run(scenario())
 
 
+def test_custom_attempts_tables_can_share_schema_live():
+    async def scenario() -> None:
+        execution_table, first_attempts_table = _names("shared")
+        second_attempts_table = f"{first_attempts_table}_other"
+        first_connector = PostgresConnector(_dsn())
+        second_connector = PostgresConnector(_dsn())
+        first = first_connector.execution_backend(
+            table=execution_table,
+            attempts_table=first_attempts_table,
+        )
+        second = second_connector.execution_backend(
+            table=execution_table,
+            attempts_table=second_attempts_table,
+        )
+        try:
+            await first.open()
+            await second.open()
+        finally:
+            await first.close()
+            await second.close()
+            engine = sa.create_engine(_dsn(), future=True)
+            try:
+                with engine.begin() as conn:
+                    conn.execute(
+                        sa.text(f'DROP TABLE IF EXISTS "{second_attempts_table}"')
+                    )
+                    conn.execute(
+                        sa.text(f'DROP TABLE IF EXISTS "{first_attempts_table}"')
+                    )
+                    conn.execute(sa.text(f'DROP TABLE IF EXISTS "{execution_table}"'))
+            finally:
+                engine.dispose()
+            await asyncio.gather(first_connector.close(), second_connector.close())
+
+    asyncio.run(scenario())
+
+
 def test_concurrent_submit_with_same_idempotency_key_creates_one_execution_live():
     async def scenario() -> None:
         execution_table, attempts_table = _names("idem")
@@ -296,6 +333,75 @@ def test_expired_lease_takeover_fences_old_worker_live():
             )
         finally:
             await _close_and_drop([first_connector, second_connector], (execution_table, attempts_table))
+
+    asyncio.run(scenario())
+
+
+def test_lease_deadlines_use_database_time_across_skewed_workers_live():
+    async def scenario() -> None:
+        execution_table, attempts_table = _names("clockskew")
+        first_connector = PostgresConnector(_dsn())
+        second_connector = PostgresConnector(_dsn())
+        clock_engine = sa.create_engine(_dsn(), future=True)
+        try:
+            with clock_engine.begin() as conn:
+                database_now = conn.execute(
+                    sa.select(sa.func.current_timestamp())
+                ).scalar_one()
+            first = PostgresExecutionBackend(
+                connector=first_connector,
+                table=execution_table,
+                attempts_table=attempts_table,
+                clock=lambda: database_now - timedelta(hours=1),
+            )
+            second = PostgresExecutionBackend(
+                connector=second_connector,
+                table=execution_table,
+                attempts_table=attempts_table,
+                clock=lambda: database_now + timedelta(hours=1),
+            )
+            await first.open()
+            await second.open()
+            submitted = await first.submit(
+                ExecutionRequest(
+                    namespace="agent-api",
+                    task_name="run_agent",
+                    payload={"value": 1},
+                )
+            )
+            [old] = await first.claim(
+                "agent-api",
+                ("run_agent",),
+                1,
+                1,
+                "worker-slow-clock",
+            )
+
+            assert old.execution.id == submitted.id
+            assert await second.claim(
+                "agent-api",
+                ("run_agent",),
+                1,
+                5,
+                "worker-fast-clock",
+            ) == ()
+
+            await asyncio.sleep(1.2)
+            [new] = await second.claim(
+                "agent-api",
+                ("run_agent",),
+                1,
+                5,
+                "worker-fast-clock",
+            )
+            assert new.execution.id == old.execution.id
+            assert new.lease_token != old.lease_token
+        finally:
+            clock_engine.dispose()
+            await _close_and_drop(
+                [first_connector, second_connector],
+                (execution_table, attempts_table),
+            )
 
     asyncio.run(scenario())
 

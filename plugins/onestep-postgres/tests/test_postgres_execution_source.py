@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -211,6 +210,33 @@ def test_claim_marks_expired_queued_execution_terminal(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_claim_marks_expired_retrying_execution_terminal(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / "lease.db", clock)
+        [lease] = await _claim_one(backend)
+        with backend.engine.begin() as conn:
+            conn.execute(
+                sa.update(backend.tables.executions)
+                .where(backend.tables.executions.c.id == lease.execution.id)
+                .values(expires_at=clock.current + timedelta(seconds=5))
+            )
+        completed = await backend.complete(
+            lease.execution.id,
+            lease.attempt_id,
+            lease.lease_token,
+            ExecutionCompletion(status=ExecutionStatus.RETRYING, delay_s=0),
+        )
+        assert completed.status is ExecutionStatus.RETRYING
+
+        clock.advance(seconds=5)
+        assert await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-2") == ()
+        page = await backend.list(ExecutionQuery(namespace="agent-api"))
+        assert page.items[0].status is ExecutionStatus.EXPIRED
+
+    asyncio.run(scenario())
+
+
 def test_heartbeat_extends_only_matching_lease(tmp_path: Path) -> None:
     async def scenario() -> None:
         clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
@@ -288,6 +314,40 @@ def test_expired_running_lease_creates_new_attempt_and_fences_old_token(tmp_path
         [second] = await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-2")
         assert second.lease_token != first.lease_token
         assert second.execution.attempts == 2
+        with pytest.raises(StaleExecutionLease):
+            await backend.complete(
+                first.execution.id,
+                first.attempt_id,
+                first.lease_token,
+                ExecutionCompletion(status=ExecutionStatus.SUCCEEDED, result={"stale": True}),
+            )
+
+    asyncio.run(scenario())
+
+
+def test_expired_running_lease_reclaims_even_after_business_expiry(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
+        backend = _backend(tmp_path / "lease.db", clock)
+        submitted = await backend.submit(
+            _request(expires_at=clock.current + timedelta(seconds=5))
+        )
+        [first] = await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-1")
+        assert first.execution.id == submitted.id
+        clock.advance(seconds=30)
+
+        [second] = await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-2")
+
+        assert second.execution.status is ExecutionStatus.RUNNING
+        assert second.execution.attempts == 2
+        assert second.lease_token != first.lease_token
+        with backend.engine.begin() as conn:
+            old_attempt_status = conn.execute(
+                sa.select(backend.tables.attempts.c.status).where(
+                    backend.tables.attempts.c.id == first.attempt_id
+                )
+            ).scalar_one()
+        assert old_attempt_status == "lease_lost"
         with pytest.raises(StaleExecutionLease):
             await backend.complete(
                 first.execution.id,
@@ -615,6 +675,8 @@ class FakeRuntimeBackend:
         self.claim_calls = []
         self.completions: list[ExecutionCompletion] = []
         self.heartbeat_called = asyncio.Event()
+        self.remaining_lease_s: float | None = None
+        self.lease_remaining_calls = 0
         self.heartbeat_result = HeartbeatResult(
             lease_expires_at=lease.lease_expires_at,
             cancel_requested=False,
@@ -636,6 +698,12 @@ class FakeRuntimeBackend:
     async def heartbeat(self, *args):
         self.heartbeat_called.set()
         return self.heartbeat_result
+
+    async def lease_remaining(self, lease_expires_at):
+        self.lease_remaining_calls += 1
+        if self.remaining_lease_s is not None:
+            return self.remaining_lease_s
+        return (lease_expires_at - datetime.now(timezone.utc)).total_seconds()
 
     async def complete(self, execution_id, attempt_id, lease_token, completion):
         self.completions.append(completion)
@@ -825,12 +893,9 @@ def test_delivery_retries_transient_heartbeat_failure() -> None:
 
 def test_heartbeat_retry_backoff_is_clamped_to_remaining_lease(monkeypatch) -> None:
     async def scenario() -> None:
-        now = datetime.now(timezone.utc)
-        lease = replace(
-            _fake_lease(now=now),
-            lease_expires_at=now + timedelta(milliseconds=50),
-        )
+        lease = _fake_lease()
         backend = AlwaysFailingHeartbeatBackend(lease)
+        backend.remaining_lease_s = 0.05
         source = PostgresExecutionSource(
             backend=backend,
             namespace="agent-api",
@@ -854,6 +919,7 @@ def test_heartbeat_retry_backoff_is_clamped_to_remaining_lease(monkeypatch) -> N
         monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
         assert await delivery._heartbeat_with_retry() is None
         assert backend.heartbeat_attempts == 3
+        assert backend.lease_remaining_calls == 3
         assert waits
         assert max(waits) <= 0.05 / 4
 

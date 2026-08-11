@@ -4,7 +4,7 @@ import asyncio
 import copy
 import math
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable
 
 from onestep.connectors.base import Delivery, Source
@@ -344,9 +344,12 @@ class PostgresExecutionDelivery(Delivery):
                 )
                 if connector_error is None or not is_retryable_connector_error(connector_error):
                     return None
-                remaining = (
-                    self.lease_expires_at - datetime.now(timezone.utc)
-                ).total_seconds()
+                try:
+                    remaining = await self.source.backend.lease_remaining(
+                        self.lease_expires_at
+                    )
+                except Exception:
+                    return None
                 if attempt == 2 or remaining <= 0:
                     return None
                 # Keep each retry inside the remaining lease; the caller cancels

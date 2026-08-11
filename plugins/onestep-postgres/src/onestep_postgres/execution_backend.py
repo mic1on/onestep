@@ -241,6 +241,24 @@ class PostgresExecutionBackend(ExecutionBackend):
             raise ValueError("clock must return a timezone-aware datetime")
         return value.astimezone(timezone.utc)
 
+    def _transaction_now(self, conn: Any) -> datetime:
+        # PostgreSQL's transaction timestamp is stable for all lease checks in
+        # this transaction. SQLite uses the injected clock for deterministic
+        # unit tests and non-PostgreSQL compatibility.
+        if conn.dialect.name == "postgresql":
+            value = conn.execute(sa.select(sa.func.current_timestamp())).scalar_one()
+            return _aware_utc(value)
+        return self._now()
+
+    def _lease_remaining_sync(self, lease_expires_at: datetime) -> float:
+        self._ensure_ready_sync()
+        with self.engine.begin() as conn:
+            now = self._transaction_now(conn)
+        return (lease_expires_at - now).total_seconds()
+
+    async def lease_remaining(self, lease_expires_at: datetime) -> float:
+        return await asyncio.to_thread(self._lease_remaining_sync, lease_expires_at)
+
     def _open_sync(self) -> None:
         with self._ready_lock:
             self._ensure_ready_locked()
@@ -399,27 +417,26 @@ class PostgresExecutionBackend(ExecutionBackend):
         encoded: dict[str, Any],
     ) -> Execution:
         self._ensure_ready_sync()
-        now = self._now()
         execution_id = uuid4()
-        available_at = now + timedelta(seconds=request.delay_s or 0)
-        values = {
-            "id": execution_id,
-            "namespace": request.namespace,
-            "task_name": request.task_name,
-            "status": ExecutionStatus.QUEUED.value,
-            "payload": encoded["payload"],
-            "metadata": encoded["metadata"],
-            "idempotency_key": request.idempotency_key,
-            "submission_digest": encoded["digest"] if request.idempotency_key else None,
-            "attempts": 0,
-            "available_at": available_at,
-            "created_at": now,
-            "updated_at": now,
-            "version": 0,
-            "expires_at": request.expires_at,
-        }
         try:
             with self.engine.begin() as conn:
+                now = self._transaction_now(conn)
+                values = {
+                    "id": execution_id,
+                    "namespace": request.namespace,
+                    "task_name": request.task_name,
+                    "status": ExecutionStatus.QUEUED.value,
+                    "payload": encoded["payload"],
+                    "metadata": encoded["metadata"],
+                    "idempotency_key": request.idempotency_key,
+                    "submission_digest": encoded["digest"] if request.idempotency_key else None,
+                    "attempts": 0,
+                    "available_at": now + timedelta(seconds=request.delay_s or 0),
+                    "created_at": now,
+                    "updated_at": now,
+                    "version": 0,
+                    "expires_at": request.expires_at,
+                }
                 conn.execute(sa.insert(self.tables.executions).values(**values))
         except sa.exc.IntegrityError:
             if request.idempotency_key is None:
@@ -493,8 +510,8 @@ class PostgresExecutionBackend(ExecutionBackend):
         reason: str | None,
     ) -> Execution | None:
         self._ensure_ready_sync()
-        now = self._now()
         with self.engine.begin() as conn:
+            now = self._transaction_now(conn)
             row = conn.execute(
                 sa.select(self.tables.executions)
                 .where(
@@ -554,11 +571,12 @@ class PostgresExecutionBackend(ExecutionBackend):
         if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > 255:
             raise ValueError("worker_id must be non-empty and <= 255 characters")
         self._ensure_ready_sync()
-        now = self._now()
         executions = self.tables.executions
         attempts = self.tables.attempts
+        lease_lost_retry = self._lease_lost_retry_predicate(executions, attempts)
         leases: list[ExecutionLease] = []
         with self.engine.begin() as conn:
+            now = self._transaction_now(conn)
             self._expire_queued_sync(
                 conn,
                 now,
@@ -586,7 +604,11 @@ class PostgresExecutionBackend(ExecutionBackend):
                         ExecutionStatus.RETRYING.value,
                     )),
                     executions.c.available_at <= now,
-                    sa.or_(executions.c.expires_at.is_(None), executions.c.expires_at > now),
+                    sa.or_(
+                        executions.c.expires_at.is_(None),
+                        executions.c.expires_at > now,
+                        lease_lost_retry,
+                    ),
                 )
                 .order_by(
                     executions.c.available_at,
@@ -652,6 +674,8 @@ class PostgresExecutionBackend(ExecutionBackend):
         limit: int | None = None,
     ) -> None:
         executions = self.tables.executions
+        attempts = self.tables.attempts
+        lease_lost_retry = self._lease_lost_retry_predicate(executions, attempts)
         stmt = (
             sa.select(executions.c.id, executions.c.version)
             .where(
@@ -661,6 +685,7 @@ class PostgresExecutionBackend(ExecutionBackend):
                 )),
                 executions.c.expires_at.is_not(None),
                 executions.c.expires_at <= now,
+                sa.not_(lease_lost_retry),
             )
             .order_by(executions.c.expires_at, executions.c.id)
             .limit(limit)
@@ -678,6 +703,7 @@ class PostgresExecutionBackend(ExecutionBackend):
                     )),
                     executions.c.expires_at.is_not(None),
                     executions.c.expires_at <= now,
+                    sa.not_(lease_lost_retry),
                 )
                 .values(
                     status=ExecutionStatus.EXPIRED.value,
@@ -757,7 +783,6 @@ class PostgresExecutionBackend(ExecutionBackend):
             sa.select(
                 executions.c.id,
                 executions.c.lease_token,
-                executions.c.expires_at,
                 executions.c.version,
             )
             .where(
@@ -770,16 +795,10 @@ class PostgresExecutionBackend(ExecutionBackend):
         )
         rows = conn.execute(stmt).all()
         for row in rows:
-            if row.expires_at is not None and _aware_utc(row.expires_at) <= now:
-                values = {
-                    "status": ExecutionStatus.EXPIRED.value,
-                    "finished_at": now,
-                }
-            else:
-                values = {
-                    "status": ExecutionStatus.RETRYING.value,
-                    "available_at": now,
-                }
+            values = {
+                "status": ExecutionStatus.RETRYING.value,
+                "available_at": now,
+            }
             values.update(
                 {
                     "lease_token": None,
@@ -813,6 +832,20 @@ class PostgresExecutionBackend(ExecutionBackend):
                 .values(status="lease_lost", finished_at=now)
             )
 
+    def _lease_lost_retry_predicate(
+        self,
+        executions: sa.Table,
+        attempts: sa.Table,
+    ) -> Any:
+        return sa.and_(
+            executions.c.status == ExecutionStatus.RETRYING.value,
+            sa.exists().where(
+                attempts.c.execution_id == executions.c.id,
+                attempts.c.attempt_no == executions.c.attempts,
+                attempts.c.status == "lease_lost",
+            ),
+        )
+
     def _heartbeat_sync(
         self,
         execution_id: UUID,
@@ -823,11 +856,11 @@ class PostgresExecutionBackend(ExecutionBackend):
         if lease_duration_s <= 0:
             raise ValueError("lease_duration_s must be > 0")
         self._ensure_ready_sync()
-        now = self._now()
-        expires = now + timedelta(seconds=lease_duration_s)
         executions = self.tables.executions
         attempts = self.tables.attempts
         with self.engine.begin() as conn:
+            now = self._transaction_now(conn)
+            expires = now + timedelta(seconds=lease_duration_s)
             updated = conn.execute(
                 sa.update(executions)
                 .where(
@@ -872,7 +905,6 @@ class PostgresExecutionBackend(ExecutionBackend):
         self._ensure_ready_sync()
         encoded_result = None
         error = None if completion.error is None else asdict(completion.error)
-        now = self._now()
         executions = self.tables.executions
         attempts = self.tables.attempts
         expected_statuses = {
@@ -888,6 +920,7 @@ class PostgresExecutionBackend(ExecutionBackend):
             ),
         }[completion.status]
         with self.engine.begin() as conn:
+            now = self._transaction_now(conn)
             current = conn.execute(
                 sa.select(executions).where(executions.c.id == execution_id).with_for_update()
             ).mappings().one_or_none()
@@ -999,10 +1032,10 @@ class PostgresExecutionBackend(ExecutionBackend):
         lease_token: UUID,
     ) -> Execution:
         self._ensure_ready_sync()
-        now = self._now()
         executions = self.tables.executions
         attempts = self.tables.attempts
         with self.engine.begin() as conn:
+            now = self._transaction_now(conn)
             current = conn.execute(
                 sa.select(executions).where(executions.c.id == execution_id)
             ).mappings().one_or_none()

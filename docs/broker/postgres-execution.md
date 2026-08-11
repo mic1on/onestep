@@ -632,7 +632,7 @@ lease 相关参数建议：
 
 过期 execution 和停滞 lease 由下一次 `claim()` 驱动恢复，没有独立 reaper。所有 worker 都停止时，不会有新的 reclaim；恢复 worker 后会按 `reclaim_batch_size` 分批处理积压。
 
-lease deadline 由 worker 进程的系统时间计算。所有 API/worker 主机应启用 NTP 或等价的时间同步，并监控时钟偏差；明显偏差可能导致 lease 提前回收和重复执行。
+lease deadline 和过期判断由 PostgreSQL 当前事务时间计算，不依赖 worker 进程时钟；source 的 heartbeat 重试也通过数据库时间计算剩余 lease。SQLite 测试和兼容路径使用注入的 `clock`。
 
 ## 10. 观测和排查
 
