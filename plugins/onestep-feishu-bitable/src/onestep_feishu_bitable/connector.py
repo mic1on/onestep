@@ -809,6 +809,7 @@ class FeishuBitableTableSink(Sink):
         self._buffer: list[dict[str, Any]] = []
         self._buffer_lock: asyncio.Lock | None = None
         self._flush_task: asyncio.Task[None] | None = None
+        self._flush_error: Exception | None = None
         self._closed = False
 
     def _ensure_buffer_lock(self) -> asyncio.Lock:
@@ -842,6 +843,12 @@ class FeishuBitableTableSink(Sink):
 
         lock = self._ensure_buffer_lock()
         async with lock:
+            # Surface any pending flush error from a background timer flush
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
+
             self._buffer.append(raw_fields)
             if len(self._buffer) >= self._batch_size:
                 await self._flush_buffer()
@@ -902,19 +909,25 @@ class FeishuBitableTableSink(Sink):
             await asyncio.sleep(self._flush_interval_s)
             lock = self._ensure_buffer_lock()
             async with lock:
-                if self._buffer:
+                if self._buffer and self._flush_error is None:
                     await self._flush_buffer()
                 self._flush_task = None
         except asyncio.CancelledError:
             self._flush_task = None
             raise
+        except BaseException as exc:
+            self._flush_task = None
+            self._flush_error = exc
 
     async def _flush_buffer(self) -> None:
-        """Flush buffered records with batched relation resolution and write."""
+        """Flush buffered records with batched relation resolution and write.
+
+        The buffer is only cleared after a successful API write.  On failure
+        records remain in the buffer so they can be retried on the next flush.
+        """
         if not self._buffer:
             return
         items = self._buffer[:]
-        self._buffer.clear()
         if self._flush_task is not None:
             self._flush_task.cancel()
             self._flush_task = None
@@ -925,34 +938,41 @@ class FeishuBitableTableSink(Sink):
         else:
             resolved = [dict(r) for r in items]
 
-        # Step 2: For upsert/update, batch find matches
+        # Step 2: For upsert/update/insert, batch find matches
         if self.mode == "create":
             creates = resolved
             updates: list[dict[str, Any]] = []
         else:
             creates, updates = await self._batch_match_and_split(resolved)
 
-        # Step 3: Batch write
-        if creates:
-            await self.connector.batch_create_records(
-                app_token=self.app_token,
-                table_id=self.table_id,
-                records=creates,
-                user_id_type=self.user_id_type,
-                operation=ConnectorOperation.SEND,
-                source_name=self.name,
-                retry_delay_s=1.0,
-            )
-        if updates:
-            await self.connector.batch_update_records(
-                app_token=self.app_token,
-                table_id=self.table_id,
-                records=updates,
-                user_id_type=self.user_id_type,
-                operation=ConnectorOperation.SEND,
-                source_name=self.name,
-                retry_delay_s=1.0,
-            )
+        # Step 3: Batch write (on failure, buffer is preserved)
+        try:
+            if creates:
+                await self.connector.batch_create_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    records=creates,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            if updates:
+                await self.connector.batch_update_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    records=updates,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+        except Exception:
+            # Buffer is still intact (items was a copy), nothing to restore
+            raise
+
+        # Only clear after successful API write
+        self._buffer.clear()
 
     async def _batch_resolve_relations(
         self, items: list[dict[str, Any]]
@@ -1130,6 +1150,10 @@ class FeishuBitableTableSink(Sink):
                 self._flush_task = None
             if self._buffer:
                 await self._flush_buffer()
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
 
     async def _resolve_relation_fields(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         if not self.relations:

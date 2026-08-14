@@ -15,6 +15,13 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.3.4
+
+- Fixes silent data loss in batch mode: background timer flush exceptions
+  are now stored and re-raised on the next `send()` or `close()` call.
+- `_flush_buffer` no longer clears the buffer until after a successful
+  API write, so records survive a flush failure and will be retried.
+
 ## onestep-feishu-bitable 0.3.3
 
 - Fixes `TypeError: unhashable type: 'mappingproxy'` in

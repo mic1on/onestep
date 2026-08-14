@@ -1582,7 +1582,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-feishu-bitable"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "plugins/onestep-feishu-bitable" }
 dependencies = [
     { name = "onestep" },
