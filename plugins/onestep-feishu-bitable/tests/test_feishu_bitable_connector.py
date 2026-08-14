@@ -1704,3 +1704,57 @@ def test_feishu_batch_create_batch_size_1_is_single_record() -> None:
         assert not any(r["target"].endswith("/batch_create") for r in requests)
 
     asyncio.run(scenario())
+
+
+def test_feishu_insert_mode_skips_existing_and_creates_new() -> None:
+    async def scenario() -> None:
+        create_batches: list[dict[str, Any]] = []
+        update_batches: list[dict[str, Any]] = []
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if "/batch_create" in request["target"]:
+                create_batches.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": f"rec{i}", "fields": {}} for i in range(len(request["body"]["records"]))]}}
+            if "/batch_update" in request["target"]:
+                update_batches.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": r["record_id"], "fields": {}} for r in request["body"]["records"]]}}
+            if "/search" in request["target"]:
+                body = request["body"]
+                order_no = body["filter"]["conditions"][0]["value"][0]
+                if order_no in ("A001", "A003"):
+                    return 200, {"code": 0, "data": {"items": [{"record_id": f"rec-{order_no}", "fields": {"order_no": order_no}}]}}
+                return 200, {"code": 0, "data": {"items": []}}
+            return 200, {"code": 0, "data": {}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="insert",
+                match_fields=["order_no"],
+                batch_size=500,
+            )
+            # A001 exists → skip
+            await sink.send(Envelope(body={"order_no": "A001", "status": "skipped"}))
+            # A002 is new → create
+            await sink.send(Envelope(body={"order_no": "A002", "status": "new"}))
+            # A003 exists → skip
+            await sink.send(Envelope(body={"order_no": "A003", "status": "skipped"}))
+            # A004 is new → create
+            await sink.send(Envelope(body={"order_no": "A004", "status": "new"}))
+            await sink.close()
+        finally:
+            await _close_server(server)
+
+        # Only A002 and A004 should be created (A001, A003 skipped)
+        assert len(create_batches) == 1
+        assert len(update_batches) == 0
+        assert len(create_batches[0]["records"]) == 2
+        create_order_nos = [r["fields"]["order_no"] for r in create_batches[0]["records"]]
+        assert create_order_nos == ["A002", "A004"]
+
+    asyncio.run(scenario())

@@ -75,7 +75,7 @@ _FEISHU_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("connector", "ref", required=True),
         ResourceCatalogField("app_token", "string", required=True, secret=True),
         ResourceCatalogField("table_id", "string", required=True),
-        ResourceCatalogField("mode", "string", default="upsert", options=("upsert", "create", "update")),
+        ResourceCatalogField("mode", "string", default="upsert", options=("upsert", "create", "update", "insert")),
         ResourceCatalogField("match_fields", "string_list", required=True),
         ResourceCatalogField("user_id_type", "string", options=tuple(sorted(_USER_ID_TYPES))),
         ResourceCatalogField("relations", "mapping"),
@@ -199,10 +199,10 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
     ctx.require_string(spec, "table_id")
     raw_mode = spec.get("mode", "upsert")
     mode = ctx.string_value(raw_mode, field=f"{ctx.field}.mode").strip().lower()
-    if mode not in {"upsert", "create", "update"}:
+    if mode not in {"upsert", "create", "update", "insert"}:
         raise ValueError(f"unsupported {ctx.field}.mode {raw_mode!r}")
     match_fields: list[str] = []
-    if mode in {"upsert", "update"} or "match_fields" in spec:
+    if mode in {"upsert", "update", "insert"} or "match_fields" in spec:
         match_fields = ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
     _validate_feishu_user_id_type(ctx, spec.get("user_id_type"), field=f"{ctx.field}.user_id_type")
     if "relations" in spec:

@@ -786,7 +786,7 @@ class FeishuBitableTableSink(Sink):
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
-        if normalized_mode in {"upsert", "update"}:
+        if normalized_mode in {"upsert", "update", "insert"}:
             normalized_match_fields = _normalize_match_fields(match_fields, required=True)
         else:
             normalized_match_fields = _normalize_match_fields(match_fields, required=False)
@@ -871,6 +871,8 @@ class FeishuBitableTableSink(Sink):
                 f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
             )
         if matches:
+            if self.mode == "insert":
+                return  # skip: record already exists
             await self.connector.update_record(
                 app_token=self.app_token,
                 table_id=self.table_id,
@@ -1109,6 +1111,8 @@ class FeishuBitableTableSink(Sink):
                         f"no record matched fields {self.match_fields!r}"
                     )
                 creates.append(resolved[i])
+            elif self.mode == "insert":
+                continue  # skip: record already exists
             else:
                 updates.append({"record_id": rid, "fields": resolved[i]})
 
@@ -1419,8 +1423,8 @@ def _normalize_fallback_scan_page_limit(value: int) -> int:
 
 def _normalize_mode(value: str) -> str:
     normalized = _require_non_empty_string(value, field="mode").strip().lower()
-    if normalized not in {"upsert", "create", "update"}:
-        raise ValueError("mode must be one of 'upsert', 'create', or 'update'")
+    if normalized not in {"upsert", "create", "update", "insert"}:
+        raise ValueError("mode must be one of 'upsert', 'create', 'update', or 'insert'")
     return normalized
 
 

@@ -15,6 +15,12 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.3.2
+
+- Adds `insert` mode: match by `match_fields` — if a record exists it is
+  skipped; if not, it is created.  Works with both single-record and batch
+  buffering paths.
+
 ## onestep-feishu-bitable 0.3.1
 
 - Optimizes relation resolution and match-finding during batch flush with
