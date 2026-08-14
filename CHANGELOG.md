@@ -15,6 +15,15 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.3.1
+
+- Optimizes relation resolution and match-finding during batch flush with
+  deduplication and concurrent search (semaphore-limited to 20).
+  Previously, each relation value triggered a serial API call.  Now all
+  unique values across the batch are searched concurrently, and missing
+  records are created via `batch_create_records`.
+- Upsert match-finding is also deduplicated and concurrent in batch mode.
+
 ## onestep-feishu-bitable 0.3.0
 
 - Adds `batch_create_records` and `batch_update_records` connector methods

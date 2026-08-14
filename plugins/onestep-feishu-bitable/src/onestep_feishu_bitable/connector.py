@@ -805,8 +805,8 @@ class FeishuBitableTableSink(Sink):
         self._relation_create_locks: dict[tuple[str, str, str, str], _FeishuRelationCreateLock] = {}
         self._batch_size = max(1, min(batch_size, _MAX_PAGE_SIZE))
         self._flush_interval_s = float(flush_interval_s)
-        # Buffer of (fields, record_id_or_None) pairs
-        self._buffer: list[tuple[dict[str, Any], str | None]] = []
+        # Buffer stores raw payload fields (before relation resolution & match-finding)
+        self._buffer: list[dict[str, Any]] = []
         self._buffer_lock: asyncio.Lock | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._closed = False
@@ -817,24 +817,10 @@ class FeishuBitableTableSink(Sink):
         return self._buffer_lock
 
     async def send(self, envelope: Envelope) -> None:
+        """Buffer raw fields for batch processing."""
         try:
-            fields = await self._resolve_relation_fields(_payload_fields(envelope.body))
-            if self.mode == "create":
-                await self._buffer_record(fields, None)
-                return
-
-            match_values = _match_values(fields, self.match_fields)
-            matches = await self._find_matches(match_values)
-            if len(matches) > 1:
-                raise FeishuBitablePayloadError(
-                    f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
-                )
-            if matches:
-                await self._buffer_record(fields, _record_id(matches[0]))
-                return
-            if self.mode == "update":
-                raise FeishuBitablePayloadError(f"no record matched fields {self.match_fields!r}")
-            await self._buffer_record(fields, None)
+            raw_fields = _payload_fields(envelope.body)
+            await self._buffer_record(raw_fields)
         except ConnectorOperationError:
             raise
         except FeishuBitablePayloadError as exc:
@@ -848,40 +834,65 @@ class FeishuBitableTableSink(Sink):
                 message=f"feishu_bitable send failed (permanent) for {self.name!r}: {exc}",
             ) from exc
 
-    async def _buffer_record(self, fields: dict[str, Any], record_id: str | None) -> None:
+    async def _buffer_record(self, raw_fields: dict[str, Any]) -> None:
         """Buffer a record for batch write, or send immediately if batch_size <= 1."""
         if self._batch_size <= 1:
-            if record_id is None:
-                await self.connector.create_record(
-                    app_token=self.app_token,
-                    table_id=self.table_id,
-                    fields=fields,
-                    user_id_type=self.user_id_type,
-                    operation=ConnectorOperation.SEND,
-                    source_name=self.name,
-                    retry_delay_s=1.0,
-                )
-            else:
-                await self.connector.update_record(
-                    app_token=self.app_token,
-                    table_id=self.table_id,
-                    record_id=record_id,
-                    fields=fields,
-                    user_id_type=self.user_id_type,
-                    operation=ConnectorOperation.SEND,
-                    source_name=self.name,
-                    retry_delay_s=1.0,
-                )
+            await self._send_single(raw_fields)
             return
 
         lock = self._ensure_buffer_lock()
         async with lock:
-            self._buffer.append((fields, record_id))
+            self._buffer.append(raw_fields)
             if len(self._buffer) >= self._batch_size:
                 await self._flush_buffer()
                 return
             if self._flush_task is None and not self._closed:
                 self._flush_task = asyncio.ensure_future(self._flush_after_interval())
+
+    async def _send_single(self, raw_fields: dict[str, Any]) -> None:
+        """Send a single record immediately (batch_size=1 path)."""
+        fields = await self._resolve_relation_fields(raw_fields)
+        if self.mode == "create":
+            await self.connector.create_record(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                fields=fields,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            return
+
+        match_values = _match_values(fields, self.match_fields)
+        matches = await self._find_matches(match_values)
+        if len(matches) > 1:
+            raise FeishuBitablePayloadError(
+                f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
+            )
+        if matches:
+            await self.connector.update_record(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                record_id=_record_id(matches[0]),
+                fields=fields,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            return
+        if self.mode == "update":
+            raise FeishuBitablePayloadError(f"no record matched fields {self.match_fields!r}")
+        await self.connector.create_record(
+            app_token=self.app_token,
+            table_id=self.table_id,
+            fields=fields,
+            user_id_type=self.user_id_type,
+            operation=ConnectorOperation.SEND,
+            source_name=self.name,
+            retry_delay_s=1.0,
+        )
 
     async def _flush_after_interval(self) -> None:
         """Flush the buffer after flush_interval_s of inactivity."""
@@ -897,7 +908,7 @@ class FeishuBitableTableSink(Sink):
             raise
 
     async def _flush_buffer(self) -> None:
-        """Flush buffered records, splitting into batch creates and batch updates."""
+        """Flush buffered records with batched relation resolution and write."""
         if not self._buffer:
             return
         items = self._buffer[:]
@@ -906,9 +917,20 @@ class FeishuBitableTableSink(Sink):
             self._flush_task.cancel()
             self._flush_task = None
 
-        creates = [fields for fields, rid in items if rid is None]
-        updates = [{"record_id": rid, "fields": fields} for fields, rid in items if rid is not None]
+        # Step 1: Batch resolve relations with dedup + concurrent search
+        if self.relations:
+            resolved = await self._batch_resolve_relations(items)
+        else:
+            resolved = [dict(r) for r in items]
 
+        # Step 2: For upsert/update, batch find matches
+        if self.mode == "create":
+            creates = resolved
+            updates: list[dict[str, Any]] = []
+        else:
+            creates, updates = await self._batch_match_and_split(resolved)
+
+        # Step 3: Batch write
         if creates:
             await self.connector.batch_create_records(
                 app_token=self.app_token,
@@ -929,6 +951,168 @@ class FeishuBitableTableSink(Sink):
                 source_name=self.name,
                 retry_delay_s=1.0,
             )
+
+    async def _batch_resolve_relations(
+        self, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Resolve relation fields for all records in batch.
+
+        Collects all unique (relation, value) pairs, searches concurrently
+        with a semaphore, and builds a cache to avoid repeated API calls.
+        """
+        _SEARCH_CONCURRENCY = 20
+        sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
+        # {(target_field, value): record_id | None}
+        cache: dict[tuple[str, str], str | None] = {}
+        # {(relation, value)} for create-on-missing values
+        to_create: dict[tuple[_FeishuRelationConfig, str], None] = {}
+
+        async def search_one(rel: _FeishuRelationConfig, value: str) -> None:
+            async with sem:
+                matches = await self._find_relation_matches(rel, value)
+                if len(matches) > 1:
+                    raise FeishuBitablePayloadError(
+                        f"relation field {rel.target_field!r} value {value!r} "
+                        f"matched {len(matches)} records in table {rel.table_id!r}"
+                    )
+                if matches:
+                    cache[(rel.target_field, value)] = _record_id(matches[0])
+                elif rel.on_missing == "create":
+                    to_create[(rel, value)] = None
+                elif rel.on_missing == "error":
+                    raise FeishuBitablePayloadError(
+                        f"relation field {rel.target_field!r} value {value!r} "
+                        f"did not match a record in table {rel.table_id!r}"
+                    )
+                # on_missing == "empty": just skip, cache stays empty
+
+        # Collect unique (relation, value) pairs
+        pending: set[tuple[_FeishuRelationConfig, str]] = set()
+        for item in items:
+            for relation in self.relations:
+                values = _normalize_relation_values(
+                    item.get(relation.source_field), field=relation.source_field
+                )
+                for value in values:
+                    pending.add((relation, value))
+
+        if pending:
+            tasks = [search_one(rel, val) for rel, val in pending]
+            await asyncio.gather(*tasks)
+
+        # Batch create missing records
+        if to_create:
+            await self._batch_create_relation_records(to_create, cache)
+
+        # Build resolved fields for each record
+        result: list[dict[str, Any]] = []
+        for item in items:
+            resolved: dict[str, list[str]] = {}
+            consumed: set[str] = set()
+            for relation in self.relations:
+                values = _normalize_relation_values(
+                    item.get(relation.source_field), field=relation.source_field
+                )
+                record_ids: list[str] = []
+                for value in values:
+                    rid = cache.get((relation.target_field, value))
+                    if rid:
+                        record_ids.append(rid)
+                resolved[relation.target_field] = record_ids
+                if relation.source_field != relation.target_field:
+                    consumed.add(relation.source_field)
+
+            out = dict(item)
+            for field_name in consumed:
+                out.pop(field_name, None)
+            out.update(resolved)
+            result.append(out)
+
+        return result
+
+    async def _batch_create_relation_records(
+        self,
+        to_create: dict[tuple[_FeishuRelationConfig, str], None],
+        cache: dict[tuple[str, str], str | None],
+    ) -> None:
+        """Batch create missing relation records and update the cache."""
+        # Group by (app_token, table_id, key)
+        groups: dict[tuple[str, str, str], list[tuple[_FeishuRelationConfig, str]]] = {}
+        for rel, value in to_create:
+            groups.setdefault((rel.app_token, rel.table_id, rel.key), []).append((rel, value))
+
+        for (app_token, table_id, key), entries in groups.items():
+            records = [
+                {key: value, **dict(rel.create_fields)}
+                for rel, value in entries
+            ]
+            result = await self.connector.batch_create_records(
+                app_token=app_token,
+                table_id=table_id,
+                records=records,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            raw_records = result.get("records", [])
+            if isinstance(raw_records, list):
+                for i, rec in enumerate(raw_records):
+                    if isinstance(rec, dict) and isinstance(rec.get("fields"), dict):
+                        rel, value = entries[i]
+                        cache[(rel.target_field, value)] = rec["record_id"]
+
+    async def _batch_match_and_split(
+        self, resolved: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Find matches for all records and split into creates and updates."""
+        _SEARCH_CONCURRENCY = 20
+        sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
+        # {(match_values_tuple): record_id|None}
+        cache: dict[tuple[tuple[str, Any], ...], str | None] = {}
+
+        async def match_one(match_values: dict[str, Any]) -> str | None:
+            async with sem:
+                matches = await self._find_matches(match_values)
+                if len(matches) > 1:
+                    raise FeishuBitablePayloadError(
+                        f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
+                    )
+                if matches:
+                    return _record_id(matches[0])
+                return None
+
+        # Deduplicate match values
+        index: list[tuple[int, tuple[tuple[str, Any], ...], dict[str, Any]]] = []
+        for i, fields in enumerate(resolved):
+            mv = _match_values(fields, self.match_fields)
+            key = tuple(sorted(mv.items()))
+            cache.setdefault(key, ...)
+            index.append((i, key, mv))
+
+        # Concurrent search for unique match values
+        pending = {k: v for k, v in cache.items() if v is ...}
+        if pending:
+            tasks = [match_one(dict(k)) for k in pending]
+            results = await asyncio.gather(*tasks)
+            for key, rid in zip(pending, results):
+                cache[key] = rid
+
+        # Split into creates and updates
+        creates: list[dict[str, Any]] = []
+        updates: list[dict[str, Any]] = []
+        for i, key, _ in index:
+            rid = cache[key]
+            if rid is None:
+                if self.mode == "update":
+                    raise FeishuBitablePayloadError(
+                        f"no record matched fields {self.match_fields!r}"
+                    )
+                creates.append(resolved[i])
+            else:
+                updates.append({"record_id": rid, "fields": resolved[i]})
+
+        return creates, updates
 
     async def close(self) -> None:
         """Flush remaining buffered records before closing."""
