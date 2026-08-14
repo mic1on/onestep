@@ -22,3 +22,4 @@ def test_feishu_bitable_plugin_registers_catalog_metadata() -> None:
     assert catalog["feishu_bitable_table_sink"].roles == ("sink",)
     assert catalog["feishu_bitable_table_sink"].connector_types == ("feishu_bitable",)
     assert sink_fields["app_token"].secret is True
+    assert sink_fields["relations"].type == "mapping"
