@@ -648,6 +648,22 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
                     "table_id": "dst",
                     "match_fields": ["shop_id", "order_no"],
                     "user_id_type": "user_id",
+                    "relations": {
+                        "companies": {
+                            "from": "company_names",
+                            "table_id": "companies",
+                            "key": "name",
+                            "on_missing": "empty",
+                        },
+                        "auditors": {
+                            "from": "auditor_names",
+                            "app_token": "auditor-app",
+                            "table_id": "auditors",
+                            "key": "name",
+                            "on_missing": "create",
+                            "create_fields": {"status": "pending"},
+                        },
+                    },
                 },
             },
             "tasks": [
@@ -668,6 +684,58 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
     assert app.resources["source"].fallback_scan_page_limit == 3
     assert app.resources["sink"].user_id_type == "user_id"
     assert app.resources["sink"].match_fields == ("shop_id", "order_no")
+    assert [relation.target_field for relation in app.resources["sink"].relations] == ["companies", "auditors"]
+    assert app.resources["sink"].relations[1].app_token == "auditor-app"
+
+
+@pytest.mark.parametrize(
+    ("relations", "message"),
+    [
+        ({}, "relations.*non-empty mapping"),
+        ({"companies": {"table_id": "companies"}}, "relations.companies.key"),
+        (
+            {"companies": {"table_id": "companies", "key": "name", "unknown": True}},
+            "unsupported fields.*unknown",
+        ),
+        (
+            {"companies": {"table_id": "companies", "key": "name", "on_missing": "skip"}},
+            "on_missing",
+        ),
+        (
+            {"companies": {"table_id": "companies", "key": "name", "create_fields": {"x": 1}}},
+            "create_fields.*on_missing.*create",
+        ),
+    ],
+)
+def test_yaml_rejects_invalid_feishu_relation_config_in_strict_mode(
+    relations: Any,
+    message: str,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "feishu-sync"},
+                "resources": {
+                    "feishu_bitable": {
+                        "type": "feishu_bitable",
+                        "app_id": "app-id",
+                        "app_secret": "secret",
+                    },
+                    "sink": {
+                        "type": "feishu_bitable_table_sink",
+                        "connector": "feishu_bitable",
+                        "app_token": "app-token",
+                        "table_id": "dst",
+                        "mode": "create",
+                        "relations": relations,
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
 
 
 def test_yaml_rejects_unknown_feishu_fields_in_strict_mode() -> None:
@@ -812,6 +880,16 @@ def test_feishu_descriptors_redact_app_token_and_omit_credentials() -> None:
         table_id="tbl",
         mode="upsert",
         match_fields=["order_no"],
+        relations={
+            "companies": {
+                "from": "company_names",
+                "app_token": "relation-token-secret",
+                "table_id": "companies",
+                "key": "name",
+                "on_missing": "create",
+                "create_fields": {"internal_note": "private-value"},
+            }
+        },
     )
 
     payload = json.dumps(
@@ -825,6 +903,11 @@ def test_feishu_descriptors_redact_app_token_and_omit_credentials() -> None:
     assert '"app_token": "<redacted>"' in payload
     assert "order_no" in payload
     assert "updated_at" in payload
+    assert "relation-token-secret" not in payload
+    assert "private-value" not in payload
+    assert '"target_field": "companies"' in payload
+    assert '"create_field_names": ["internal_note"]' in payload
+    assert '"uses_custom_app_token": true' in payload
 
 
 def test_feishu_relation_config_normalizes_python_api_mapping() -> None:

@@ -876,6 +876,18 @@ class FeishuBitableTableSink(Sink):
                 "mode": self.mode,
                 "match_fields": list(self.match_fields),
                 "user_id_type": self.user_id_type,
+                "relations": [
+                    {
+                        "target_field": relation.target_field,
+                        "from": relation.source_field,
+                        "table_id": relation.table_id,
+                        "key": relation.key,
+                        "on_missing": relation.on_missing,
+                        "create_field_names": sorted(relation.create_fields),
+                        "uses_custom_app_token": relation.app_token != self.app_token,
+                    }
+                    for relation in self.relations
+                ],
             },
         }
 

@@ -31,9 +31,11 @@ _FEISHU_INCREMENTAL_FIELDS = frozenset(
     }
 )
 _FEISHU_TABLE_SINK_FIELDS = frozenset(
-    {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type"}
+    {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type", "relations"}
 )
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
+_RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
+_RELATION_MISSING_POLICIES = frozenset({"error", "empty", "create"})
 _FEISHU_BITABLE_CATALOG = ResourceCatalogEntry(
     type="feishu_bitable",
     roles=("connector",),
@@ -76,6 +78,7 @@ _FEISHU_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("mode", "string", default="upsert", options=("upsert", "create", "update")),
         ResourceCatalogField("match_fields", "string_list", required=True),
         ResourceCatalogField("user_id_type", "string", options=tuple(sorted(_USER_ID_TYPES))),
+        ResourceCatalogField("relations", "mapping"),
     ),
     topology_fields=("app_token", "table_id", "mode", "match_fields"),
 )
@@ -154,6 +157,7 @@ def _build_feishu_bitable_table_sink(ctx: ResourceBuildContext, spec: Mapping[st
         mode=spec.get("mode", "upsert"),
         match_fields=spec.get("match_fields"),
         user_id_type=spec.get("user_id_type"),
+        relations=spec.get("relations"),
     )
 
 
@@ -193,11 +197,68 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
     mode = ctx.string_value(raw_mode, field=f"{ctx.field}.mode").strip().lower()
     if mode not in {"upsert", "create", "update"}:
         raise ValueError(f"unsupported {ctx.field}.mode {raw_mode!r}")
+    match_fields: list[str] = []
     if mode in {"upsert", "update"}:
-        ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
+        match_fields = ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
     elif "match_fields" in spec:
-        ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
+        match_fields = ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
     _validate_feishu_user_id_type(ctx, spec.get("user_id_type"), field=f"{ctx.field}.user_id_type")
+    if "relations" in spec:
+        _validate_feishu_relations(
+            ctx,
+            spec.get("relations"),
+            match_fields=match_fields,
+            field=f"{ctx.field}.relations",
+        )
+
+
+def _validate_feishu_relations(
+    ctx: ResourceValidationContext,
+    value: Any,
+    *,
+    match_fields: list[str],
+    field: str,
+) -> None:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"'{field}' must be a mapping")
+    if not value:
+        raise ValueError(f"'{field}' must be a non-empty mapping")
+    for raw_target_field, raw_config in value.items():
+        target_field = ctx.string_value(raw_target_field, field=f"{field} target field").strip()
+        relation_field = f"{field}.{target_field}"
+        if not isinstance(raw_config, Mapping):
+            raise TypeError(f"'{relation_field}' must be a mapping")
+        ctx.validate_unknown_fields(raw_config, _RELATION_FIELDS, field=relation_field)
+        source_field = ctx.string_value(
+            raw_config.get("from", target_field),
+            field=f"{relation_field}.from",
+        ).strip()
+        if "app_token" in raw_config:
+            ctx.string_value(raw_config.get("app_token"), field=f"{relation_field}.app_token")
+        ctx.string_value(raw_config.get("table_id"), field=f"{relation_field}.table_id")
+        key = ctx.string_value(raw_config.get("key"), field=f"{relation_field}.key").strip()
+        on_missing = ctx.string_value(
+            raw_config.get("on_missing", "error"),
+            field=f"{relation_field}.on_missing",
+        ).strip().lower()
+        if on_missing not in _RELATION_MISSING_POLICIES:
+            raise ValueError(
+                f"'{relation_field}.on_missing' must be one of 'error', 'empty', or 'create'"
+            )
+        if "create_fields" in raw_config:
+            create_fields = raw_config.get("create_fields")
+            if not isinstance(create_fields, Mapping):
+                raise TypeError(f"'{relation_field}.create_fields' must be a mapping")
+            if on_missing != "create":
+                raise ValueError(f"'{relation_field}.create_fields' requires on_missing 'create'")
+            if key in create_fields:
+                raise ValueError(
+                    f"'{relation_field}.create_fields' must not contain relation key {key!r}"
+                )
+        if target_field in match_fields:
+            raise ValueError(f"relation target field {target_field!r} must not appear in match_fields")
+        if source_field != target_field and source_field in match_fields:
+            raise ValueError(f"relation source field {source_field!r} must not appear in match_fields")
 
 
 def _validate_feishu_user_id_type(ctx: ResourceValidationContext, value: Any, *, field: str) -> None:
