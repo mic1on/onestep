@@ -9,7 +9,8 @@ import urllib.parse
 import urllib.request
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -773,6 +774,21 @@ class _FeishuRelationCreateLock:
     record_id: str | None = None
 
 
+class _InsertState(str, Enum):
+    BUFFERED = "buffered"
+    WRITING = "writing"
+    RECOVERING = "recovering"
+
+
+@dataclass
+class _PendingInsert:
+    key: str
+    fields: dict[str, Any]
+    waiters: list[asyncio.Future[None]] = field(default_factory=list)
+    buffered_at: float = 0.0
+    state: _InsertState = _InsertState.BUFFERED
+
+
 class FeishuBitableTableSink(Sink):
     """Feishu Bitable table sink with optional batch buffering for create mode.
 
@@ -847,6 +863,13 @@ class FeishuBitableTableSink(Sink):
         self._index_loaded = False
         self._scan_duplicate_keys = 0
         self._scan_missing_key_records = 0
+        # Indexed insert pending-key tracking
+        self._pending_by_key: dict[str, _PendingInsert] = {}
+        self._pending_order: deque[str] = deque()
+        self._flush_lock: asyncio.Lock | None = None
+        self._uncertain_keys: set[str] = set()
+        self._normal_lookup_avoided_count = 0
+        self._inflight_waiter_count = 0
 
     async def open(self) -> None:
         """Open the sink and, if insert_key_index is enabled, preload destination keys."""
@@ -978,7 +1001,11 @@ class FeishuBitableTableSink(Sink):
         """Buffer raw fields for batch processing."""
         try:
             raw_fields = _payload_fields(envelope.body)
-            await self._buffer_record(raw_fields)
+            # Indexed insert path
+            if self.insert_key_index and self._index_loaded:
+                await self._send_indexed_insert(raw_fields)
+            else:
+                await self._buffer_record(raw_fields)
         except ConnectorOperationError:
             raise
         except FeishuBitablePayloadError as exc:
@@ -993,25 +1020,432 @@ class FeishuBitableTableSink(Sink):
             ) from exc
 
     async def _buffer_record(self, raw_fields: dict[str, Any]) -> None:
-        """Buffer a record for batch write, or send immediately if batch_size <= 1."""
+        """Preserve the existing buffered behavior for non-indexed sinks."""
         if self._batch_size <= 1:
             await self._send_single(raw_fields)
             return
-
         lock = self._ensure_buffer_lock()
         async with lock:
-            # Surface any pending flush error from a background timer flush
             if self._flush_error is not None:
                 err = self._flush_error
                 self._flush_error = None
                 raise err
-
             self._buffer.append(raw_fields)
             if len(self._buffer) >= self._batch_size:
                 await self._flush_buffer()
                 return
             if self._flush_task is None and not self._closed:
-                self._flush_task = asyncio.ensure_future(self._flush_after_interval())
+                self._flush_task = asyncio.create_task(self._flush_after_interval())
+
+    async def _send_indexed_insert(self, raw_fields: dict[str, Any]) -> None:
+        """Send one record through the indexed insert path with per-key waiter.
+
+        If the key is already in the startup index, return immediately.
+        Otherwise buffer the record, join any existing waiter for the same key,
+        and await the batch outcome.
+        """
+        if self._closed:
+            raise ConnectorOperationError(
+                backend="feishu_bitable",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                retry_delay_s=1.0,
+                message="feishu_bitable sink is closed",
+            )
+
+        # Parse and canonicalize the match key
+        match_value = raw_fields.get(self.match_fields[0])
+        if _empty_match_value(match_value):
+            raise FeishuBitablePayloadError(
+                f"payload must include non-empty match_fields entry {self.match_fields[0]!r}"
+            )
+        key = _canonical_insert_key(match_value)
+
+        # Key is in the startup index: confirmed pre-existing
+        if self._insert_keys is not None and key in self._insert_keys:
+            self._normal_lookup_avoided_count += 1
+            return
+
+        # Key is uncertain from a previous ambiguous write: reconcile first
+        if key in self._uncertain_keys:
+            await self._reconcile_uncertain_key(key)
+            if self._insert_keys is not None and key in self._insert_keys:
+                self._normal_lookup_avoided_count += 1
+                return
+
+        # Buffer with a waiter.  The pending entry stays in the map while its
+        # batch is being written so a concurrent duplicate joins the same
+        # outcome instead of creating a second record.
+        lock = self._ensure_buffer_lock()
+        async with lock:
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
+
+            waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            existing = self._pending_by_key.get(key)
+            if existing is not None:
+                existing.waiters.append(waiter)
+            else:
+                pending = _PendingInsert(
+                    key=key,
+                    fields=raw_fields,
+                    waiters=[waiter],
+                    buffered_at=time.monotonic(),
+                )
+                self._pending_by_key[key] = pending
+                self._pending_order.append(key)
+            self._inflight_waiter_count += 1
+            should_flush = len(self._pending_order) >= self._batch_size
+            if not should_flush and self._flush_task is None and not self._closed:
+                self._flush_task = asyncio.create_task(self._flush_after_interval())
+
+        if should_flush:
+            await self._flush_indexed_insert(reason="threshold")
+
+        # Await the waiter (may be resolved during flush above, or by timer/close)
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            # Cancellation cancels this caller's Future, but the key group must
+            # remain until its batch is confirmed or failed.  Close and the
+            # elected flusher therefore still settle the group.
+            raise
+
+    def _seal_indexed_batch(self, batch_size: int) -> list[_PendingInsert]:
+        """Seal a batch from _pending_order at most batch_size unique keys."""
+        batch: list[_PendingInsert] = []
+        seen: int = 0
+        while self._pending_order and seen < batch_size:
+            key = self._pending_order[0]
+            pending = self._pending_by_key.get(key)
+            if pending is None:
+                self._pending_order.popleft()
+                continue
+            if pending.state != _InsertState.BUFFERED:
+                self._pending_order.popleft()
+                continue
+            pending.state = _InsertState.WRITING
+            batch.append(pending)
+            self._pending_order.popleft()
+            seen += 1
+        return batch
+
+    def _ensure_flush_lock(self) -> asyncio.Lock:
+        if self._flush_lock is None:
+            self._flush_lock = asyncio.Lock()
+        return self._flush_lock
+
+    async def _write_indexed_batch(
+        self,
+        batch: list[_PendingInsert],
+        *,
+        reason: str,
+        recovery_round: int = 0,
+    ) -> None:
+        """Write one indexed insert batch and settle every member."""
+        if not batch:
+            return
+
+        batch_size = len(batch)
+        start_time = time.monotonic()
+        batch_records = [dict(pending.fields) for pending in batch]
+
+        try:
+            result = await self.connector.batch_create_records(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                records=batch_records,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+        except ConnectorOperationError as exc:
+            duration = time.monotonic() - start_time
+            if _is_definite_write_error(exc):
+                self._fail_pending(batch, exc)
+                logger.info(
+                    "feishu insert batch write",
+                    extra={
+                        "event": "feishu_insert_batch_write",
+                        "batch_size": batch_size,
+                        "duration_s": round(duration, 3),
+                        "outcome": "permanent_error",
+                        "flush_reason": reason,
+                        "recovery_round": recovery_round,
+                        "inflight_waiter_count": self._inflight_waiter_count,
+                    },
+                )
+                return
+            await self._recover_ambiguous_batch(
+                batch, reason=reason, recovery_round=recovery_round + 1, cause=exc
+            )
+            return
+        except Exception as exc:
+            # An unexpected exception after request dispatch has an unknown
+            # commit outcome.  Treat it conservatively and reconcile first.
+            await self._recover_ambiguous_batch(
+                batch,
+                reason=reason,
+                recovery_round=recovery_round + 1,
+                cause=ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.SEND,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message="feishu_bitable batch create outcome is uncertain",
+                ),
+            )
+            return
+
+        if not _batch_create_response_is_complete(result, expected=batch_size):
+            await self._recover_ambiguous_batch(
+                batch,
+                reason=reason,
+                recovery_round=recovery_round + 1,
+                cause=ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.SEND,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable batch create response was incomplete",
+                ),
+            )
+            return
+
+        duration = time.monotonic() - start_time
+        self._confirm_created(batch)
+        logger.info(
+            "feishu insert batch write",
+            extra={
+                "event": "feishu_insert_batch_write",
+                "batch_size": batch_size,
+                "duration_s": round(duration, 3),
+                "outcome": "success",
+                "flush_reason": reason,
+                "recovery_round": recovery_round,
+                "inflight_waiter_count": self._inflight_waiter_count,
+            },
+        )
+
+    async def _recover_ambiguous_batch(
+        self,
+        batch: list[_PendingInsert],
+        *,
+        reason: str,
+        recovery_round: int,
+        cause: ConnectorOperationError,
+    ) -> None:
+        """Reconcile only the keys whose create outcome is uncertain."""
+        unresolved = list(batch)
+        for pending in unresolved:
+            pending.state = _InsertState.RECOVERING
+            self._uncertain_keys.add(pending.key)
+
+        logger.info(
+            "feishu insert batch write",
+            extra={
+                "event": "feishu_insert_batch_write",
+                "batch_size": len(batch),
+                "duration_s": 0.0,
+                "outcome": "ambiguous",
+                "flush_reason": reason,
+                "recovery_round": recovery_round,
+                "inflight_waiter_count": self._inflight_waiter_count,
+            },
+        )
+
+        round_number = recovery_round
+        while unresolved and round_number <= self.ambiguous_write_max_rounds:
+            found, missing, lookup_failed = await self._lookup_pending_keys(unresolved)
+            if found:
+                self._confirm_found(found)
+            if not missing:
+                unresolved = lookup_failed
+                round_number += 1
+                continue
+
+            for pending in missing:
+                pending.state = _InsertState.WRITING
+            try:
+                result = await self.connector.batch_create_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    records=[dict(pending.fields) for pending in missing],
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            except ConnectorOperationError as exc:
+                if _is_definite_write_error(exc):
+                    self._fail_pending(missing, exc)
+                    unresolved = lookup_failed
+                else:
+                    unresolved = lookup_failed + missing
+            except Exception as exc:
+                cause = ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.SEND,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message="feishu_bitable recovery create outcome is uncertain",
+                )
+                unresolved = lookup_failed + missing
+            else:
+                if _batch_create_response_is_complete(result, expected=len(missing)):
+                    self._confirm_created(missing)
+                    unresolved = lookup_failed
+                else:
+                    unresolved = lookup_failed + missing
+            round_number += 1
+
+        if unresolved:
+            exhausted = ConnectorOperationError(
+                backend="feishu_bitable",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.UNCERTAIN,
+                source_name=self.name,
+                retry_delay_s=1.0,
+                cause=cause,
+                message=(
+                    "feishu_bitable ambiguous batch remained unresolved after "
+                    f"{self.ambiguous_write_max_rounds} recovery rounds"
+                ),
+            )
+            self._fail_pending(unresolved, exhausted)
+
+    async def _lookup_pending_keys(
+        self, pending_list: list[_PendingInsert]
+    ) -> tuple[list[_PendingInsert], list[_PendingInsert], list[_PendingInsert]]:
+        """Return found, confirmed-missing, and lookup-failed members."""
+        semaphore = asyncio.Semaphore(20)
+
+        async def lookup(
+            pending: _PendingInsert,
+        ) -> tuple[str, _PendingInsert, BaseException | None]:
+            try:
+                async with semaphore:
+                    matches = await self._find_matches(
+                        {self.match_fields[0]: pending.key}
+                    )
+            except BaseException as exc:
+                return "failed", pending, exc
+            if len(matches) > 1:
+                return (
+                    "failed",
+                    pending,
+                    FeishuBitablePayloadError(
+                        "insert match field resolved to multiple destination records"
+                    ),
+                )
+            return ("found" if matches else "missing"), pending, None
+
+        found: list[_PendingInsert] = []
+        missing: list[_PendingInsert] = []
+        failed: list[_PendingInsert] = []
+        results = await asyncio.gather(*(lookup(item) for item in pending_list))
+        for outcome, pending, exc in results:
+            if outcome == "found":
+                found.append(pending)
+            elif outcome == "missing":
+                missing.append(pending)
+            else:
+                if isinstance(exc, FeishuBitablePayloadError):
+                    self._fail_pending(
+                        [pending],
+                        ConnectorOperationError(
+                            backend="feishu_bitable",
+                            operation=ConnectorOperation.SEND,
+                            kind=ConnectorErrorKind.PERMANENT,
+                            source_name=self.name,
+                            retry_delay_s=1.0,
+                            cause=exc,
+                            message="feishu_bitable destination match is not unique",
+                        ),
+                    )
+                else:
+                    failed.append(pending)
+        return found, missing, failed
+
+    def _confirm_created(self, batch: list[_PendingInsert]) -> None:
+        """Mark batch keys as created and complete all waiters successfully."""
+        for pending in batch:
+            if self._insert_keys is not None:
+                self._insert_keys.add(pending.key)
+            self._uncertain_keys.discard(pending.key)
+        self._complete_pending(batch)
+
+    def _confirm_found(self, batch: list[_PendingInsert]) -> None:
+        """Mark batch keys as found in the destination and complete waiters."""
+        for pending in batch:
+            if self._insert_keys is not None:
+                self._insert_keys.add(pending.key)
+            self._uncertain_keys.discard(pending.key)
+        self._complete_pending(batch)
+
+    def _fail_pending(
+        self,
+        pending_list: list[_PendingInsert],
+        exc: BaseException,
+    ) -> None:
+        """Complete all waiters for the given pending items with an exception."""
+        for pending in pending_list:
+            self._pending_by_key.pop(pending.key, None)
+            self._inflight_waiter_count -= len(pending.waiters)
+            for waiter in pending.waiters:
+                if not waiter.done():
+                    waiter.set_exception(exc)
+
+    def _complete_pending(self, pending_list: list[_PendingInsert]) -> None:
+        """Complete all waiters for the given pending items successfully."""
+        for pending in pending_list:
+            self._pending_by_key.pop(pending.key, None)
+            self._inflight_waiter_count -= len(pending.waiters)
+            for waiter in pending.waiters:
+                if not waiter.done():
+                    waiter.set_result(None)
+
+    @property
+    def inflight_waiter_count(self) -> int:
+        return self._inflight_waiter_count
+
+    async def _reconcile_uncertain_key(self, key: str) -> None:
+        """Exact-search one uncertain key before a new send can proceed."""
+        try:
+            matches = await self._find_matches({self.match_fields[0]: key})
+        except ConnectorOperationError:
+            raise
+        if len(matches) > 1:
+            raise FeishuBitablePayloadError(
+                "insert match field resolved to multiple destination records"
+            )
+        if matches:
+            if self._insert_keys is not None:
+                self._insert_keys.add(key)
+        # A successful exact search establishes either found or missing.
+        self._uncertain_keys.discard(key)
+
+    async def _flush_indexed_insert(self, *, reason: str) -> None:
+        """Seal and write an indexed insert batch under the flush lock.
+
+        Timer, threshold, and close flushes share one network-write lane.
+        """
+        async with self._ensure_flush_lock():
+            lock = self._ensure_buffer_lock()
+            async with lock:
+                batch = self._seal_indexed_batch(self._batch_size)
+            if not batch:
+                return
+            await self._write_indexed_batch(batch, reason=reason)
 
     async def _send_single(self, raw_fields: dict[str, Any]) -> None:
         """Send a single record immediately (batch_size=1 path)."""
@@ -1065,10 +1499,14 @@ class FeishuBitableTableSink(Sink):
         timer_task = asyncio.current_task()
         try:
             await asyncio.sleep(self._flush_interval_s)
-            lock = self._ensure_buffer_lock()
-            async with lock:
-                if self._buffer and self._flush_error is None:
-                    await self._flush_buffer()
+            if self.insert_key_index and self._index_loaded:
+                if self._flush_error is None:
+                    await self._flush_indexed_insert(reason="timer")
+            else:
+                lock = self._ensure_buffer_lock()
+                async with lock:
+                    if self._buffer and self._flush_error is None:
+                        await self._flush_buffer()
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
@@ -1303,10 +1741,34 @@ class FeishuBitableTableSink(Sink):
         """Flush remaining buffered records before closing."""
         self._closed = True
         lock = self._ensure_buffer_lock()
+        timer_task: asyncio.Task[None] | None = None
         async with lock:
             if self._flush_task is not None:
-                self._flush_task.cancel()
+                timer_task = self._flush_task
+                timer_task.cancel()
                 self._flush_task = None
+        if timer_task is not None:
+            await asyncio.gather(timer_task, return_exceptions=True)
+
+        # Indexed insert close: drain all pending keys
+        if self.insert_key_index and self._index_loaded:
+            while True:
+                await self._flush_indexed_insert(reason="close")
+                async with lock:
+                    has_buffered = bool(self._pending_order)
+                if not has_buffered:
+                    break
+            # Surface any error stored from timer flush
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
+            # No remaining pending keys should exist
+            assert not self._pending_by_key, "close left pending entries"
+            return
+
+        # Legacy close path
+        async with lock:
             if self._buffer:
                 await self._flush_buffer()
             if self._flush_error is not None:
@@ -1725,6 +2187,24 @@ def _empty_match_value(value: Any) -> bool:
     if isinstance(value, (list, tuple, set, dict)) and not value:
         return True
     return False
+
+
+def _is_definite_write_error(exc: ConnectorOperationError) -> bool:
+    """Check if a connector error is a definite (non-ambiguous) failure."""
+    return exc.kind in {
+        ConnectorErrorKind.PERMANENT,
+        ConnectorErrorKind.MISCONFIGURED,
+    }
+
+
+def _batch_create_response_is_complete(
+    result: Mapping[str, Any], *, expected: int
+) -> bool:
+    """Return whether Feishu assigned one response record per input."""
+    records = result.get("records")
+    if not isinstance(records, list) or len(records) != expected:
+        return False
+    return all(isinstance(record, Mapping) for record in records)
 
 
 def _normalize_match_fields(value: Sequence[str] | None, *, required: bool) -> tuple[str, ...]:
