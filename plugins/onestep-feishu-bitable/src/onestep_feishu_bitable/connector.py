@@ -704,7 +704,7 @@ class FeishuBitableTableSink(Sink):
 
     async def send(self, envelope: Envelope) -> None:
         try:
-            fields = _payload_fields(envelope.body)
+            fields = await self._resolve_relation_fields(_payload_fields(envelope.body))
             if self.mode == "create":
                 await self.connector.create_record(
                     app_token=self.app_token,
@@ -757,6 +757,64 @@ class FeishuBitableTableSink(Sink):
                 retry_delay_s=1.0,
                 cause=exc,
             ) from exc
+
+    async def _resolve_relation_fields(self, fields: Mapping[str, Any]) -> dict[str, Any]:
+        if not self.relations:
+            return dict(fields)
+        original = dict(fields)
+        resolved: dict[str, list[str]] = {}
+        consumed_fields: set[str] = set()
+        for relation in self.relations:
+            values = _normalize_relation_values(original.get(relation.source_field), field=relation.source_field)
+            record_ids: list[str] = []
+            for value in values:
+                matches = await self._find_relation_matches(relation, value)
+                if len(matches) > 1:
+                    raise FeishuBitablePayloadError(
+                        f"relation field {relation.target_field!r} value {value!r} "
+                        f"matched {len(matches)} records in table {relation.table_id!r}"
+                    )
+                if matches:
+                    record_ids.append(_record_id(matches[0]))
+                    continue
+                if relation.on_missing == "error":
+                    raise FeishuBitablePayloadError(
+                        f"relation field {relation.target_field!r} value {value!r} "
+                        f"did not match a record in table {relation.table_id!r}"
+                    )
+                if relation.on_missing == "create":
+                    raise FeishuBitablePayloadError(
+                        f"relation field {relation.target_field!r} cannot create missing value {value!r}"
+                    )
+            resolved[relation.target_field] = record_ids
+            if relation.source_field != relation.target_field:
+                consumed_fields.add(relation.source_field)
+
+        result = dict(original)
+        for field_name in consumed_fields:
+            result.pop(field_name, None)
+        result.update(resolved)
+        return result
+
+    async def _find_relation_matches(
+        self,
+        relation: _FeishuRelationConfig,
+        value: str,
+    ) -> list[dict[str, Any]]:
+        data = await self.connector.search_records(
+            app_token=relation.app_token,
+            table_id=relation.table_id,
+            body=_match_search_body({relation.key: value}),
+            page_size=2,
+            user_id_type=self.user_id_type,
+            operation=ConnectorOperation.SEND,
+            source_name=self.name,
+            retry_delay_s=1.0,
+        )
+        raw_items = data.get("items", [])
+        if not isinstance(raw_items, list):
+            raise FeishuBitablePayloadError("feishu_bitable search response data.items must be a list")
+        return [dict(item) for item in raw_items if isinstance(item, Mapping)]
 
     def control_plane_descriptor(self) -> dict[str, Any]:
         return {
@@ -1045,6 +1103,34 @@ def _normalize_relations(
                 create_fields=create_fields,
             )
         )
+    return tuple(normalized)
+
+
+def _normalize_relation_values(value: Any, *, field: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw_values = (value,)
+    elif isinstance(value, (list, tuple)):
+        raw_values = tuple(value)
+    else:
+        raise FeishuBitablePayloadError(
+            f"relation source field {field!r} must be a string, list, tuple, or None"
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_values:
+        if item is None:
+            continue
+        if not isinstance(item, str):
+            raise FeishuBitablePayloadError(
+                f"relation source field {field!r} values must be strings or None"
+            )
+        item = item.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
     return tuple(normalized)
 
 
