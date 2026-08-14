@@ -1621,6 +1621,41 @@ def test_feishu_batch_create_flushes_on_threshold() -> None:
     asyncio.run(scenario())
 
 
+def test_feishu_batch_create_automatically_flushes_partial_batch() -> None:
+    async def scenario() -> None:
+        batch_requests: list[dict[str, Any]] = []
+        flushed = asyncio.Event()
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if request["target"].endswith("/batch_create"):
+                batch_requests.append(request["body"])
+                flushed.set()
+                return 200, {"code": 0, "data": {"records": [{"record_id": "rec0", "fields": {}}]}}
+            return 200, {"code": 0, "data": {}}
+
+        server, _, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+                batch_size=2,
+                flush_interval_s=0.01,
+            )
+            await sink.send(Envelope(body={"order_no": "A001"}))
+            await asyncio.wait_for(flushed.wait(), timeout=1.0)
+
+            assert batch_requests == [{"records": [{"fields": {"order_no": "A001"}}]}]
+        finally:
+            await sink.close()
+            await _close_server(server)
+
+    asyncio.run(scenario())
+
+
 def test_feishu_batch_upsert_splits_creates_and_updates() -> None:
     async def scenario() -> None:
         create_batches: list[dict[str, Any]] = []

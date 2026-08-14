@@ -905,19 +905,20 @@ class FeishuBitableTableSink(Sink):
 
     async def _flush_after_interval(self) -> None:
         """Flush the buffer after flush_interval_s of inactivity."""
+        timer_task = asyncio.current_task()
         try:
             await asyncio.sleep(self._flush_interval_s)
             lock = self._ensure_buffer_lock()
             async with lock:
                 if self._buffer and self._flush_error is None:
                     await self._flush_buffer()
-                self._flush_task = None
         except asyncio.CancelledError:
-            self._flush_task = None
             raise
         except BaseException as exc:
-            self._flush_task = None
             self._flush_error = exc
+        finally:
+            if self._flush_task is timer_task:
+                self._flush_task = None
 
     async def _flush_buffer(self) -> None:
         """Flush buffered records with batched relation resolution and write.
@@ -928,7 +929,8 @@ class FeishuBitableTableSink(Sink):
         if not self._buffer:
             return
         items = self._buffer[:]
-        if self._flush_task is not None:
+        current_task = asyncio.current_task()
+        if self._flush_task is not None and self._flush_task is not current_task:
             self._flush_task.cancel()
             self._flush_task = None
 

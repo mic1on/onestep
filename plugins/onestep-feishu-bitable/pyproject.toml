@@ -1,6 +1,6 @@
 [project]
 name = "onestep-feishu-bitable"
-version = "0.3.4"
+version = "0.3.5"
 description = "Feishu Bitable connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"

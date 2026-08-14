@@ -15,6 +15,11 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.3.5
+- Fixes partial batches never reaching Feishu when `flush_interval_s` expires:
+  the scheduled flush task no longer cancels itself before the batch API call.
+- Makes flush-timer cleanup task-identity-safe so an older cancelled timer cannot
+  clear a newer scheduled flush.
 ## onestep-feishu-bitable 0.3.4
 
 - Fixes silent data loss in batch mode: background timer flush exceptions
