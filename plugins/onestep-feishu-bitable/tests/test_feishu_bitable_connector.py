@@ -827,6 +827,109 @@ def test_feishu_descriptors_redact_app_token_and_omit_credentials() -> None:
     assert "updated_at" in payload
 
 
+def test_feishu_relation_config_normalizes_python_api_mapping() -> None:
+    connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+    create_fields = {"status": "pending"}
+
+    sink = connector.table_sink(
+        app_token="project-app",
+        table_id="projects",
+        mode="upsert",
+        match_fields=["project_id"],
+        relations={
+            "companies": {
+                "from": "company_names",
+                "table_id": "companies",
+                "key": "name",
+                "on_missing": "CREATE",
+                "create_fields": create_fields,
+            }
+        },
+    )
+    create_fields["status"] = "changed"
+
+    assert len(sink.relations) == 1
+    relation = sink.relations[0]
+    assert relation.target_field == "companies"
+    assert relation.source_field == "company_names"
+    assert relation.app_token == "project-app"
+    assert relation.table_id == "companies"
+    assert relation.key == "name"
+    assert relation.on_missing == "create"
+    assert relation.create_fields == {"status": "pending"}
+
+
+@pytest.mark.parametrize(
+    ("relations", "match_fields", "error", "message"),
+    [
+        ({}, [], ValueError, "relations.*non-empty mapping"),
+        ([], [], TypeError, "relations.*mapping"),
+        ({"companies": []}, [], TypeError, "relations.companies.*mapping"),
+        ({"companies": {"table_id": "companies"}}, [], ValueError, "relations.companies.key"),
+        ({"companies": {"key": "name"}}, [], ValueError, "relations.companies.table_id"),
+        (
+            {"companies": {"table_id": "companies", "key": "name", "unknown": True}},
+            [],
+            ValueError,
+            "unsupported fields.*unknown",
+        ),
+        (
+            {"companies": {"table_id": "companies", "key": "name", "on_missing": "skip"}},
+            [],
+            ValueError,
+            "on_missing",
+        ),
+        (
+            {"companies": {"table_id": "companies", "key": "name", "create_fields": {"x": 1}}},
+            [],
+            ValueError,
+            "create_fields.*on_missing.*create",
+        ),
+        (
+            {
+                "companies": {
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                    "create_fields": {"name": "override"},
+                }
+            },
+            [],
+            ValueError,
+            "create_fields.*key",
+        ),
+        (
+            {"companies": {"table_id": "companies", "key": "name"}},
+            ["companies"],
+            ValueError,
+            "target field.*match_fields",
+        ),
+        (
+            {"companies": {"from": "company_names", "table_id": "companies", "key": "name"}},
+            ["company_names"],
+            ValueError,
+            "source field.*match_fields",
+        ),
+    ],
+)
+def test_feishu_relation_config_rejects_invalid_python_api_mapping(
+    relations: Any,
+    match_fields: list[str],
+    error: type[Exception],
+    message: str,
+) -> None:
+    connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+
+    with pytest.raises(error, match=message):
+        connector.table_sink(
+            app_token="project-app",
+            table_id="projects",
+            mode="create" if not match_fields else "upsert",
+            match_fields=match_fields,
+            relations=relations,
+        )
+
+
 def test_feishu_http_error_classifies_rate_limit_as_throttled() -> None:
     async def scenario() -> None:
         def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:

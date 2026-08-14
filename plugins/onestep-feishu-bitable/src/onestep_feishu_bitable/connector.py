@@ -30,6 +30,8 @@ _AUTOMATIC_CURSOR_FIELD_ALIASES = {
     "最后更新时间": "last_modified_time",
 }
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
+_RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
+_RELATION_MISSING_POLICIES = frozenset({"error", "empty", "create"})
 
 
 def feishu_bitable_text(value: Any) -> str | None:
@@ -150,6 +152,7 @@ class FeishuBitableConnector:
         mode: str = "upsert",
         match_fields: Sequence[str] | None = None,
         user_id_type: str | None = None,
+        relations: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
             connector=self,
@@ -158,6 +161,7 @@ class FeishuBitableConnector:
             mode=mode,
             match_fields=match_fields,
             user_id_type=user_id_type,
+            relations=relations,
         )
 
     async def search_records(
@@ -656,6 +660,17 @@ class FeishuBitableIncrementalSource(Source):
         return records[:limit]
 
 
+@dataclass(frozen=True)
+class _FeishuRelationConfig:
+    target_field: str
+    source_field: str
+    app_token: str
+    table_id: str
+    key: str
+    on_missing: str
+    create_fields: Mapping[str, Any]
+
+
 class FeishuBitableTableSink(Sink):
     def __init__(
         self,
@@ -666,6 +681,7 @@ class FeishuBitableTableSink(Sink):
         mode: str,
         match_fields: Sequence[str] | None,
         user_id_type: str | None,
+        relations: Mapping[str, Mapping[str, Any]] | None,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
@@ -674,11 +690,17 @@ class FeishuBitableTableSink(Sink):
         else:
             normalized_match_fields = _normalize_match_fields(match_fields, required=False)
         self.connector = connector
-        self.app_token = _require_non_empty_string(app_token, field="app_token")
+        normalized_app_token = _require_non_empty_string(app_token, field="app_token")
+        self.app_token = normalized_app_token
         self.table_id = _require_non_empty_string(table_id, field="table_id")
         self.mode = normalized_mode
         self.match_fields = normalized_match_fields
         self.user_id_type = _normalize_user_id_type(user_id_type)
+        self.relations = _normalize_relations(
+            relations,
+            default_app_token=normalized_app_token,
+            match_fields=normalized_match_fields,
+        )
 
     async def send(self, envelope: Envelope) -> None:
         try:
@@ -959,6 +981,71 @@ def _normalize_match_fields(value: Sequence[str] | None, *, required: bool) -> t
     if len(set(fields)) != len(fields):
         raise ValueError("'match_fields' must not contain duplicate field names")
     return fields
+
+
+def _normalize_relations(
+    value: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    default_app_token: str,
+    match_fields: Sequence[str],
+) -> tuple[_FeishuRelationConfig, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise TypeError("'relations' must be a mapping")
+    if not value:
+        raise ValueError("'relations' must be a non-empty mapping")
+
+    normalized: list[_FeishuRelationConfig] = []
+    for raw_target_field, raw_config in value.items():
+        target_field = _require_non_empty_string(raw_target_field, field="relations target field")
+        field = f"relations.{target_field}"
+        if not isinstance(raw_config, Mapping):
+            raise TypeError(f"'{field}' must be a mapping")
+        unknown_fields = sorted(set(raw_config) - _RELATION_FIELDS)
+        if unknown_fields:
+            raise ValueError(f"unsupported fields for {field}: {', '.join(unknown_fields)}")
+
+        source_field = _require_non_empty_string(raw_config.get("from", target_field), field=f"{field}.from")
+        app_token = _require_non_empty_string(
+            raw_config.get("app_token", default_app_token),
+            field=f"{field}.app_token",
+        )
+        table_id = _require_non_empty_string(raw_config.get("table_id"), field=f"{field}.table_id")
+        key = _require_non_empty_string(raw_config.get("key"), field=f"{field}.key")
+        on_missing = _require_non_empty_string(
+            raw_config.get("on_missing", "error"),
+            field=f"{field}.on_missing",
+        ).lower()
+        if on_missing not in _RELATION_MISSING_POLICIES:
+            raise ValueError(f"'{field}.on_missing' must be one of 'error', 'empty', or 'create'")
+
+        raw_create_fields = raw_config.get("create_fields", {})
+        if not isinstance(raw_create_fields, Mapping):
+            raise TypeError(f"'{field}.create_fields' must be a mapping")
+        if "create_fields" in raw_config and on_missing != "create":
+            raise ValueError(f"'{field}.create_fields' requires on_missing 'create'")
+        create_fields = dict(raw_create_fields)
+        if key in create_fields:
+            raise ValueError(f"'{field}.create_fields' must not contain relation key {key!r}")
+
+        if target_field in match_fields:
+            raise ValueError(f"relation target field {target_field!r} must not appear in match_fields")
+        if source_field != target_field and source_field in match_fields:
+            raise ValueError(f"relation source field {source_field!r} must not appear in match_fields")
+
+        normalized.append(
+            _FeishuRelationConfig(
+                target_field=target_field,
+                source_field=source_field,
+                app_token=app_token,
+                table_id=table_id,
+                key=key,
+                on_missing=on_missing,
+                create_fields=create_fields,
+            )
+        )
+    return tuple(normalized)
 
 
 def _match_values(fields: Mapping[str, Any], match_fields: Sequence[str]) -> dict[str, Any]:
