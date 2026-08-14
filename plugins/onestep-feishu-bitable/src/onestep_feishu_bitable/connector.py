@@ -19,6 +19,8 @@ from onestep.connectors.base import Delivery, Sink, Source
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.state import CursorStore, InMemoryCursorStore
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_BASE_URL = "https://open.feishu.cn"
 _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_BATCH_SIZE = 100
@@ -840,6 +842,132 @@ class FeishuBitableTableSink(Sink):
         self._flush_task: asyncio.Task[None] | None = None
         self._flush_error: Exception | None = None
         self._closed = False
+        # Insert key index state
+        self._insert_keys: set[str] | None = None
+        self._index_loaded = False
+        self._scan_duplicate_keys = 0
+        self._scan_missing_key_records = 0
+
+    async def open(self) -> None:
+        """Open the sink and, if insert_key_index is enabled, preload destination keys."""
+        if self.insert_key_index and not self._index_loaded:
+            await self._load_insert_key_index()
+
+    async def _load_insert_key_index(self) -> None:
+        """Page the configured match field into a bounded in-memory set.
+
+        The scan requests only the match field, stops at insert_index_max_pages,
+        and fails closed if the destination table has more records than the bound.
+        """
+        page_token: str | None = None
+        seen_tokens: set[str] = set()
+        loaded: set[str] = set()
+        missing_key_records = 0
+        duplicate_keys = 0
+        start_time = time.monotonic()
+
+        for page_number in range(1, self.insert_index_max_pages + 1):
+            try:
+                data = await self.connector.search_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    body={"field_names": [self.match_fields[0]]},
+                    page_size=self.insert_index_page_size,
+                    page_token=page_token,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.OPEN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            except ConnectorOperationError:
+                raise
+            except Exception as exc:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message="feishu_bitable insert index scan failed",
+                ) from exc
+
+            raw_items = data.get("items", [])
+            if not isinstance(raw_items, list):
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable insert index response items must be a list",
+                )
+
+            for raw_item in raw_items:
+                if not isinstance(raw_item, Mapping):
+                    missing_key_records += 1
+                    continue
+                raw_fields = raw_item.get("fields")
+                if not isinstance(raw_fields, Mapping):
+                    missing_key_records += 1
+                    continue
+                try:
+                    key = _canonical_insert_key(raw_fields.get(self.match_fields[0]))
+                except FeishuBitablePayloadError:
+                    missing_key_records += 1
+                    continue
+                if key in loaded:
+                    duplicate_keys += 1
+                loaded.add(key)
+
+            has_more = bool(data.get("has_more"))
+            next_token = data.get("page_token")
+            if not has_more:
+                self._insert_keys = loaded
+                self._index_loaded = True
+                self._scan_duplicate_keys = duplicate_keys
+                self._scan_missing_key_records = missing_key_records
+                duration = time.monotonic() - start_time
+                logger.info(
+                    "feishu insert index scan",
+                    extra={
+                        "event": "feishu_insert_index_scan",
+                        "scan_pages": page_number,
+                        "scan_keys": len(loaded),
+                        "missing_key_records": missing_key_records,
+                        "duplicate_keys": duplicate_keys,
+                        "duration_s": round(duration, 3),
+                        "outcome": "success",
+                        "page_size": self.insert_index_page_size,
+                        "max_pages": self.insert_index_max_pages,
+                    },
+                )
+                return
+
+            if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable insert index pagination did not advance",
+                )
+            seen_tokens.add(next_token)
+            page_token = next_token
+
+        # Exhausted max_pages while Feishu still has more
+        raise ConnectorOperationError(
+            backend="feishu_bitable",
+            operation=ConnectorOperation.OPEN,
+            kind=ConnectorErrorKind.PERMANENT,
+            source_name=self.name,
+            retry_delay_s=1.0,
+            message=(
+                "feishu_bitable insert index exceeded "
+                f"insert_index_max_pages={self.insert_index_max_pages}"
+            ),
+        )
 
     def _ensure_buffer_lock(self) -> asyncio.Lock:
         if self._buffer_lock is None:
@@ -1483,6 +1611,41 @@ def _normalize_mode(value: str) -> str:
     if normalized not in {"upsert", "create", "update", "insert"}:
         raise ValueError("mode must be one of 'upsert', 'create', 'update', or 'insert'")
     return normalized
+
+
+_DELETED = object()
+
+
+def _canonical_insert_key(value: Any) -> str:
+    """Normalize a match field value to its canonical string form.
+
+    Returns the canonical key or raises FeishuBitablePayloadError if the
+    value cannot be used as a stable insert key.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise FeishuBitablePayloadError("insert key value is empty after stripping")
+        return stripped
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        if value != value or abs(value) == float("inf"):
+            raise FeishuBitablePayloadError(
+                "insert key value must be a finite number"
+            )
+        return str(value)
+    if value is None:
+        raise FeishuBitablePayloadError("insert key value must not be None")
+    if isinstance(value, (dict, list, set, tuple)):
+        raise FeishuBitablePayloadError(
+            "insert key value must be a string, number, or boolean, "
+            "got {!r}".format(type(value).__name__)
+        )
+    raise FeishuBitablePayloadError(
+        "insert key value must be a string, number, or boolean, "
+        "got {!r}".format(type(value).__name__)
+    )
 
 
 def _normalize_insert_key_index(value: bool) -> bool:
