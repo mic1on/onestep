@@ -706,6 +706,9 @@ class IncrementalTableSource(Source):
         self._commit_error: BaseException | None = None
         self._retry_rows: dict[tuple[Any, ...], _IncrementalRetryRow] = {}
         self._terminal_error: ConnectorOperationError | None = None
+        self._fetch_count = 0
+        self._retry_count = 0
+        self._cursor_save_count = 0
         self._loaded = False
         self._committed_cursor: tuple[Any, ...] | None = None
         self._fetched_cursor: tuple[Any, ...] | None = None
@@ -729,8 +732,10 @@ class IncrementalTableSource(Source):
                 return [retry_delivery]
             if self._retry_rows:
                 return []
+        requested_limit = max(1, min(limit, self.batch_size))
+        started_at = time.monotonic()
         try:
-            rows = await self._fetch(max(1, min(limit, self.batch_size)))
+            rows = await self._fetch(requested_limit)
         except Exception as exc:
             connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -750,6 +755,21 @@ class IncrementalTableSource(Source):
                 self._fetched_cursor = token.value
                 envelope = Envelope(body=row, meta={"table": self.table_name})
                 deliveries.append(IncrementalDelivery(self, envelope, token))
+            self._fetch_count += 1
+            fetch_count = self._fetch_count
+            pending_cursor_rows = len(self._pending)
+        logger.info(
+            "mysql incremental fetch",
+            extra={
+                "event": "mysql_incremental_fetch",
+                "fetch_count": fetch_count,
+                "requested_limit": requested_limit,
+                "row_count": len(rows),
+                "duration_s": round(time.monotonic() - started_at, 3),
+                "pending_cursor_rows": pending_cursor_rows,
+                "fetched_cursor_lag_rows": pending_cursor_rows,
+            },
+        )
         return deliveries
 
     def _take_ready_retry_delivery(self) -> Delivery | None:
@@ -802,6 +822,8 @@ class IncrementalTableSource(Source):
     ) -> None:
         lock = self._runtime_commit_lock()
         async with lock:
+            self._retry_count += 1
+            retry_count = self._retry_count
             self._retry_rows[token.value] = _IncrementalRetryRow(
                 envelope=Envelope(
                     body=envelope.body,
@@ -814,6 +836,7 @@ class IncrementalTableSource(Source):
             "mysql incremental retry",
             extra={
                 "event": "mysql_incremental_retry",
+                "retry_count": retry_count,
                 "attempt": envelope.attempts + 1,
                 "delay_s": max(0.0, delay_s or 0.0),
                 "pending_cursor_rows": len(self._pending),
@@ -867,7 +890,25 @@ class IncrementalTableSource(Source):
                         return
                     highest = prefix[-1]
                 started_at = time.monotonic()
-                await self.state.save(self.state_key, list(highest))
+                async with lock:
+                    self._cursor_save_count += 1
+                    cursor_save_count = self._cursor_save_count
+                try:
+                    await self.state.save(self.state_key, list(highest))
+                except BaseException:
+                    logger.info(
+                        "mysql incremental cursor commit",
+                        extra={
+                            "event": "mysql_incremental_cursor_commit",
+                            "cursor_save_count": cursor_save_count,
+                            "coalesced_ack_count": len(prefix),
+                            "duration_s": round(time.monotonic() - started_at, 3),
+                            "outcome": "error",
+                            "pending_cursor_rows": len(self._pending),
+                            "fetched_cursor_lag_rows": len(self._pending),
+                        },
+                    )
+                    raise
                 async with lock:
                     for token_value in prefix:
                         current = self._pending.popleft()
@@ -887,10 +928,12 @@ class IncrementalTableSource(Source):
                     "mysql incremental cursor commit",
                     extra={
                         "event": "mysql_incremental_cursor_commit",
+                        "cursor_save_count": cursor_save_count,
                         "coalesced_ack_count": len(prefix),
                         "duration_s": round(time.monotonic() - started_at, 3),
                         "outcome": "success",
                         "pending_cursor_rows": len(self._pending),
+                        "fetched_cursor_lag_rows": len(self._pending),
                     },
                 )
                 if not has_more:

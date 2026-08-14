@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -475,3 +477,92 @@ def test_mysql_incremental_cursor_save_failure_preserves_retryable_prefix(
         await db.close()
 
     asyncio.run(scenario())
+
+
+def test_mysql_incremental_logs_fetch_retry_commit_without_sensitive_values(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    db_url = f"sqlite:///{tmp_path / 'mysql-dsn-secret.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("union_key", sa.String, primary_key=True),
+        sa.Column("created_at", sa.Integer, nullable=False),
+        sa.Column("payload", sa.String, nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.insert(rows),
+            {
+                "union_key": "union-key-secret",
+                "created_at": 8_675_309,
+                "payload": "payload-value-secret",
+            },
+        )
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = InMemoryCursorStore()
+        source = db.incremental(
+            table="rows",
+            key="union_key",
+            cursor=("created_at", "union_key"),
+            batch_size=100,
+            poll_interval_s=0.01,
+            state=state,
+            state_key="cursor-state-secret",
+        )
+        original = (await source.fetch(100))[0]
+        await original.retry(delay_s=0)
+        retry = (await source.fetch(100))[0]
+        await retry.ack()
+        await db.close()
+
+    caplog.set_level(logging.INFO, logger="onestep_mysql.connector")
+    asyncio.run(scenario())
+
+    records = {
+        record.event: record
+        for record in caplog.records
+        if hasattr(record, "event")
+    }
+    assert {
+        "fetch_count",
+        "requested_limit",
+        "row_count",
+        "duration_s",
+        "pending_cursor_rows",
+        "fetched_cursor_lag_rows",
+    } <= records["mysql_incremental_fetch"].__dict__.keys()
+    assert {
+        "retry_count",
+        "attempt",
+        "delay_s",
+        "pending_cursor_rows",
+    } <= records["mysql_incremental_retry"].__dict__.keys()
+    assert {
+        "cursor_save_count",
+        "coalesced_ack_count",
+        "duration_s",
+        "outcome",
+        "pending_cursor_rows",
+        "fetched_cursor_lag_rows",
+    } <= records["mysql_incremental_cursor_commit"].__dict__.keys()
+
+    serialized = json.dumps(
+        [record.__dict__ for record in caplog.records],
+        ensure_ascii=False,
+        default=str,
+    )
+    for secret in (
+        "mysql-dsn-secret",
+        "union-key-secret",
+        "payload-value-secret",
+        "cursor-state-secret",
+        "8675309",
+    ):
+        assert secret not in serialized

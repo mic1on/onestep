@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from typing import Any
 
 import pytest
@@ -359,3 +361,131 @@ def test_feishu_insert_short_success_response_enters_recovery() -> None:
         assert search_calls == 2
 
     asyncio.run(scenario())
+
+
+def test_feishu_insert_logs_aggregates_without_sensitive_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        create_calls = 0
+
+        async def fake_search(**kwargs: Any) -> dict[str, Any]:
+            body = kwargs["body"]
+            if "field_names" in body:
+                return {
+                    "items": [
+                        {
+                            "record_id": "record-id-secret",
+                            "fields": {"编号": "preexisting-key-secret"},
+                        }
+                    ],
+                    "has_more": False,
+                }
+            return {
+                "items": [
+                    {
+                        "record_id": "record-id-secret",
+                        "fields": {"编号": "union-key-secret"},
+                    }
+                ],
+                "has_more": False,
+            }
+
+        async def fake_batch_create(**kwargs: Any) -> dict[str, Any]:
+            nonlocal create_calls
+            create_calls += 1
+            raise ConnectorOperationError(
+                backend="feishu_bitable",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.UNCERTAIN,
+                source_name="test",
+                message="connection closed after request",
+            )
+
+        connector = FeishuBitableConnector(
+            app_id="app-id-secret", app_secret="app-secret-value"
+        )
+        connector.search_records = fake_search  # type: ignore[assignment]
+        connector.batch_create_records = fake_batch_create  # type: ignore[assignment]
+        sink = connector.table_sink(
+            app_token="app-token-secret",
+            table_id="table-id-secret",
+            mode="insert",
+            match_fields=["编号"],
+            batch_size=2,
+            insert_key_index=True,
+        )
+        await sink.open()
+        await sink.send(Envelope(body={"编号": "preexisting-key-secret"}))
+        await asyncio.gather(
+            sink.send(
+                Envelope(
+                    body={"编号": "union-key-secret", "内容": "payload-value-secret"}
+                )
+            ),
+            sink.send(
+                Envelope(
+                    body={"编号": "second-key-secret", "内容": "payload-value-secret"}
+                )
+            ),
+        )
+        await sink.close()
+        assert create_calls == 1
+
+    caplog.set_level(logging.INFO, logger="onestep_feishu_bitable.connector")
+    asyncio.run(scenario())
+
+    by_event: dict[str, list[logging.LogRecord]] = {}
+    for record in caplog.records:
+        event = getattr(record, "event", None)
+        if event is not None:
+            by_event.setdefault(event, []).append(record)
+    assert {
+        "scan_pages",
+        "scan_keys",
+        "duration_s",
+        "page_size",
+        "max_pages",
+    } <= by_event["feishu_insert_index_scan"][0].__dict__.keys()
+    assert {
+        "buffered_batch_size",
+        "oldest_batch_age_s",
+        "inflight_waiter_count",
+        "flush_reason",
+    } <= by_event["feishu_insert_buffer"][0].__dict__.keys()
+    assert {
+        "batch_size",
+        "duration_s",
+        "outcome",
+        "flush_reason",
+        "recovery_round",
+    } <= by_event["feishu_insert_batch_write"][0].__dict__.keys()
+    assert {
+        "normal_lookup_avoided_count",
+        "recovery_lookup_count",
+        "outcome",
+    } <= by_event["feishu_insert_lookup"][0].__dict__.keys()
+    assert {
+        "retry_count",
+        "recovery_round",
+        "unresolved_count",
+    } <= by_event["feishu_insert_retry"][0].__dict__.keys()
+
+    serialized = json.dumps(
+        [record.__dict__ for record in caplog.records],
+        ensure_ascii=False,
+        default=str,
+    )
+    for secret in (
+        "app-id-secret",
+        "app-secret-value",
+        "app-token-secret",
+        "table-id-secret",
+        "union-key-secret",
+        "second-key-secret",
+        "preexisting-key-secret",
+        "payload-value-secret",
+        "record-id-secret",
+        "编号",
+    ):
+        assert secret not in serialized

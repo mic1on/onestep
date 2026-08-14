@@ -869,6 +869,8 @@ class FeishuBitableTableSink(Sink):
         self._flush_lock: asyncio.Lock | None = None
         self._uncertain_keys: set[str] = set()
         self._normal_lookup_avoided_count = 0
+        self._recovery_lookup_count = 0
+        self._insert_retry_count = 0
         self._inflight_waiter_count = 0
 
     async def open(self) -> None:
@@ -1263,6 +1265,16 @@ class FeishuBitableTableSink(Sink):
 
         round_number = recovery_round
         while unresolved and round_number <= self.ambiguous_write_max_rounds:
+            self._insert_retry_count += 1
+            logger.info(
+                "feishu insert retry",
+                extra={
+                    "event": "feishu_insert_retry",
+                    "retry_count": self._insert_retry_count,
+                    "recovery_round": round_number,
+                    "unresolved_count": len(unresolved),
+                },
+            )
             found, missing, lookup_failed = await self._lookup_pending_keys(unresolved)
             if found:
                 self._confirm_found(found)
@@ -1374,6 +1386,16 @@ class FeishuBitableTableSink(Sink):
                     )
                 else:
                     failed.append(pending)
+        self._recovery_lookup_count += len(pending_list)
+        logger.info(
+            "feishu insert lookup",
+            extra={
+                "event": "feishu_insert_lookup",
+                "normal_lookup_avoided_count": self._normal_lookup_avoided_count,
+                "recovery_lookup_count": self._recovery_lookup_count,
+                "outcome": "success" if not failed else "error",
+            },
+        )
         return found, missing, failed
 
     def _confirm_created(self, batch: list[_PendingInsert]) -> None:
@@ -1423,7 +1445,11 @@ class FeishuBitableTableSink(Sink):
         try:
             matches = await self._find_matches({self.match_fields[0]: key})
         except ConnectorOperationError:
+            self._recovery_lookup_count += 1
+            self._log_insert_lookup(outcome="error")
             raise
+        self._recovery_lookup_count += 1
+        self._log_insert_lookup(outcome="success")
         if len(matches) > 1:
             raise FeishuBitablePayloadError(
                 "insert match field resolved to multiple destination records"
@@ -1433,6 +1459,17 @@ class FeishuBitableTableSink(Sink):
                 self._insert_keys.add(key)
         # A successful exact search establishes either found or missing.
         self._uncertain_keys.discard(key)
+
+    def _log_insert_lookup(self, *, outcome: str) -> None:
+        logger.info(
+            "feishu insert lookup",
+            extra={
+                "event": "feishu_insert_lookup",
+                "normal_lookup_avoided_count": self._normal_lookup_avoided_count,
+                "recovery_lookup_count": self._recovery_lookup_count,
+                "outcome": outcome,
+            },
+        )
 
     async def _flush_indexed_insert(self, *, reason: str) -> None:
         """Seal and write an indexed insert batch under the flush lock.
@@ -1445,6 +1482,23 @@ class FeishuBitableTableSink(Sink):
                 batch = self._seal_indexed_batch(self._batch_size)
             if not batch:
                 return
+            logger.info(
+                "feishu insert buffer",
+                extra={
+                    "event": "feishu_insert_buffer",
+                    "buffered_batch_size": len(batch),
+                    "oldest_batch_age_s": round(
+                        max(
+                            0.0,
+                            time.monotonic()
+                            - min(item.buffered_at for item in batch),
+                        ),
+                        3,
+                    ),
+                    "inflight_waiter_count": self._inflight_waiter_count,
+                    "flush_reason": reason,
+                },
+            )
             await self._write_indexed_batch(batch, reason=reason)
 
     async def _send_single(self, raw_fields: dict[str, Any]) -> None:
@@ -1765,6 +1819,7 @@ class FeishuBitableTableSink(Sink):
                 raise err
             # No remaining pending keys should exist
             assert not self._pending_by_key, "close left pending entries"
+            self._log_insert_lookup(outcome="success")
             return
 
         # Legacy close path
