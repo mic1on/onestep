@@ -2,6 +2,9 @@ import asyncio
 from pathlib import Path
 
 import sqlalchemy as sa
+import pytest
+from onestep.resilience import ConnectorOperationError
+from onestep.state import InMemoryCursorStore
 from onestep_mysql import MySQLConnector
 
 
@@ -244,6 +247,231 @@ def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tm
         assert [item.payload["id"] for item in deleted_batch] == [3]
         await deleted_batch[0].ack()
 
+        await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_mysql_incremental_retry_redelivers_same_row_with_incremented_attempts(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental_retry.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(sa.insert(rows), [{"id": 1, "created_at": 10}, {"id": 2, "created_at": 11}])
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = InMemoryCursorStore()
+        source = db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=state,
+            state_key="retry-test",
+        )
+        original = await source.fetch(2)
+        assert [item.payload["id"] for item in original] == [1, 2]
+
+        await original[0].retry(delay_s=0)
+        first_retry = await source.fetch(2)
+        assert len(first_retry) == 1
+        assert first_retry[0].payload["id"] == 1
+        assert first_retry[0].envelope.attempts == 1
+
+        await first_retry[0].retry(delay_s=0)
+        second_retry = await source.fetch(2)
+        assert second_retry[0].payload["id"] == 1
+        assert second_retry[0].envelope.attempts == 2
+        await second_retry[0].ack()
+        assert await state.load("retry-test") == [10, 1]
+        await original[1].ack()
+        assert await state.load("retry-test") == [11, 2]
+        await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_mysql_incremental_retry_delay_and_inflight_gap_pause_sql_reads(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental_retry_gap.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(sa.insert(rows), [{"id": 1, "created_at": 10}])
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        source = db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        original = (await source.fetch(1))[0]
+        await original.retry(delay_s=0.05)
+        assert await source.fetch(10) == []
+        await asyncio.sleep(0.06)
+        retry = (await source.fetch(10))[0]
+        assert retry.envelope.attempts == 1
+        assert await source.fetch(10) == []
+        await retry.ack()
+        await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_mysql_incremental_terminal_failure_blocks_before_failed_cursor(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental_terminal.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(sa.insert(rows), [{"id": 1, "created_at": 10}, {"id": 2, "created_at": 11}])
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = InMemoryCursorStore()
+        source = db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=state,
+            state_key="terminal-test",
+        )
+        batch = await source.fetch(2)
+        await batch[1].ack()
+        await batch[0].fail(RuntimeError("bad row"))
+        with pytest.raises(ConnectorOperationError, match="blocked at a failed cursor row"):
+            await source.fetch(10)
+        assert await state.load("terminal-test") is None
+        await db.close()
+
+    asyncio.run(scenario())
+
+
+class _CountingCursorStore(InMemoryCursorStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.save_calls: list[object] = []
+        self.failures_remaining = 0
+
+    async def save(self, key: str, value: object) -> None:
+        self.save_calls.append(value)
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise RuntimeError("cursor save failed")
+        await super().save(key, value)
+
+
+def test_mysql_incremental_coalesces_concurrent_contiguous_acks(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental_coalesce.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.insert(rows),
+            [{"id": index, "created_at": index} for index in range(1, 101)],
+        )
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = _CountingCursorStore()
+        source = db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=100,
+            poll_interval_s=0.01,
+            state=state,
+            state_key="coalesce-test",
+        )
+        batch = await source.fetch(100)
+        await asyncio.gather(*(delivery.ack() for delivery in batch))
+        assert state.save_calls == [[100, 100]]
+        await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_mysql_incremental_cursor_save_failure_preserves_retryable_prefix(
+    tmp_path: Path,
+) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental_save_failure.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.Integer, nullable=False),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(sa.insert(rows), [{"id": 1, "created_at": 10}, {"id": 2, "created_at": 11}])
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = _CountingCursorStore()
+        state.failures_remaining = 1
+        source = db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=state,
+            state_key="save-failure-test",
+        )
+        batch = await source.fetch(2)
+        results = await asyncio.gather(
+            *(delivery.ack() for delivery in batch), return_exceptions=True
+        )
+        assert all(isinstance(result, RuntimeError) for result in results)
+        assert await state.load("save-failure-test") is None
+        await batch[0].ack()
+        assert await state.load("save-failure-test") == [11, 2]
         await db.close()
 
     asyncio.run(scenario())
