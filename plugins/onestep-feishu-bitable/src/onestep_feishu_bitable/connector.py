@@ -671,6 +671,12 @@ class _FeishuRelationConfig:
     create_fields: Mapping[str, Any]
 
 
+@dataclass
+class _FeishuRelationCreateLock:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class FeishuBitableTableSink(Sink):
     def __init__(
         self,
@@ -701,6 +707,7 @@ class FeishuBitableTableSink(Sink):
             default_app_token=normalized_app_token,
             match_fields=normalized_match_fields,
         )
+        self._relation_create_locks: dict[tuple[str, str, str, str], _FeishuRelationCreateLock] = {}
 
     async def send(self, envelope: Envelope) -> None:
         try:
@@ -783,9 +790,7 @@ class FeishuBitableTableSink(Sink):
                         f"did not match a record in table {relation.table_id!r}"
                     )
                 if relation.on_missing == "create":
-                    raise FeishuBitablePayloadError(
-                        f"relation field {relation.target_field!r} cannot create missing value {value!r}"
-                    )
+                    record_ids.append(await self._find_or_create_relation_record(relation, value))
             resolved[relation.target_field] = record_ids
             if relation.source_field != relation.target_field:
                 consumed_fields.add(relation.source_field)
@@ -795,6 +800,50 @@ class FeishuBitableTableSink(Sink):
             result.pop(field_name, None)
         result.update(resolved)
         return result
+
+    async def _find_or_create_relation_record(
+        self,
+        relation: _FeishuRelationConfig,
+        value: str,
+    ) -> str:
+        lock_key = (relation.app_token, relation.table_id, relation.key, value)
+        entry = self._relation_create_locks.get(lock_key)
+        if entry is None:
+            entry = _FeishuRelationCreateLock(asyncio.Lock())
+            self._relation_create_locks[lock_key] = entry
+        entry.users += 1
+        try:
+            async with entry.lock:
+                matches = await self._find_relation_matches(relation, value)
+                if len(matches) > 1:
+                    raise FeishuBitablePayloadError(
+                        f"relation field {relation.target_field!r} value {value!r} "
+                        f"matched {len(matches)} records in table {relation.table_id!r}"
+                    )
+                if matches:
+                    return _record_id(matches[0])
+                fields = dict(relation.create_fields)
+                fields[relation.key] = value
+                data = await self.connector.create_record(
+                    app_token=relation.app_token,
+                    table_id=relation.table_id,
+                    fields=fields,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+                raw_record = data.get("record")
+                if not isinstance(raw_record, Mapping):
+                    raise FeishuBitablePayloadError(
+                        f"feishu_bitable create response for relation field {relation.target_field!r} "
+                        "is missing record"
+                    )
+                return _record_id(raw_record)
+        finally:
+            entry.users -= 1
+            if entry.users == 0 and self._relation_create_locks.get(lock_key) is entry:
+                self._relation_create_locks.pop(lock_key, None)
 
     async def _find_relation_matches(
         self,

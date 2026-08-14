@@ -1090,6 +1090,183 @@ def test_feishu_relation_resolution_rejects_unsafe_values_before_target_write(fa
     asyncio.run(scenario())
 
 
+def test_feishu_relation_create_resolves_found_and_missing_values_in_order_with_cross_base_token() -> None:
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        existing = {"A": "rec-a"}
+        searched: list[dict[str, Any]] = []
+        related_creates: list[dict[str, Any]] = []
+        project_creates: list[dict[str, Any]] = []
+
+        async def search_records(**kwargs):
+            searched.append(kwargs)
+            value = kwargs["body"]["filter"]["conditions"][0]["value"][0]
+            record_id = existing.get(value)
+            return {"items": [] if record_id is None else [{"record_id": record_id}]}
+
+        async def create_record(**kwargs):
+            if kwargs["table_id"] == "companies":
+                related_creates.append(kwargs)
+                value = kwargs["fields"]["name"]
+                record_id = f"rec-{value.lower()}"
+                existing[value] = record_id
+                return {"record": {"record_id": record_id}}
+            project_creates.append(kwargs)
+            return {"record": {"record_id": "project"}}
+
+        connector.search_records = search_records  # type: ignore[method-assign]
+        connector.create_record = create_record  # type: ignore[method-assign]
+        sink = connector.table_sink(
+            app_token="project-app",
+            table_id="projects",
+            mode="create",
+            user_id_type="user_id",
+            relations={
+                "companies": {
+                    "from": "company_names",
+                    "app_token": "company-app",
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                    "create_fields": {"status": "pending"},
+                }
+            },
+        )
+
+        await sink.send(Envelope(body={"project_id": "P-1", "company_names": ["A", "B", "C"]}))
+
+        assert project_creates[0]["fields"]["companies"] == ["rec-a", "rec-b", "rec-c"]
+        assert [call["fields"] for call in related_creates] == [
+            {"status": "pending", "name": "B"},
+            {"status": "pending", "name": "C"},
+        ]
+        assert all(call["app_token"] == "company-app" for call in searched)
+        assert all(call["app_token"] == "company-app" for call in related_creates)
+        assert all(call["user_id_type"] == "user_id" for call in searched + related_creates)
+
+    asyncio.run(scenario())
+
+
+def test_feishu_relation_create_partial_failure_does_not_write_project_and_retry_reuses_created_record() -> None:
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        existing: dict[str, str] = {}
+        fail_c = True
+        related_creates: list[str] = []
+        project_creates: list[dict[str, Any]] = []
+
+        async def search_records(**kwargs):
+            value = kwargs["body"]["filter"]["conditions"][0]["value"][0]
+            record_id = existing.get(value)
+            return {"items": [] if record_id is None else [{"record_id": record_id}]}
+
+        async def create_record(**kwargs):
+            nonlocal fail_c
+            if kwargs["table_id"] == "companies":
+                value = kwargs["fields"]["name"]
+                related_creates.append(value)
+                if value == "C" and fail_c:
+                    fail_c = False
+                    raise ConnectorOperationError(
+                        backend="feishu_bitable",
+                        operation=ConnectorOperation.SEND,
+                        kind=ConnectorErrorKind.TRANSIENT,
+                        source_name=kwargs["source_name"],
+                    )
+                record_id = f"rec-{value.lower()}"
+                existing[value] = record_id
+                return {"record": {"record_id": record_id}}
+            project_creates.append(kwargs)
+            return {"record": {"record_id": "project"}}
+
+        connector.search_records = search_records  # type: ignore[method-assign]
+        connector.create_record = create_record  # type: ignore[method-assign]
+        sink = connector.table_sink(
+            app_token="app-token",
+            table_id="projects",
+            mode="create",
+            relations={
+                "companies": {
+                    "from": "company_names",
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                }
+            },
+        )
+        envelope = Envelope(body={"project_id": "P-1", "company_names": ["B", "C"]})
+
+        with pytest.raises(ConnectorOperationError) as raised:
+            await sink.send(envelope)
+        assert raised.value.kind is ConnectorErrorKind.TRANSIENT
+        assert project_creates == []
+
+        await sink.send(envelope)
+
+        assert related_creates == ["B", "C", "C"]
+        assert project_creates[0]["fields"]["companies"] == ["rec-b", "rec-c"]
+
+    asyncio.run(scenario())
+
+
+def test_feishu_relation_create_single_flight_prevents_duplicate_create_in_one_sink() -> None:
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        existing: dict[str, str] = {}
+        initial_queries = 0
+        both_initial_queries = asyncio.Event()
+        related_creates: list[str] = []
+        project_creates: list[dict[str, Any]] = []
+
+        async def search_records(**kwargs):
+            nonlocal initial_queries
+            value = kwargs["body"]["filter"]["conditions"][0]["value"][0]
+            if value not in existing and initial_queries < 2:
+                initial_queries += 1
+                if initial_queries == 2:
+                    both_initial_queries.set()
+                await both_initial_queries.wait()
+            record_id = existing.get(value)
+            return {"items": [] if record_id is None else [{"record_id": record_id}]}
+
+        async def create_record(**kwargs):
+            if kwargs["table_id"] == "companies":
+                value = kwargs["fields"]["name"]
+                related_creates.append(value)
+                existing[value] = "rec-a"
+                return {"record": {"record_id": "rec-a"}}
+            project_creates.append(kwargs)
+            return {"record": {"record_id": "project"}}
+
+        connector.search_records = search_records  # type: ignore[method-assign]
+        connector.create_record = create_record  # type: ignore[method-assign]
+        sink = connector.table_sink(
+            app_token="app-token",
+            table_id="projects",
+            mode="create",
+            relations={
+                "companies": {
+                    "from": "company_names",
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                }
+            },
+        )
+
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-1", "company_names": ["A"]})),
+            sink.send(Envelope(body={"project_id": "P-2", "company_names": ["A"]})),
+        )
+
+        assert related_creates == ["A"]
+        assert len(project_creates) == 2
+        assert all(call["fields"]["companies"] == ["rec-a"] for call in project_creates)
+        assert sink._relation_create_locks == {}
+
+    asyncio.run(scenario())
+
+
 def test_feishu_http_error_classifies_rate_limit_as_throttled() -> None:
     async def scenario() -> None:
         def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
