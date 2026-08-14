@@ -9,6 +9,7 @@ import urllib.request
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -675,6 +676,7 @@ class _FeishuRelationConfig:
 class _FeishuRelationCreateLock:
     lock: asyncio.Lock
     users: int = 0
+    record_id: str | None = None
 
 
 class FeishuBitableTableSink(Sink):
@@ -687,7 +689,7 @@ class FeishuBitableTableSink(Sink):
         mode: str,
         match_fields: Sequence[str] | None,
         user_id_type: str | None,
-        relations: Mapping[str, Mapping[str, Any]] | None,
+        relations: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
@@ -814,6 +816,8 @@ class FeishuBitableTableSink(Sink):
         entry.users += 1
         try:
             async with entry.lock:
+                if entry.record_id is not None:
+                    return entry.record_id
                 matches = await self._find_relation_matches(relation, value)
                 if len(matches) > 1:
                     raise FeishuBitablePayloadError(
@@ -839,7 +843,8 @@ class FeishuBitableTableSink(Sink):
                         f"feishu_bitable create response for relation field {relation.target_field!r} "
                         "is missing record"
                     )
-                return _record_id(raw_record)
+                entry.record_id = _record_id(raw_record)
+                return entry.record_id
         finally:
             entry.users -= 1
             if entry.users == 0 and self._relation_create_locks.get(lock_key) is entry:
@@ -863,7 +868,11 @@ class FeishuBitableTableSink(Sink):
         raw_items = data.get("items", [])
         if not isinstance(raw_items, list):
             raise FeishuBitablePayloadError("feishu_bitable search response data.items must be a list")
-        return [dict(item) for item in raw_items if isinstance(item, Mapping)]
+        if any(not isinstance(item, Mapping) for item in raw_items):
+            raise FeishuBitablePayloadError(
+                "feishu_bitable search response data.items entries must be mappings"
+            )
+        return [dict(item) for item in raw_items]
 
     def control_plane_descriptor(self) -> dict[str, Any]:
         return {
@@ -1121,7 +1130,7 @@ def _normalize_relations(
         field = f"relations.{target_field}"
         if not isinstance(raw_config, Mapping):
             raise TypeError(f"'{field}' must be a mapping")
-        unknown_fields = sorted(set(raw_config) - _RELATION_FIELDS)
+        unknown_fields = sorted(str(item) for item in raw_config if item not in _RELATION_FIELDS)
         if unknown_fields:
             raise ValueError(f"unsupported fields for {field}: {', '.join(unknown_fields)}")
 
@@ -1145,6 +1154,8 @@ def _normalize_relations(
         if "create_fields" in raw_config and on_missing != "create":
             raise ValueError(f"'{field}.create_fields' requires on_missing 'create'")
         create_fields = dict(raw_create_fields)
+        if any(not isinstance(field_name, str) or not field_name.strip() for field_name in create_fields):
+            raise ValueError(f"'{field}.create_fields' keys must be non-empty strings")
         if key in create_fields:
             raise ValueError(f"'{field}.create_fields' must not contain relation key {key!r}")
 
@@ -1161,7 +1172,7 @@ def _normalize_relations(
                 table_id=table_id,
                 key=key,
                 on_missing=on_missing,
-                create_fields=create_fields,
+                create_fields=MappingProxyType(create_fields),
             )
         )
     return tuple(normalized)

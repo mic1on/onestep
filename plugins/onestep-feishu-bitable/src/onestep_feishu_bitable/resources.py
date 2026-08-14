@@ -198,9 +198,7 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
     if mode not in {"upsert", "create", "update"}:
         raise ValueError(f"unsupported {ctx.field}.mode {raw_mode!r}")
     match_fields: list[str] = []
-    if mode in {"upsert", "update"}:
-        match_fields = ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
-    elif "match_fields" in spec:
+    if mode in {"upsert", "update"} or "match_fields" in spec:
         match_fields = ctx.require_non_empty_string_list(spec, "match_fields", field=f"{ctx.field}.match_fields")
     _validate_feishu_user_id_type(ctx, spec.get("user_id_type"), field=f"{ctx.field}.user_id_type")
     if "relations" in spec:
@@ -249,6 +247,13 @@ def _validate_feishu_relations(
             create_fields = raw_config.get("create_fields")
             if not isinstance(create_fields, Mapping):
                 raise TypeError(f"'{relation_field}.create_fields' must be a mapping")
+            if any(
+                not isinstance(field_name, str) or not field_name.strip()
+                for field_name in create_fields
+            ):
+                raise ValueError(
+                    f"'{relation_field}.create_fields' keys must be non-empty strings"
+                )
             if on_missing != "create":
                 raise ValueError(f"'{relation_field}.create_fields' requires on_missing 'create'")
             if key in create_fields:

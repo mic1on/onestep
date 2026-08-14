@@ -705,6 +705,17 @@ def test_yaml_builds_feishu_bitable_resources_in_strict_mode() -> None:
             {"companies": {"table_id": "companies", "key": "name", "create_fields": {"x": 1}}},
             "create_fields.*on_missing.*create",
         ),
+        (
+            {
+                "companies": {
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                    "create_fields": {1: "invalid"},
+                }
+            },
+            "create_fields.*non-empty strings",
+        ),
     ],
 )
 def test_yaml_rejects_invalid_feishu_relation_config_in_strict_mode(
@@ -982,6 +993,19 @@ def test_feishu_relation_config_normalizes_python_api_mapping() -> None:
             "create_fields.*key",
         ),
         (
+            {
+                "companies": {
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                    "create_fields": {1: "invalid"},
+                }
+            },
+            [],
+            ValueError,
+            "create_fields.*non-empty strings",
+        ),
+        (
             {"companies": {"table_id": "companies", "key": "name"}},
             ["companies"],
             ValueError,
@@ -1173,6 +1197,42 @@ def test_feishu_relation_resolution_rejects_unsafe_values_before_target_write(fa
     asyncio.run(scenario())
 
 
+def test_feishu_relation_resolution_rejects_malformed_search_items_before_missing_policy() -> None:
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        created: list[dict[str, Any]] = []
+
+        async def search_records(**kwargs):
+            return {"items": ["not-a-record"]}
+
+        async def create_record(**kwargs):
+            created.append(kwargs)
+            return {"record": {"record_id": "created"}}
+
+        connector.search_records = search_records  # type: ignore[method-assign]
+        connector.create_record = create_record  # type: ignore[method-assign]
+        sink = connector.table_sink(
+            app_token="app-token",
+            table_id="projects",
+            mode="create",
+            relations={
+                "companies": {
+                    "table_id": "companies",
+                    "key": "name",
+                    "on_missing": "create",
+                }
+            },
+        )
+
+        with pytest.raises(ConnectorOperationError) as raised:
+            await sink.send(Envelope(body={"companies": "A"}))
+
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        assert created == []
+
+    asyncio.run(scenario())
+
+
 def test_feishu_relation_create_resolves_found_and_missing_values_in_order_with_cross_base_token() -> None:
     async def scenario() -> None:
         connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
@@ -1303,14 +1363,13 @@ def test_feishu_relation_create_single_flight_prevents_duplicate_create_in_one_s
 
         async def search_records(**kwargs):
             nonlocal initial_queries
-            value = kwargs["body"]["filter"]["conditions"][0]["value"][0]
-            if value not in existing and initial_queries < 2:
+            if initial_queries < 2:
                 initial_queries += 1
                 if initial_queries == 2:
                     both_initial_queries.set()
                 await both_initial_queries.wait()
-            record_id = existing.get(value)
-            return {"items": [] if record_id is None else [{"record_id": record_id}]}
+            await asyncio.sleep(0)
+            return {"items": []}
 
         async def create_record(**kwargs):
             if kwargs["table_id"] == "companies":
