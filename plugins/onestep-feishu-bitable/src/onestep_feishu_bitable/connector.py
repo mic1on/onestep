@@ -26,6 +26,9 @@ DEFAULT_FALLBACK_SCAN_PAGE_LIMIT = 100
 _MAX_PAGE_SIZE = 500
 _TOKEN_REFRESH_MARGIN_S = 60.0
 _REDACTED = "<redacted>"
+_DEFAULT_INSERT_INDEX_PAGE_SIZE = 500
+_DEFAULT_INSERT_INDEX_MAX_PAGES = 200
+_DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS = 3
 _AUTOMATIC_CURSOR_FIELD_ALIASES = {
     "创建时间": "created_time",
     "最后修改时间": "last_modified_time",
@@ -157,6 +160,10 @@ class FeishuBitableConnector:
         relations: Mapping[str, Mapping[str, Any]] | None = None,
         batch_size: int = 1,
         flush_interval_s: float = 1.0,
+        insert_key_index: bool = False,
+        insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+        insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
+        ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
             connector=self,
@@ -168,6 +175,10 @@ class FeishuBitableConnector:
             relations=relations,
             batch_size=batch_size,
             flush_interval_s=flush_interval_s,
+            insert_key_index=insert_key_index,
+            insert_index_page_size=insert_index_page_size,
+            insert_index_max_pages=insert_index_max_pages,
+            ambiguous_write_max_rounds=ambiguous_write_max_rounds,
         )
 
     async def search_records(
@@ -769,6 +780,9 @@ class FeishuBitableTableSink(Sink):
 
     upsert and update modes still process records one at a time because
     each record requires a match-finding search before the write.
+
+    Opt-in insert_key_index mode preloads the destination match field into
+    memory so normal Insert processing requires zero per-key Feishu searches.
     """
 
     def __init__(
@@ -783,6 +797,10 @@ class FeishuBitableTableSink(Sink):
         relations: Mapping[str, Mapping[str, Any]] | None = None,
         batch_size: int = 1,
         flush_interval_s: float = 1.0,
+        insert_key_index: bool = False,
+        insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+        insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
+        ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
@@ -805,6 +823,17 @@ class FeishuBitableTableSink(Sink):
         self._relation_create_locks: dict[tuple[str, str, str, str], _FeishuRelationCreateLock] = {}
         self._batch_size = max(1, min(batch_size, _MAX_PAGE_SIZE))
         self._flush_interval_s = float(flush_interval_s)
+        # Insert key index configuration
+        self.insert_key_index = _normalize_insert_key_index(insert_key_index)
+        self.insert_index_page_size = _normalize_insert_index_page_size(insert_index_page_size)
+        self.insert_index_max_pages = _normalize_insert_index_max_pages(insert_index_max_pages)
+        self.ambiguous_write_max_rounds = _normalize_ambiguous_write_max_rounds(ambiguous_write_max_rounds)
+        if self.insert_key_index:
+            _validate_insert_key_index_requirements(
+                mode=self.mode,
+                match_fields=self.match_fields,
+                relations=self.relations,
+            )
         # Buffer stores raw payload fields (before relation resolution & match-finding)
         self._buffer: list[dict[str, Any]] = []
         self._buffer_lock: asyncio.Lock | None = None
@@ -1454,6 +1483,55 @@ def _normalize_mode(value: str) -> str:
     if normalized not in {"upsert", "create", "update", "insert"}:
         raise ValueError("mode must be one of 'upsert', 'create', 'update', or 'insert'")
     return normalized
+
+
+def _normalize_insert_key_index(value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError("'insert_key_index' must be a boolean")
+    return value
+
+
+def _normalize_insert_index_page_size(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'insert_index_page_size' must be an integer")
+    if value < 1:
+        raise ValueError("'insert_index_page_size' must be >= 1")
+    return min(value, _MAX_PAGE_SIZE)
+
+
+def _normalize_insert_index_max_pages(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'insert_index_max_pages' must be an integer")
+    if value < 1:
+        raise ValueError("'insert_index_max_pages' must be >= 1")
+    return value
+
+
+def _normalize_ambiguous_write_max_rounds(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'ambiguous_write_max_rounds' must be an integer")
+    if value < 1:
+        raise ValueError("'ambiguous_write_max_rounds' must be >= 1")
+    return value
+
+
+def _validate_insert_key_index_requirements(
+    *,
+    mode: str,
+    match_fields: tuple[str, ...],
+    relations: tuple[_FeishuRelationConfig, ...],
+) -> None:
+    if mode != "insert":
+        raise ValueError(
+            "insert_key_index requires mode='insert', not {!r}".format(mode)
+        )
+    if len(match_fields) != 1:
+        raise ValueError(
+            "insert_key_index requires exactly one match field, "
+            "got {}: {!r}".format(len(match_fields), match_fields)
+        )
+    if relations:
+        raise ValueError("insert_key_index is not supported with relations")
 
 
 def _normalize_user_id_type(value: str | None) -> str | None:

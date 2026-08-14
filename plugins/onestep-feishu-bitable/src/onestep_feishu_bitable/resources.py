@@ -31,7 +31,8 @@ _FEISHU_INCREMENTAL_FIELDS = frozenset(
     }
 )
 _FEISHU_TABLE_SINK_FIELDS = frozenset(
-    {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type", "relations", "batch_size", "flush_interval_s"}
+    {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type", "relations", "batch_size", "flush_interval_s",
+     "insert_key_index", "insert_index_page_size", "insert_index_max_pages", "ambiguous_write_max_rounds"}
 )
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
 _RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
@@ -81,6 +82,10 @@ _FEISHU_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("relations", "mapping"),
         ResourceCatalogField("batch_size", "integer", default=1),
         ResourceCatalogField("flush_interval_s", "number", default=1.0),
+        ResourceCatalogField("insert_key_index", "boolean", default=False),
+        ResourceCatalogField("insert_index_page_size", "integer", default=500),
+        ResourceCatalogField("insert_index_max_pages", "integer", default=200),
+        ResourceCatalogField("ambiguous_write_max_rounds", "integer", default=3),
     ),
     topology_fields=("app_token", "table_id", "mode", "match_fields", "batch_size"),
 )
@@ -162,6 +167,10 @@ def _build_feishu_bitable_table_sink(ctx: ResourceBuildContext, spec: Mapping[st
         relations=spec.get("relations"),
         batch_size=spec.get("batch_size", 1),
         flush_interval_s=spec.get("flush_interval_s", 1.0),
+        insert_key_index=spec.get("insert_key_index", False),
+        insert_index_page_size=spec.get("insert_index_page_size", 500),
+        insert_index_max_pages=spec.get("insert_index_max_pages", 200),
+        ambiguous_write_max_rounds=spec.get("ambiguous_write_max_rounds", 3),
     )
 
 
@@ -214,6 +223,26 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
         )
     ctx.validate_positive_integer(spec.get("batch_size"), field=f"{ctx.field}.batch_size")
     ctx.validate_positive_number(spec.get("flush_interval_s"), field=f"{ctx.field}.flush_interval_s")
+    if "insert_key_index" in spec:
+        raw = spec["insert_key_index"]
+        if not isinstance(raw, bool):
+            raise TypeError(f"'{ctx.field}.insert_key_index' must be a boolean")
+        if raw:
+            if mode != "insert":
+                raise ValueError(
+                    f"'{ctx.field}.insert_key_index' requires '{ctx.field}.mode' to be 'insert'"
+                )
+            if len(match_fields) != 1:
+                raise ValueError(
+                    f"'{ctx.field}.insert_key_index' requires exactly one match field"
+                )
+            if "relations" in spec:
+                raise ValueError(
+                    f"'{ctx.field}.insert_key_index' is not supported with relations"
+                )
+    ctx.validate_positive_integer(spec.get("insert_index_page_size"), field=f"{ctx.field}.insert_index_page_size")
+    ctx.validate_positive_integer(spec.get("insert_index_max_pages"), field=f"{ctx.field}.insert_index_max_pages")
+    ctx.validate_positive_integer(spec.get("ambiguous_write_max_rounds"), field=f"{ctx.field}.ambiguous_write_max_rounds")
 
 
 def _validate_feishu_relations(
