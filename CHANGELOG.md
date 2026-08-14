@@ -15,6 +15,24 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.3.0
+
+- Adds `batch_create_records` and `batch_update_records` connector methods
+  that call the Feishu batch create/update endpoints, reducing API calls
+  for multiple records.
+- TableSink now supports optional buffering via `batch_size` and
+  `flush_interval_s`. When `batch_size > 1`, records are buffered and
+  flushed in batches — works for both `create` and `upsert` modes.
+  In upsert mode, match-finding is still per-record, but creates and
+  updates are batched separately.
+- Emits a `logging.warning` when a field value looks like a bare dict
+  with no recognized Feishu field-type keys, suggesting the use of
+  `feishu_bitable_text()` to avoid `TextFieldConvFail`.
+- `_normalize_relation_values` now accepts `int`, `float`, and `bool`
+  values for relation source fields, auto-converting them to strings.
+- API errors from `create_record` and `update_record` now include
+  field names and `table_id` in the error message.
+
 ## onestep-feishu-bitable 0.2.0
 
 - Adds declarative Table Sink `relations` that resolve one or many business keys

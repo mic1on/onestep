@@ -31,7 +31,7 @@ _FEISHU_INCREMENTAL_FIELDS = frozenset(
     }
 )
 _FEISHU_TABLE_SINK_FIELDS = frozenset(
-    {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type", "relations"}
+    {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type", "relations", "batch_size", "flush_interval_s"}
 )
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
 _RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
@@ -79,8 +79,10 @@ _FEISHU_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("match_fields", "string_list", required=True),
         ResourceCatalogField("user_id_type", "string", options=tuple(sorted(_USER_ID_TYPES))),
         ResourceCatalogField("relations", "mapping"),
+        ResourceCatalogField("batch_size", "integer", default=1),
+        ResourceCatalogField("flush_interval_s", "number", default=1.0),
     ),
-    topology_fields=("app_token", "table_id", "mode", "match_fields"),
+    topology_fields=("app_token", "table_id", "mode", "match_fields", "batch_size"),
 )
 
 
@@ -158,6 +160,8 @@ def _build_feishu_bitable_table_sink(ctx: ResourceBuildContext, spec: Mapping[st
         match_fields=spec.get("match_fields"),
         user_id_type=spec.get("user_id_type"),
         relations=spec.get("relations"),
+        batch_size=spec.get("batch_size", 1),
+        flush_interval_s=spec.get("flush_interval_s", 1.0),
     )
 
 
@@ -208,6 +212,8 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
             match_fields=match_fields,
             field=f"{ctx.field}.relations",
         )
+    ctx.validate_positive_integer(spec.get("batch_size"), field=f"{ctx.field}.batch_size")
+    ctx.validate_positive_number(spec.get("flush_interval_s"), field=f"{ctx.field}.flush_interval_s")
 
 
 def _validate_feishu_relations(

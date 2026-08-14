@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -154,6 +155,8 @@ class FeishuBitableConnector:
         match_fields: Sequence[str] | None = None,
         user_id_type: str | None = None,
         relations: Mapping[str, Mapping[str, Any]] | None = None,
+        batch_size: int = 1,
+        flush_interval_s: float = 1.0,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
             connector=self,
@@ -163,6 +166,8 @@ class FeishuBitableConnector:
             match_fields=match_fields,
             user_id_type=user_id_type,
             relations=relations,
+            batch_size=batch_size,
+            flush_interval_s=flush_interval_s,
         )
 
     async def search_records(
@@ -208,16 +213,21 @@ class FeishuBitableConnector:
         source_name: str,
         retry_delay_s: float | None = None,
     ) -> dict[str, Any]:
-        payload = await self._request_json(
-            "POST",
-            _bitable_records_path(app_token=app_token, table_id=table_id),
-            query=_user_id_type_query(user_id_type),
-            body={"fields": dict(fields)},
-            auth=True,
-            operation=operation,
-            source_name=source_name,
-            retry_delay_s=retry_delay_s,
-        )
+        _check_field_values_before_send(fields, table_id, source_name)
+        try:
+            payload = await self._request_json(
+                "POST",
+                _bitable_records_path(app_token=app_token, table_id=table_id),
+                query=_user_id_type_query(user_id_type),
+                body={"fields": dict(fields)},
+                auth=True,
+                operation=operation,
+                source_name=source_name,
+                retry_delay_s=retry_delay_s,
+            )
+        except ConnectorOperationError as exc:
+            __traceback__ = exc.__traceback__
+            raise _with_field_context(exc, fields, table_id) from exc.__cause__
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 
@@ -233,16 +243,87 @@ class FeishuBitableConnector:
         source_name: str,
         retry_delay_s: float | None = None,
     ) -> dict[str, Any]:
+        _check_field_values_before_send(fields, table_id, source_name)
         path = _bitable_records_path(
             app_token=app_token,
             table_id=table_id,
             suffix=f"/{_quote_path(record_id)}",
         )
+        try:
+            payload = await self._request_json(
+                "PUT",
+                path,
+                query=_user_id_type_query(user_id_type),
+                body={"fields": dict(fields)},
+                auth=True,
+                operation=operation,
+                source_name=source_name,
+                retry_delay_s=retry_delay_s,
+            )
+        except ConnectorOperationError as exc:
+            __traceback__ = exc.__traceback__
+            raise _with_field_context(exc, fields, table_id) from exc.__cause__
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
+    async def batch_create_records(
+        self,
+        *,
+        app_token: str,
+        table_id: str,
+        records: Sequence[dict[str, Any]],
+        user_id_type: str | None = None,
+        operation: ConnectorOperation,
+        source_name: str,
+        retry_delay_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Create multiple records in one API call (max 500 per batch)."""
+        if not records:
+            return {"records": []}
+        for fields in records:
+            _check_field_values_before_send(fields, table_id, source_name)
         payload = await self._request_json(
-            "PUT",
-            path,
+            "POST",
+            _bitable_records_path(app_token=app_token, table_id=table_id, suffix="/batch_create"),
             query=_user_id_type_query(user_id_type),
-            body={"fields": dict(fields)},
+            body={"records": [{"fields": dict(fields)} for fields in records]},
+            auth=True,
+            operation=operation,
+            source_name=source_name,
+            retry_delay_s=retry_delay_s,
+        )
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
+    async def batch_update_records(
+        self,
+        *,
+        app_token: str,
+        table_id: str,
+        records: Sequence[dict[str, Any]],
+        user_id_type: str | None = None,
+        operation: ConnectorOperation,
+        source_name: str,
+        retry_delay_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Update multiple records in one API call (max 500 per batch).
+
+        Each record dict must include ``record_id`` and ``fields``.
+        """
+        if not records:
+            return {"records": []}
+        for item in records:
+            _check_field_values_before_send(item["fields"], table_id, source_name)
+        payload = await self._request_json(
+            "POST",
+            _bitable_records_path(app_token=app_token, table_id=table_id, suffix="/batch_update"),
+            query=_user_id_type_query(user_id_type),
+            body={
+                "records": [
+                    {"record_id": item["record_id"], "fields": dict(item["fields"])}
+                    for item in records
+                ]
+            },
             auth=True,
             operation=operation,
             source_name=source_name,
@@ -680,6 +761,16 @@ class _FeishuRelationCreateLock:
 
 
 class FeishuBitableTableSink(Sink):
+    """Feishu Bitable table sink with optional batch buffering for create mode.
+
+    When ``mode="create"`` and ``batch_size > 1``, records are buffered and
+    flushed in batches via the Feishu ``batch_create`` API.  This dramatically
+    reduces API calls — 500 records become 1 call instead of 500.
+
+    upsert and update modes still process records one at a time because
+    each record requires a match-finding search before the write.
+    """
+
     def __init__(
         self,
         *,
@@ -690,6 +781,8 @@ class FeishuBitableTableSink(Sink):
         match_fields: Sequence[str] | None,
         user_id_type: str | None,
         relations: Mapping[str, Mapping[str, Any]] | None = None,
+        batch_size: int = 1,
+        flush_interval_s: float = 1.0,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
@@ -710,20 +803,24 @@ class FeishuBitableTableSink(Sink):
             match_fields=normalized_match_fields,
         )
         self._relation_create_locks: dict[tuple[str, str, str, str], _FeishuRelationCreateLock] = {}
+        self._batch_size = max(1, min(batch_size, _MAX_PAGE_SIZE))
+        self._flush_interval_s = float(flush_interval_s)
+        # Buffer of (fields, record_id_or_None) pairs
+        self._buffer: list[tuple[dict[str, Any], str | None]] = []
+        self._buffer_lock: asyncio.Lock | None = None
+        self._flush_task: asyncio.Task[None] | None = None
+        self._closed = False
+
+    def _ensure_buffer_lock(self) -> asyncio.Lock:
+        if self._buffer_lock is None:
+            self._buffer_lock = asyncio.Lock()
+        return self._buffer_lock
 
     async def send(self, envelope: Envelope) -> None:
         try:
             fields = await self._resolve_relation_fields(_payload_fields(envelope.body))
             if self.mode == "create":
-                await self.connector.create_record(
-                    app_token=self.app_token,
-                    table_id=self.table_id,
-                    fields=fields,
-                    user_id_type=self.user_id_type,
-                    operation=ConnectorOperation.SEND,
-                    source_name=self.name,
-                    retry_delay_s=1.0,
-                )
+                await self._buffer_record(fields, None)
                 return
 
             match_values = _match_values(fields, self.match_fields)
@@ -733,28 +830,11 @@ class FeishuBitableTableSink(Sink):
                     f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
                 )
             if matches:
-                await self.connector.update_record(
-                    app_token=self.app_token,
-                    table_id=self.table_id,
-                    record_id=_record_id(matches[0]),
-                    fields=fields,
-                    user_id_type=self.user_id_type,
-                    operation=ConnectorOperation.SEND,
-                    source_name=self.name,
-                    retry_delay_s=1.0,
-                )
+                await self._buffer_record(fields, _record_id(matches[0]))
                 return
             if self.mode == "update":
                 raise FeishuBitablePayloadError(f"no record matched fields {self.match_fields!r}")
-            await self.connector.create_record(
-                app_token=self.app_token,
-                table_id=self.table_id,
-                fields=fields,
-                user_id_type=self.user_id_type,
-                operation=ConnectorOperation.SEND,
-                source_name=self.name,
-                retry_delay_s=1.0,
-            )
+            await self._buffer_record(fields, None)
         except ConnectorOperationError:
             raise
         except FeishuBitablePayloadError as exc:
@@ -765,7 +845,101 @@ class FeishuBitableTableSink(Sink):
                 source_name=self.name,
                 retry_delay_s=1.0,
                 cause=exc,
+                message=f"feishu_bitable send failed (permanent) for {self.name!r}: {exc}",
             ) from exc
+
+    async def _buffer_record(self, fields: dict[str, Any], record_id: str | None) -> None:
+        """Buffer a record for batch write, or send immediately if batch_size <= 1."""
+        if self._batch_size <= 1:
+            if record_id is None:
+                await self.connector.create_record(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    fields=fields,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            else:
+                await self.connector.update_record(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    record_id=record_id,
+                    fields=fields,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            return
+
+        lock = self._ensure_buffer_lock()
+        async with lock:
+            self._buffer.append((fields, record_id))
+            if len(self._buffer) >= self._batch_size:
+                await self._flush_buffer()
+                return
+            if self._flush_task is None and not self._closed:
+                self._flush_task = asyncio.ensure_future(self._flush_after_interval())
+
+    async def _flush_after_interval(self) -> None:
+        """Flush the buffer after flush_interval_s of inactivity."""
+        try:
+            await asyncio.sleep(self._flush_interval_s)
+            lock = self._ensure_buffer_lock()
+            async with lock:
+                if self._buffer:
+                    await self._flush_buffer()
+                self._flush_task = None
+        except asyncio.CancelledError:
+            self._flush_task = None
+            raise
+
+    async def _flush_buffer(self) -> None:
+        """Flush buffered records, splitting into batch creates and batch updates."""
+        if not self._buffer:
+            return
+        items = self._buffer[:]
+        self._buffer.clear()
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            self._flush_task = None
+
+        creates = [fields for fields, rid in items if rid is None]
+        updates = [{"record_id": rid, "fields": fields} for fields, rid in items if rid is not None]
+
+        if creates:
+            await self.connector.batch_create_records(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                records=creates,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+        if updates:
+            await self.connector.batch_update_records(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                records=updates,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+
+    async def close(self) -> None:
+        """Flush remaining buffered records before closing."""
+        self._closed = True
+        lock = self._ensure_buffer_lock()
+        async with lock:
+            if self._flush_task is not None:
+                self._flush_task.cancel()
+                self._flush_task = None
+            if self._buffer:
+                await self._flush_buffer()
 
     async def _resolve_relation_fields(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         if not self.relations:
@@ -1183,20 +1357,24 @@ def _normalize_relation_values(value: Any, *, field: str) -> tuple[str, ...]:
         return ()
     if isinstance(value, str):
         raw_values = (value,)
+    elif isinstance(value, (int, float, bool)):
+        raw_values = (str(value),)
     elif isinstance(value, (list, tuple)):
         raw_values = tuple(value)
     else:
         raise FeishuBitablePayloadError(
-            f"relation source field {field!r} must be a string, list, tuple, or None"
+            f"relation source field {field!r} must be a string, number, list, tuple, or None"
         )
     normalized: list[str] = []
     seen: set[str] = set()
     for item in raw_values:
         if item is None:
             continue
+        if isinstance(item, (int, float, bool)):
+            item = str(item)
         if not isinstance(item, str):
             raise FeishuBitablePayloadError(
-                f"relation source field {field!r} values must be strings or None"
+                f"relation source field {field!r} values must be strings, numbers, or None"
             )
         item = item.strip()
         if not item or item in seen:
@@ -1225,6 +1403,79 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+_KNOWN_DICT_FIELD_KEYS = frozenset({
+    "text",           # rich text object
+    "name",           # text field common key
+    "value",          # text field common key
+    "link",           # URL field
+    "email",          # email field
+    "id",             # person field
+    "file_token",     # attachment field
+    "location",       # location field
+    "address",        # location field
+    "elements",       # block/rich text
+    "type",           # rich text type discriminator
+})
+
+
+def _check_field_values_before_send(
+    fields: Mapping[str, Any],
+    table_id: str,
+    source_name: str,
+) -> None:
+    """Warn about field values that may cause TextFieldConvFail.
+
+    Feishu's TextFieldConvFail error does not report which field caused the
+    failure.  This check emits a warning for the most common cause — a bare
+    dict being sent to a text field — so the field name and value are logged
+    even if the API call fails with a generic error.
+    """
+    _logger = logging.getLogger(__name__)
+    for field_name, value in fields.items():
+        if isinstance(value, dict) and not _KNOWN_DICT_FIELD_KEYS.intersection(value):
+            _logger.warning(
+                "Field %r looks like a dict with no recognized Feishu field-type keys "
+                "(keys=%r). If this is meant for a text field, use feishu_bitable_text() "
+                "to convert it. (table_id=%s, source=%s)",
+                field_name,
+                sorted(value.keys()),
+                table_id,
+                source_name,
+            )
+
+
+def _with_field_context(
+    exc: ConnectorOperationError,
+    fields: Mapping[str, Any],
+    table_id: str,
+) -> ConnectorOperationError:
+    field_names = list(fields.keys())
+    cause = exc.__cause__
+    if isinstance(cause, FeishuBitableApiError) and isinstance(cause.body, dict):
+        api_data = cause.body.get("data")
+        if isinstance(api_data, dict):
+            api_fields = api_data.get("field_name") or api_data.get("field") or api_data.get("fields")
+            if api_fields:
+                field_names_str = f"fields={field_names}"
+                detail_str = f"field={api_fields}"
+                new_msg = f"{exc} ; {detail_str} ; {field_names_str} ; table_id={table_id}"
+            else:
+                new_msg = f"{exc} ; fields={field_names} ; table_id={table_id}"
+        else:
+            new_msg = f"{exc} ; fields={field_names} ; table_id={table_id}"
+    else:
+        new_msg = f"{exc} ; fields={field_names} ; table_id={table_id}"
+    return ConnectorOperationError(
+        backend=exc.backend,
+        operation=exc.operation,
+        kind=exc.kind,
+        source_name=exc.source_name,
+        retry_delay_s=exc.retry_delay_s,
+        cause=exc.__cause__ or exc,
+        message=new_msg,
+    )
 
 
 def _classify_transport_error(exc: BaseException) -> ConnectorErrorKind:
