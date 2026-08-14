@@ -15,6 +15,16 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.2.0
+
+- Adds declarative Table Sink `relations` that resolve one or many business keys
+  to Feishu related-record IDs before create, update, or upsert.
+- Supports `error`, `empty`, and `create` behavior for missing related records,
+  including create-and-link, cross-Base relation lookups, and per-Sink
+  single-flight protection for concurrent creates.
+- Adds strict YAML validation, safe control-plane relation descriptors, and
+  documentation for multi-record relations and multi-process creation limits.
+
 ## onestep 1.9.0
 
 - Adds the `ExecutionClient`, immutable execution snapshots, typed result

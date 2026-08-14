@@ -31,3 +31,27 @@ YAML resource types registered by the plugin:
 - `feishu_bitable`
 - `feishu_bitable_incremental`
 - `feishu_bitable_table_sink`
+
+Table sinks can resolve business keys into Feishu relation record IDs:
+
+```yaml
+resources:
+  projects:
+    type: feishu_bitable_table_sink
+    connector: feishu
+    app_token: project-app-token
+    table_id: projects
+    mode: upsert
+    match_fields: [project_id]
+    relations:
+      companies:
+        from: company_names
+        table_id: companies
+        key: name
+        on_missing: create
+```
+
+The input may contain one business key or a list. Missing related records can
+fail the send, be omitted, or be created and linked. See the
+[Feishu Bitable broker documentation](https://onestep.code05.com/broker/feishu-bitable)
+for the complete behavior and concurrency limits.
