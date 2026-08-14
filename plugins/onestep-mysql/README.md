@@ -28,3 +28,9 @@ SQLAlchemy database operations use `AsyncEngine` and async drivers. Existing
 adapted to the `asyncmy` dialect. SQLite is supported in tests and local
 development through `aiosqlite`. The binlog reader remains isolated behind a
 thread boundary because `mysql-replication` is a synchronous library.
+
+Production `mysql_incremental` sources should bind a durable
+`mysql_cursor_store` with an explicit stable `state_key`. Retries redeliver the
+same logical row with incremented attempts and pause later SQL reads across the
+gap. Concurrent acknowledgements advance only a contiguous prefix and are
+coalesced into cursor-store commit waves.

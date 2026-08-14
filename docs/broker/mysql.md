@@ -307,8 +307,9 @@ batch_size=1000
 # 表队列：可高并发（行级锁）
 @app.task(source=source, concurrency=16)
 
-# 增量同步：建议单并发（保持顺序）
-@app.task(source=incremental, concurrency=1)
+# 增量同步可并发处理；Runner 每轮仍只调用一次 fetch(limit)
+# concurrency 限制处理中 Delivery，不会发起 100 条并发 SELECT
+@app.task(source=incremental, concurrency=100)
 ```
 
 ### 4. 连接池
@@ -321,4 +322,29 @@ db = MySQLConnector(
     "&max_overflow=20"
     "&pool_recycle=3600"
 )
+```
+
+### 5. 可靠持久游标与重试
+
+生产增量同步应显式绑定 `mysql_cursor_store` 和稳定 `state_key`。成功记录可以乱序
+完成，但持久游标只推进到连续成功前缀；同一批同时释放的确认会合并为一个状态写。
+失败重试会重新投递同一逻辑行并增加 `Envelope.attempts`，缺口重试期间不会继续发出
+后续 SQL 查询。达到任务 `max_attempts` 后 Source 停在失败行之前。进程重启从已持久
+游标恢复，未提交的行会重放。
+
+```yaml
+mysql_cursors:
+  type: mysql_cursor_store
+  connector: mysql_source
+  table: onestep_cursor
+  auto_create: true
+
+follow_records:
+  type: mysql_incremental
+  connector: mysql_source
+  table: view_follow_record_sync
+  key: unionKey
+  cursor: [dataCreateTime, unionKey]
+  state: mysql_cursors
+  state_key: follow-record-sync-v1
 ```

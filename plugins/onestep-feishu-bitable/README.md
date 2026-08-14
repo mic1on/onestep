@@ -55,3 +55,10 @@ The input may contain one business key or a list. Missing related records can
 fail the send, be omitted, or be created and linked. See the
 [Feishu Bitable broker documentation](https://onestep.code05.com/broker/feishu-bitable)
 for the complete behavior and concurrency limits.
+
+For immutable, insert-only logs, `insert_key_index: true` preloads one unique
+`match_fields` value and removes normal per-row destination searches. It is
+single-writer only, cannot be combined with `relations`, retains no record IDs,
+and waits for each batch member's confirmed outcome before returning from
+`send()`. Ambiguous writes are searched by affected key before confirmed misses
+are recreated. See `example/mysql_feishu_insert.yaml`.
