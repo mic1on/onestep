@@ -15,6 +15,12 @@
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
 
+## onestep-feishu-bitable 0.3.3
+
+- Fixes `TypeError: unhashable type: 'mappingproxy'` in
+  `_batch_resolve_relations` by using `(target_field, value)` as the
+  dedup key instead of a `set` of `(relation, value)` tuples.
+
 ## onestep-feishu-bitable 0.3.2
 
 - Adds `insert` mode: match by `match_fields` — if a record exists it is

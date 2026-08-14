@@ -966,8 +966,8 @@ class FeishuBitableTableSink(Sink):
         sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
         # {(target_field, value): record_id | None}
         cache: dict[tuple[str, str], str | None] = {}
-        # {(relation, value)} for create-on-missing values
-        to_create: dict[tuple[_FeishuRelationConfig, str], None] = {}
+        # List of (relation, value) for create-on-missing values
+        to_create: list[tuple[_FeishuRelationConfig, str]] = []
 
         async def search_one(rel: _FeishuRelationConfig, value: str) -> None:
             async with sem:
@@ -980,7 +980,7 @@ class FeishuBitableTableSink(Sink):
                 if matches:
                     cache[(rel.target_field, value)] = _record_id(matches[0])
                 elif rel.on_missing == "create":
-                    to_create[(rel, value)] = None
+                    to_create.append((rel, value))
                 elif rel.on_missing == "error":
                     raise FeishuBitablePayloadError(
                         f"relation field {rel.target_field!r} value {value!r} "
@@ -988,18 +988,18 @@ class FeishuBitableTableSink(Sink):
                     )
                 # on_missing == "empty": just skip, cache stays empty
 
-        # Collect unique (relation, value) pairs
-        pending: set[tuple[_FeishuRelationConfig, str]] = set()
+        # Collect unique (relation, value) pairs, keyed by (target_field, value)
+        pending: dict[tuple[str, str], tuple[_FeishuRelationConfig, str]] = {}
         for item in items:
             for relation in self.relations:
                 values = _normalize_relation_values(
                     item.get(relation.source_field), field=relation.source_field
                 )
                 for value in values:
-                    pending.add((relation, value))
+                    pending[(relation.target_field, value)] = (relation, value)
 
         if pending:
-            tasks = [search_one(rel, val) for rel, val in pending]
+            tasks = [search_one(rel, val) for rel, val in pending.values()]
             await asyncio.gather(*tasks)
 
         # Batch create missing records
@@ -1034,10 +1034,12 @@ class FeishuBitableTableSink(Sink):
 
     async def _batch_create_relation_records(
         self,
-        to_create: dict[tuple[_FeishuRelationConfig, str], None],
+        to_create: list[tuple[_FeishuRelationConfig, str]],
         cache: dict[tuple[str, str], str | None],
     ) -> None:
         """Batch create missing relation records and update the cache."""
+        if not to_create:
+            return
         # Group by (app_token, table_id, key)
         groups: dict[tuple[str, str, str], list[tuple[_FeishuRelationConfig, str]]] = {}
         for rel, value in to_create:
