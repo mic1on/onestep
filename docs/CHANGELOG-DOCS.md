@@ -1,5 +1,18 @@
 # 文档更新日志
 
+## 2026-08-14 - 同步 Feishu Bitable 关联解析器
+
+### 变更概述
+
+将 docs 分支同步到 `main` 的最新代码状态（PR #112），补充 Feishu Bitable 关联字段解析器文档。
+
+### 更新内容
+
+- [Feishu Bitable](/broker/feishu-bitable) 文档新增 `relations` 关联字段章节，覆盖声明式业务键到关联记录 ID 的解析、`error`/`empty`/`create` 三种缺失策略、跨 Base 关联和并发创建保护。
+- 新增关联解析器设计文档和实现计划。
+- 同步 `onestep-feishu-bitable` 插件 README 更新至 0.2.0。
+- 合入 `onestep-feishu-bitable` 0.2.0 发布与 `deploy-docs.yml` CI 修复。
+
 ## 2026-08-11 - 同步 1.9.0 与新连接器文档
 
 ### 变更概述
