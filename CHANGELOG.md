@@ -14,6 +14,15 @@
 - Makes direct PostgreSQL execution backends process-safe for pre-fork deployments:
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
+## onestep-feishu-bitable 0.4.0
+- Adds opt-in, bounded destination-key preload for single-field Insert sinks.
+- Makes buffered sends complete only after their item is confirmed created or pre-existing.
+- Reconciles ambiguous batch writes by exact-searching only affected keys before creating confirmed misses.
+- Requires one active writer per indexed destination table and retains no record IDs or durable ledger.
+## onestep-mysql 0.5.0
+- Retries the same incremental logical row with incremented delivery attempts.
+- Coalesces contiguous cursor acknowledgements into event-loop commit waves without crossing failed gaps.
+- Keeps the existing persisted cursor representation compatible with prior releases.
 
 ## onestep-feishu-bitable 0.3.5
 - Fixes partial batches never reaching Feishu when `flush_interval_s` expires:
