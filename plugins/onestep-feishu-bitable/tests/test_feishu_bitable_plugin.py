@@ -23,3 +23,11 @@ def test_feishu_bitable_plugin_registers_catalog_metadata() -> None:
     assert catalog["feishu_bitable_table_sink"].connector_types == ("feishu_bitable",)
     assert sink_fields["app_token"].secret is True
     assert sink_fields["relations"].type == "mapping"
+    assert sink_fields["insert_key_index"].type == "boolean"
+    assert sink_fields["insert_key_index"].default is False
+    assert sink_fields["insert_index_page_size"].type == "integer"
+    assert sink_fields["insert_index_page_size"].default == 500
+    assert sink_fields["insert_index_max_pages"].type == "integer"
+    assert sink_fields["insert_index_max_pages"].default == 200
+    assert sink_fields["ambiguous_write_max_rounds"].type == "integer"
+    assert sink_fields["ambiguous_write_max_rounds"].default == 3

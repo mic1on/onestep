@@ -890,3 +890,14 @@ files can use the provided `type` values without changing onestep core.
 
 The repository includes plugin packages under `plugins/`, each with its own
 entry point and release workflow.
+
+## MySQL to Feishu insert controls
+
+`mysql_incremental.batch_size` limits rows returned by one source fetch, and the
+runtime further caps that fetch by available task concurrency.
+`feishu_bitable_table_sink.batch_size` is the Feishu write boundary.
+`tasks[].concurrency` is the maximum number of in-flight deliveries. These are
+independent; `tasks[].config.batch_size` would only be arbitrary data exposed as
+`ctx.task_config` and does not batch either connector. See
+`example/mysql_feishu_insert.yaml` for the strict lowercase, durable-cursor
+configuration.

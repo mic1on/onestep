@@ -205,6 +205,38 @@ relations:
 
 `fallback_scan_page_limit` 是防护阀。只有确认表规模和调用配额允许 fallback 扫描时，才提高这个值。
 
+## 高吞吐 Insert 增量同步
+
+不可变操作记录可以为 `insert` Sink 开启 `insert_key_index`：Sink 启动时只分页读取
+一个 `match_fields` 字段到内存集合，正常处理不再逐条调用 Search。目标表 5 万条、
+页大小 500 时，启动扫描约 100 次。扫描达到 `insert_index_max_pages` 仍未结束会
+直接启动失败，不会使用截断索引。
+
+```yaml
+follow_record_table:
+  type: feishu_bitable_table_sink
+  connector: feishu
+  app_token: "${FEISHU_APP_TOKEN}"
+  table_id: "${FEISHU_TABLE_ID}"
+  mode: insert
+  match_fields: [编号]
+  batch_size: 100
+  flush_interval_s: 1
+  insert_key_index: true
+  insert_index_page_size: 500
+  insert_index_max_pages: 200
+  ambiguous_write_max_rounds: 3
+```
+
+该模式仅支持一个匹配字段且不能同时配置 `relations`。每次 `send()` 只有在记录已
+存在或所属批次确认创建成功后才返回，因此上游 Delivery 不会在私有缓冲区仍未落盘时
+提前确认。超时、断链或不完整响应会先精确查询受影响批次，再只创建明确缺失的键；
+查询失败永远不会被当作“不存在”。
+
+内存索引要求同一 `(app_token, table_id)` 只有一个活动写入实例。手工新增或第二个
+worker 会造成启动后竞态。该模式不保存 record ID，也不提供持久幂等账本、更新、删除、
+CDC 或多写者 exactly-once 保证。
+
 ## 下一步
 
 - [YAML 任务定义](/yaml-task-definition) - 查看插件资源注册和严格校验
