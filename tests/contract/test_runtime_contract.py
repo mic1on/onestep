@@ -33,7 +33,7 @@ from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
 from onestep.execution import ExecutionErrorDetail
 from onestep.runtime import TaskRunner
-from onestep.task import EmitRoute, TaskHooks
+from onestep.task import EmitBinding, EmitRoute, TaskHooks
 
 
 class _StubDelivery(Delivery):
@@ -1244,6 +1244,32 @@ def test_task_spec_normalizes_unconditional_sink_to_emit_route() -> None:
     task = app.tasks[0]
     assert task.sinks == (sink,)
     assert task.emit_routes == (EmitRoute(then_sinks=(sink,)),)
+
+
+def test_task_spec_keeps_emit_binding_order_and_legacy_route_view() -> None:
+    source = MemoryQueue("incoming")
+    audit = MemoryQueue("audit")
+    projected = MemoryQueue("projected")
+    app = OneStepApp("emit-binding-model")
+
+    def to_projected(ctx, payload, result):
+        return {"value": result["value"] * 2}
+
+    binding = EmitBinding(
+        sink=projected,
+        transform=to_projected,
+        transform_ref="tests.transforms:to_projected",
+    )
+
+    @app.task(source=source, emit=[audit, binding])
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.emit_targets == (EmitRoute(then_sinks=(audit,)), binding)
+    assert task.emit_routes == (EmitRoute(then_sinks=(audit,)),)
+    assert task.emit_bindings == (EmitBinding(sink=audit), binding)
+    assert task.sinks == (audit, projected)
 
 
 def test_task_spec_flattens_conditional_route_sinks_for_compatibility() -> None:

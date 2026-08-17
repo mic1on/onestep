@@ -33,6 +33,7 @@ from onestep.diagnostics.models import (
 )
 from onestep.envelope import Envelope
 from onestep.retry import FailureInfo, FailureKind
+from onestep.task import EmitBinding, EmitRoute
 
 
 @contextmanager
@@ -1545,6 +1546,111 @@ def test_yaml_target_loads_conditional_emit_routes(tmp_path) -> None:
 
     assert asyncio.run(evaluate_predicate({"value": 11})) is True
     assert asyncio.run(evaluate_predicate({"value": 9})) is False
+
+
+def test_yaml_target_loads_per_sink_emit_binding(tmp_path) -> None:
+    config_path = tmp_path / "emit-binding.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-emit-binding"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "audit": {"type": "memory", "maxsize": 100},
+                    "projected": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "project",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_emit_binding:consume",
+                        "emit": [
+                            "audit",
+                            {
+                                "sink": "projected",
+                                "transform": {
+                                    "ref": "testsupport_yaml_emit_binding:to_projected",
+                                    "params": {"factor": 2},
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async def consume(ctx, item):
+        return item
+
+    def to_projected(ctx, payload, result, *, factor: int):
+        return {"value": result["value"] * factor}
+
+    with registered_yaml_module(), registered_module(
+        "testsupport_yaml_emit_binding",
+        consume=consume,
+        to_projected=to_projected,
+    ):
+        app = load_app_config(json.loads(config_path.read_text()), strict=True)
+
+    task = app.tasks[0]
+    assert [type(target) for target in task.emit_targets] == [EmitRoute, EmitBinding]
+    assert [sink.name for sink in task.sinks] == ["audit", "projected"]
+    binding = task.emit_targets[1]
+    assert isinstance(binding, EmitBinding)
+    assert binding.transform_ref == "testsupport_yaml_emit_binding:to_projected"
+    assert asyncio.run(binding.transform(None, {}, {"value": 3})) == {"value": 6}
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        (
+            {"transform": "testsupport_yaml_emit_binding:to_projected"},
+            r"'sink' must be a non-empty string",
+        ),
+        (
+            {"sink": "processed", "unknown": True},
+            r"unsupported fields for tasks\[0\]\.emit\[0\]: unknown",
+        ),
+        (
+            {"sink": "processed", "transform": {"params": {}}},
+            r"'ref' must be a non-empty string",
+        ),
+        (
+            {
+                "sink": "processed",
+                "when": "testsupport_yaml_emit_binding:predicate",
+                "then": "processed",
+            },
+            r"unsupported fields for tasks\[0\]\.emit\[0\]: then, when",
+        ),
+    ],
+)
+def test_load_app_config_strict_rejects_invalid_emit_binding(entry, message) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-invalid-emit-binding"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "processed": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "project",
+                        "source": "incoming",
+                        "emit": [entry],
+                    }
+                ],
+            },
+            strict=True,
+        )
 
 
 def test_yaml_conditional_emit_supports_list_sinks_and_passthrough_handler() -> None:
