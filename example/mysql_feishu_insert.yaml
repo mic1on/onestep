@@ -2,7 +2,7 @@ apiVersion: onestep/v1alpha1
 kind: App
 
 app:
-  name: follow-record-sync
+  name: feishu-order-sync
   shutdown_timeout_s: 120
   strict_env: true
 
@@ -17,16 +17,16 @@ resources:
     table: onestep_cursor
     auto_create: true
 
-  follow_records:
+  order_source:
     type: mysql_incremental
     connector: mysql_source
-    table: view_follow_record_sync
-    key: unionKey
-    cursor: [dataCreateTime, unionKey]
+    table: view_order_sync
+    key: orderKey
+    cursor: [orderCreateTime, orderKey]
     batch_size: 1000
     poll_interval_s: 1
     state: mysql_cursors
-    state_key: follow-record-sync-v1
+    state_key: feishu-order-sync-v1
 
   feishu:
     type: feishu_bitable
@@ -34,13 +34,13 @@ resources:
     app_secret: "${FEISHU_APP_SECRET}"
     timeout_s: 10
 
-  follow_record_table:
+  order_table:
     type: feishu_bitable_table_sink
     connector: feishu
     app_token: "${FEISHU_APP_TOKEN}"
     table_id: "${FEISHU_TABLE_ID}"
     mode: insert
-    match_fields: [编号]
+    match_fields: [订单编号]
     batch_size: 100
     flush_interval_s: 1
     insert_key_index: true
@@ -49,9 +49,9 @@ resources:
     ambiguous_write_max_rounds: 3
 
 tasks:
-  - name: insert_follow_records
-    source: follow_records
-    emit: follow_record_table
+  - name: sync_orders
+    source: order_source
+    emit: order_table
     concurrency: 100
     timeout_s: 120
     retry:

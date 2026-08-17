@@ -332,6 +332,11 @@ db = MySQLConnector(
 后续 SQL 查询。达到任务 `max_attempts` 后 Source 停在失败行之前。进程重启从已持久
 游标恢复，未提交的行会重放。
 
+从 `onestep-mysql 0.5.1` 起，`mysql_cursor_store` 能持久化游标中的 MySQL
+`DATETIME` 组件：它以带类型标记的 ISO-8601 JSON 保存，重启后恢复为原始
+`datetime`（保留微秒）再参与 keyset 查询。已有的纯 JSON 游标继续兼容；从
+`0.5.0` 升级不需要迁移游标表，也不要手工推进一个因提交失败而尚未确认的游标。
+
 ```yaml
 mysql_cursors:
   type: mysql_cursor_store
@@ -339,12 +344,15 @@ mysql_cursors:
   table: onestep_cursor
   auto_create: true
 
-follow_records:
+order_source:
   type: mysql_incremental
   connector: mysql_source
-  table: view_follow_record_sync
-  key: unionKey
-  cursor: [dataCreateTime, unionKey]
+  table: view_order_sync
+  key: orderKey
+  cursor: [orderCreateTime, orderKey]
   state: mysql_cursors
-  state_key: follow-record-sync-v1
+  state_key: feishu-order-sync-v1
 ```
+
+完整的生产参数、飞书 Insert 键索引、handler 契约和故障恢复流程参见
+[实战篇：MySQL 订单流水同步到飞书多维表格](/guide/cases/mysql-feishu-order-sync)。

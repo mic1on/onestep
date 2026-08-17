@@ -1,5 +1,22 @@
 # 文档更新日志
 
+## 2026-08-17 - 新增 MySQL 到飞书多维表格实战案例
+
+### 变更概述
+
+新增匿名化的订单流水同步实战篇，并同步 `onestep-mysql 0.5.1` 的 `DATETIME`
+游标持久化与恢复说明。
+
+### 更新内容
+
+- 新增 [用户案例 / 实战篇](/guide/cases/) 与
+  [MySQL 订单流水同步到飞书多维表格](/guide/cases/mysql-feishu-order-sync)，覆盖完整
+  strict YAML、handler 契约、单写者限制、批量参数、观测事件和安全恢复流程。
+- [MySQL](/broker/mysql) 文档说明 `0.5.1` 对 `DATETIME` 复合游标的兼容行为：
+  保留微秒恢复、无需迁移游标表，且提交失败时不应手工推进游标。
+- [Feishu Bitable](/broker/feishu-bitable) 文档链接高吞吐 Insert 键索引的完整实战。
+- `example/mysql_feishu_insert.yaml` 和连接器示例统一为匿名订单流水命名。
+
 ## 2026-08-14 - 同步 Feishu Bitable 关联解析器
 
 ### 变更概述

@@ -213,13 +213,13 @@ relations:
 直接启动失败，不会使用截断索引。
 
 ```yaml
-follow_record_table:
+order_table:
   type: feishu_bitable_table_sink
   connector: feishu
   app_token: "${FEISHU_APP_TOKEN}"
   table_id: "${FEISHU_TABLE_ID}"
   mode: insert
-  match_fields: [编号]
+  match_fields: [订单编号]
   batch_size: 100
   flush_interval_s: 1
   insert_key_index: true
@@ -236,6 +236,9 @@ follow_record_table:
 内存索引要求同一 `(app_token, table_id)` 只有一个活动写入实例。手工新增或第二个
 worker 会造成启动后竞态。该模式不保存 record ID，也不提供持久幂等账本、更新、删除、
 CDC 或多写者 exactly-once 保证。
+
+要将该模式与 MySQL 复合游标、重试和安全恢复组合使用，参见
+[实战篇：MySQL 订单流水同步到飞书多维表格](/guide/cases/mysql-feishu-order-sync)。
 
 ## 下一步
 

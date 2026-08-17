@@ -8,6 +8,10 @@ export default defineConfig({
   title: 'OneStep',
   description: '轻量级 Python 异步任务运行时',
   cleanUrls: true,
+  srcExclude: [
+    'superpowers/plans/2026-08-14-feishu-insert-incremental-sync.md',
+    'superpowers/specs/2026-08-14-feishu-insert-incremental-sync-design.md',
+  ],
   lastUpdated: true,
   head: [
     ['meta', { name: 'theme-color', content: '#303f9f' }],
@@ -74,6 +78,13 @@ export default defineConfig({
           { text: '功能特性', link: '/guide/features' },
           { text: '生产部署', link: '/guide/deploy' },
           { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },
+        ],
+      },
+      {
+        text: '用户案例 / 实战篇',
+        items: [
+          { text: '案例总览', link: '/guide/cases/' },
+          { text: '订单流水同步到飞书多维表格', link: '/guide/cases/mysql-feishu-order-sync' },
         ],
       },
       {
