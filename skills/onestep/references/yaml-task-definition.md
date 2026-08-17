@@ -141,6 +141,37 @@ Rules:
 - omitted `otherwise` means a falsy predicate skips that route.
 - separate `emit` entries are evaluated independently and in order.
 
+## Per-Sink Payload Transforms
+
+Use a binding when one handler result must be projected into different payloads
+for different static sinks:
+
+~~~yaml
+tasks:
+  - name: extract_entities
+    source: entity_events
+    emit:
+      - sink: entity_callback
+      - sink: downstream_meta
+        transform:
+          ref: worker.transforms:to_meta_row
+    handler:
+      ref: worker.tasks:extract_entities
+~~~
+
+Each binding names exactly one sink. Its optional transform is a Python callable
+with (ctx, payload, result) and may be synchronous or async; without a transform,
+that sink receives the handler result unchanged. OneStep prepares all selected
+transform results in YAML order before sending to any sink. A transform failure
+therefore sends no configured output and follows normal task retry or dead-letter
+policy.
+
+Sink dispatch remains at-least-once and non-transactional after preparation: if
+a later sink fails, an earlier successful sink can receive a duplicate on retry.
+Use stable business keys or sink idempotency when duplicates matter. A binding may
+contain only sink and transform; do not combine it with when, then, or otherwise
+in this release.
+
 ## Passthrough Tasks
 
 If a YAML task only forwards the incoming payload to sinks, it may omit `handler`.
