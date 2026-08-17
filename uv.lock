@@ -1689,7 +1689,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.5.0"
+version = "0.5.1"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
     { name = "aiosqlite" },

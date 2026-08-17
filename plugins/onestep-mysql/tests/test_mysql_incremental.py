@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -82,6 +83,76 @@ def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
         assert [item.payload["id"] for item in next_batch] == [3]
         await next_batch[0].ack()
         assert await restarted_state.load("users-sync") == [11, 3]
+        await restarted_db.close()
+
+    asyncio.run(scenario())
+
+
+def test_mysql_incremental_restarts_from_datetime_cursor(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'incremental-datetime.db'}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    rows = sa.Table(
+        "rows",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+    )
+    first_created_at = datetime(2026, 8, 17, 0, 53, 55, 640000)  # noqa: DTZ001
+    second_created_at = first_created_at + timedelta(microseconds=1)
+    third_created_at = second_created_at + timedelta(microseconds=1)
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.insert(rows),
+            [
+                {"id": 1, "created_at": first_created_at},
+                {"id": 2, "created_at": second_created_at},
+            ],
+        )
+    engine.dispose()
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        state = db.cursor_store(table="onestep_cursor")
+        source = db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=state,
+            state_key="follow-records",
+        )
+
+        batch = await source.fetch(10)
+        assert [item.payload["id"] for item in batch] == [1, 2]
+        await asyncio.gather(*(item.ack() for item in batch))
+        assert await state.load("follow-records") == [second_created_at, 2]
+        await db.close()
+
+        restarted_db = MySQLConnector(db_url)
+        restarted_state = restarted_db.cursor_store(table="onestep_cursor")
+        restarted_source = restarted_db.incremental(
+            table="rows",
+            key="id",
+            cursor=("created_at", "id"),
+            batch_size=10,
+            poll_interval_s=0.01,
+            state=restarted_state,
+            state_key="follow-records",
+        )
+
+        assert await restarted_source.fetch(10) == []
+
+        verify_engine = sa.create_engine(db_url, future=True)
+        with verify_engine.begin() as conn:
+            conn.execute(sa.insert(rows), {"id": 3, "created_at": third_created_at})
+        verify_engine.dispose()
+
+        next_batch = await restarted_source.fetch(10)
+        assert [item.payload["id"] for item in next_batch] == [3]
+        await next_batch[0].ack()
         await restarted_db.close()
 
     asyncio.run(scenario())

@@ -132,4 +132,37 @@ class SQLAlchemyStateStore:
 
 
 class SQLAlchemyCursorStore(SQLAlchemyStateStore):
-    pass
+    _DATETIME_TYPE_KEY = "__onestep_cursor_type__"
+    _DATETIME_TYPE_VALUE = "datetime"
+    _DATETIME_VALUE_KEY = "value"
+
+    async def load(self, key: str) -> Any | None:
+        value = await super().load(key)
+        if not isinstance(value, list):
+            return value
+        return [self._decode_cursor_component(component) for component in value]
+
+    async def save(self, key: str, value: Any) -> None:
+        if isinstance(value, (list, tuple)):
+            value = [self._encode_cursor_component(component) for component in value]
+        await super().save(key, value)
+
+    @classmethod
+    def _encode_cursor_component(cls, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return {
+                cls._DATETIME_TYPE_KEY: cls._DATETIME_TYPE_VALUE,
+                cls._DATETIME_VALUE_KEY: value.isoformat(),
+            }
+        return value
+
+    @classmethod
+    def _decode_cursor_component(cls, value: Any) -> Any:
+        if (
+            isinstance(value, dict)
+            and set(value) == {cls._DATETIME_TYPE_KEY, cls._DATETIME_VALUE_KEY}
+            and value[cls._DATETIME_TYPE_KEY] == cls._DATETIME_TYPE_VALUE
+            and isinstance(value[cls._DATETIME_VALUE_KEY], str)
+        ):
+            return datetime.fromisoformat(value[cls._DATETIME_VALUE_KEY])
+        return value
