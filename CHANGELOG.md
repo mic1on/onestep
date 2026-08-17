@@ -19,6 +19,10 @@
 - Makes buffered sends complete only after their item is confirmed created or pre-existing.
 - Reconciles ambiguous batch writes by exact-searching only affected keys before creating confirmed misses.
 - Requires one active writer per indexed destination table and retains no record IDs or durable ledger.
+
+## onestep-mysql 0.5.1
+- Persists `datetime` components of incremental cursors as tagged ISO-8601 JSON values and restores them for keyset queries after restart.
+
 ## onestep-mysql 0.5.0
 - Retries the same incremental logical row with incremented delivery attempts.
 - Coalesces contiguous cursor acknowledgements into event-loop commit waves without crossing failed gaps.
