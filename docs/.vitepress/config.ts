@@ -57,7 +57,7 @@ export default defineConfig({
       { text: '核心', link: '/core/' },
       { text: '连接器', link: '/broker/' },
       { text: 'YAML', link: '/yaml-task-definition' },
-      { text: 'SKILL', link: '/skill/' },
+      { text: '实战', link: '/guide/cases/' },
       { text: '部署', link: '/guide/deploy' },
       { text: 'Web 控制台', link: '/control-plane/' },
       {
