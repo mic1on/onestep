@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import time
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -10,11 +12,17 @@ from typing import Any
 
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
-from onestep.resilience import ConnectorOperation
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
 from onestep.state import CursorStore, InMemoryCursorStore
 
 from .resilience import as_mysql_connector_operation_error, collect_sensitive_tokens
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore, _async_dsn
+
+logger = logging.getLogger(__name__)
 
 try:
     import sqlalchemy as sa
@@ -635,6 +643,13 @@ class _CursorToken:
     value: tuple[Any, ...]
 
 
+@dataclass
+class _IncrementalRetryRow:
+    envelope: Envelope
+    ready_at: float
+    in_flight: bool = False
+
+
 class IncrementalDelivery(Delivery):
     def __init__(self, source: IncrementalTableSource, envelope: Envelope, token: _CursorToken) -> None:
         super().__init__(envelope)
@@ -645,11 +660,17 @@ class IncrementalDelivery(Delivery):
         await self._source.ack_token(self._token)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
-        if delay_s:
-            await asyncio.sleep(delay_s)
+        await self._source.retry_token(
+            self._token,
+            self.envelope,
+            delay_s=delay_s,
+        )
 
     async def fail(self, exc: Exception | None = None) -> None:
-        return None
+        await self._source.fail_token(self._token, exc)
+
+    async def release_unstarted(self) -> None:
+        await self._source.release_token(self._token, self.envelope)
 
 
 class IncrementalTableSource(Source):
@@ -681,6 +702,13 @@ class IncrementalTableSource(Source):
         self._acked: set[tuple[Any, ...]] = set()
         self._commit_lock: asyncio.Lock | None = None
         self._commit_loop: asyncio.AbstractEventLoop | None = None
+        self._commit_task: asyncio.Task[None] | None = None
+        self._commit_error: BaseException | None = None
+        self._retry_rows: dict[tuple[Any, ...], _IncrementalRetryRow] = {}
+        self._terminal_error: ConnectorOperationError | None = None
+        self._fetch_count = 0
+        self._retry_count = 0
+        self._cursor_save_count = 0
         self._loaded = False
         self._committed_cursor: tuple[Any, ...] | None = None
         self._fetched_cursor: tuple[Any, ...] | None = None
@@ -695,8 +723,19 @@ class IncrementalTableSource(Source):
 
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
+        lock = self._runtime_commit_lock()
+        async with lock:
+            if self._terminal_error is not None:
+                raise self._terminal_error
+            retry_delivery = self._take_ready_retry_delivery()
+            if retry_delivery is not None:
+                return [retry_delivery]
+            if self._retry_rows:
+                return []
+        requested_limit = max(1, min(limit, self.batch_size))
+        started_at = time.monotonic()
         try:
-            rows = await self._fetch(max(1, min(limit, self.batch_size)))
+            rows = await self._fetch(requested_limit)
         except Exception as exc:
             connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -709,13 +748,39 @@ class IncrementalTableSource(Source):
                 raise
             raise connector_error from exc
         deliveries: list[Delivery] = []
-        for row in rows:
-            token = _CursorToken(tuple(row[column] for column in self.cursor))
-            self._pending.append(token.value)
-            self._fetched_cursor = token.value
-            envelope = Envelope(body=row, meta={"table": self.table_name})
-            deliveries.append(IncrementalDelivery(self, envelope, token))
+        async with lock:
+            for row in rows:
+                token = _CursorToken(tuple(row[column] for column in self.cursor))
+                self._pending.append(token.value)
+                self._fetched_cursor = token.value
+                envelope = Envelope(body=row, meta={"table": self.table_name})
+                deliveries.append(IncrementalDelivery(self, envelope, token))
+            self._fetch_count += 1
+            fetch_count = self._fetch_count
+            pending_cursor_rows = len(self._pending)
+        logger.info(
+            "mysql incremental fetch",
+            extra={
+                "event": "mysql_incremental_fetch",
+                "fetch_count": fetch_count,
+                "requested_limit": requested_limit,
+                "row_count": len(rows),
+                "duration_s": round(time.monotonic() - started_at, 3),
+                "pending_cursor_rows": pending_cursor_rows,
+                "fetched_cursor_lag_rows": pending_cursor_rows,
+            },
+        )
         return deliveries
+
+    def _take_ready_retry_delivery(self) -> Delivery | None:
+        now = time.monotonic()
+        for token_value in self._pending:
+            retry = self._retry_rows.get(token_value)
+            if retry is None or retry.in_flight or retry.ready_at > now:
+                continue
+            retry.in_flight = True
+            return IncrementalDelivery(self, retry.envelope, _CursorToken(token_value))
+        return None
 
     async def _fetch(self, limit: int) -> list[dict[str, Any]]:
         table = await self.connector._table(self.table_name)
@@ -739,15 +804,153 @@ class IncrementalTableSource(Source):
         lock = self._runtime_commit_lock()
         async with lock:
             self._acked.add(token.value)
-            advanced: tuple[Any, ...] | None = None
-            while self._pending and self._pending[0] in self._acked:
-                advanced = self._pending.popleft()
-                self._acked.remove(advanced)
-            if advanced is not None:
-                self._committed_cursor = advanced
-                if not self._pending:
-                    self._fetched_cursor = advanced
-                await self.state.save(self.state_key, list(advanced))
+            if not self._pending or self._pending[0] not in self._acked:
+                return
+            task = self._commit_task
+            if task is None or task.done():
+                self._commit_error = None
+                task = asyncio.create_task(self._flush_commits())
+                self._commit_task = task
+        await asyncio.shield(task)
+
+    async def retry_token(
+        self,
+        token: _CursorToken,
+        envelope: Envelope,
+        *,
+        delay_s: float | None,
+    ) -> None:
+        lock = self._runtime_commit_lock()
+        async with lock:
+            self._retry_count += 1
+            retry_count = self._retry_count
+            self._retry_rows[token.value] = _IncrementalRetryRow(
+                envelope=Envelope(
+                    body=envelope.body,
+                    meta=dict(envelope.meta),
+                    attempts=envelope.attempts + 1,
+                ),
+                ready_at=time.monotonic() + max(0.0, delay_s or 0.0),
+            )
+        logger.info(
+            "mysql incremental retry",
+            extra={
+                "event": "mysql_incremental_retry",
+                "retry_count": retry_count,
+                "attempt": envelope.attempts + 1,
+                "delay_s": max(0.0, delay_s or 0.0),
+                "pending_cursor_rows": len(self._pending),
+            },
+        )
+
+    async def release_token(
+        self, token: _CursorToken, envelope: Envelope
+    ) -> None:
+        lock = self._runtime_commit_lock()
+        async with lock:
+            retry = self._retry_rows.get(token.value)
+            if retry is None:
+                retry = _IncrementalRetryRow(envelope=envelope, ready_at=time.monotonic())
+                self._retry_rows[token.value] = retry
+            retry.in_flight = False
+            retry.ready_at = time.monotonic()
+
+    async def fail_token(
+        self, token: _CursorToken, exc: Exception | None
+    ) -> None:
+        lock = self._runtime_commit_lock()
+        async with lock:
+            self._terminal_error = ConnectorOperationError(
+                backend="mysql",
+                operation=ConnectorOperation.FETCH,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                retry_delay_s=self.poll_interval_s,
+                cause=exc,
+                message="mysql incremental source is blocked at a failed cursor row",
+            )
+            retry = self._retry_rows.get(token.value)
+            if retry is not None:
+                retry.in_flight = False
+
+    async def _flush_commits(self) -> None:
+        # Let acknowledgements released by the same destination batch join one
+        # durable cursor write.
+        await asyncio.sleep(0)
+        try:
+            while True:
+                lock = self._runtime_commit_lock()
+                async with lock:
+                    prefix: list[tuple[Any, ...]] = []
+                    for token_value in self._pending:
+                        if token_value not in self._acked:
+                            break
+                        prefix.append(token_value)
+                    if not prefix:
+                        return
+                    highest = prefix[-1]
+                started_at = time.monotonic()
+                async with lock:
+                    self._cursor_save_count += 1
+                    cursor_save_count = self._cursor_save_count
+                try:
+                    await self.state.save(self.state_key, list(highest))
+                except BaseException:
+                    logger.info(
+                        "mysql incremental cursor commit",
+                        extra={
+                            "event": "mysql_incremental_cursor_commit",
+                            "cursor_save_count": cursor_save_count,
+                            "coalesced_ack_count": len(prefix),
+                            "duration_s": round(time.monotonic() - started_at, 3),
+                            "outcome": "error",
+                            "pending_cursor_rows": len(self._pending),
+                            "fetched_cursor_lag_rows": len(self._pending),
+                        },
+                    )
+                    raise
+                async with lock:
+                    for token_value in prefix:
+                        current = self._pending.popleft()
+                        if current != token_value:
+                            raise RuntimeError(
+                                "mysql incremental pending cursor order changed during commit"
+                            )
+                        self._acked.remove(token_value)
+                        self._retry_rows.pop(token_value, None)
+                    self._committed_cursor = highest
+                    if not self._pending:
+                        self._fetched_cursor = highest
+                    has_more = bool(
+                        self._pending and self._pending[0] in self._acked
+                    )
+                logger.info(
+                    "mysql incremental cursor commit",
+                    extra={
+                        "event": "mysql_incremental_cursor_commit",
+                        "cursor_save_count": cursor_save_count,
+                        "coalesced_ack_count": len(prefix),
+                        "duration_s": round(time.monotonic() - started_at, 3),
+                        "outcome": "success",
+                        "pending_cursor_rows": len(self._pending),
+                        "fetched_cursor_lag_rows": len(self._pending),
+                    },
+                )
+                if not has_more:
+                    return
+        except BaseException as exc:
+            self._commit_error = exc
+            raise
+        finally:
+            lock = self._runtime_commit_lock()
+            async with lock:
+                if self._commit_task is asyncio.current_task():
+                    self._commit_task = None
+
+    async def close(self) -> None:
+        task = self._commit_task
+        if task is not None:
+            await asyncio.shield(task)
 
     def _runtime_commit_lock(self) -> asyncio.Lock:
         current_loop = asyncio.get_running_loop()

@@ -124,6 +124,15 @@ resources:
     table: onestep_state
 ```
 
+For immutable MySQL rows inserted into one Feishu table, bind a durable
+`mysql_cursor_store`, use `(operation_time, unique_key)` as the incremental
+cursor, and enable the Feishu table Sink's opt-in `insert_key_index`. This
+preloads the single match field and avoids normal per-row searches. The indexed
+Sink requires one active writer, supports no relations, and stores neither
+record IDs nor a durable idempotency ledger. Source `batch_size`, Sink
+`batch_size`, and task `concurrency` are independent controls;
+`tasks[].config` is handler data only.
+
 ## PostgreSQL execution source
 
 The Python API process uses `ExecutionClient` with the backend plugin's direct DSN

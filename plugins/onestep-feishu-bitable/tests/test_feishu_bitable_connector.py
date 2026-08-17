@@ -1433,3 +1433,363 @@ def test_feishu_http_error_classifies_rate_limit_as_throttled() -> None:
         assert raised.value.kind is ConnectorErrorKind.THROTTLED
 
     asyncio.run(scenario())
+
+
+def test_feishu_create_record_error_includes_field_names() -> None:
+    async def scenario() -> None:
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            return 400, {"code": 1251234, "msg": "TextFieldConvFail"}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+            )
+            with pytest.raises(ConnectorOperationError) as raised:
+                await sink.send(Envelope(body={"order_no": "A001", "status": "new", "amount": 100}))
+        finally:
+            await _close_server(server)
+
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        message = str(raised.value)
+        assert "fields=" in message
+        assert "order_no" in message
+        assert "status" in message
+        assert "amount" in message
+        assert "table_id=tbl" in message
+
+    asyncio.run(scenario())
+
+
+def test_feishu_pre_validation_warns_but_does_not_block() -> None:
+    async def scenario() -> None:
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            return 200, {"code": 0, "data": {"record": {"record_id": "rec1", "fields": {}}}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+            )
+            # Pre-validation warns but does not block — the send succeeds
+            await sink.send(Envelope(body={
+                "order_no": "A001",
+                "title": {"some": "unexpected", "nested": "dict"},
+            }))
+        finally:
+            await _close_server(server)
+
+        assert len(requests) == 2  # 1 send + 1 token
+
+    asyncio.run(scenario())
+
+
+def test_feishu_pre_validation_allows_known_feishu_field_dicts() -> None:
+    async def scenario() -> None:
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            body = request["body"]
+            return 200, {"code": 0, "data": {"record": {"record_id": "rec1", "fields": body["fields"]}}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+            )
+            # Rich text dict with "text" key — should pass pre-validation
+            await sink.send(Envelope(body={
+                "order_no": "A001",
+                "title": {"text": "hello", "type": "text"},
+            }))
+            # Person dict with "id" key — should pass
+            await sink.send(Envelope(body={
+                "order_no": "A002",
+                "owner": {"id": "user_1"},
+            }))
+            # Attachment dict with "file_token" key — should pass
+            await sink.send(Envelope(body={
+                "order_no": "A003",
+                "attachment": {"file_token": "tok_1"},
+            }))
+        finally:
+            await _close_server(server)
+
+        assert len(requests) == 4  # 3 sends + 1 token
+
+    asyncio.run(scenario())
+
+
+def test_normalize_relation_values_accepts_numbers() -> None:
+    from onestep_feishu_bitable.connector import _normalize_relation_values, FeishuBitablePayloadError
+
+    assert _normalize_relation_values(None, field="f") == ()
+    assert _normalize_relation_values("A001", field="f") == ("A001",)
+    assert _normalize_relation_values(1001, field="f") == ("1001",)
+    assert _normalize_relation_values(3.14, field="f") == ("3.14",)
+    assert _normalize_relation_values(True, field="f") == ("True",)
+    assert _normalize_relation_values(["A", "B"], field="f") == ("A", "B")
+    assert _normalize_relation_values([1001, 2002], field="f") == ("1001", "2002")
+    assert _normalize_relation_values(["A", 1001, "B"], field="f") == ("A", "1001", "B")
+    # Empty string after strip is skipped
+    assert _normalize_relation_values("  ", field="f") == ()
+    # Duplicates are deduplicated
+    assert _normalize_relation_values(["A", "A"], field="f") == ("A",)
+    # Dict still rejected
+    with pytest.raises(FeishuBitablePayloadError):
+        _normalize_relation_values({"key": "val"}, field="f")
+
+
+def test_feishu_batch_create_sends_records_in_one_request() -> None:
+    async def scenario() -> None:
+        batch_requests: list[dict[str, Any]] = []
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if request["target"].endswith("/batch_create"):
+                batch_requests.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": f"rec{i}", "fields": {}} for i in range(len(request["body"]["records"]))]}}
+            return 200, {"code": 0, "data": {"record": {"record_id": "rec0", "fields": {}}}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+                batch_size=500,
+            )
+            for i in range(3):
+                await sink.send(Envelope(body={"order_no": f"A{i:03d}", "status": "new"}))
+            await sink.close()
+        finally:
+            await _close_server(server)
+
+        assert len(batch_requests) == 1
+        assert len(batch_requests[0]["records"]) == 3
+        order_nos = [r["fields"]["order_no"] for r in batch_requests[0]["records"]]
+        assert order_nos == ["A000", "A001", "A002"]
+
+    asyncio.run(scenario())
+
+
+def test_feishu_batch_create_flushes_on_threshold() -> None:
+    async def scenario() -> None:
+        batch_requests: list[dict[str, Any]] = []
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if "batch_create" in request["target"] or "batch_update" in request["target"]:
+                batch_requests.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": f"rec{i}", "fields": {}} for i in range(len(request["body"]["records"]))]}}
+            return 200, {"code": 0, "data": {"record": {"record_id": "rec0", "fields": {}}}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+                batch_size=2,
+            )
+            for i in range(5):
+                await sink.send(Envelope(body={"order_no": f"A{i:03d}"}))
+            await sink.close()
+        finally:
+            await _close_server(server)
+
+        assert len(batch_requests) == 3
+        assert [len(b["records"]) for b in batch_requests] == [2, 2, 1]
+
+    asyncio.run(scenario())
+
+
+def test_feishu_batch_create_automatically_flushes_partial_batch() -> None:
+    async def scenario() -> None:
+        batch_requests: list[dict[str, Any]] = []
+        flushed = asyncio.Event()
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if request["target"].endswith("/batch_create"):
+                batch_requests.append(request["body"])
+                flushed.set()
+                return 200, {"code": 0, "data": {"records": [{"record_id": "rec0", "fields": {}}]}}
+            return 200, {"code": 0, "data": {}}
+
+        server, _, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+                batch_size=2,
+                flush_interval_s=0.01,
+            )
+            await sink.send(Envelope(body={"order_no": "A001"}))
+            await asyncio.wait_for(flushed.wait(), timeout=1.0)
+
+            assert batch_requests == [{"records": [{"fields": {"order_no": "A001"}}]}]
+        finally:
+            await sink.close()
+            await _close_server(server)
+
+    asyncio.run(scenario())
+
+
+def test_feishu_batch_upsert_splits_creates_and_updates() -> None:
+    async def scenario() -> None:
+        create_batches: list[dict[str, Any]] = []
+        update_batches: list[dict[str, Any]] = []
+        search_targets: list[str] = []
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if "/batch_create" in request["target"]:
+                create_batches.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": f"rec{i}", "fields": {}} for i in range(len(request["body"]["records"]))]}}
+            if "/batch_update" in request["target"]:
+                update_batches.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": r["record_id"], "fields": {}} for r in request["body"]["records"]]}}
+            if "/search" in request["target"]:
+                search_targets.append(request["target"])
+                body = request["body"]
+                order_no = body["filter"]["conditions"][0]["value"][0]
+                if order_no in ("A001", "A003"):
+                    return 200, {"code": 0, "data": {"items": [{"record_id": f"rec-{order_no}", "fields": {"order_no": order_no}}]}}
+                return 200, {"code": 0, "data": {"items": []}}
+            return 200, {"code": 0, "data": {}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="upsert",
+                match_fields=["order_no"],
+                batch_size=500,
+            )
+            await sink.send(Envelope(body={"order_no": "A001", "status": "updated"}))
+            await sink.send(Envelope(body={"order_no": "A002", "status": "new"}))
+            await sink.send(Envelope(body={"order_no": "A003", "status": "updated"}))
+            await sink.send(Envelope(body={"order_no": "A004", "status": "new"}))
+            await sink.close()
+        finally:
+            await _close_server(server)
+
+        # All 4 should be flushed in one batch
+        all_targets = [r["target"] for r in requests]
+        assert len(search_targets) == 4, f"Expected 4 search calls, got {len(search_targets)}. All targets: {all_targets}"
+        assert len(create_batches) == 1
+        assert len(update_batches) == 1
+        assert len(create_batches[0]["records"]) == 2  # A002, A004
+        assert len(update_batches[0]["records"]) == 2  # A001, A003
+        create_order_nos = [r["fields"]["order_no"] for r in create_batches[0]["records"]]
+        update_order_nos = [r["fields"]["order_no"] for r in update_batches[0]["records"]]
+        assert create_order_nos == ["A002", "A004"]
+        assert update_order_nos == ["A001", "A003"]
+
+    asyncio.run(scenario())
+
+
+def test_feishu_batch_create_batch_size_1_is_single_record() -> None:
+    async def scenario() -> None:
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            return 200, {"code": 0, "data": {"record": {"record_id": "rec1", "fields": {}}}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="create",
+                batch_size=1,
+            )
+            await sink.send(Envelope(body={"order_no": "A001"}))
+            await sink.send(Envelope(body={"order_no": "A002"}))
+        finally:
+            await _close_server(server)
+
+        # batch_size=1 should use individual create_record, not batch_create
+        assert len(requests) == 3  # 2 sends + 1 token
+        assert not any(r["target"].endswith("/batch_create") for r in requests)
+
+    asyncio.run(scenario())
+
+
+def test_feishu_insert_mode_skips_existing_and_creates_new() -> None:
+    async def scenario() -> None:
+        create_batches: list[dict[str, Any]] = []
+        update_batches: list[dict[str, Any]] = []
+
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"] == "/open-apis/auth/v3/tenant_access_token/internal":
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if "/batch_create" in request["target"]:
+                create_batches.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": f"rec{i}", "fields": {}} for i in range(len(request["body"]["records"]))]}}
+            if "/batch_update" in request["target"]:
+                update_batches.append(request["body"])
+                return 200, {"code": 0, "data": {"records": [{"record_id": r["record_id"], "fields": {}} for r in request["body"]["records"]]}}
+            if "/search" in request["target"]:
+                body = request["body"]
+                order_no = body["filter"]["conditions"][0]["value"][0]
+                if order_no in ("A001", "A003"):
+                    return 200, {"code": 0, "data": {"items": [{"record_id": f"rec-{order_no}", "fields": {"order_no": order_no}}]}}
+                return 200, {"code": 0, "data": {"items": []}}
+            return 200, {"code": 0, "data": {}}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(
+                app_token="app-token",
+                table_id="tbl",
+                mode="insert",
+                match_fields=["order_no"],
+                batch_size=500,
+            )
+            # A001 exists → skip
+            await sink.send(Envelope(body={"order_no": "A001", "status": "skipped"}))
+            # A002 is new → create
+            await sink.send(Envelope(body={"order_no": "A002", "status": "new"}))
+            # A003 exists → skip
+            await sink.send(Envelope(body={"order_no": "A003", "status": "skipped"}))
+            # A004 is new → create
+            await sink.send(Envelope(body={"order_no": "A004", "status": "new"}))
+            await sink.close()
+        finally:
+            await _close_server(server)
+
+        # Only A002 and A004 should be created (A001, A003 skipped)
+        assert len(create_batches) == 1
+        assert len(update_batches) == 0
+        assert len(create_batches[0]["records"]) == 2
+        create_order_nos = [r["fields"]["order_no"] for r in create_batches[0]["records"]]
+        assert create_order_nos == ["A002", "A004"]
+
+    asyncio.run(scenario())

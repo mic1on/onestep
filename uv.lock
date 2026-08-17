@@ -1582,7 +1582,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-feishu-bitable"
-version = "0.2.0"
+version = "0.4.0"
 source = { editable = "plugins/onestep-feishu-bitable" }
 dependencies = [
     { name = "onestep" },
@@ -1689,7 +1689,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.4.0"
+version = "0.5.1"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
     { name = "aiosqlite" },

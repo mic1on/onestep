@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -18,6 +20,8 @@ from onestep.connectors.base import Delivery, Sink, Source
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.state import CursorStore, InMemoryCursorStore
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_BASE_URL = "https://open.feishu.cn"
 _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_BATCH_SIZE = 100
@@ -25,6 +29,9 @@ DEFAULT_FALLBACK_SCAN_PAGE_LIMIT = 100
 _MAX_PAGE_SIZE = 500
 _TOKEN_REFRESH_MARGIN_S = 60.0
 _REDACTED = "<redacted>"
+_DEFAULT_INSERT_INDEX_PAGE_SIZE = 500
+_DEFAULT_INSERT_INDEX_MAX_PAGES = 200
+_DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS = 3
 _AUTOMATIC_CURSOR_FIELD_ALIASES = {
     "创建时间": "created_time",
     "最后修改时间": "last_modified_time",
@@ -154,6 +161,12 @@ class FeishuBitableConnector:
         match_fields: Sequence[str] | None = None,
         user_id_type: str | None = None,
         relations: Mapping[str, Mapping[str, Any]] | None = None,
+        batch_size: int = 1,
+        flush_interval_s: float = 1.0,
+        insert_key_index: bool = False,
+        insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+        insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
+        ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
             connector=self,
@@ -163,6 +176,12 @@ class FeishuBitableConnector:
             match_fields=match_fields,
             user_id_type=user_id_type,
             relations=relations,
+            batch_size=batch_size,
+            flush_interval_s=flush_interval_s,
+            insert_key_index=insert_key_index,
+            insert_index_page_size=insert_index_page_size,
+            insert_index_max_pages=insert_index_max_pages,
+            ambiguous_write_max_rounds=ambiguous_write_max_rounds,
         )
 
     async def search_records(
@@ -208,16 +227,21 @@ class FeishuBitableConnector:
         source_name: str,
         retry_delay_s: float | None = None,
     ) -> dict[str, Any]:
-        payload = await self._request_json(
-            "POST",
-            _bitable_records_path(app_token=app_token, table_id=table_id),
-            query=_user_id_type_query(user_id_type),
-            body={"fields": dict(fields)},
-            auth=True,
-            operation=operation,
-            source_name=source_name,
-            retry_delay_s=retry_delay_s,
-        )
+        _check_field_values_before_send(fields, table_id, source_name)
+        try:
+            payload = await self._request_json(
+                "POST",
+                _bitable_records_path(app_token=app_token, table_id=table_id),
+                query=_user_id_type_query(user_id_type),
+                body={"fields": dict(fields)},
+                auth=True,
+                operation=operation,
+                source_name=source_name,
+                retry_delay_s=retry_delay_s,
+            )
+        except ConnectorOperationError as exc:
+            __traceback__ = exc.__traceback__
+            raise _with_field_context(exc, fields, table_id) from exc.__cause__
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 
@@ -233,16 +257,87 @@ class FeishuBitableConnector:
         source_name: str,
         retry_delay_s: float | None = None,
     ) -> dict[str, Any]:
+        _check_field_values_before_send(fields, table_id, source_name)
         path = _bitable_records_path(
             app_token=app_token,
             table_id=table_id,
             suffix=f"/{_quote_path(record_id)}",
         )
+        try:
+            payload = await self._request_json(
+                "PUT",
+                path,
+                query=_user_id_type_query(user_id_type),
+                body={"fields": dict(fields)},
+                auth=True,
+                operation=operation,
+                source_name=source_name,
+                retry_delay_s=retry_delay_s,
+            )
+        except ConnectorOperationError as exc:
+            __traceback__ = exc.__traceback__
+            raise _with_field_context(exc, fields, table_id) from exc.__cause__
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
+    async def batch_create_records(
+        self,
+        *,
+        app_token: str,
+        table_id: str,
+        records: Sequence[dict[str, Any]],
+        user_id_type: str | None = None,
+        operation: ConnectorOperation,
+        source_name: str,
+        retry_delay_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Create multiple records in one API call (max 500 per batch)."""
+        if not records:
+            return {"records": []}
+        for fields in records:
+            _check_field_values_before_send(fields, table_id, source_name)
         payload = await self._request_json(
-            "PUT",
-            path,
+            "POST",
+            _bitable_records_path(app_token=app_token, table_id=table_id, suffix="/batch_create"),
             query=_user_id_type_query(user_id_type),
-            body={"fields": dict(fields)},
+            body={"records": [{"fields": dict(fields)} for fields in records]},
+            auth=True,
+            operation=operation,
+            source_name=source_name,
+            retry_delay_s=retry_delay_s,
+        )
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {}
+
+    async def batch_update_records(
+        self,
+        *,
+        app_token: str,
+        table_id: str,
+        records: Sequence[dict[str, Any]],
+        user_id_type: str | None = None,
+        operation: ConnectorOperation,
+        source_name: str,
+        retry_delay_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Update multiple records in one API call (max 500 per batch).
+
+        Each record dict must include ``record_id`` and ``fields``.
+        """
+        if not records:
+            return {"records": []}
+        for item in records:
+            _check_field_values_before_send(item["fields"], table_id, source_name)
+        payload = await self._request_json(
+            "POST",
+            _bitable_records_path(app_token=app_token, table_id=table_id, suffix="/batch_update"),
+            query=_user_id_type_query(user_id_type),
+            body={
+                "records": [
+                    {"record_id": item["record_id"], "fields": dict(item["fields"])}
+                    for item in records
+                ]
+            },
             auth=True,
             operation=operation,
             source_name=source_name,
@@ -679,7 +774,35 @@ class _FeishuRelationCreateLock:
     record_id: str | None = None
 
 
+class _InsertState(str, Enum):
+    BUFFERED = "buffered"
+    WRITING = "writing"
+    RECOVERING = "recovering"
+
+
+@dataclass
+class _PendingInsert:
+    key: str
+    fields: dict[str, Any]
+    waiters: list[asyncio.Future[None]] = field(default_factory=list)
+    buffered_at: float = 0.0
+    state: _InsertState = _InsertState.BUFFERED
+
+
 class FeishuBitableTableSink(Sink):
+    """Feishu Bitable table sink with optional batch buffering for create mode.
+
+    When ``mode="create"`` and ``batch_size > 1``, records are buffered and
+    flushed in batches via the Feishu ``batch_create`` API.  This dramatically
+    reduces API calls — 500 records become 1 call instead of 500.
+
+    upsert and update modes still process records one at a time because
+    each record requires a match-finding search before the write.
+
+    Opt-in insert_key_index mode preloads the destination match field into
+    memory so normal Insert processing requires zero per-key Feishu searches.
+    """
+
     def __init__(
         self,
         *,
@@ -690,10 +813,16 @@ class FeishuBitableTableSink(Sink):
         match_fields: Sequence[str] | None,
         user_id_type: str | None,
         relations: Mapping[str, Mapping[str, Any]] | None = None,
+        batch_size: int = 1,
+        flush_interval_s: float = 1.0,
+        insert_key_index: bool = False,
+        insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+        insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
+        ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
-        if normalized_mode in {"upsert", "update"}:
+        if normalized_mode in {"upsert", "update", "insert"}:
             normalized_match_fields = _normalize_match_fields(match_fields, required=True)
         else:
             normalized_match_fields = _normalize_match_fields(match_fields, required=False)
@@ -710,51 +839,175 @@ class FeishuBitableTableSink(Sink):
             match_fields=normalized_match_fields,
         )
         self._relation_create_locks: dict[tuple[str, str, str, str], _FeishuRelationCreateLock] = {}
+        self._batch_size = max(1, min(batch_size, _MAX_PAGE_SIZE))
+        self._flush_interval_s = float(flush_interval_s)
+        # Insert key index configuration
+        self.insert_key_index = _normalize_insert_key_index(insert_key_index)
+        self.insert_index_page_size = _normalize_insert_index_page_size(insert_index_page_size)
+        self.insert_index_max_pages = _normalize_insert_index_max_pages(insert_index_max_pages)
+        self.ambiguous_write_max_rounds = _normalize_ambiguous_write_max_rounds(ambiguous_write_max_rounds)
+        if self.insert_key_index:
+            _validate_insert_key_index_requirements(
+                mode=self.mode,
+                match_fields=self.match_fields,
+                relations=self.relations,
+            )
+        # Buffer stores raw payload fields (before relation resolution & match-finding)
+        self._buffer: list[dict[str, Any]] = []
+        self._buffer_lock: asyncio.Lock | None = None
+        self._flush_task: asyncio.Task[None] | None = None
+        self._flush_error: Exception | None = None
+        self._closed = False
+        # Insert key index state
+        self._insert_keys: set[str] | None = None
+        self._index_loaded = False
+        self._scan_duplicate_keys = 0
+        self._scan_missing_key_records = 0
+        # Indexed insert pending-key tracking
+        self._pending_by_key: dict[str, _PendingInsert] = {}
+        self._pending_order: deque[str] = deque()
+        self._flush_lock: asyncio.Lock | None = None
+        self._uncertain_keys: set[str] = set()
+        self._normal_lookup_avoided_count = 0
+        self._recovery_lookup_count = 0
+        self._insert_retry_count = 0
+        self._inflight_waiter_count = 0
+
+    async def open(self) -> None:
+        """Open the sink and, if insert_key_index is enabled, preload destination keys."""
+        if self.insert_key_index and not self._index_loaded:
+            await self._load_insert_key_index()
+
+    async def _load_insert_key_index(self) -> None:
+        """Page the configured match field into a bounded in-memory set.
+
+        The scan requests only the match field, stops at insert_index_max_pages,
+        and fails closed if the destination table has more records than the bound.
+        """
+        page_token: str | None = None
+        seen_tokens: set[str] = set()
+        loaded: set[str] = set()
+        missing_key_records = 0
+        duplicate_keys = 0
+        start_time = time.monotonic()
+
+        for page_number in range(1, self.insert_index_max_pages + 1):
+            try:
+                data = await self.connector.search_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    body={"field_names": [self.match_fields[0]]},
+                    page_size=self.insert_index_page_size,
+                    page_token=page_token,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.OPEN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            except ConnectorOperationError:
+                raise
+            except Exception as exc:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message="feishu_bitable insert index scan failed",
+                ) from exc
+
+            raw_items = data.get("items", [])
+            if not isinstance(raw_items, list):
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable insert index response items must be a list",
+                )
+
+            for raw_item in raw_items:
+                if not isinstance(raw_item, Mapping):
+                    missing_key_records += 1
+                    continue
+                raw_fields = raw_item.get("fields")
+                if not isinstance(raw_fields, Mapping):
+                    missing_key_records += 1
+                    continue
+                try:
+                    key = _canonical_insert_key(raw_fields.get(self.match_fields[0]))
+                except FeishuBitablePayloadError:
+                    missing_key_records += 1
+                    continue
+                if key in loaded:
+                    duplicate_keys += 1
+                loaded.add(key)
+
+            has_more = bool(data.get("has_more"))
+            next_token = data.get("page_token")
+            if not has_more:
+                self._insert_keys = loaded
+                self._index_loaded = True
+                self._scan_duplicate_keys = duplicate_keys
+                self._scan_missing_key_records = missing_key_records
+                duration = time.monotonic() - start_time
+                logger.info(
+                    "feishu insert index scan",
+                    extra={
+                        "event": "feishu_insert_index_scan",
+                        "scan_pages": page_number,
+                        "scan_keys": len(loaded),
+                        "missing_key_records": missing_key_records,
+                        "duplicate_keys": duplicate_keys,
+                        "duration_s": round(duration, 3),
+                        "outcome": "success",
+                        "page_size": self.insert_index_page_size,
+                        "max_pages": self.insert_index_max_pages,
+                    },
+                )
+                return
+
+            if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable insert index pagination did not advance",
+                )
+            seen_tokens.add(next_token)
+            page_token = next_token
+
+        # Exhausted max_pages while Feishu still has more
+        raise ConnectorOperationError(
+            backend="feishu_bitable",
+            operation=ConnectorOperation.OPEN,
+            kind=ConnectorErrorKind.PERMANENT,
+            source_name=self.name,
+            retry_delay_s=1.0,
+            message=(
+                "feishu_bitable insert index exceeded "
+                f"insert_index_max_pages={self.insert_index_max_pages}"
+            ),
+        )
+
+    def _ensure_buffer_lock(self) -> asyncio.Lock:
+        if self._buffer_lock is None:
+            self._buffer_lock = asyncio.Lock()
+        return self._buffer_lock
 
     async def send(self, envelope: Envelope) -> None:
+        """Buffer raw fields for batch processing."""
         try:
-            fields = await self._resolve_relation_fields(_payload_fields(envelope.body))
-            if self.mode == "create":
-                await self.connector.create_record(
-                    app_token=self.app_token,
-                    table_id=self.table_id,
-                    fields=fields,
-                    user_id_type=self.user_id_type,
-                    operation=ConnectorOperation.SEND,
-                    source_name=self.name,
-                    retry_delay_s=1.0,
-                )
-                return
-
-            match_values = _match_values(fields, self.match_fields)
-            matches = await self._find_matches(match_values)
-            if len(matches) > 1:
-                raise FeishuBitablePayloadError(
-                    f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
-                )
-            if matches:
-                await self.connector.update_record(
-                    app_token=self.app_token,
-                    table_id=self.table_id,
-                    record_id=_record_id(matches[0]),
-                    fields=fields,
-                    user_id_type=self.user_id_type,
-                    operation=ConnectorOperation.SEND,
-                    source_name=self.name,
-                    retry_delay_s=1.0,
-                )
-                return
-            if self.mode == "update":
-                raise FeishuBitablePayloadError(f"no record matched fields {self.match_fields!r}")
-            await self.connector.create_record(
-                app_token=self.app_token,
-                table_id=self.table_id,
-                fields=fields,
-                user_id_type=self.user_id_type,
-                operation=ConnectorOperation.SEND,
-                source_name=self.name,
-                retry_delay_s=1.0,
-            )
+            raw_fields = _payload_fields(envelope.body)
+            # Indexed insert path
+            if self.insert_key_index and self._index_loaded:
+                await self._send_indexed_insert(raw_fields)
+            else:
+                await self._buffer_record(raw_fields)
         except ConnectorOperationError:
             raise
         except FeishuBitablePayloadError as exc:
@@ -765,7 +1018,818 @@ class FeishuBitableTableSink(Sink):
                 source_name=self.name,
                 retry_delay_s=1.0,
                 cause=exc,
+                message=f"feishu_bitable send failed (permanent) for {self.name!r}: {exc}",
             ) from exc
+
+    async def _buffer_record(self, raw_fields: dict[str, Any]) -> None:
+        """Preserve the existing buffered behavior for non-indexed sinks."""
+        if self._batch_size <= 1:
+            await self._send_single(raw_fields)
+            return
+        lock = self._ensure_buffer_lock()
+        async with lock:
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
+            self._buffer.append(raw_fields)
+            if len(self._buffer) >= self._batch_size:
+                await self._flush_buffer()
+                return
+            if self._flush_task is None and not self._closed:
+                self._flush_task = asyncio.create_task(self._flush_after_interval())
+
+    async def _send_indexed_insert(self, raw_fields: dict[str, Any]) -> None:
+        """Send one record through the indexed insert path with per-key waiter.
+
+        If the key is already in the startup index, return immediately.
+        Otherwise buffer the record, join any existing waiter for the same key,
+        and await the batch outcome.
+        """
+        if self._closed:
+            raise ConnectorOperationError(
+                backend="feishu_bitable",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                retry_delay_s=1.0,
+                message="feishu_bitable sink is closed",
+            )
+
+        # Parse and canonicalize the match key
+        match_value = raw_fields.get(self.match_fields[0])
+        if _empty_match_value(match_value):
+            raise FeishuBitablePayloadError(
+                f"payload must include non-empty match_fields entry {self.match_fields[0]!r}"
+            )
+        key = _canonical_insert_key(match_value)
+
+        # Key is in the startup index: confirmed pre-existing
+        if self._insert_keys is not None and key in self._insert_keys:
+            self._normal_lookup_avoided_count += 1
+            return
+
+        # Key is uncertain from a previous ambiguous write: reconcile first
+        if key in self._uncertain_keys:
+            await self._reconcile_uncertain_key(key)
+            if self._insert_keys is not None and key in self._insert_keys:
+                self._normal_lookup_avoided_count += 1
+                return
+
+        # Buffer with a waiter.  The pending entry stays in the map while its
+        # batch is being written so a concurrent duplicate joins the same
+        # outcome instead of creating a second record.
+        lock = self._ensure_buffer_lock()
+        async with lock:
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
+
+            waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            existing = self._pending_by_key.get(key)
+            if existing is not None:
+                existing.waiters.append(waiter)
+            else:
+                pending = _PendingInsert(
+                    key=key,
+                    fields=raw_fields,
+                    waiters=[waiter],
+                    buffered_at=time.monotonic(),
+                )
+                self._pending_by_key[key] = pending
+                self._pending_order.append(key)
+            self._inflight_waiter_count += 1
+            should_flush = len(self._pending_order) >= self._batch_size
+            if not should_flush and self._flush_task is None and not self._closed:
+                self._flush_task = asyncio.create_task(self._flush_after_interval())
+
+        if should_flush:
+            await self._flush_indexed_insert(reason="threshold")
+
+        # Await the waiter (may be resolved during flush above, or by timer/close)
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            # Cancellation cancels this caller's Future, but the key group must
+            # remain until its batch is confirmed or failed.  Close and the
+            # elected flusher therefore still settle the group.
+            raise
+
+    def _seal_indexed_batch(self, batch_size: int) -> list[_PendingInsert]:
+        """Seal a batch from _pending_order at most batch_size unique keys."""
+        batch: list[_PendingInsert] = []
+        seen: int = 0
+        while self._pending_order and seen < batch_size:
+            key = self._pending_order[0]
+            pending = self._pending_by_key.get(key)
+            if pending is None:
+                self._pending_order.popleft()
+                continue
+            if pending.state != _InsertState.BUFFERED:
+                self._pending_order.popleft()
+                continue
+            pending.state = _InsertState.WRITING
+            batch.append(pending)
+            self._pending_order.popleft()
+            seen += 1
+        return batch
+
+    def _ensure_flush_lock(self) -> asyncio.Lock:
+        if self._flush_lock is None:
+            self._flush_lock = asyncio.Lock()
+        return self._flush_lock
+
+    async def _write_indexed_batch(
+        self,
+        batch: list[_PendingInsert],
+        *,
+        reason: str,
+        recovery_round: int = 0,
+    ) -> None:
+        """Write one indexed insert batch and settle every member."""
+        if not batch:
+            return
+
+        batch_size = len(batch)
+        start_time = time.monotonic()
+        batch_records = [dict(pending.fields) for pending in batch]
+
+        try:
+            result = await self.connector.batch_create_records(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                records=batch_records,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+        except ConnectorOperationError as exc:
+            duration = time.monotonic() - start_time
+            if _is_definite_write_error(exc):
+                self._fail_pending(batch, exc)
+                logger.info(
+                    "feishu insert batch write",
+                    extra={
+                        "event": "feishu_insert_batch_write",
+                        "batch_size": batch_size,
+                        "duration_s": round(duration, 3),
+                        "outcome": "permanent_error",
+                        "flush_reason": reason,
+                        "recovery_round": recovery_round,
+                        "inflight_waiter_count": self._inflight_waiter_count,
+                    },
+                )
+                return
+            await self._recover_ambiguous_batch(
+                batch, reason=reason, recovery_round=recovery_round + 1, cause=exc
+            )
+            return
+        except Exception as exc:
+            # An unexpected exception after request dispatch has an unknown
+            # commit outcome.  Treat it conservatively and reconcile first.
+            await self._recover_ambiguous_batch(
+                batch,
+                reason=reason,
+                recovery_round=recovery_round + 1,
+                cause=ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.SEND,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message="feishu_bitable batch create outcome is uncertain",
+                ),
+            )
+            return
+
+        if not _batch_create_response_is_complete(result, expected=batch_size):
+            await self._recover_ambiguous_batch(
+                batch,
+                reason=reason,
+                recovery_round=recovery_round + 1,
+                cause=ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.SEND,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable batch create response was incomplete",
+                ),
+            )
+            return
+
+        duration = time.monotonic() - start_time
+        self._confirm_created(batch)
+        logger.info(
+            "feishu insert batch write",
+            extra={
+                "event": "feishu_insert_batch_write",
+                "batch_size": batch_size,
+                "duration_s": round(duration, 3),
+                "outcome": "success",
+                "flush_reason": reason,
+                "recovery_round": recovery_round,
+                "inflight_waiter_count": self._inflight_waiter_count,
+            },
+        )
+
+    async def _recover_ambiguous_batch(
+        self,
+        batch: list[_PendingInsert],
+        *,
+        reason: str,
+        recovery_round: int,
+        cause: ConnectorOperationError,
+    ) -> None:
+        """Reconcile only the keys whose create outcome is uncertain."""
+        unresolved = list(batch)
+        for pending in unresolved:
+            pending.state = _InsertState.RECOVERING
+            self._uncertain_keys.add(pending.key)
+
+        logger.info(
+            "feishu insert batch write",
+            extra={
+                "event": "feishu_insert_batch_write",
+                "batch_size": len(batch),
+                "duration_s": 0.0,
+                "outcome": "ambiguous",
+                "flush_reason": reason,
+                "recovery_round": recovery_round,
+                "inflight_waiter_count": self._inflight_waiter_count,
+            },
+        )
+
+        round_number = recovery_round
+        while unresolved and round_number <= self.ambiguous_write_max_rounds:
+            self._insert_retry_count += 1
+            logger.info(
+                "feishu insert retry",
+                extra={
+                    "event": "feishu_insert_retry",
+                    "retry_count": self._insert_retry_count,
+                    "recovery_round": round_number,
+                    "unresolved_count": len(unresolved),
+                },
+            )
+            found, missing, lookup_failed = await self._lookup_pending_keys(unresolved)
+            if found:
+                self._confirm_found(found)
+            if not missing:
+                unresolved = lookup_failed
+                round_number += 1
+                continue
+
+            for pending in missing:
+                pending.state = _InsertState.WRITING
+            try:
+                result = await self.connector.batch_create_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    records=[dict(pending.fields) for pending in missing],
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            except ConnectorOperationError as exc:
+                if _is_definite_write_error(exc):
+                    self._fail_pending(missing, exc)
+                    unresolved = lookup_failed
+                else:
+                    unresolved = lookup_failed + missing
+            except Exception as exc:
+                cause = ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.SEND,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message="feishu_bitable recovery create outcome is uncertain",
+                )
+                unresolved = lookup_failed + missing
+            else:
+                if _batch_create_response_is_complete(result, expected=len(missing)):
+                    self._confirm_created(missing)
+                    unresolved = lookup_failed
+                else:
+                    unresolved = lookup_failed + missing
+            round_number += 1
+
+        if unresolved:
+            exhausted = ConnectorOperationError(
+                backend="feishu_bitable",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.UNCERTAIN,
+                source_name=self.name,
+                retry_delay_s=1.0,
+                cause=cause,
+                message=(
+                    "feishu_bitable ambiguous batch remained unresolved after "
+                    f"{self.ambiguous_write_max_rounds} recovery rounds"
+                ),
+            )
+            self._fail_pending(unresolved, exhausted)
+
+    async def _lookup_pending_keys(
+        self, pending_list: list[_PendingInsert]
+    ) -> tuple[list[_PendingInsert], list[_PendingInsert], list[_PendingInsert]]:
+        """Return found, confirmed-missing, and lookup-failed members."""
+        semaphore = asyncio.Semaphore(20)
+
+        async def lookup(
+            pending: _PendingInsert,
+        ) -> tuple[str, _PendingInsert, BaseException | None]:
+            try:
+                async with semaphore:
+                    matches = await self._find_matches(
+                        {self.match_fields[0]: pending.key}
+                    )
+            except BaseException as exc:
+                return "failed", pending, exc
+            if len(matches) > 1:
+                return (
+                    "failed",
+                    pending,
+                    FeishuBitablePayloadError(
+                        "insert match field resolved to multiple destination records"
+                    ),
+                )
+            return ("found" if matches else "missing"), pending, None
+
+        found: list[_PendingInsert] = []
+        missing: list[_PendingInsert] = []
+        failed: list[_PendingInsert] = []
+        results = await asyncio.gather(*(lookup(item) for item in pending_list))
+        for outcome, pending, exc in results:
+            if outcome == "found":
+                found.append(pending)
+            elif outcome == "missing":
+                missing.append(pending)
+            else:
+                if isinstance(exc, FeishuBitablePayloadError):
+                    self._fail_pending(
+                        [pending],
+                        ConnectorOperationError(
+                            backend="feishu_bitable",
+                            operation=ConnectorOperation.SEND,
+                            kind=ConnectorErrorKind.PERMANENT,
+                            source_name=self.name,
+                            retry_delay_s=1.0,
+                            cause=exc,
+                            message="feishu_bitable destination match is not unique",
+                        ),
+                    )
+                else:
+                    failed.append(pending)
+        self._recovery_lookup_count += len(pending_list)
+        logger.info(
+            "feishu insert lookup",
+            extra={
+                "event": "feishu_insert_lookup",
+                "normal_lookup_avoided_count": self._normal_lookup_avoided_count,
+                "recovery_lookup_count": self._recovery_lookup_count,
+                "outcome": "success" if not failed else "error",
+            },
+        )
+        return found, missing, failed
+
+    def _confirm_created(self, batch: list[_PendingInsert]) -> None:
+        """Mark batch keys as created and complete all waiters successfully."""
+        for pending in batch:
+            if self._insert_keys is not None:
+                self._insert_keys.add(pending.key)
+            self._uncertain_keys.discard(pending.key)
+        self._complete_pending(batch)
+
+    def _confirm_found(self, batch: list[_PendingInsert]) -> None:
+        """Mark batch keys as found in the destination and complete waiters."""
+        for pending in batch:
+            if self._insert_keys is not None:
+                self._insert_keys.add(pending.key)
+            self._uncertain_keys.discard(pending.key)
+        self._complete_pending(batch)
+
+    def _fail_pending(
+        self,
+        pending_list: list[_PendingInsert],
+        exc: BaseException,
+    ) -> None:
+        """Complete all waiters for the given pending items with an exception."""
+        for pending in pending_list:
+            self._pending_by_key.pop(pending.key, None)
+            self._inflight_waiter_count -= len(pending.waiters)
+            for waiter in pending.waiters:
+                if not waiter.done():
+                    waiter.set_exception(exc)
+
+    def _complete_pending(self, pending_list: list[_PendingInsert]) -> None:
+        """Complete all waiters for the given pending items successfully."""
+        for pending in pending_list:
+            self._pending_by_key.pop(pending.key, None)
+            self._inflight_waiter_count -= len(pending.waiters)
+            for waiter in pending.waiters:
+                if not waiter.done():
+                    waiter.set_result(None)
+
+    @property
+    def inflight_waiter_count(self) -> int:
+        return self._inflight_waiter_count
+
+    async def _reconcile_uncertain_key(self, key: str) -> None:
+        """Exact-search one uncertain key before a new send can proceed."""
+        try:
+            matches = await self._find_matches({self.match_fields[0]: key})
+        except ConnectorOperationError:
+            self._recovery_lookup_count += 1
+            self._log_insert_lookup(outcome="error")
+            raise
+        self._recovery_lookup_count += 1
+        self._log_insert_lookup(outcome="success")
+        if len(matches) > 1:
+            raise FeishuBitablePayloadError(
+                "insert match field resolved to multiple destination records"
+            )
+        if matches:
+            if self._insert_keys is not None:
+                self._insert_keys.add(key)
+        # A successful exact search establishes either found or missing.
+        self._uncertain_keys.discard(key)
+
+    def _log_insert_lookup(self, *, outcome: str) -> None:
+        logger.info(
+            "feishu insert lookup",
+            extra={
+                "event": "feishu_insert_lookup",
+                "normal_lookup_avoided_count": self._normal_lookup_avoided_count,
+                "recovery_lookup_count": self._recovery_lookup_count,
+                "outcome": outcome,
+            },
+        )
+
+    async def _flush_indexed_insert(self, *, reason: str) -> None:
+        """Seal and write an indexed insert batch under the flush lock.
+
+        Timer, threshold, and close flushes share one network-write lane.
+        """
+        async with self._ensure_flush_lock():
+            lock = self._ensure_buffer_lock()
+            async with lock:
+                batch = self._seal_indexed_batch(self._batch_size)
+            if not batch:
+                return
+            logger.info(
+                "feishu insert buffer",
+                extra={
+                    "event": "feishu_insert_buffer",
+                    "buffered_batch_size": len(batch),
+                    "oldest_batch_age_s": round(
+                        max(
+                            0.0,
+                            time.monotonic()
+                            - min(item.buffered_at for item in batch),
+                        ),
+                        3,
+                    ),
+                    "inflight_waiter_count": self._inflight_waiter_count,
+                    "flush_reason": reason,
+                },
+            )
+            await self._write_indexed_batch(batch, reason=reason)
+
+    async def _send_single(self, raw_fields: dict[str, Any]) -> None:
+        """Send a single record immediately (batch_size=1 path)."""
+        fields = await self._resolve_relation_fields(raw_fields)
+        if self.mode == "create":
+            await self.connector.create_record(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                fields=fields,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            return
+
+        match_values = _match_values(fields, self.match_fields)
+        matches = await self._find_matches(match_values)
+        if len(matches) > 1:
+            raise FeishuBitablePayloadError(
+                f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
+            )
+        if matches:
+            if self.mode == "insert":
+                return  # skip: record already exists
+            await self.connector.update_record(
+                app_token=self.app_token,
+                table_id=self.table_id,
+                record_id=_record_id(matches[0]),
+                fields=fields,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            return
+        if self.mode == "update":
+            raise FeishuBitablePayloadError(f"no record matched fields {self.match_fields!r}")
+        await self.connector.create_record(
+            app_token=self.app_token,
+            table_id=self.table_id,
+            fields=fields,
+            user_id_type=self.user_id_type,
+            operation=ConnectorOperation.SEND,
+            source_name=self.name,
+            retry_delay_s=1.0,
+        )
+
+    async def _flush_after_interval(self) -> None:
+        """Flush the buffer after flush_interval_s of inactivity."""
+        timer_task = asyncio.current_task()
+        try:
+            await asyncio.sleep(self._flush_interval_s)
+            if self.insert_key_index and self._index_loaded:
+                if self._flush_error is None:
+                    await self._flush_indexed_insert(reason="timer")
+            else:
+                lock = self._ensure_buffer_lock()
+                async with lock:
+                    if self._buffer and self._flush_error is None:
+                        await self._flush_buffer()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            self._flush_error = exc
+        finally:
+            if self._flush_task is timer_task:
+                self._flush_task = None
+
+    async def _flush_buffer(self) -> None:
+        """Flush buffered records with batched relation resolution and write.
+
+        The buffer is only cleared after a successful API write.  On failure
+        records remain in the buffer so they can be retried on the next flush.
+        """
+        if not self._buffer:
+            return
+        items = self._buffer[:]
+        current_task = asyncio.current_task()
+        if self._flush_task is not None and self._flush_task is not current_task:
+            self._flush_task.cancel()
+            self._flush_task = None
+
+        # Step 1: Batch resolve relations with dedup + concurrent search
+        if self.relations:
+            resolved = await self._batch_resolve_relations(items)
+        else:
+            resolved = [dict(r) for r in items]
+
+        # Step 2: For upsert/update/insert, batch find matches
+        if self.mode == "create":
+            creates = resolved
+            updates: list[dict[str, Any]] = []
+        else:
+            creates, updates = await self._batch_match_and_split(resolved)
+
+        # Step 3: Batch write (on failure, buffer is preserved)
+        try:
+            if creates:
+                await self.connector.batch_create_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    records=creates,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            if updates:
+                await self.connector.batch_update_records(
+                    app_token=self.app_token,
+                    table_id=self.table_id,
+                    records=updates,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.SEND,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+        except Exception:
+            # Buffer is still intact (items was a copy), nothing to restore
+            raise
+
+        # Only clear after successful API write
+        self._buffer.clear()
+
+    async def _batch_resolve_relations(
+        self, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Resolve relation fields for all records in batch.
+
+        Collects all unique (relation, value) pairs, searches concurrently
+        with a semaphore, and builds a cache to avoid repeated API calls.
+        """
+        _SEARCH_CONCURRENCY = 20
+        sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
+        # {(target_field, value): record_id | None}
+        cache: dict[tuple[str, str], str | None] = {}
+        # List of (relation, value) for create-on-missing values
+        to_create: list[tuple[_FeishuRelationConfig, str]] = []
+
+        async def search_one(rel: _FeishuRelationConfig, value: str) -> None:
+            async with sem:
+                matches = await self._find_relation_matches(rel, value)
+                if len(matches) > 1:
+                    raise FeishuBitablePayloadError(
+                        f"relation field {rel.target_field!r} value {value!r} "
+                        f"matched {len(matches)} records in table {rel.table_id!r}"
+                    )
+                if matches:
+                    cache[(rel.target_field, value)] = _record_id(matches[0])
+                elif rel.on_missing == "create":
+                    to_create.append((rel, value))
+                elif rel.on_missing == "error":
+                    raise FeishuBitablePayloadError(
+                        f"relation field {rel.target_field!r} value {value!r} "
+                        f"did not match a record in table {rel.table_id!r}"
+                    )
+                # on_missing == "empty": just skip, cache stays empty
+
+        # Collect unique (relation, value) pairs, keyed by (target_field, value)
+        pending: dict[tuple[str, str], tuple[_FeishuRelationConfig, str]] = {}
+        for item in items:
+            for relation in self.relations:
+                values = _normalize_relation_values(
+                    item.get(relation.source_field), field=relation.source_field
+                )
+                for value in values:
+                    pending[(relation.target_field, value)] = (relation, value)
+
+        if pending:
+            tasks = [search_one(rel, val) for rel, val in pending.values()]
+            await asyncio.gather(*tasks)
+
+        # Batch create missing records
+        if to_create:
+            await self._batch_create_relation_records(to_create, cache)
+
+        # Build resolved fields for each record
+        result: list[dict[str, Any]] = []
+        for item in items:
+            resolved: dict[str, list[str]] = {}
+            consumed: set[str] = set()
+            for relation in self.relations:
+                values = _normalize_relation_values(
+                    item.get(relation.source_field), field=relation.source_field
+                )
+                record_ids: list[str] = []
+                for value in values:
+                    rid = cache.get((relation.target_field, value))
+                    if rid:
+                        record_ids.append(rid)
+                resolved[relation.target_field] = record_ids
+                if relation.source_field != relation.target_field:
+                    consumed.add(relation.source_field)
+
+            out = dict(item)
+            for field_name in consumed:
+                out.pop(field_name, None)
+            out.update(resolved)
+            result.append(out)
+
+        return result
+
+    async def _batch_create_relation_records(
+        self,
+        to_create: list[tuple[_FeishuRelationConfig, str]],
+        cache: dict[tuple[str, str], str | None],
+    ) -> None:
+        """Batch create missing relation records and update the cache."""
+        if not to_create:
+            return
+        # Group by (app_token, table_id, key)
+        groups: dict[tuple[str, str, str], list[tuple[_FeishuRelationConfig, str]]] = {}
+        for rel, value in to_create:
+            groups.setdefault((rel.app_token, rel.table_id, rel.key), []).append((rel, value))
+
+        for (app_token, table_id, key), entries in groups.items():
+            records = [
+                {key: value, **dict(rel.create_fields)}
+                for rel, value in entries
+            ]
+            result = await self.connector.batch_create_records(
+                app_token=app_token,
+                table_id=table_id,
+                records=records,
+                user_id_type=self.user_id_type,
+                operation=ConnectorOperation.SEND,
+                source_name=self.name,
+                retry_delay_s=1.0,
+            )
+            raw_records = result.get("records", [])
+            if isinstance(raw_records, list):
+                for i, rec in enumerate(raw_records):
+                    if isinstance(rec, dict) and isinstance(rec.get("fields"), dict):
+                        rel, value = entries[i]
+                        cache[(rel.target_field, value)] = rec["record_id"]
+
+    async def _batch_match_and_split(
+        self, resolved: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Find matches for all records and split into creates and updates."""
+        _SEARCH_CONCURRENCY = 20
+        sem = asyncio.Semaphore(_SEARCH_CONCURRENCY)
+        # {(match_values_tuple): record_id|None}
+        cache: dict[tuple[tuple[str, Any], ...], str | None] = {}
+
+        async def match_one(match_values: dict[str, Any]) -> str | None:
+            async with sem:
+                matches = await self._find_matches(match_values)
+                if len(matches) > 1:
+                    raise FeishuBitablePayloadError(
+                        f"{self.mode} match fields {self.match_fields!r} matched {len(matches)} records"
+                    )
+                if matches:
+                    return _record_id(matches[0])
+                return None
+
+        # Deduplicate match values
+        index: list[tuple[int, tuple[tuple[str, Any], ...], dict[str, Any]]] = []
+        for i, fields in enumerate(resolved):
+            mv = _match_values(fields, self.match_fields)
+            key = tuple(sorted(mv.items()))
+            cache.setdefault(key, ...)
+            index.append((i, key, mv))
+
+        # Concurrent search for unique match values
+        pending = {k: v for k, v in cache.items() if v is ...}
+        if pending:
+            tasks = [match_one(dict(k)) for k in pending]
+            results = await asyncio.gather(*tasks)
+            for key, rid in zip(pending, results):
+                cache[key] = rid
+
+        # Split into creates and updates
+        creates: list[dict[str, Any]] = []
+        updates: list[dict[str, Any]] = []
+        for i, key, _ in index:
+            rid = cache[key]
+            if rid is None:
+                if self.mode == "update":
+                    raise FeishuBitablePayloadError(
+                        f"no record matched fields {self.match_fields!r}"
+                    )
+                creates.append(resolved[i])
+            elif self.mode == "insert":
+                continue  # skip: record already exists
+            else:
+                updates.append({"record_id": rid, "fields": resolved[i]})
+
+        return creates, updates
+
+    async def close(self) -> None:
+        """Flush remaining buffered records before closing."""
+        self._closed = True
+        lock = self._ensure_buffer_lock()
+        timer_task: asyncio.Task[None] | None = None
+        async with lock:
+            if self._flush_task is not None:
+                timer_task = self._flush_task
+                timer_task.cancel()
+                self._flush_task = None
+        if timer_task is not None:
+            await asyncio.gather(timer_task, return_exceptions=True)
+
+        # Indexed insert close: drain all pending keys
+        if self.insert_key_index and self._index_loaded:
+            while True:
+                await self._flush_indexed_insert(reason="close")
+                async with lock:
+                    has_buffered = bool(self._pending_order)
+                if not has_buffered:
+                    break
+            # Surface any error stored from timer flush
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
+            # No remaining pending keys should exist
+            assert not self._pending_by_key, "close left pending entries"
+            self._log_insert_lookup(outcome="success")
+            return
+
+        # Legacy close path
+        async with lock:
+            if self._buffer:
+                await self._flush_buffer()
+            if self._flush_error is not None:
+                err = self._flush_error
+                self._flush_error = None
+                raise err
 
     async def _resolve_relation_fields(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         if not self.relations:
@@ -1061,9 +2125,93 @@ def _normalize_fallback_scan_page_limit(value: int) -> int:
 
 def _normalize_mode(value: str) -> str:
     normalized = _require_non_empty_string(value, field="mode").strip().lower()
-    if normalized not in {"upsert", "create", "update"}:
-        raise ValueError("mode must be one of 'upsert', 'create', or 'update'")
+    if normalized not in {"upsert", "create", "update", "insert"}:
+        raise ValueError("mode must be one of 'upsert', 'create', 'update', or 'insert'")
     return normalized
+
+
+_DELETED = object()
+
+
+def _canonical_insert_key(value: Any) -> str:
+    """Normalize a match field value to its canonical string form.
+
+    Returns the canonical key or raises FeishuBitablePayloadError if the
+    value cannot be used as a stable insert key.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise FeishuBitablePayloadError("insert key value is empty after stripping")
+        return stripped
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        if value != value or abs(value) == float("inf"):
+            raise FeishuBitablePayloadError(
+                "insert key value must be a finite number"
+            )
+        return str(value)
+    if value is None:
+        raise FeishuBitablePayloadError("insert key value must not be None")
+    if isinstance(value, (dict, list, set, tuple)):
+        raise FeishuBitablePayloadError(
+            "insert key value must be a string, number, or boolean, "
+            "got {!r}".format(type(value).__name__)
+        )
+    raise FeishuBitablePayloadError(
+        "insert key value must be a string, number, or boolean, "
+        "got {!r}".format(type(value).__name__)
+    )
+
+
+def _normalize_insert_key_index(value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError("'insert_key_index' must be a boolean")
+    return value
+
+
+def _normalize_insert_index_page_size(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'insert_index_page_size' must be an integer")
+    if value < 1:
+        raise ValueError("'insert_index_page_size' must be >= 1")
+    return min(value, _MAX_PAGE_SIZE)
+
+
+def _normalize_insert_index_max_pages(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'insert_index_max_pages' must be an integer")
+    if value < 1:
+        raise ValueError("'insert_index_max_pages' must be >= 1")
+    return value
+
+
+def _normalize_ambiguous_write_max_rounds(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'ambiguous_write_max_rounds' must be an integer")
+    if value < 1:
+        raise ValueError("'ambiguous_write_max_rounds' must be >= 1")
+    return value
+
+
+def _validate_insert_key_index_requirements(
+    *,
+    mode: str,
+    match_fields: tuple[str, ...],
+    relations: tuple[_FeishuRelationConfig, ...],
+) -> None:
+    if mode != "insert":
+        raise ValueError(
+            "insert_key_index requires mode='insert', not {!r}".format(mode)
+        )
+    if len(match_fields) != 1:
+        raise ValueError(
+            "insert_key_index requires exactly one match field, "
+            "got {}: {!r}".format(len(match_fields), match_fields)
+        )
+    if relations:
+        raise ValueError("insert_key_index is not supported with relations")
 
 
 def _normalize_user_id_type(value: str | None) -> str | None:
@@ -1094,6 +2242,24 @@ def _empty_match_value(value: Any) -> bool:
     if isinstance(value, (list, tuple, set, dict)) and not value:
         return True
     return False
+
+
+def _is_definite_write_error(exc: ConnectorOperationError) -> bool:
+    """Check if a connector error is a definite (non-ambiguous) failure."""
+    return exc.kind in {
+        ConnectorErrorKind.PERMANENT,
+        ConnectorErrorKind.MISCONFIGURED,
+    }
+
+
+def _batch_create_response_is_complete(
+    result: Mapping[str, Any], *, expected: int
+) -> bool:
+    """Return whether Feishu assigned one response record per input."""
+    records = result.get("records")
+    if not isinstance(records, list) or len(records) != expected:
+        return False
+    return all(isinstance(record, Mapping) for record in records)
 
 
 def _normalize_match_fields(value: Sequence[str] | None, *, required: bool) -> tuple[str, ...]:
@@ -1183,20 +2349,24 @@ def _normalize_relation_values(value: Any, *, field: str) -> tuple[str, ...]:
         return ()
     if isinstance(value, str):
         raw_values = (value,)
+    elif isinstance(value, (int, float, bool)):
+        raw_values = (str(value),)
     elif isinstance(value, (list, tuple)):
         raw_values = tuple(value)
     else:
         raise FeishuBitablePayloadError(
-            f"relation source field {field!r} must be a string, list, tuple, or None"
+            f"relation source field {field!r} must be a string, number, list, tuple, or None"
         )
     normalized: list[str] = []
     seen: set[str] = set()
     for item in raw_values:
         if item is None:
             continue
+        if isinstance(item, (int, float, bool)):
+            item = str(item)
         if not isinstance(item, str):
             raise FeishuBitablePayloadError(
-                f"relation source field {field!r} values must be strings or None"
+                f"relation source field {field!r} values must be strings, numbers, or None"
             )
         item = item.strip()
         if not item or item in seen:
@@ -1225,6 +2395,79 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+_KNOWN_DICT_FIELD_KEYS = frozenset({
+    "text",           # rich text object
+    "name",           # text field common key
+    "value",          # text field common key
+    "link",           # URL field
+    "email",          # email field
+    "id",             # person field
+    "file_token",     # attachment field
+    "location",       # location field
+    "address",        # location field
+    "elements",       # block/rich text
+    "type",           # rich text type discriminator
+})
+
+
+def _check_field_values_before_send(
+    fields: Mapping[str, Any],
+    table_id: str,
+    source_name: str,
+) -> None:
+    """Warn about field values that may cause TextFieldConvFail.
+
+    Feishu's TextFieldConvFail error does not report which field caused the
+    failure.  This check emits a warning for the most common cause — a bare
+    dict being sent to a text field — so the field name and value are logged
+    even if the API call fails with a generic error.
+    """
+    _logger = logging.getLogger(__name__)
+    for field_name, value in fields.items():
+        if isinstance(value, dict) and not _KNOWN_DICT_FIELD_KEYS.intersection(value):
+            _logger.warning(
+                "Field %r looks like a dict with no recognized Feishu field-type keys "
+                "(keys=%r). If this is meant for a text field, use feishu_bitable_text() "
+                "to convert it. (table_id=%s, source=%s)",
+                field_name,
+                sorted(value.keys()),
+                table_id,
+                source_name,
+            )
+
+
+def _with_field_context(
+    exc: ConnectorOperationError,
+    fields: Mapping[str, Any],
+    table_id: str,
+) -> ConnectorOperationError:
+    field_names = list(fields.keys())
+    cause = exc.__cause__
+    if isinstance(cause, FeishuBitableApiError) and isinstance(cause.body, dict):
+        api_data = cause.body.get("data")
+        if isinstance(api_data, dict):
+            api_fields = api_data.get("field_name") or api_data.get("field") or api_data.get("fields")
+            if api_fields:
+                field_names_str = f"fields={field_names}"
+                detail_str = f"field={api_fields}"
+                new_msg = f"{exc} ; {detail_str} ; {field_names_str} ; table_id={table_id}"
+            else:
+                new_msg = f"{exc} ; fields={field_names} ; table_id={table_id}"
+        else:
+            new_msg = f"{exc} ; fields={field_names} ; table_id={table_id}"
+    else:
+        new_msg = f"{exc} ; fields={field_names} ; table_id={table_id}"
+    return ConnectorOperationError(
+        backend=exc.backend,
+        operation=exc.operation,
+        kind=exc.kind,
+        source_name=exc.source_name,
+        retry_delay_s=exc.retry_delay_s,
+        cause=exc.__cause__ or exc,
+        message=new_msg,
+    )
 
 
 def _classify_transport_error(exc: BaseException) -> ConnectorErrorKind:

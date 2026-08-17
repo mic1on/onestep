@@ -14,6 +14,70 @@
 - Makes direct PostgreSQL execution backends process-safe for pre-fork deployments:
   each child creates its own pool, while externally supplied connectors are rejected
   when reused across a process boundary.
+## onestep-feishu-bitable 0.4.0
+- Adds opt-in, bounded destination-key preload for single-field Insert sinks.
+- Makes buffered sends complete only after their item is confirmed created or pre-existing.
+- Reconciles ambiguous batch writes by exact-searching only affected keys before creating confirmed misses.
+- Requires one active writer per indexed destination table and retains no record IDs or durable ledger.
+
+## onestep-mysql 0.5.1
+- Persists `datetime` components of incremental cursors as tagged ISO-8601 JSON values and restores them for keyset queries after restart.
+
+## onestep-mysql 0.5.0
+- Retries the same incremental logical row with incremented delivery attempts.
+- Coalesces contiguous cursor acknowledgements into event-loop commit waves without crossing failed gaps.
+- Keeps the existing persisted cursor representation compatible with prior releases.
+
+## onestep-feishu-bitable 0.3.5
+- Fixes partial batches never reaching Feishu when `flush_interval_s` expires:
+  the scheduled flush task no longer cancels itself before the batch API call.
+- Makes flush-timer cleanup task-identity-safe so an older cancelled timer cannot
+  clear a newer scheduled flush.
+## onestep-feishu-bitable 0.3.4
+
+- Fixes silent data loss in batch mode: background timer flush exceptions
+  are now stored and re-raised on the next `send()` or `close()` call.
+- `_flush_buffer` no longer clears the buffer until after a successful
+  API write, so records survive a flush failure and will be retried.
+
+## onestep-feishu-bitable 0.3.3
+
+- Fixes `TypeError: unhashable type: 'mappingproxy'` in
+  `_batch_resolve_relations` by using `(target_field, value)` as the
+  dedup key instead of a `set` of `(relation, value)` tuples.
+
+## onestep-feishu-bitable 0.3.2
+
+- Adds `insert` mode: match by `match_fields` — if a record exists it is
+  skipped; if not, it is created.  Works with both single-record and batch
+  buffering paths.
+
+## onestep-feishu-bitable 0.3.1
+
+- Optimizes relation resolution and match-finding during batch flush with
+  deduplication and concurrent search (semaphore-limited to 20).
+  Previously, each relation value triggered a serial API call.  Now all
+  unique values across the batch are searched concurrently, and missing
+  records are created via `batch_create_records`.
+- Upsert match-finding is also deduplicated and concurrent in batch mode.
+
+## onestep-feishu-bitable 0.3.0
+
+- Adds `batch_create_records` and `batch_update_records` connector methods
+  that call the Feishu batch create/update endpoints, reducing API calls
+  for multiple records.
+- TableSink now supports optional buffering via `batch_size` and
+  `flush_interval_s`. When `batch_size > 1`, records are buffered and
+  flushed in batches — works for both `create` and `upsert` modes.
+  In upsert mode, match-finding is still per-record, but creates and
+  updates are batched separately.
+- Emits a `logging.warning` when a field value looks like a bare dict
+  with no recognized Feishu field-type keys, suggesting the use of
+  `feishu_bitable_text()` to avoid `TextFieldConvFail`.
+- `_normalize_relation_values` now accepts `int`, `float`, and `bool`
+  values for relation source fields, auto-converting them to strings.
+- API errors from `create_record` and `update_record` now include
+  field names and `table_id` in the error message.
 
 ## onestep-feishu-bitable 0.2.0
 
