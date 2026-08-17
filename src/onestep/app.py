@@ -862,6 +862,13 @@ class OneStepApp:
                     "handler_ref": task.handler_ref,
                     "source": _describe_resource(task.source),
                     "emit": [_describe_resource(sink) for sink in task.sinks],
+                    "emit_bindings": [
+                        {
+                            "sink": _describe_resource(binding.sink),
+                            "transform_ref": binding.transform_ref,
+                        }
+                        for binding in task.emit_bindings
+                    ],
                     "dead_letter": [_describe_resource(sink) for sink in task.dead_letter_sinks],
                     "config": copy.deepcopy(task.config),
                     "metadata": copy.deepcopy(task.metadata),

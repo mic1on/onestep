@@ -22,7 +22,7 @@ from onestep.diagnostics.runner import DiagnosticRunner
 from onestep.diagnostics.supervisor import supervise_diagnostic
 from onestep.envelope import Envelope
 from onestep.events import TaskEventKind
-from onestep.task import EmitRoute, TaskHooks
+from onestep.task import EmitBinding, EmitRoute, TaskHooks
 
 
 class RecordingSink(Sink):
@@ -91,6 +91,34 @@ def test_diagnostic_dry_run_executes_handler_hooks_and_routes_without_sink_io() 
             TaskEventKind.STARTED,
             TaskEventKind.SUCCEEDED,
         ]
+
+    asyncio.run(scenario())
+
+
+def test_diagnostic_reports_transform_stage_before_sink_send() -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+        app = OneStepApp("transform-diagnostic")
+        sink = RecordingSink("projected", calls)
+
+        def fail_transform(ctx, payload, result):
+            raise RuntimeError("transform failed")
+
+        @app.task(emit=EmitBinding(sink=sink, transform=fail_transform), retry=MaxAttempts(2))
+        async def consume(ctx, payload):
+            return payload
+
+        report = await DiagnosticRunner(app).run(
+            task_name="consume",
+            envelope=Envelope(body={"id": 1}),
+            send=False,
+        )
+
+        assert calls == []
+        assert report.completion == "failed"
+        assert report.failure_stage == "transform"
+        assert report.selected_sinks == ("projected",)
+        assert report.delivery_action == "would_retry"
 
     asyncio.run(scenario())
 

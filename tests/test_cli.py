@@ -1732,6 +1732,86 @@ def test_cli_check_json_flattens_conditional_emit_routes(capsys, tmp_path) -> No
     assert "emit_routes" not in summary["tasks"][0]
 
 
+def test_cli_check_describes_per_sink_emit_transform(capsys, tmp_path) -> None:
+    config_path = tmp_path / "emit-binding-check.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "emit-binding-check",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "projected": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "project",
+                        "source": "incoming",
+                        "handler": "testsupport_yaml_emit_binding_check:consume",
+                        "emit": [
+                            {
+                                "sink": "projected",
+                                "transform": "testsupport_yaml_emit_binding_check:to_projected",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    async def consume(ctx, item):
+        return item
+
+    def to_projected(ctx, payload, result):
+        return result
+
+    with registered_yaml_module(), registered_module(
+        "testsupport_yaml_emit_binding_check",
+        consume=consume,
+        to_projected=to_projected,
+    ):
+        exit_code = main(["check", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "transforms=projected:testsupport_yaml_emit_binding_check:to_projected" in captured.out
+
+
+def test_app_describe_includes_per_sink_emit_bindings() -> None:
+    source = MemoryQueue("incoming")
+    audit = MemoryQueue("audit")
+    projected = MemoryQueue("projected")
+    app = OneStepApp("emit-binding-description")
+
+    def to_projected(ctx, payload, result):
+        return result
+
+    @app.task(
+        source=source,
+        emit=[
+            audit,
+            EmitBinding(
+                sink=projected,
+                transform=to_projected,
+                transform_ref="tests.transforms:to_projected",
+            ),
+        ],
+    )
+    async def consume(ctx, payload):
+        return payload
+
+    task = app.describe()["tasks"][0]
+    assert [entry["name"] for entry in task["emit"]] == ["audit", "projected"]
+    assert task["emit_bindings"] == [
+        {"sink": {"name": "audit", "type": "MemoryQueue"}, "transform_ref": None},
+        {
+            "sink": {"name": "projected", "type": "MemoryQueue"},
+            "transform_ref": "tests.transforms:to_projected",
+        },
+    ]
+
+
 def test_load_app_config_strict_rejects_emit_route_missing_then() -> None:
     with pytest.raises(ValueError, match=r"tasks\[0\]\.emit\[0\]\.then is required"):
         load_app_config(
