@@ -1653,6 +1653,32 @@ def test_load_app_config_strict_rejects_invalid_emit_binding(entry, message) -> 
         )
 
 
+def test_load_app_config_rejects_emit_binding_with_route_keys_without_strict_mode() -> None:
+    with pytest.raises(ValueError, match=r"unsupported fields for tasks\[0\]\.emit\[0\]: then, when"):
+        load_app_config(
+            {
+                "name": "yaml-invalid-emit-binding-nonstrict",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "processed": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "project",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "sink": "processed",
+                                "when": "testsupport_yaml_emit_binding:predicate",
+                                "then": "processed",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+
 def test_yaml_conditional_emit_supports_list_sinks_and_passthrough_handler() -> None:
     def should_route(ctx, payload, result):
         return True

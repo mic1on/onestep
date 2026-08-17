@@ -717,6 +717,7 @@ def _resolve_emit_binding(
     *,
     field: str,
 ) -> EmitBinding:
+    _validate_unknown_fields(value, _STRICT_EMIT_BINDING_FIELDS, field=field)
     name = _require_string(value, "sink")
     sink = _resolve_resource(resources, name)
     if not isinstance(sink, Sink):
