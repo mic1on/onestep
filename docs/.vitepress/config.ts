@@ -56,10 +56,17 @@ export default defineConfig({
       { text: '指南', link: '/guide/' },
       { text: '核心', link: '/core/' },
       { text: '连接器', link: '/broker/' },
-      { text: 'YAML', link: '/yaml-task-definition' },
       { text: '实战', link: '/guide/cases/' },
       { text: '部署', link: '/guide/deploy' },
-      { text: 'Web 控制台', link: '/control-plane/' },
+      {
+        text: '集成',
+        items: [
+          { text: 'YAML', link: '/yaml-task-definition' },
+          { text: 'SKILL', link: '/skill/' },
+          { text: 'Web 控制台', link: '/control-plane/' },
+          { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
+        ],
+      },
       {
         text: '版本',
         items: [
