@@ -548,6 +548,18 @@ class _AlwaysFailSink(Sink):
         raise RuntimeError("sink failed after previous sink succeeded")
 
 
+class _RecordingSink(Sink):
+    def __init__(self, name: str, events: list[str] | None = None) -> None:
+        super().__init__(name)
+        self.envelopes: list[Envelope] = []
+        self.events = events
+
+    async def send(self, envelope: Envelope) -> None:
+        self.envelopes.append(envelope)
+        if self.events is not None:
+            self.events.append(f"send:{self.name}")
+
+
 class _ReleaseTrackingDelivery(Delivery):
     def __init__(self, envelope: Envelope) -> None:
         super().__init__(envelope)
@@ -1228,6 +1240,107 @@ def test_multi_sink_send_is_not_transactional_when_later_sink_fails_contract() -
         first_batch = await first_sink.fetch(1)
         assert failing_sink.calls == 1
         assert [delivery.payload for delivery in first_batch] == [{"value": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_emit_bindings_send_per_sink_bodies_after_preparation() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        events: list[str] = []
+        callback = _RecordingSink("callback", events)
+        row = _RecordingSink("row", events)
+        app = OneStepApp("emit-binding-runtime")
+
+        async def to_row(ctx, payload, result):
+            events.append("transform:row")
+            await asyncio.sleep(0)
+            return {"id": result["id"], "source": payload["source"]}
+
+        @app.task(
+            source=source,
+            emit=[callback, EmitBinding(sink=row, transform=to_row)],
+        )
+        async def consume(ctx, payload):
+            ctx.app.request_shutdown()
+            return {"id": payload["id"], "status": "ready"}
+
+        await source.publish({"id": "evt-1", "source": "crm"})
+        await app.serve()
+
+        assert events == ["transform:row", "send:callback", "send:row"]
+        assert [envelope.body for envelope in callback.envelopes] == [
+            {"id": "evt-1", "status": "ready"}
+        ]
+        assert [envelope.body for envelope in row.envelopes] == [
+            {"id": "evt-1", "source": "crm"}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_emit_binding_transform_failure_sends_no_sink() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        first = _RecordingSink("first")
+        app = OneStepApp("emit-binding-transform-failure")
+        transform_calls = 0
+
+        def fail_transform(ctx, payload, result):
+            nonlocal transform_calls
+            transform_calls += 1
+            raise RuntimeError("transform failed before sink dispatch")
+
+        @app.task(
+            source=source,
+            emit=[first, EmitBinding(sink=_RecordingSink("second"), transform=fail_transform)],
+            retry=NoRetry(),
+        )
+        async def consume(ctx, payload):
+            ctx.app.request_shutdown()
+            return payload
+
+        await source.publish({"id": "evt-1"})
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        assert transform_calls == 1
+        assert first.envelopes == []
+
+    asyncio.run(scenario())
+
+
+def test_emit_binding_send_remains_non_transactional_after_preparation() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        first = _RecordingSink("first")
+        failing = _AlwaysFailSink("second")
+        app = OneStepApp("emit-binding-partial-success")
+
+        def to_first(ctx, payload, result):
+            return {"id": result["id"], "sink": "first"}
+
+        def to_second(ctx, payload, result):
+            return {"id": result["id"], "sink": "second"}
+
+        @app.task(
+            source=source,
+            emit=[
+                EmitBinding(sink=first, transform=to_first),
+                EmitBinding(sink=failing, transform=to_second),
+            ],
+            retry=NoRetry(),
+        )
+        async def consume(ctx, payload):
+            ctx.app.request_shutdown()
+            return payload
+
+        await source.publish({"id": "evt-1"})
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        assert [envelope.body for envelope in first.envelopes] == [
+            {"id": "evt-1", "sink": "first"}
+        ]
+        assert failing.calls == 1
 
     asyncio.run(scenario())
 
