@@ -1521,6 +1521,69 @@ def test_conditional_emit_predicate_failure_uses_retry_policy() -> None:
     asyncio.run(scenario())
 
 
+def test_conditional_emit_route_transforms_selected_branch() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        meta_sink = MemoryQueue("meta", poll_interval_s=0.01)
+        rows_sink = MemoryQueue("rows", poll_interval_s=0.01)
+        fallback_sink = MemoryQueue("fallback", poll_interval_s=0.01)
+        app = OneStepApp("conditional-emit-route-transforms")
+        seen: list[str] = []
+
+        def is_bidding(ctx, payload, result):
+            return bool(result.get("bidding_id"))
+
+        def to_meta(ctx, payload, result):
+            seen.append("meta")
+            return {"meta_id": result["bidding_id"], "source": payload["source"]}
+
+        def to_row(ctx, payload, result):
+            seen.append("row")
+            return {"row_id": result["bidding_id"], "value": result["value"]}
+
+        def to_fallback(ctx, payload, result):
+            seen.append("fallback")
+            return {"fallback_id": result["id"]}
+
+        @app.task(
+            source=source,
+            emit=[
+                EmitRoute(
+                    predicate=is_bidding,
+                    then_bindings=(
+                        EmitBinding(sink=meta_sink, transform=to_meta),
+                        EmitBinding(sink=rows_sink, transform=to_row),
+                    ),
+                    otherwise_bindings=(EmitBinding(sink=fallback_sink, transform=to_fallback),),
+                ),
+            ],
+        )
+        async def consume(ctx, item):
+            if len(seen) >= 3:
+                ctx.app.request_shutdown()
+            return item
+
+        await source.publish({"id": "no-bid", "source": "web"})
+        await source.publish({"bidding_id": "bid-1", "value": 42, "source": "api"})
+        await app.serve()
+
+        fallback_batch = await fallback_sink.fetch(1)
+        meta_batch = await meta_sink.fetch(1)
+        row_batch = await rows_sink.fetch(1)
+        assert [delivery.payload for delivery in fallback_batch] == [
+            {"fallback_id": "no-bid"}
+        ]
+        assert [delivery.payload for delivery in meta_batch] == [
+            {"meta_id": "bid-1", "source": "api"}
+        ]
+        assert [delivery.payload for delivery in row_batch] == [
+            {"row_id": "bid-1", "value": 42}
+        ]
+        assert seen == ["meta", "row"]
+
+    asyncio.run(scenario())
+
+
 def test_task_timeout_retries_once_then_fails() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming", poll_interval_s=0.01)

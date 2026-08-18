@@ -719,9 +719,7 @@ def _resolve_emit_binding(
 ) -> EmitBinding:
     _validate_unknown_fields(value, _STRICT_EMIT_BINDING_FIELDS, field=field)
     name = _require_string(value, "sink")
-    sink = _resolve_resource(resources, name)
-    if not isinstance(sink, Sink):
-        raise TypeError(f"resource {name!r} cannot be used as a sink")
+    sink = _resolve_sink_resource(resources, name)
     transform = transform_ref = None
     if "transform" in value:
         transform, transform_ref = _resolve_callable_ref(
@@ -738,31 +736,61 @@ def _resolve_emit_route(resources: Mapping[str, Any], value: Any, *, field: str)
         if "then" not in value:
             raise ValueError(f"{field}.then is required")
         predicate, predicate_ref = _resolve_callable_ref(value.get("when"), field=f"{field}.when")
-        otherwise_sinks = (
-            _resolve_emit_sinks(resources, value.get("otherwise"), field=f"{field}.otherwise")
+        otherwise_bindings = (
+            _resolve_emit_branch(resources, value.get("otherwise"), field=f"{field}.otherwise")
             if "otherwise" in value
             else ()
         )
         return EmitRoute(
             predicate=predicate,
             predicate_ref=predicate_ref,
-            then_sinks=_resolve_emit_sinks(resources, value.get("then"), field=f"{field}.then"),
-            otherwise_sinks=otherwise_sinks,
+            then_bindings=_resolve_emit_branch(resources, value.get("then"), field=f"{field}.then"),
+            otherwise_bindings=otherwise_bindings,
         )
-    return EmitRoute(then_sinks=_resolve_emit_sinks(resources, value, field=field))
+    return EmitRoute(then_bindings=_resolve_emit_branch(resources, value, field=field))
 
 
-def _resolve_emit_sinks(resources: Mapping[str, Any], value: Any, *, field: str) -> tuple[Sink, ...]:
-    names = _string_list(value, field=field)
-    if not names:
+def _resolve_emit_branch(
+    resources: Mapping[str, Any],
+    value: Any,
+    *,
+    field: str,
+) -> tuple[EmitBinding, ...]:
+    """Resolve a route branch (``then``/``otherwise``) into emit bindings.
+
+    A branch accepts a sink-name string, a list mixing sink-name strings with
+    emit-binding mappings (``{sink, transform}``), or a single emit-binding
+    mapping — the same entry shapes as top-level ``emit`` entries.
+    """
+    if value is None:
+        raise ValueError(f"'{field}' must be provided")
+    if isinstance(value, Mapping) and ("sink" in value or "transform" in value):
+        return (_resolve_emit_binding(resources, value, field=field),)
+    if isinstance(value, str):
+        _string_value(value, field=field)
+        entries, indexed = [value], False
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        entries, indexed = list(value), True
+    else:
+        raise TypeError(f"'{field}' must be a string or list of strings")
+    if not entries:
         raise ValueError(f"{field} must not be empty")
-    sinks: list[Sink] = []
-    for name in names:
-        resolved = _resolve_resource(resources, name)
-        if not isinstance(resolved, Sink):
-            raise TypeError(f"resource {name!r} cannot be used as a sink")
-        sinks.append(resolved)
-    return tuple(sinks)
+    bindings: list[EmitBinding] = []
+    for index, entry in enumerate(entries):
+        entry_field = f"{field}[{index}]" if indexed else field
+        if isinstance(entry, Mapping):
+            bindings.append(_resolve_emit_binding(resources, entry, field=entry_field))
+            continue
+        name = _string_value(entry, field=entry_field)
+        bindings.append(EmitBinding(sink=_resolve_sink_resource(resources, name)))
+    return tuple(bindings)
+
+
+def _resolve_sink_resource(resources: Mapping[str, Any], name: str) -> Sink:
+    resolved = _resolve_resource(resources, name)
+    if not isinstance(resolved, Sink):
+        raise TypeError(f"resource {name!r} cannot be used as a sink")
+    return resolved
 
 
 def _resolve_app_state(resources: Mapping[str, Any], value: Any) -> Any:
@@ -990,9 +1018,38 @@ def _validate_emit_route(raw_route: Mapping[str, Any], *, field: str) -> None:
     if "then" not in raw_route:
         raise ValueError(f"{field}.then is required")
     _validate_ref_entry(raw_route.get("when"), field=f"{field}.when")
-    _validate_emit_sink_names(raw_route.get("then"), field=f"{field}.then")
+    _validate_emit_branch(raw_route.get("then"), field=f"{field}.then")
     if "otherwise" in raw_route:
-        _validate_emit_sink_names(raw_route.get("otherwise"), field=f"{field}.otherwise")
+        _validate_emit_branch(raw_route.get("otherwise"), field=f"{field}.otherwise")
+
+
+def _validate_emit_branch(raw_value: Any, *, field: str) -> None:
+    """Validate a route branch (``then``/``otherwise").
+
+    A branch accepts a sink-name string, a list mixing sink-name strings with
+    emit-binding mappings (``{sink, transform}``), or a single emit-binding
+    mapping — mirroring top-level ``emit`` entry validation.
+    """
+    if raw_value is None:
+        raise ValueError(f"'{field}' must be provided")
+    if isinstance(raw_value, Mapping):
+        if "sink" in raw_value or "transform" in raw_value:
+            _validate_emit_binding(raw_value, field=field)
+            return
+        raise TypeError(f"'{field}' must be a string or list of strings")
+    if isinstance(raw_value, str):
+        _string_value(raw_value, field=field)
+        return
+    if not isinstance(raw_value, Sequence) or isinstance(raw_value, (str, bytes)):
+        raise TypeError(f"'{field}' must be a string or list of strings")
+    if not raw_value:
+        raise ValueError(f"{field} must not be empty")
+    for index, entry in enumerate(raw_value):
+        entry_field = f"{field}[{index}]"
+        if isinstance(entry, Mapping):
+            _validate_emit_binding(entry, field=entry_field)
+        else:
+            _string_value(entry, field=entry_field)
 
 
 def _validate_emit_sink_names(raw_value: Any, *, field: str) -> None:
