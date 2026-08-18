@@ -137,7 +137,8 @@ Rules:
 
 - `when` is a callable ref string or `{ref, params}` mapping.
 - the predicate may accept `ctx`, `payload`, and `result` positional arguments.
-- `then` and `otherwise` are sink names or lists of sink names.
+- `then` and `otherwise` are sink names, lists of sink names, or lists of
+  emit-binding mappings (`{sink, transform}`) as shown below.
 - omitted `otherwise` means a falsy predicate skips that route.
 - separate `emit` entries are evaluated independently and in order.
 
