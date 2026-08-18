@@ -324,8 +324,7 @@ tasks:
     emit:
       - sink: entity_callback
       - sink: downstream_meta
-        transform:
-          ref: worker.transforms:to_meta_row
+        transform: worker.transforms:to_meta_row
     handler:
       ref: worker.tasks:extract_entities
 ~~~
@@ -335,12 +334,38 @@ binding receives the handler result unchanged. A transform is a Python callable
 that receives ctx, the original source payload, and the handler result; it may be
 synchronous or async and returns the body for that Sink.
 
+The transform value is either a callable ref string
+(`transform: worker.transforms:to_meta_row`) or a `{ref, params}` mapping when
+the callable needs call-time keyword arguments; both forms work in plain
+bindings and inside `then`/`otherwise` branches.
+
 ~~~python
 async def to_meta_row(ctx, payload, result):
     return {
         "id": result["document_id"],
         "address": payload["address"],
     }
+
+
+def to_prefixed_row(ctx, payload, result, *, prefix: str):
+    return {"id": f"{prefix}:{result['document_id']}"}
+~~~
+
+When the transform needs arguments, use the mapping form with `params`; entries
+become call-time keyword arguments:
+
+~~~yaml
+tasks:
+  - name: extract_entities
+    source: entity_events
+    emit:
+      - sink: downstream_meta
+        transform:
+          ref: worker.transforms:to_prefixed_row
+          params:
+            prefix: bidding
+    handler:
+      ref: worker.tasks:extract_entities
 ~~~
 
 OneStep evaluates every selected transform in YAML order before it sends to any
@@ -360,19 +385,15 @@ tasks:
     source: entity_events
     emit:
       - sink: entity_callback
-      - when:
-          ref: worker.tasks:has_bidding_id
+      - when: worker.tasks:has_bidding_id
         then:
           - sink: meta_sink
-            transform:
-              ref: worker.transforms:to_meta_row
+            transform: worker.transforms:to_meta_row
           - sink: rows_sink
-            transform:
-              ref: worker.transforms:to_bidding_row
+            transform: worker.transforms:to_bidding_row
         otherwise:
           - sink: fallback_sink
-            transform:
-              ref: worker.transforms:to_fallback_row
+            transform: worker.transforms:to_fallback_row
     handler:
       ref: worker.tasks:extract_entities
 ```
@@ -383,13 +404,11 @@ binding mappings with an optional `transform`.
 ```yaml
 emit:
   - audit_sink
-  - when:
-      ref: worker.routing:is_active
+  - when: worker.routing:is_active
     then:
       - active_sink
       - sink: metric_sink
-        transform:
-          ref: worker.transforms:to_metric
+        transform: worker.transforms:to_metric
 ```
 
 ### Level 5: Add Task Config
