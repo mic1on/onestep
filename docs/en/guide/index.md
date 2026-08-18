@@ -127,7 +127,7 @@ import logging
 logger = logging.getLogger("billing.kpi_sync")
 ```
 
-For log level control, task event toggling, and embedded run boundaries, see [Logging & Task Events](/guide/logging).
+For log level control, task event toggling, and embedded run boundaries, see [Logging & Task Events](/en/guide/logging).
 
 ## Processing Queue Messages
 
@@ -235,9 +235,9 @@ tasks:
 
 ## Next Steps
 
-- [Tutorial](/guide/tutorial) walks through core concepts with complete examples.
-- [Connector Overview](/broker/) helps you choose among Memory, Cron, Webhook, HTTP Sink, RabbitMQ, Redis, SQS, MySQL, PostgreSQL, or Kafka.
-- [YAML Task Definition](/yaml-task-definition) explains the full configuration fields and strict validation.
-- [Production Deploy](/guide/deploy) covers CLI, systemd, and persistent state.
-- [Worker Runtime Image](/guide/worker-runtime-image) describes running YAML workers in containers.
-- [Core Reliability](/core-reliability) explains at-least-once, ack, retry, and plugin compatibility contracts.
+- [Tutorial](/en/guide/tutorial) walks through core concepts with complete examples.
+- [Connector Overview](/en/broker/) helps you choose among Memory, Cron, Webhook, HTTP Sink, RabbitMQ, Redis, SQS, MySQL, PostgreSQL, or Kafka.
+- [YAML Task Definition](/en/yaml-task-definition) explains the full configuration fields and strict validation.
+- [Production Deploy](/en/guide/deploy) covers CLI, systemd, and persistent state.
+- [Worker Runtime Image](/en/guide/worker-runtime-image) describes running YAML workers in containers.
+- [Core Reliability](/en/core-reliability) explains at-least-once, ack, retry, and plugin compatibility contracts.

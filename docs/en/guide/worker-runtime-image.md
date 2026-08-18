@@ -61,6 +61,6 @@ docker run --rm my-worker
 
 ## Next Steps
 
-- [Production Deploy](/guide/deploy) - systemd and CLI deployment
-- [YAML Task Definition](/yaml-task-definition) - writing worker.yaml
-- [Connectors](/broker/) - choosing plugin resource types
+- [Production Deploy](/en/guide/deploy) - systemd and CLI deployment
+- [YAML Task Definition](/en/yaml-task-definition) - writing worker.yaml
+- [Connectors](/en/broker/) - choosing plugin resource types

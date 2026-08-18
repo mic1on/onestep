@@ -11,7 +11,7 @@ Business field transformations should still be implemented by the application's 
 
 ## Cases
 
-- [MySQL Order Stream Incremental Sync to Feishu Bitable](/guide/cases/mysql-feishu-order-sync):
+- [MySQL Order Stream Incremental Sync to Feishu Bitable](/en/guide/cases/mysql-feishu-order-sync):
   Uses MySQL composite cursor, persistent progress, and Feishu Insert key index to reliably write
   immutable order records into a Bitable.
 

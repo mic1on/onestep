@@ -7,7 +7,7 @@ outline: deep
 
 `onestep-postgres` provides PostgreSQL table queue, incremental polling, table sink, and SQLAlchemy-backed state/cursor storage. The first release does not include logical replication or CDC.
 
-For the full business integration flow for long-running tasks, see [PostgreSQL Tracked Execution](/broker/postgres-execution).
+For the full business integration flow for long-running tasks, see [PostgreSQL Tracked Execution](/en/broker/postgres-execution).
 
 ## Installation
 
@@ -177,5 +177,5 @@ for error redaction; callers should not log their contents.
 
 ## Next Steps
 
-- [YAML Task Definition](/yaml-task-definition) - View plugin resource registration and strict validation
-- [Core Reliability](/core-reliability) - Understand at-least-once and duplicate output semantics
+- [YAML Task Definition](/en/yaml-task-definition) - View plugin resource registration and strict validation
+- [Core Reliability](/en/core-reliability) - Understand at-least-once and duplicate output semantics

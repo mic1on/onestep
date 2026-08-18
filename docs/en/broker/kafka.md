@@ -95,5 +95,5 @@ tasks:
 
 ## Next Steps
 
-- [YAML Task Definition](/yaml-task-definition) - View `emit`, retry, and dead-letter
-- [Core Reliability](/core-reliability) - Understand at-least-once, ack, and sink send ordering
+- [YAML Task Definition](/en/yaml-task-definition) - View `emit`, retry, and dead-letter
+- [Core Reliability](/en/core-reliability) - Understand at-least-once, ack, and sink send ordering

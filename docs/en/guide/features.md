@@ -306,8 +306,8 @@ The reporter pushes topology sync, heartbeats, metrics, and events, and can rece
 
 ## Next Steps
 
-- [Tutorial](/guide/tutorial) - quick start
-- [CLI Deploy](/guide/deploy) - production deployment
-- [Worker Runtime Image](/guide/worker-runtime-image) - containerized YAML workers
-- [RabbitMQ](/broker/rabbitmq) - distributed queue
-- [Core Reliability](/core-reliability) - runtime and plugin compatibility contracts
+- [Tutorial](/en/guide/tutorial) - quick start
+- [CLI Deploy](/en/guide/deploy) - production deployment
+- [Worker Runtime Image](/en/guide/worker-runtime-image) - containerized YAML workers
+- [RabbitMQ](/en/broker/rabbitmq) - distributed queue
+- [Core Reliability](/en/core-reliability) - runtime and plugin compatibility contracts

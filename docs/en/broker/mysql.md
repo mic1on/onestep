@@ -349,4 +349,4 @@ order_source:
 ```
 
 For complete production parameters, Feishu Insert key index, handler contract, and failure recovery flow, see
-[User Case: MySQL to Feishu Bitable Order Sync](/guide/cases/mysql-feishu-order-sync).
+[User Case: MySQL to Feishu Bitable Order Sync](/en/guide/cases/mysql-feishu-order-sync).

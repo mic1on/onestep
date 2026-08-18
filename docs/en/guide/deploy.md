@@ -38,7 +38,7 @@ onestep check your_package.tasks:app
 onestep check --json your_package.tasks:app
 ```
 
-`onestep run` writes INFO-level application logs and task lifecycle events to stdout by default, suitable for ingestion by systemd, Docker, or log collectors. Use `--log-level DEBUG` to see more detailed fetched, started, and sink-success events, or `--no-task-events` to disable automatic task events. Full rules are documented in [Logging & Task Events](/guide/logging).
+`onestep run` writes INFO-level application logs and task lifecycle events to stdout by default, suitable for ingestion by systemd, Docker, or log collectors. Use `--log-level DEBUG` to see more detailed fetched, started, and sink-success events, or `--no-task-events` to disable automatic task events. Full rules are documented in [Logging & Task Events](/en/guide/logging).
 
 ## systemd Deployment
 
@@ -141,7 +141,7 @@ docker run --rm \
   ghcr.io/mic1on/onestep-worker:1.9.0
 ```
 
-See [Worker Runtime Image](/guide/worker-runtime-image) for details.
+See [Worker Runtime Image](/en/guide/worker-runtime-image) for details.
 
 ## Production Recommendations
 
@@ -173,9 +173,9 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 
 ## Next Steps
 
-- [RabbitMQ](/broker/rabbitmq) - distributed message queue
-- [Redis Streams](/broker/redis) - lightweight message queue
-- [MySQL](/broker/mysql) - database integration
-- [PostgreSQL](/broker/postgres) - PostgreSQL integration
-- [Kafka](/broker/kafka) - Kafka topic source/sink
-- [Worker Runtime Image](/guide/worker-runtime-image) - containerized YAML workers
+- [RabbitMQ](/en/broker/rabbitmq) - distributed message queue
+- [Redis Streams](/en/broker/redis) - lightweight message queue
+- [MySQL](/en/broker/mysql) - database integration
+- [PostgreSQL](/en/broker/postgres) - PostgreSQL integration
+- [Kafka](/en/broker/kafka) - Kafka topic source/sink
+- [Worker Runtime Image](/en/guide/worker-runtime-image) - containerized YAML workers

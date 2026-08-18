@@ -176,6 +176,6 @@ Supported event types: task started, succeeded, failed, retried, dead-lettered, 
 
 ## More Resources
 
-- [Agent WS Protocol](/agent-ws-protocol) — WebSocket communication protocol specification
-- [Cross-Repo Collaboration](/ws-cross-repo-collaboration) — Boundaries and collaboration flow between the two repositories
+- [Agent WS Protocol](/en/agent-ws-protocol) — WebSocket communication protocol specification
+- [Cross-Repo Collaboration](/en/ws-cross-repo-collaboration) — Boundaries and collaboration flow between the two repositories
 - [GitHub: onestep-control-plane](https://github.com/mic1on/onestep-control-plane) — Source repository

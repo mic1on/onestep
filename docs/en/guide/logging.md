@@ -103,10 +103,10 @@ app:
     level: WARNING
 ```
 
-`onestep run worker.yaml --log-level DEBUG` overrides the YAML value. When `--log-level` is not passed, the YAML configuration is preserved. See [YAML Task Definition](/yaml-task-definition) for other YAML logging rules.
+`onestep run worker.yaml --log-level DEBUG` overrides the YAML value. When `--log-level` is not passed, the YAML configuration is preserved. See [YAML Task Definition](/en/yaml-task-definition) for other YAML logging rules.
 
 ## Next Steps
 
-- [Events & Lifecycle](/core/middleware) - task events and custom handlers
-- [Production Deploy](/guide/deploy) - systemd, containers, and YAML deployment
-- [YAML Task Definition](/yaml-task-definition) - YAML log level configuration
+- [Events & Lifecycle](/en/core/middleware) - task events and custom handlers
+- [Production Deploy](/en/guide/deploy) - systemd, containers, and YAML deployment
+- [YAML Task Definition](/en/yaml-task-definition) - YAML log level configuration

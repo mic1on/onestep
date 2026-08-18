@@ -242,10 +242,10 @@ This mode does not save record IDs, nor does it provide persistent idempotency l
 updates, deletes, CDC, or multi-writer exactly-once guarantees.
 
 For combining this mode with MySQL composite cursors, retries, and safe recovery, see
-[User Case: MySQL to Feishu Bitable Order Sync](/guide/cases/mysql-feishu-order-sync).
+[User Case: MySQL to Feishu Bitable Order Sync](/en/guide/cases/mysql-feishu-order-sync).
 
 ## Next Steps
 
-- [YAML Task Definition](/yaml-task-definition) - View plugin resource registration and strict validation
-- [MySQL](/broker/mysql) - Incremental sync from database to Bitable
-- [HTTP Sink](/broker/http) - Connect to standard HTTP APIs
+- [YAML Task Definition](/en/yaml-task-definition) - View plugin resource registration and strict validation
+- [MySQL](/en/broker/mysql) - Incremental sync from database to Bitable
+- [HTTP Sink](/en/broker/http) - Connect to standard HTTP APIs

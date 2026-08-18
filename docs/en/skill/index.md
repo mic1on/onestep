@@ -157,7 +157,7 @@ python skills/onestep/scripts/check_worker.py . --app-target your_package.tasks:
 
 ## Related Docs
 
-- [Quick Start](/guide/): Installation, running, and your first task for general users.
-- [YAML Task Definition](/yaml-task-definition): Full YAML boundaries, fields, and strict validation.
-- [Connector Overview](/broker/): Memory, Cron, Webhook, HTTP Sink, RabbitMQ, Redis, SQS, and MySQL.
-- [Control Plane](/control-plane/): Runtime telemetry and WebSocket control plane integration.
+- [Quick Start](/en/guide/): Installation, running, and your first task for general users.
+- [YAML Task Definition](/en/yaml-task-definition): Full YAML boundaries, fields, and strict validation.
+- [Connector Overview](/en/broker/): Memory, Cron, Webhook, HTTP Sink, RabbitMQ, Redis, SQS, and MySQL.
+- [Control Plane](/en/control-plane/): Runtime telemetry and WebSocket control plane integration.

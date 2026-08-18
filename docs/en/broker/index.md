@@ -13,47 +13,47 @@ onestep 1.x uses `Source` for input and `Sink` for output. Many connectors imple
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [Memory](/broker/memory) | Yes | Yes | In-memory queue, suitable for development and testing |
+| [Memory](/en/broker/memory) | Yes | Yes | In-memory queue, suitable for development and testing |
 
 ### Timers
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [Interval](/broker/cron) | Yes | No | Fixed interval trigger |
-| [Cron](/broker/cron) | Yes | No | Cron expression trigger |
+| [Interval](/en/broker/cron) | Yes | No | Fixed interval trigger |
+| [Cron](/en/broker/cron) | Yes | No | Cron expression trigger |
 
 ### Message Queues
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [Redis Streams](/broker/redis) | Yes | Yes | Redis Streams message queue, install `onestep-redis` |
-| [RabbitMQ](/broker/rabbitmq) | Yes | Yes | RabbitMQ queue, install `onestep-mq` |
-| [AWS SQS](/broker/sqs) | Yes | Yes | AWS SQS managed queue, install `onestep-sqs` |
-| [Kafka](/broker/kafka) | Yes | Yes | Kafka topic source/sink, install `onestep-kafka` |
+| [Redis Streams](/en/broker/redis) | Yes | Yes | Redis Streams message queue, install `onestep-redis` |
+| [RabbitMQ](/en/broker/rabbitmq) | Yes | Yes | RabbitMQ queue, install `onestep-mq` |
+| [AWS SQS](/en/broker/sqs) | Yes | Yes | AWS SQS managed queue, install `onestep-sqs` |
+| [Kafka](/en/broker/kafka) | Yes | Yes | Kafka topic source/sink, install `onestep-kafka` |
 
 ### Databases
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [MySQL](/broker/mysql) | Yes | Yes | Table queue/incremental sync/binlog CDC/table sink, install `onestep-mysql` |
-| [PostgreSQL](/broker/postgres) | Yes | Yes | Table queue/incremental sync/table sink/tracked execution, install `onestep-postgres` |
-| [MongoDB](/broker/mongodb) | Yes | Yes | Collection polling/Change Stream/table sink, install `onestep-mongodb` |
-| [Elasticsearch / OpenSearch](/broker/elasticsearch) | No | Yes | Async bulk Sink, install `onestep-elasticsearch` |
-| [ClickHouse](/broker/clickhouse) | No | Yes | Async confirmed table output Sink, install `onestep-clickhouse` |
-| [Feishu Bitable](/broker/feishu-bitable) | Yes | Yes | Feishu Bitable incremental sync/table sink, install `onestep-feishu-bitable` |
+| [MySQL](/en/broker/mysql) | Yes | Yes | Table queue/incremental sync/binlog CDC/table sink, install `onestep-mysql` |
+| [PostgreSQL](/en/broker/postgres) | Yes | Yes | Table queue/incremental sync/table sink/tracked execution, install `onestep-postgres` |
+| [MongoDB](/en/broker/mongodb) | Yes | Yes | Collection polling/Change Stream/table sink, install `onestep-mongodb` |
+| [Elasticsearch / OpenSearch](/en/broker/elasticsearch) | No | Yes | Async bulk Sink, install `onestep-elasticsearch` |
+| [ClickHouse](/en/broker/clickhouse) | No | Yes | Async confirmed table output Sink, install `onestep-clickhouse` |
+| [Feishu Bitable](/en/broker/feishu-bitable) | Yes | Yes | Feishu Bitable incremental sync/table sink, install `onestep-feishu-bitable` |
 
 ### Web
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [Webhook](/broker/webhook) | Yes | No | HTTP request reception |
-| [HTTP Sink](/broker/http) | No | Yes | HTTP JSON request output |
+| [Webhook](/en/broker/webhook) | Yes | No | HTTP request reception |
+| [HTTP Sink](/en/broker/http) | No | Yes | HTTP JSON request output |
 
 ### Custom
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [Custom](/broker/custom) | Yes | Yes | Implement any data source |
+| [Custom](/en/broker/custom) | Yes | Yes | Implement any data source |
 
 ## Selection Guide
 
@@ -177,16 +177,16 @@ YAML registers resource types through installed plugins. Before using `rabbitmq`
 
 ## Custom Source/Sink
 
-Refer to [Custom Broker](/broker/custom) to implement custom data sources.
+Refer to [Custom Broker](/en/broker/custom) to implement custom data sources.
 
 ## Next Steps
 
-- [Memory](/broker/memory) - In-memory queue
-- [RabbitMQ](/broker/rabbitmq) - RabbitMQ queue
-- [Kafka](/broker/kafka) - Kafka topic source/sink
-- [Feishu Bitable](/broker/feishu-bitable) - Feishu Bitable sync
-- [MySQL](/broker/mysql) - MySQL integration
-- [PostgreSQL](/broker/postgres) - PostgreSQL integration
-- [Webhook](/broker/webhook) - HTTP reception
-- [HTTP Sink](/broker/http) - HTTP output
-- [Custom](/broker/custom) - Custom implementation
+- [Memory](/en/broker/memory) - In-memory queue
+- [RabbitMQ](/en/broker/rabbitmq) - RabbitMQ queue
+- [Kafka](/en/broker/kafka) - Kafka topic source/sink
+- [Feishu Bitable](/en/broker/feishu-bitable) - Feishu Bitable sync
+- [MySQL](/en/broker/mysql) - MySQL integration
+- [PostgreSQL](/en/broker/postgres) - PostgreSQL integration
+- [Webhook](/en/broker/webhook) - HTTP reception
+- [HTTP Sink](/en/broker/http) - HTTP output
+- [Custom](/en/broker/custom) - Custom implementation

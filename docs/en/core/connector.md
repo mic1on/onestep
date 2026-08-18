@@ -215,7 +215,7 @@ class MySink(Sink):
 
 ## Next Steps
 
-- [RabbitMQ](/broker/rabbitmq) - Distributed message queue
-- [MySQL](/broker/mysql) - Database table queue
-- [Webhook](/broker/webhook) - HTTP receiver
-- [HTTP Sink](/broker/http) - HTTP output
+- [RabbitMQ](/en/broker/rabbitmq) - Distributed message queue
+- [MySQL](/en/broker/mysql) - Database table queue
+- [Webhook](/en/broker/webhook) - HTTP receiver
+- [HTTP Sink](/en/broker/http) - HTTP output

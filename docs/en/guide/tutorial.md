@@ -234,7 +234,7 @@ onestep run worker.yaml
 
 ## Next Steps
 
-- [Features](/guide/features) - learn about all supported features
-- [RabbitMQ](/broker/rabbitmq) - distributed message queue
-- [MySQL](/broker/mysql) - database table queue and incremental sync
-- [CLI Deploy](/guide/deploy) - production deployment guide
+- [Features](/en/guide/features) - learn about all supported features
+- [RabbitMQ](/en/broker/rabbitmq) - distributed message queue
+- [MySQL](/en/broker/mysql) - database table queue and incremental sync
+- [CLI Deploy](/en/guide/deploy) - production deployment guide

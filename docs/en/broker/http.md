@@ -128,6 +128,6 @@ When the Control Plane reporter is enabled, `HttpSink` appears as `http_sink` in
 
 ## Next Steps
 
-- [Webhook](/broker/webhook) - Receive external HTTP requests
-- [YAML Task Definition](/yaml-task-definition) - Using `http_sink` and direct forwarding tasks
-- [Custom Source/Sink](/broker/custom) - Implement your own output target
+- [Webhook](/en/broker/webhook) - Receive external HTTP requests
+- [YAML Task Definition](/en/yaml-task-definition) - Using `http_sink` and direct forwarding tasks
+- [Custom Source/Sink](/en/broker/custom) - Implement your own output target

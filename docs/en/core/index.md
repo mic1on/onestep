@@ -264,7 +264,7 @@ Task states include `queued` → `running` → `succeeded` / `failed` / `cancell
 
 Executions use leases to guarantee at-least-once delivery: workers renew via `heartbeat()`, and expired leases are reclaimed by `claim()`. Cancellation is cooperative; external side effects from handlers still require business-level idempotency.
 
-See [PostgreSQL Tracked Execution](/broker/postgres-execution) and [Core Reliability](/core-reliability) for details.
+See [PostgreSQL Tracked Execution](/en/broker/postgres-execution) and [Core Reliability](/en/core-reliability) for details.
 
 ## Error Handling
 
@@ -328,6 +328,6 @@ asyncio.run(main())
 
 ## Next Steps
 
-- [Connector](/core/connector) - Connector details
-- [Retry](/core/retry) - Retry strategies
-- [Middleware](/core/middleware) - Event hooks
+- [Connector](/en/core/connector) - Connector details
+- [Retry](/en/core/retry) - Retry strategies
+- [Middleware](/en/core/middleware) - Event hooks

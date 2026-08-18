@@ -91,7 +91,7 @@ app.on_event(
 
 Output fields: `event_kind`, `app_name`, `task_name`, `source_name`, `attempts`, `duration_s`, `failure_kind`
 
-You can also use `app.enable_structured_event_logging()` to idempotently enable the default handler; if a `StructuredEventLogger` already exists, it reuses it. See [Logging & Task Events](/guide/logging) for CLI parameters and log level rules.
+You can also use `app.enable_structured_event_logging()` to idempotently enable the default handler; if a `StructuredEventLogger` already exists, it reuses it. See [Logging & Task Events](/en/guide/logging) for CLI parameters and log level rules.
 
 ## Lifecycle Hooks
 
