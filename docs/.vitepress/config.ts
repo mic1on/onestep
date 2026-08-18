@@ -89,6 +89,86 @@ export default defineConfig({
         },
       },
     },
+    nav: [
+      { text: '指南', link: '/guide/' },
+      { text: '核心', link: '/core/' },
+      { text: '连接器', link: '/broker/' },
+      { text: '实战', link: '/guide/cases/' },
+      { text: '部署', link: '/guide/deploy' },
+      {
+        text: '集成',
+        items: [
+          { text: 'YAML', link: '/yaml-task-definition' },
+          { text: 'SKILL', link: '/skill/' },
+          { text: 'Web 控制台', link: '/control-plane/' },
+          { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
+        ],
+      },
+    ],
+    sidebar: [
+      {
+        text: '指南',
+        items: [
+          { text: '快速开始', link: '/guide/' },
+          { text: '入门教程', link: '/guide/tutorial' },
+          { text: '日志与任务事件', link: '/guide/logging' },
+          { text: '功能特性', link: '/guide/features' },
+          { text: '生产部署', link: '/guide/deploy' },
+          { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },
+        ],
+      },
+      {
+        text: '用户案例 / 实战篇',
+        items: [
+          { text: '案例总览', link: '/guide/cases/' },
+          { text: '订单流水同步到飞书多维表格', link: '/guide/cases/mysql-feishu-order-sync' },
+        ],
+      },
+      {
+        text: '核心',
+        items: [
+          { text: '核心概念', link: '/core/' },
+          { text: 'Connector', link: '/core/connector' },
+          { text: '事件与生命周期', link: '/core/middleware' },
+          { text: '重试与死信', link: '/core/retry' },
+        ],
+      },
+      {
+        text: '连接器',
+        items: [
+          { text: '概览', link: '/broker/' },
+          { text: 'Memory', link: '/broker/memory' },
+          { text: 'Cron & Interval', link: '/broker/cron' },
+          { text: 'Webhook', link: '/broker/webhook' },
+          { text: 'HTTP Sink', link: '/broker/http' },
+          { text: 'RabbitMQ', link: '/broker/rabbitmq' },
+          { text: 'Redis Streams', link: '/broker/redis' },
+          { text: 'AWS SQS', link: '/broker/sqs' },
+          { text: 'MySQL', link: '/broker/mysql' },
+          { text: 'PostgreSQL', link: '/broker/postgres' },
+          { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
+          { text: 'MongoDB', link: '/broker/mongodb' },
+          { text: 'Elasticsearch / OpenSearch', link: '/broker/elasticsearch' },
+          { text: 'ClickHouse', link: '/broker/clickhouse' },
+          { text: 'Kafka', link: '/broker/kafka' },
+          { text: 'Feishu Bitable', link: '/broker/feishu-bitable' },
+          { text: '自定义 Source/Sink', link: '/broker/custom' },
+        ],
+      },
+      {
+        text: '运行与集成',
+        items: [
+          { text: 'YAML 任务定义', link: '/yaml-task-definition' },
+          { text: 'SKILL', link: '/skill/' },
+          { text: '核心可靠性', link: '/core-reliability' },
+          { text: '稳定实例身份', link: '/stable-instance-identity' },
+          { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
+          { text: 'Control Plane', link: '/control-plane/' },
+          { text: 'Connector Conformance', link: '/connector-conformance' },
+          { text: '跨仓协作', link: '/ws-cross-repo-collaboration' },
+        ],
+      },
+    ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/mic1on/onestep' },
     ],
@@ -97,102 +177,6 @@ export default defineConfig({
       copyright: 'Copyright © 2023-present MicLon',
     },
     locales: {
-      root: {
-        outline: {
-          label: '本页目录',
-        },
-        editLink: {
-          pattern: 'https://github.com/mic1on/onestep/edit/main/docs/:path',
-          text: '编辑此页',
-        },
-        lastUpdated: {
-          text: '最后更新',
-          formatOptions: {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-          },
-        },
-        nav: [
-          { text: '指南', link: '/guide/' },
-          { text: '核心', link: '/core/' },
-          { text: '连接器', link: '/broker/' },
-          { text: '实战', link: '/guide/cases/' },
-          { text: '部署', link: '/guide/deploy' },
-          {
-            text: '集成',
-            items: [
-              { text: 'YAML', link: '/yaml-task-definition' },
-              { text: 'SKILL', link: '/skill/' },
-              { text: 'Web 控制台', link: '/control-plane/' },
-              { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
-            ],
-          },
-        ],
-        sidebar: [
-          {
-            text: '指南',
-            items: [
-              { text: '快速开始', link: '/guide/' },
-              { text: '入门教程', link: '/guide/tutorial' },
-              { text: '日志与任务事件', link: '/guide/logging' },
-              { text: '功能特性', link: '/guide/features' },
-              { text: '生产部署', link: '/guide/deploy' },
-              { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },
-            ],
-          },
-          {
-            text: '用户案例 / 实战篇',
-            items: [
-              { text: '案例总览', link: '/guide/cases/' },
-              { text: '订单流水同步到飞书多维表格', link: '/guide/cases/mysql-feishu-order-sync' },
-            ],
-          },
-          {
-            text: '核心',
-            items: [
-              { text: '核心概念', link: '/core/' },
-              { text: 'Connector', link: '/core/connector' },
-              { text: '事件与生命周期', link: '/core/middleware' },
-              { text: '重试与死信', link: '/core/retry' },
-            ],
-          },
-          {
-            text: '连接器',
-            items: [
-              { text: '概览', link: '/broker/' },
-              { text: 'Memory', link: '/broker/memory' },
-              { text: 'Cron & Interval', link: '/broker/cron' },
-              { text: 'Webhook', link: '/broker/webhook' },
-              { text: 'HTTP Sink', link: '/broker/http' },
-              { text: 'RabbitMQ', link: '/broker/rabbitmq' },
-              { text: 'Redis Streams', link: '/broker/redis' },
-              { text: 'AWS SQS', link: '/broker/sqs' },
-              { text: 'MySQL', link: '/broker/mysql' },
-              { text: 'PostgreSQL', link: '/broker/postgres' },
-              { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
-              { text: 'MongoDB', link: '/broker/mongodb' },
-              { text: 'Elasticsearch / OpenSearch', link: '/broker/elasticsearch' },
-              { text: 'ClickHouse', link: '/broker/clickhouse' },
-              { text: 'Kafka', link: '/broker/kafka' },
-              { text: 'Feishu Bitable', link: '/broker/feishu-bitable' },
-              { text: '自定义 Source/Sink', link: '/broker/custom' },
-            ],
-          },
-          {
-            text: '运行与集成',
-            items: [
-              { text: 'YAML 任务定义', link: '/yaml-task-definition' },
-              { text: 'SKILL', link: '/skill/' },
-              { text: '核心可靠性', link: '/core-reliability' },
-              { text: '稳定实例身份', link: '/stable-instance-identity' },
-              { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
-              { text: 'Control Plane', link: '/control-plane/' },
-              { text: 'Connector Conformance', link: '/connector-conformance' },
-              { text: '跨仓协作', link: '/ws-cross-repo-collaboration' },
-            ],
-          },
-        ],
-      },
       en: {
         outline: {
           label: 'On this page',
