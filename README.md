@@ -268,14 +268,16 @@ onestep init billing-sync            # scaffold a minimal YAML project
 onestep build worker.yaml --out dist/worker.zip
 ```
 
-The full YAML schema, resource types, conditional routing, and state binding
-are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
+The full YAML schema, resource types, per-Sink payload transforms, conditional
+routing, and state binding are covered in
+[`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
 
 ### Build a deployable worker package
 
 `onestep build` packages a YAML worker project into a zip that a worker agent can
 download and run. It validates the target first, collects the YAML entrypoint,
-local Python modules referenced by handler, hook, and conditional routing refs,
+local Python modules referenced by handler, hook, per-Sink transform, and
+conditional routing refs,
 dependency declaration files such as `pyproject.toml`, `requirements.txt`, and
 `uv.lock`, packaging metadata such as README and license files, and writes an
 `onestep-package.json` manifest into the zip.

@@ -17,13 +17,13 @@ YAML is responsible for:
 
 YAML does not define:
 
-- transform DSLs
+- inline transform DSLs
 - workflow graphs
 - expression engines
 - embedded business logic
 
-YAML may name Python predicate callables for conditional sink routing, but the
-condition logic still lives in Python.
+YAML may name Python predicate callables for conditional sink routing and Python
+payload transforms for individual Sinks, but business logic still lives in Python.
 
 ## Strict Check
 
@@ -41,7 +41,7 @@ Strict mode is intended to catch configuration drift early:
 - invalid `apiVersion` / `kind` values when they are present
 - silent mixing of legacy top-level app fields with the `app:` section
 - invalid `app.logging.level` values when YAML opts into framework log control
-- invalid conditional `emit` route shapes
+- invalid conditional `emit` route and per-Sink binding shapes
 
 ## Framework Logging
 
