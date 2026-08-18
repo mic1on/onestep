@@ -12,6 +12,7 @@ from .retry import NoRetry, RetryPolicy
 TaskHandler = Callable[["TaskContext", Any], Any]
 TaskHook = Callable[..., Any]
 TaskPredicate = Callable[..., Any]
+TaskTransform = Callable[["TaskContext", Any, Any], Any]
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,14 @@ class EmitRoute:
         return (*self.then_sinks, *self.otherwise_sinks)
 
 
-EmitTarget = Union[Sink, EmitRoute]
+@dataclass(frozen=True)
+class EmitBinding:
+    sink: Sink
+    transform: TaskTransform | None = None
+    transform_ref: str | None = None
+
+
+EmitTarget = Union[Sink, EmitBinding, EmitRoute]
 
 
 @dataclass
@@ -44,6 +52,8 @@ class TaskSpec:
     handler_ref: str | None
     source: Source | None
     sinks: tuple[Sink, ...]
+    emit_targets: tuple[EmitBinding | EmitRoute, ...]
+    emit_bindings: tuple[EmitBinding, ...]
     emit_routes: tuple[EmitRoute, ...]
     dead_letter_sinks: tuple[Sink, ...]
     config: dict[str, Any]
@@ -75,7 +85,7 @@ class TaskSpec:
             raise ValueError("concurrency must be >= 1")
         if timeout_s is not None and timeout_s <= 0:
             raise ValueError("timeout_s must be > 0")
-        resolved_emit_routes = _normalize_emit_routes(sinks)
+        resolved_emit_targets = _normalize_emit_targets(sinks)
         resolved_dead_letter_sinks = _normalize_sinks(dead_letter)
         return cls(
             name=name,
@@ -83,8 +93,12 @@ class TaskSpec:
             handler=handler,
             handler_ref=handler_ref,
             source=source,
-            sinks=_flatten_emit_route_sinks(resolved_emit_routes),
-            emit_routes=resolved_emit_routes,
+            sinks=_flatten_emit_target_sinks(resolved_emit_targets),
+            emit_targets=resolved_emit_targets,
+            emit_bindings=_flatten_emit_target_bindings(resolved_emit_targets),
+            emit_routes=tuple(
+                target for target in resolved_emit_targets if isinstance(target, EmitRoute)
+            ),
             dead_letter_sinks=resolved_dead_letter_sinks,
             config=copy.deepcopy(dict(config or {})),
             metadata=copy.deepcopy(dict(metadata or {})),
@@ -95,7 +109,9 @@ class TaskSpec:
         )
 
 
-def _normalize_emit_routes(targets: EmitTarget | Sequence[EmitTarget] | None) -> tuple[EmitRoute, ...]:
+def _normalize_emit_targets(
+    targets: EmitTarget | Sequence[EmitTarget] | None,
+) -> tuple[EmitBinding | EmitRoute, ...]:
     if targets is None:
         return ()
     if isinstance(targets, Sequence) and not isinstance(targets, (str, bytes)):
@@ -103,21 +119,35 @@ def _normalize_emit_routes(targets: EmitTarget | Sequence[EmitTarget] | None) ->
     else:
         entries = (targets,)
 
-    routes: list[EmitRoute] = []
+    resolved: list[EmitBinding | EmitRoute] = []
     for entry in entries:
-        if isinstance(entry, EmitRoute):
-            routes.append(entry)
+        if isinstance(entry, (EmitBinding, EmitRoute)):
+            resolved.append(entry)
         elif isinstance(entry, Sink):
-            routes.append(EmitRoute(then_sinks=(entry,)))
+            resolved.append(EmitRoute(then_sinks=(entry,)))
         else:
-            raise TypeError("emit entries must be Sink or EmitRoute instances")
-    return tuple(routes)
+            raise TypeError("emit entries must be Sink, EmitBinding, or EmitRoute instances")
+    return tuple(resolved)
 
 
-def _flatten_emit_route_sinks(routes: Iterable[EmitRoute]) -> tuple[Sink, ...]:
+def _flatten_emit_target_bindings(
+    targets: Iterable[EmitBinding | EmitRoute],
+) -> tuple[EmitBinding, ...]:
+    bindings: list[EmitBinding] = []
+    for target in targets:
+        if isinstance(target, EmitBinding):
+            bindings.append(target)
+        else:
+            bindings.extend(EmitBinding(sink=sink) for sink in target.sinks)
+    return tuple(bindings)
+
+
+def _flatten_emit_target_sinks(
+    targets: Iterable[EmitBinding | EmitRoute],
+) -> tuple[Sink, ...]:
     sinks: list[Sink] = []
-    for route in routes:
-        sinks.extend(route.sinks)
+    for binding in _flatten_emit_target_bindings(targets):
+        sinks.append(binding.sink)
     return tuple(sinks)
 
 

@@ -40,7 +40,7 @@ from .resource_registry import (
     validate_unknown_fields as _validate_unknown_fields,
 )
 from .retry import ByFailureKind, ExponentialBackoff, MaxAttempts, NoRetry, RetryPolicy
-from .task import EmitRoute, TaskHooks
+from .task import EmitBinding, EmitRoute, TaskHooks
 
 _YAML_SUFFIXES = (".yaml", ".yml")
 
@@ -89,6 +89,7 @@ _STRICT_APP_FIELDS = frozenset(
 _STRICT_APP_LOGGING_FIELDS = frozenset({"level"})
 _STRICT_HANDLER_FIELDS = frozenset({"ref", "params"})
 _STRICT_EMIT_ROUTE_FIELDS = frozenset({"when", "then", "otherwise"})
+_STRICT_EMIT_BINDING_FIELDS = frozenset({"sink", "transform"})
 _STRICT_APP_HOOK_FIELDS = frozenset({"startup", "shutdown", "events"})
 _STRICT_TASK_HOOK_FIELDS = frozenset({"before", "after_success", "on_failure"})
 _STRICT_TASK_FIELDS = frozenset(
@@ -449,7 +450,12 @@ def load_app_config(
             raise TypeError(f"'tasks[{index}]' must be a mapping")
         task_name = _optional_string(task_config, "name")
         source = _resolve_optional_source(resources, task_config.get("source"), task_index=index)
-        emit = _resolve_optional_emit_routes(resources, task_config.get("emit"), field="emit", task_index=index)
+        emit = _resolve_optional_emit_targets(
+            resources,
+            task_config.get("emit"),
+            field="emit",
+            task_index=index,
+        )
         dead_letter = _resolve_optional_sinks(
             resources,
             task_config.get("dead_letter"),
@@ -675,23 +681,54 @@ def _resolve_optional_sinks(
     return tuple(sinks)
 
 
-def _resolve_optional_emit_routes(
+def _resolve_optional_emit_targets(
     resources: Mapping[str, Any],
     value: Any,
     *,
     field: str,
     task_index: int,
-) -> tuple[EmitRoute, ...] | None:
+) -> tuple[EmitBinding | EmitRoute, ...] | None:
     if value is None:
         return None
     base_field = f"tasks[{task_index}].{field}"
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         entries = list(value)
         return tuple(
-            _resolve_emit_route(resources, entry, field=f"{base_field}[{index}]")
+            _resolve_emit_entry(resources, entry, field=f"{base_field}[{index}]")
             for index, entry in enumerate(entries)
         )
-    return (_resolve_emit_route(resources, value, field=base_field),)
+    return (_resolve_emit_entry(resources, value, field=base_field),)
+
+
+def _resolve_emit_entry(
+    resources: Mapping[str, Any],
+    value: Any,
+    *,
+    field: str,
+) -> EmitBinding | EmitRoute:
+    if isinstance(value, Mapping) and ("sink" in value or "transform" in value):
+        return _resolve_emit_binding(resources, value, field=field)
+    return _resolve_emit_route(resources, value, field=field)
+
+
+def _resolve_emit_binding(
+    resources: Mapping[str, Any],
+    value: Mapping[str, Any],
+    *,
+    field: str,
+) -> EmitBinding:
+    _validate_unknown_fields(value, _STRICT_EMIT_BINDING_FIELDS, field=field)
+    name = _require_string(value, "sink")
+    sink = _resolve_resource(resources, name)
+    if not isinstance(sink, Sink):
+        raise TypeError(f"resource {name!r} cannot be used as a sink")
+    transform = transform_ref = None
+    if "transform" in value:
+        transform, transform_ref = _resolve_callable_ref(
+            value["transform"],
+            field=f"{field}.transform",
+        )
+    return EmitBinding(sink=sink, transform=transform, transform_ref=transform_ref)
 
 
 def _resolve_emit_route(resources: Mapping[str, Any], value: Any, *, field: str) -> EmitRoute:
@@ -920,17 +957,30 @@ def _validate_emit(raw_emit: Any, *, field: str) -> None:
     if raw_emit is None:
         return
     if isinstance(raw_emit, Mapping):
-        _validate_emit_route(raw_emit, field=field)
+        if "sink" in raw_emit or "transform" in raw_emit:
+            _validate_emit_binding(raw_emit, field=field)
+        else:
+            _validate_emit_route(raw_emit, field=field)
         return
     if isinstance(raw_emit, Sequence) and not isinstance(raw_emit, (str, bytes)):
         for index, entry in enumerate(raw_emit):
             entry_field = f"{field}[{index}]"
             if isinstance(entry, Mapping):
-                _validate_emit_route(entry, field=entry_field)
+                if "sink" in entry or "transform" in entry:
+                    _validate_emit_binding(entry, field=entry_field)
+                else:
+                    _validate_emit_route(entry, field=entry_field)
             else:
                 _validate_emit_sink_names(entry, field=entry_field)
         return
     _validate_emit_sink_names(raw_emit, field=field)
+
+
+def _validate_emit_binding(raw_binding: Mapping[str, Any], *, field: str) -> None:
+    _validate_unknown_fields(raw_binding, _STRICT_EMIT_BINDING_FIELDS, field=field)
+    _require_string(raw_binding, "sink")
+    if "transform" in raw_binding:
+        _validate_ref_entry(raw_binding["transform"], field=f"{field}.transform")
 
 
 def _validate_emit_route(raw_route: Mapping[str, Any], *, field: str) -> None:

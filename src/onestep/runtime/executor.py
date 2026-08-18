@@ -30,7 +30,7 @@ from onestep.resilience import (
     is_retryable_connector_error,
 )
 from onestep.retry import FailureInfo, FailureKind, RetryDecision, resolve_retry_action
-from onestep.task import TaskSpec
+from onestep.task import EmitBinding, EmitRoute, TaskSpec
 
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
@@ -126,24 +126,32 @@ class DeliveryExecutor:
             )
             await self.checkpoint(active_stage, "completed", {})
 
-            if outcome.handler_result is not None and self.task.emit_routes:
+            if outcome.handler_result is not None and self.task.emit_targets:
                 active_stage = "route"
                 await self.checkpoint(active_stage, "entered", {})
-                selected = await self._select_emit_sinks(
+                selected = await self._select_emit_bindings(
                     ctx,
                     delivery.payload,
                     outcome.handler_result,
                 )
                 outcome.selected_sinks = [
-                    getattr(sink, "name", type(sink).__name__) for sink in selected
+                    getattr(binding.sink, "name", type(binding.sink).__name__) for binding in selected
                 ]
                 await self.checkpoint(
                     active_stage,
                     "completed",
                     {"selected_sinks": outcome.selected_sinks},
                 )
-                emitted = Envelope(body=outcome.handler_result)
-                for sink in selected:
+                active_stage = "transform"
+                await self.checkpoint(active_stage, "entered", {})
+                prepared = await self._prepare_emit_envelopes(
+                    selected,
+                    ctx,
+                    delivery.payload,
+                    outcome.handler_result,
+                )
+                await self.checkpoint(active_stage, "completed", {})
+                for sink, emitted in prepared:
                     active_stage = "sink"
                     await self._sink_dispatcher(sink, emitted, "emit")
 
@@ -223,25 +231,45 @@ class DeliveryExecutor:
             return await result
         return result
 
-    async def _select_emit_sinks(
+    async def _select_emit_bindings(
         self,
         ctx: TaskContext,
         payload: Any,
         result: Any,
-    ) -> tuple[Sink, ...]:
-        sinks: list[Sink] = []
-        for route in self.task.emit_routes:
-            if route.predicate is None:
-                sinks.extend(route.then_sinks)
+    ) -> tuple[EmitBinding, ...]:
+        bindings: list[EmitBinding] = []
+        for target in self.task.emit_targets:
+            if isinstance(target, EmitBinding):
+                bindings.append(target)
                 continue
-            predicate_result = invoke_callback(route.predicate, ctx, payload, result)
+            assert isinstance(target, EmitRoute)
+            if target.predicate is None:
+                bindings.extend(EmitBinding(sink=sink) for sink in target.then_sinks)
+                continue
+            predicate_result = invoke_callback(target.predicate, ctx, payload, result)
             if inspect.isawaitable(predicate_result):
                 predicate_result = await predicate_result
             if predicate_result:
-                sinks.extend(route.then_sinks)
+                bindings.extend(EmitBinding(sink=sink) for sink in target.then_sinks)
             else:
-                sinks.extend(route.otherwise_sinks)
-        return tuple(sinks)
+                bindings.extend(EmitBinding(sink=sink) for sink in target.otherwise_sinks)
+        return tuple(bindings)
+
+    async def _prepare_emit_envelopes(
+        self,
+        bindings: tuple[EmitBinding, ...],
+        ctx: TaskContext,
+        payload: Any,
+        result: Any,
+    ) -> tuple[tuple[Sink, Envelope], ...]:
+        prepared: list[tuple[Sink, Envelope]] = []
+        for binding in bindings:
+            body = result
+            if binding.transform is not None:
+                transformed = invoke_callback(binding.transform, ctx, payload, result)
+                body = await transformed if inspect.isawaitable(transformed) else transformed
+            prepared.append((binding.sink, Envelope(body=body)))
+        return tuple(prepared)
 
     async def _handle_cancelled(
         self,

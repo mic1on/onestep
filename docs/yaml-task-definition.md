@@ -311,6 +311,47 @@ Rules:
 - predicate exceptions are task failures and use the task retry/dead-letter policy.
 - already completed sink sends are not rolled back if a later route or sink fails.
 
+### Per-Sink Payload Transforms
+
+Use a binding when selected sinks need different payload shapes. YAML declares
+the static topology, while the Python transform owns the payload projection.
+
+~~~yaml
+tasks:
+  - name: extract_entities
+    source: entity_events
+    emit:
+      - sink: entity_callback
+      - sink: downstream_meta
+        transform:
+          ref: worker.transforms:to_meta_row
+    handler:
+      ref: worker.tasks:extract_entities
+~~~
+
+sink names exactly one Sink resource. transform is optional; without it, that
+binding receives the handler result unchanged. A transform is a Python callable
+that receives ctx, the original source payload, and the handler result; it may be
+synchronous or async and returns the body for that Sink.
+
+~~~python
+async def to_meta_row(ctx, payload, result):
+    return {
+        "id": result["document_id"],
+        "address": payload["address"],
+    }
+~~~
+
+OneStep evaluates every selected transform in YAML order before it sends to any
+Sink. If a transform fails, no configured Sink output is sent and the task uses
+its normal retry/dead-letter policy. Once dispatch begins, writes remain
+at-least-once: a later Sink failure does not roll back earlier writes, so each
+destination must be idempotent when duplicates matter.
+
+A binding mapping may contain only sink and transform; it cannot combine with
+when, then, or otherwise in this release. Conditional routes continue to send
+the same handler result to each selected Sink.
+
 ### Level 5: Add Task Config
 
 Use `tasks[].config` for task definition data that should be visible at runtime through `ctx.task_config`.

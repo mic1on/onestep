@@ -437,6 +437,9 @@ def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:
             f"concurrency={task['concurrency']} timeout={timeout} retry={task['retry']}{description}"
         )
         details = _format_task_details(task)
+        transforms = _format_emit_transforms(task.get("emit_bindings"))
+        if transforms:
+            details = " ".join(part for part in (details, f"transforms={transforms}") if part)
         if details:
             print(f"  {details}")
 
@@ -562,6 +565,25 @@ def _format_resources(items: list[dict[str, str]]) -> str:
     if not items:
         return "-"
     return ",".join(_format_resource(item) for item in items)
+
+
+def _format_emit_transforms(value: object) -> str:
+    if not isinstance(value, list):
+        return ""
+    transforms: list[str] = []
+    for binding in value:
+        if not isinstance(binding, dict):
+            continue
+        transform_ref = binding.get("transform_ref")
+        sink = binding.get("sink")
+        if not isinstance(transform_ref, str) or not transform_ref:
+            continue
+        if not isinstance(sink, dict):
+            continue
+        name = sink.get("name")
+        if isinstance(name, str) and name:
+            transforms.append(f"{name}:{transform_ref}")
+    return ",".join(transforms)
 
 
 def _format_resource_inventory(items: list[dict[str, str]]) -> str:

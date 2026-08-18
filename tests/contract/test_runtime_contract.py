@@ -33,7 +33,7 @@ from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
 from onestep.execution import ExecutionErrorDetail
 from onestep.runtime import TaskRunner
-from onestep.task import EmitRoute, TaskHooks
+from onestep.task import EmitBinding, EmitRoute, TaskHooks
 
 
 class _StubDelivery(Delivery):
@@ -546,6 +546,18 @@ class _AlwaysFailSink(Sink):
     async def send(self, envelope: Envelope) -> None:
         self.calls += 1
         raise RuntimeError("sink failed after previous sink succeeded")
+
+
+class _RecordingSink(Sink):
+    def __init__(self, name: str, events: list[str] | None = None) -> None:
+        super().__init__(name)
+        self.envelopes: list[Envelope] = []
+        self.events = events
+
+    async def send(self, envelope: Envelope) -> None:
+        self.envelopes.append(envelope)
+        if self.events is not None:
+            self.events.append(f"send:{self.name}")
 
 
 class _ReleaseTrackingDelivery(Delivery):
@@ -1232,6 +1244,107 @@ def test_multi_sink_send_is_not_transactional_when_later_sink_fails_contract() -
     asyncio.run(scenario())
 
 
+def test_emit_bindings_send_per_sink_bodies_after_preparation() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        events: list[str] = []
+        callback = _RecordingSink("callback", events)
+        row = _RecordingSink("row", events)
+        app = OneStepApp("emit-binding-runtime")
+
+        async def to_row(ctx, payload, result):
+            events.append("transform:row")
+            await asyncio.sleep(0)
+            return {"id": result["id"], "source": payload["source"]}
+
+        @app.task(
+            source=source,
+            emit=[callback, EmitBinding(sink=row, transform=to_row)],
+        )
+        async def consume(ctx, payload):
+            ctx.app.request_shutdown()
+            return {"id": payload["id"], "status": "ready"}
+
+        await source.publish({"id": "evt-1", "source": "crm"})
+        await app.serve()
+
+        assert events == ["transform:row", "send:callback", "send:row"]
+        assert [envelope.body for envelope in callback.envelopes] == [
+            {"id": "evt-1", "status": "ready"}
+        ]
+        assert [envelope.body for envelope in row.envelopes] == [
+            {"id": "evt-1", "source": "crm"}
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_emit_binding_transform_failure_sends_no_sink() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        first = _RecordingSink("first")
+        app = OneStepApp("emit-binding-transform-failure")
+        transform_calls = 0
+
+        def fail_transform(ctx, payload, result):
+            nonlocal transform_calls
+            transform_calls += 1
+            raise RuntimeError("transform failed before sink dispatch")
+
+        @app.task(
+            source=source,
+            emit=[first, EmitBinding(sink=_RecordingSink("second"), transform=fail_transform)],
+            retry=NoRetry(),
+        )
+        async def consume(ctx, payload):
+            ctx.app.request_shutdown()
+            return payload
+
+        await source.publish({"id": "evt-1"})
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        assert transform_calls == 1
+        assert first.envelopes == []
+
+    asyncio.run(scenario())
+
+
+def test_emit_binding_send_remains_non_transactional_after_preparation() -> None:
+    async def scenario() -> None:
+        source = MemoryQueue("incoming", poll_interval_s=0.01)
+        first = _RecordingSink("first")
+        failing = _AlwaysFailSink("second")
+        app = OneStepApp("emit-binding-partial-success")
+
+        def to_first(ctx, payload, result):
+            return {"id": result["id"], "sink": "first"}
+
+        def to_second(ctx, payload, result):
+            return {"id": result["id"], "sink": "second"}
+
+        @app.task(
+            source=source,
+            emit=[
+                EmitBinding(sink=first, transform=to_first),
+                EmitBinding(sink=failing, transform=to_second),
+            ],
+            retry=NoRetry(),
+        )
+        async def consume(ctx, payload):
+            ctx.app.request_shutdown()
+            return payload
+
+        await source.publish({"id": "evt-1"})
+        await asyncio.wait_for(app.serve(), timeout=1.0)
+
+        assert [envelope.body for envelope in first.envelopes] == [
+            {"id": "evt-1", "sink": "first"}
+        ]
+        assert failing.calls == 1
+
+    asyncio.run(scenario())
+
+
 def test_task_spec_normalizes_unconditional_sink_to_emit_route() -> None:
     source = MemoryQueue("incoming")
     sink = MemoryQueue("processed")
@@ -1244,6 +1357,32 @@ def test_task_spec_normalizes_unconditional_sink_to_emit_route() -> None:
     task = app.tasks[0]
     assert task.sinks == (sink,)
     assert task.emit_routes == (EmitRoute(then_sinks=(sink,)),)
+
+
+def test_task_spec_keeps_emit_binding_order_and_legacy_route_view() -> None:
+    source = MemoryQueue("incoming")
+    audit = MemoryQueue("audit")
+    projected = MemoryQueue("projected")
+    app = OneStepApp("emit-binding-model")
+
+    def to_projected(ctx, payload, result):
+        return {"value": result["value"] * 2}
+
+    binding = EmitBinding(
+        sink=projected,
+        transform=to_projected,
+        transform_ref="tests.transforms:to_projected",
+    )
+
+    @app.task(source=source, emit=[audit, binding])
+    async def consume(ctx, item):
+        return item
+
+    task = app.tasks[0]
+    assert task.emit_targets == (EmitRoute(then_sinks=(audit,)), binding)
+    assert task.emit_routes == (EmitRoute(then_sinks=(audit,)),)
+    assert task.emit_bindings == (EmitBinding(sink=audit), binding)
+    assert task.sinks == (audit, projected)
 
 
 def test_task_spec_flattens_conditional_route_sinks_for_compatibility() -> None:
