@@ -1024,7 +1024,7 @@ def _validate_emit_route(raw_route: Mapping[str, Any], *, field: str) -> None:
 
 
 def _validate_emit_branch(raw_value: Any, *, field: str) -> None:
-    """Validate a route branch (``then``/``otherwise").
+    """Validate a route branch (``then``/``otherwise``).
 
     A branch accepts a sink-name string, a list mixing sink-name strings with
     emit-binding mappings (``{sink, transform}``), or a single emit-binding

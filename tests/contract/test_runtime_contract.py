@@ -1529,6 +1529,7 @@ def test_conditional_emit_route_transforms_selected_branch() -> None:
         fallback_sink = MemoryQueue("fallback", poll_interval_s=0.01)
         app = OneStepApp("conditional-emit-route-transforms")
         seen: list[str] = []
+        processed = 0
 
         def is_bidding(ctx, payload, result):
             return bool(result.get("bidding_id"))
@@ -1559,7 +1560,9 @@ def test_conditional_emit_route_transforms_selected_branch() -> None:
             ],
         )
         async def consume(ctx, item):
-            if len(seen) >= 3:
+            nonlocal processed
+            processed += 1
+            if processed == 2:
                 ctx.app.request_shutdown()
             return item
 
@@ -1579,7 +1582,7 @@ def test_conditional_emit_route_transforms_selected_branch() -> None:
         assert [delivery.payload for delivery in row_batch] == [
             {"row_id": "bid-1", "value": 42}
         ]
-        assert seen == ["meta", "row"]
+        assert seen == ["fallback", "meta", "row"]
 
     asyncio.run(scenario())
 
