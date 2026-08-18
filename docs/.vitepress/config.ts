@@ -16,6 +16,102 @@ export default defineConfig({
       lang: 'en-US',
       title: 'OneStep',
       description: 'Lightweight Python async task runtime',
+      themeConfig: {
+        outline: {
+          label: 'On this page',
+        },
+        editLink: {
+          pattern: 'https://github.com/mic1on/onestep/edit/main/docs/:path',
+          text: 'Edit this page',
+        },
+        lastUpdated: {
+          text: 'Last updated',
+          formatOptions: {
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          },
+        },
+        nav: [
+          { text: 'Guide', link: '/en/guide/' },
+          { text: 'Core', link: '/en/core/' },
+          { text: 'Connectors', link: '/en/broker/' },
+          { text: 'User Cases', link: '/en/guide/cases/' },
+          { text: 'Deploy', link: '/en/guide/deploy' },
+          {
+            text: 'More',
+            items: [
+              { text: 'YAML', link: '/en/yaml-task-definition' },
+              { text: 'SKILL', link: '/en/skill/' },
+              { text: 'Web Console', link: '/en/control-plane/' },
+              { text: 'Agent WS Protocol', link: '/en/agent-ws-protocol' },
+            ],
+          },
+        ],
+        sidebar: [
+          {
+            text: 'Guide',
+            items: [
+              { text: 'Quick Start', link: '/en/guide/' },
+              { text: 'Tutorial', link: '/en/guide/tutorial' },
+              { text: 'Logging & Task Events', link: '/en/guide/logging' },
+              { text: 'Features', link: '/en/guide/features' },
+              { text: 'Production Deploy', link: '/en/guide/deploy' },
+              { text: 'Worker Runtime Image', link: '/en/guide/worker-runtime-image' },
+            ],
+          },
+          {
+            text: 'User Cases',
+            items: [
+              { text: 'Cases Overview', link: '/en/guide/cases/' },
+              { text: 'MySQL to Feishu Bitable Order Sync', link: '/en/guide/cases/mysql-feishu-order-sync' },
+            ],
+          },
+          {
+            text: 'Core',
+            items: [
+              { text: 'Core Concepts', link: '/en/core/' },
+              { text: 'Connector', link: '/en/core/connector' },
+              { text: 'Events & Lifecycle', link: '/en/core/middleware' },
+              { text: 'Retry & Dead Letter', link: '/en/core/retry' },
+            ],
+          },
+          {
+            text: 'Connectors',
+            items: [
+              { text: 'Overview', link: '/en/broker/' },
+              { text: 'Memory', link: '/en/broker/memory' },
+              { text: 'Cron & Interval', link: '/en/broker/cron' },
+              { text: 'Webhook', link: '/en/broker/webhook' },
+              { text: 'HTTP Sink', link: '/en/broker/http' },
+              { text: 'RabbitMQ', link: '/en/broker/rabbitmq' },
+              { text: 'Redis Streams', link: '/en/broker/redis' },
+              { text: 'AWS SQS', link: '/en/broker/sqs' },
+              { text: 'MySQL', link: '/en/broker/mysql' },
+              { text: 'PostgreSQL', link: '/en/broker/postgres' },
+              { text: 'PostgreSQL Tracked Execution', link: '/en/broker/postgres-execution' },
+              { text: 'MongoDB', link: '/en/broker/mongodb' },
+              { text: 'Elasticsearch / OpenSearch', link: '/en/broker/elasticsearch' },
+              { text: 'ClickHouse', link: '/en/broker/clickhouse' },
+              { text: 'Kafka', link: '/en/broker/kafka' },
+              { text: 'Feishu Bitable', link: '/en/broker/feishu-bitable' },
+              { text: 'Custom Source/Sink', link: '/en/broker/custom' },
+            ],
+          },
+          {
+            text: 'Operations & Integration',
+            items: [
+              { text: 'YAML Task Definition', link: '/en/yaml-task-definition' },
+              { text: 'SKILL', link: '/en/skill/' },
+              { text: 'Core Reliability', link: '/en/core-reliability' },
+              { text: 'Stable Instance Identity', link: '/en/stable-instance-identity' },
+              { text: 'Agent WS Protocol', link: '/en/agent-ws-protocol' },
+              { text: 'Control Plane', link: '/en/control-plane/' },
+              { text: 'Connector Conformance', link: '/en/connector-conformance' },
+              { text: 'Cross-Repo Collaboration', link: '/en/ws-cross-repo-collaboration' },
+            ],
+          },
+        ],
+      },
     },
   },
   cleanUrls: true,
@@ -45,9 +141,6 @@ export default defineConfig({
   },
   themeConfig: {
     logo: '/logo-3.svg',
-    outline: {
-      level: [2, 3],
-    },
     search: {
       provider: 'local',
       options: {
@@ -176,103 +269,19 @@ export default defineConfig({
       message: 'Released under the MIT License.',
       copyright: 'Copyright © 2023-present MicLon',
     },
-    locales: {
-      en: {
-        outline: {
-          label: 'On this page',
-        },
-        editLink: {
-          pattern: 'https://github.com/mic1on/onestep/edit/main/docs/:path',
-          text: 'Edit this page',
-        },
-        lastUpdated: {
-          text: 'Last updated',
-          formatOptions: {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-          },
-        },
-        nav: [
-          { text: 'Guide', link: '/en/guide/' },
-          { text: 'Core', link: '/en/core/' },
-          { text: 'Connectors', link: '/en/broker/' },
-          {
-            text: 'More',
-            items: [
-              { text: 'Tutorial', link: '/en/guide/tutorial' },
-              { text: 'User Cases', link: '/en/guide/cases/' },
-              { text: 'Deploy', link: '/en/guide/deploy' },
-              { text: 'YAML', link: '/en/yaml-task-definition' },
-              { text: 'SKILL', link: '/en/skill/' },
-              { text: 'Web Console', link: '/en/control-plane/' },
-              { text: 'Agent WS Protocol', link: '/en/agent-ws-protocol' },
-            ],
-          },
-        ],
-        sidebar: [
-          {
-            text: 'Guide',
-            items: [
-              { text: 'Quick Start', link: '/en/guide/' },
-              { text: 'Tutorial', link: '/en/guide/tutorial' },
-              { text: 'Logging & Task Events', link: '/en/guide/logging' },
-              { text: 'Features', link: '/en/guide/features' },
-              { text: 'Production Deploy', link: '/en/guide/deploy' },
-              { text: 'Worker Runtime Image', link: '/en/guide/worker-runtime-image' },
-            ],
-          },
-          {
-            text: 'User Cases',
-            items: [
-              { text: 'Cases Overview', link: '/en/guide/cases/' },
-              { text: 'MySQL to Feishu Bitable Order Sync', link: '/en/guide/cases/mysql-feishu-order-sync' },
-            ],
-          },
-          {
-            text: 'Core',
-            items: [
-              { text: 'Core Concepts', link: '/en/core/' },
-              { text: 'Connector', link: '/en/core/connector' },
-              { text: 'Events & Lifecycle', link: '/en/core/middleware' },
-              { text: 'Retry & Dead Letter', link: '/en/core/retry' },
-            ],
-          },
-          {
-            text: 'Connectors',
-            items: [
-              { text: 'Overview', link: '/en/broker/' },
-              { text: 'Memory', link: '/en/broker/memory' },
-              { text: 'Cron & Interval', link: '/en/broker/cron' },
-              { text: 'Webhook', link: '/en/broker/webhook' },
-              { text: 'HTTP Sink', link: '/en/broker/http' },
-              { text: 'RabbitMQ', link: '/en/broker/rabbitmq' },
-              { text: 'Redis Streams', link: '/en/broker/redis' },
-              { text: 'AWS SQS', link: '/en/broker/sqs' },
-              { text: 'MySQL', link: '/en/broker/mysql' },
-              { text: 'PostgreSQL', link: '/en/broker/postgres' },
-              { text: 'PostgreSQL Tracked Execution', link: '/en/broker/postgres-execution' },
-              { text: 'MongoDB', link: '/en/broker/mongodb' },
-              { text: 'Elasticsearch / OpenSearch', link: '/en/broker/elasticsearch' },
-              { text: 'ClickHouse', link: '/en/broker/clickhouse' },
-              { text: 'Kafka', link: '/en/broker/kafka' },
-              { text: 'Feishu Bitable', link: '/en/broker/feishu-bitable' },
-              { text: 'Custom Source/Sink', link: '/en/broker/custom' },
-            ],
-          },
-          {
-            text: 'Operations & Integration',
-            items: [
-              { text: 'YAML Task Definition', link: '/en/yaml-task-definition' },
-              { text: 'SKILL', link: '/en/skill/' },
-              { text: 'Core Reliability', link: '/en/core-reliability' },
-              { text: 'Stable Instance Identity', link: '/en/stable-instance-identity' },
-              { text: 'Agent WS Protocol', link: '/en/agent-ws-protocol' },
-              { text: 'Control Plane', link: '/en/control-plane/' },
-              { text: 'Connector Conformance', link: '/en/connector-conformance' },
-              { text: 'Cross-Repo Collaboration', link: '/en/ws-cross-repo-collaboration' },
-            ],
-          },
-        ],
+    outline: {
+      level: [2, 3],
+      label: '本页目录',
+    },
+    editLink: {
+      pattern: 'https://github.com/mic1on/onestep/edit/main/docs/:path',
+      text: '编辑此页',
+    },
+    lastUpdated: {
+      text: '最后更新',
+      formatOptions: {
+        dateStyle: 'medium',
+        timeStyle: 'short',
       },
     },
   },
