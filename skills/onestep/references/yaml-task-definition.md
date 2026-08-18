@@ -154,18 +154,19 @@ tasks:
     emit:
       - sink: entity_callback
       - sink: downstream_meta
-        transform:
-          ref: worker.transforms:to_meta_row
+        transform: worker.transforms:to_meta_row
     handler:
       ref: worker.tasks:extract_entities
 ~~~
 
 Each binding names exactly one sink. Its optional transform is a Python callable
 with (ctx, payload, result) and may be synchronous or async; without a transform,
-that sink receives the handler result unchanged. OneStep prepares all selected
-transform results in YAML order before sending to any sink. A transform failure
-therefore sends no configured output and follows normal task retry or dead-letter
-policy.
+that sink receives the handler result unchanged. The transform value is either a
+callable ref string, or a `{ref, params}` mapping when the callable needs
+call-time keyword arguments; both forms work in plain bindings and inside
+`then`/`otherwise` branches. OneStep prepares all selected transform results in
+YAML order before sending to any sink. A transform failure therefore sends no
+configured output and follows normal task retry or dead-letter policy.
 
 Sink dispatch remains at-least-once and non-transactional after preparation: if
 a later sink fails, an earlier successful sink can receive a duplicate on retry.
@@ -175,25 +176,38 @@ on the same entry. Bindings can appear inside the `then` and `otherwise` branche
 of a conditional route, so each sink in a branch can receive a distinct transformed
 payload.
 
+When the transform needs arguments, use the mapping form with `params`; entries
+are passed as call-time keyword arguments:
+
+~~~yaml
+tasks:
+  - name: extract_entities
+    source: entity_events
+    emit:
+      - sink: downstream_meta
+        transform:
+          ref: worker.transforms:to_meta_row
+          params:
+            prefix: bidding
+    handler:
+      ref: worker.tasks:extract_entities
+~~~
+
 ```yaml
 tasks:
   - name: extract_entities
     source: entity_events
     emit:
       - sink: entity_callback
-      - when:
-          ref: worker.tasks:has_bidding_id
+      - when: worker.tasks:has_bidding_id
         then:
           - sink: meta_sink
-            transform:
-              ref: worker.transforms:to_meta_row
+            transform: worker.transforms:to_meta_row
           - sink: rows_sink
-            transform:
-              ref: worker.transforms:to_bidding_row
+            transform: worker.transforms:to_bidding_row
         otherwise:
           - sink: fallback_sink
-            transform:
-              ref: worker.transforms:to_fallback_row
+            transform: worker.transforms:to_fallback_row
     handler:
       ref: worker.tasks:extract_entities
 ```
