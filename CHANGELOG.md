@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## onestep 1.10.0
 
 - Adds declarative per-Sink emit bindings with optional Python payload transforms;
   all transforms run before sink dispatch while existing at-least-once fan-out
