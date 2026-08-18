@@ -244,15 +244,15 @@ class DeliveryExecutor:
                 continue
             assert isinstance(target, EmitRoute)
             if target.predicate is None:
-                bindings.extend(EmitBinding(sink=sink) for sink in target.then_sinks)
+                bindings.extend(target.then_bindings)
                 continue
             predicate_result = invoke_callback(target.predicate, ctx, payload, result)
             if inspect.isawaitable(predicate_result):
                 predicate_result = await predicate_result
             if predicate_result:
-                bindings.extend(EmitBinding(sink=sink) for sink in target.then_sinks)
+                bindings.extend(target.then_bindings)
             else:
-                bindings.extend(EmitBinding(sink=sink) for sink in target.otherwise_sinks)
+                bindings.extend(target.otherwise_bindings)
         return tuple(bindings)
 
     async def _prepare_emit_envelopes(

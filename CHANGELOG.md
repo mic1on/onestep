@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Extends conditional `emit` routes (`when`/`then`/`otherwise`) with per-sink
+  transform bindings: `then`/`otherwise` branches accept emit-binding mappings
+  (`{sink, transform}`) alongside plain sink names, mirroring top-level emit
+  entries while string and list forms stay backward compatible.
+
 ## onestep 1.10.0
 
 - Adds declarative per-Sink emit bindings with optional Python payload transforms;

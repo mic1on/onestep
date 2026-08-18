@@ -23,22 +23,50 @@ class TaskHooks:
 
 
 @dataclass(frozen=True)
-class EmitRoute:
-    then_sinks: tuple[Sink, ...]
-    predicate: TaskPredicate | None = None
-    otherwise_sinks: tuple[Sink, ...] = ()
-    predicate_ref: str | None = None
-
-    @property
-    def sinks(self) -> tuple[Sink, ...]:
-        return (*self.then_sinks, *self.otherwise_sinks)
-
-
-@dataclass(frozen=True)
 class EmitBinding:
     sink: Sink
     transform: TaskTransform | None = None
     transform_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class EmitRoute:
+    then_sinks: tuple[Sink, ...] = ()
+    predicate: TaskPredicate | None = None
+    otherwise_sinks: tuple[Sink, ...] = ()
+    predicate_ref: str | None = None
+    then_bindings: tuple[EmitBinding, ...] = ()
+    otherwise_bindings: tuple[EmitBinding, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Branch bindings are the canonical form: they carry the optional
+        # per-sink transform. Sinks-only construction (the original Python
+        # API) derives plain bindings, and the sink tuples are always kept in
+        # sync with the bindings so both views stay interchangeable.
+        object.__setattr__(
+            self,
+            "then_bindings",
+            _normalize_route_bindings(self.then_sinks, self.then_bindings),
+        )
+        object.__setattr__(
+            self,
+            "then_sinks",
+            tuple(binding.sink for binding in self.then_bindings),
+        )
+        object.__setattr__(
+            self,
+            "otherwise_bindings",
+            _normalize_route_bindings(self.otherwise_sinks, self.otherwise_bindings),
+        )
+        object.__setattr__(
+            self,
+            "otherwise_sinks",
+            tuple(binding.sink for binding in self.otherwise_bindings),
+        )
+
+    @property
+    def sinks(self) -> tuple[Sink, ...]:
+        return (*self.then_sinks, *self.otherwise_sinks)
 
 
 EmitTarget = Union[Sink, EmitBinding, EmitRoute]
@@ -130,6 +158,15 @@ def _normalize_emit_targets(
     return tuple(resolved)
 
 
+def _normalize_route_bindings(
+    sinks: tuple[Sink, ...],
+    bindings: tuple[EmitBinding, ...],
+) -> tuple[EmitBinding, ...]:
+    if bindings:
+        return tuple(bindings)
+    return tuple(EmitBinding(sink=sink) for sink in sinks)
+
+
 def _flatten_emit_target_bindings(
     targets: Iterable[EmitBinding | EmitRoute],
 ) -> tuple[EmitBinding, ...]:
@@ -138,7 +175,8 @@ def _flatten_emit_target_bindings(
         if isinstance(target, EmitBinding):
             bindings.append(target)
         else:
-            bindings.extend(EmitBinding(sink=sink) for sink in target.sinks)
+            bindings.extend(target.then_bindings)
+            bindings.extend(target.otherwise_bindings)
     return tuple(bindings)
 
 
