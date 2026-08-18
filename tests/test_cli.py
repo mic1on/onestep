@@ -1950,6 +1950,248 @@ def test_load_app_config_strict_rejects_emit_route_empty_then_list() -> None:
         )
 
 
+def test_load_app_config_strict_accepts_emit_route_branch_bindings() -> None:
+    def predicate(ctx, payload, result):
+        return True
+
+    def to_meta(ctx, payload, result, *, prefix: str):
+        return {"meta": result["id"], "prefix": prefix}
+
+    def to_row(ctx, payload, result):
+        return {"row": result["id"]}
+
+    def to_fallback(ctx, payload, result):
+        return {"fallback": result["id"]}
+
+    with registered_module(
+        "testsupport_yaml_route_bindings",
+        predicate=predicate,
+        to_meta=to_meta,
+        to_row=to_row,
+        to_fallback=to_fallback,
+    ):
+        app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {"name": "yaml-emit-route-bindings"},
+            "resources": {
+                "incoming": {"type": "memory", "maxsize": 100},
+                "audit": {"type": "memory", "maxsize": 100},
+                "meta": {"type": "memory", "maxsize": 100},
+                "rows": {"type": "memory", "maxsize": 100},
+                "fallback": {"type": "memory", "maxsize": 100},
+            },
+            "tasks": [
+                {
+                    "name": "route",
+                    "source": "incoming",
+                    "emit": [
+                        {
+                            "when": "testsupport_yaml_route_bindings:predicate",
+                            "then": [
+                                "audit",
+                                {
+                                    "sink": "meta",
+                                    "transform": {
+                                        "ref": "testsupport_yaml_route_bindings:to_meta",
+                                        "params": {"prefix": "bidding"},
+                                    },
+                                },
+                                {
+                                    "sink": "rows",
+                                    "transform": "testsupport_yaml_route_bindings:to_row",
+                                },
+                            ],
+                            "otherwise": [
+                                {
+                                    "sink": "fallback",
+                                    "transform": "testsupport_yaml_route_bindings:to_fallback",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        strict=True,
+    )
+
+    task = app.tasks[0]
+    route = task.emit_routes[0]
+    assert [binding.sink.name for binding in route.then_bindings] == ["audit", "meta", "rows"]
+    assert [sink.name for sink in route.then_sinks] == ["audit", "meta", "rows"]
+    assert [binding.transform_ref for binding in route.then_bindings] == [
+        None,
+        "testsupport_yaml_route_bindings:to_meta",
+        "testsupport_yaml_route_bindings:to_row",
+    ]
+    assert [sink.name for sink in route.otherwise_sinks] == ["fallback"]
+    assert [sink.name for sink in task.sinks] == ["audit", "meta", "rows", "fallback"]
+    assert [binding.transform_ref for binding in task.emit_bindings] == [
+        None,
+        "testsupport_yaml_route_bindings:to_meta",
+        "testsupport_yaml_route_bindings:to_row",
+        "testsupport_yaml_route_bindings:to_fallback",
+    ]
+
+    meta_binding = route.then_bindings[1]
+    assert asyncio.run(meta_binding.transform(None, {}, {"id": "evt-1"})) == {
+        "meta": "evt-1",
+        "prefix": "bidding",
+    }
+
+
+def test_load_app_config_accepts_single_binding_mapping_branch() -> None:
+    def predicate(ctx, payload, result):
+        return False
+
+    def to_fallback(ctx, payload, result):
+        return {"fallback": result["id"]}
+
+    with registered_module(
+        "testsupport_yaml_route_single_binding",
+        predicate=predicate,
+        to_fallback=to_fallback,
+    ):
+        app = load_app_config(
+            {
+                "name": "yaml-route-single-binding",
+                "resources": {
+                    "incoming": {"type": "memory"},
+                    "fallback": {"type": "memory"},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [
+                            {
+                                "when": "testsupport_yaml_route_single_binding:predicate",
+                                "then": {
+                                    "sink": "fallback",
+                                    "transform": "testsupport_yaml_route_single_binding:to_fallback",
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+    route = app.tasks[0].emit_routes[0]
+    assert [sink.name for sink in route.then_sinks] == ["fallback"]
+    binding = route.then_bindings[0]
+    assert binding.transform_ref == "testsupport_yaml_route_single_binding:to_fallback"
+    assert binding.transform(None, {}, {"id": "evt-1"}) == {"fallback": "evt-1"}
+
+
+@pytest.mark.parametrize(
+    ("then_value", "otherwise_value", "message"),
+    [
+        (
+            [{"transform": "testsupport_yaml_route_reject:to_row"}],
+            None,
+            r"'sink' must be a non-empty string",
+        ),
+        (
+            [{"sink": "rows", "delivery": "guaranteed"}],
+            None,
+            r"unsupported fields for tasks\[0\]\.emit\[0\]\.then\[0\]: delivery",
+        ),
+        (
+            [{"sink": "rows", "transform": {"expression": "result"}}],
+            None,
+            r"unsupported fields for tasks\[0\]\.emit\[0\]\.then\[0\]\.transform: expression",
+        ),
+        (
+            [{"sink": "rows", "transform": {"params": {}}}],
+            None,
+            r"'ref' must be a non-empty string",
+        ),
+        (
+            ["rows", 5],
+            None,
+            r"tasks\[0\]\.emit\[0\]\.then\[1\]' must be a non-empty string",
+        ),
+        (
+            [{"name": "rows"}],
+            None,
+            r"unsupported fields for tasks\[0\]\.emit\[0\]\.then\[0\]: name",
+        ),
+        (
+            "rows",
+            [],
+            r"tasks\[0\]\.emit\[0\]\.otherwise must not be empty",
+        ),
+        (
+            {"name": "rows"},
+            None,
+            r"'tasks\[0\]\.emit\[0\]\.then' must be a string or list of strings",
+        ),
+    ],
+)
+def test_load_app_config_strict_rejects_invalid_emit_route_branch_entries(
+    then_value,
+    otherwise_value,
+    message,
+) -> None:
+    route: dict[str, object] = {
+        "when": "testsupport_yaml_route_reject:predicate",
+        "then": then_value,
+    }
+    if otherwise_value is not None:
+        route["otherwise"] = otherwise_value
+    with pytest.raises((TypeError, ValueError), match=message):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "yaml-strict-emit-branch-reject"},
+                "resources": {
+                    "incoming": {"type": "memory", "maxsize": 100},
+                    "rows": {"type": "memory", "maxsize": 100},
+                },
+                "tasks": [
+                    {
+                        "name": "route",
+                        "source": "incoming",
+                        "emit": [route],
+                    }
+                ],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_rejects_unknown_sink_in_route_branch_binding() -> None:
+    def predicate(ctx, payload, result):
+        return True
+
+    with registered_module("testsupport_yaml_route_unknown_sink", predicate=predicate):
+        with pytest.raises(KeyError, match="unknown resource 'missing_sink'"):
+            load_app_config(
+                {
+                    "name": "yaml-route-unknown-sink",
+                    "resources": {
+                        "incoming": {"type": "memory"},
+                    },
+                    "tasks": [
+                        {
+                            "name": "route",
+                            "source": "incoming",
+                            "emit": [
+                                {
+                                    "when": "testsupport_yaml_route_unknown_sink:predicate",
+                                    "then": [{"sink": "missing_sink"}],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+
+
 def test_yaml_target_builds_webhook_auth_and_response(tmp_path) -> None:
     config_path = tmp_path / "webhook.yaml"
     config_path.write_text(

@@ -30,6 +30,7 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
    - Migration from old `step` / broker APIs: `references/migration-0.5-to-1.0.md`
 3. Make surgical changes in the user's project. Match the existing style and do not introduce speculative structure.
 4. Validate with `onestep check` for app targets, `onestep check --strict` for long-lived YAML, and focused `pytest` when code behavior changed.
+5. If you hit a gap that only a framework change can fix, report it upstream (see "Framework Feedback").
 
 ## Defaults
 
@@ -41,6 +42,18 @@ Default to the smallest working task. Add hooks, reporter config, dead-letter si
 - Do not enable `reporter` or control-plane integration unless explicitly needed.
 - Keep generated projects minimal; `onestep init <project>` is the preferred scaffold when the CLI is available.
 - Treat delivery as at-least-once: sink sends can happen before `ack()`, so production sinks and handlers should be idempotent when duplicates matter.
+
+## Framework Feedback
+
+When using onestep reveals a limitation that requires a framework-level change (not something the user's app can reasonably work around), proactively open an issue at https://github.com/mic1on/onestep/issues instead of silently patching around it.
+
+File an issue when:
+
+- A needed Source/Sink/connector, hook, or configuration option does not exist and cannot be composed from existing primitives.
+- Runtime behavior (delivery semantics, retry/dead-letter, cursor/state handling, YAML validation, control-plane protocol) appears broken, unsafe, or semantically wrong.
+- Ergonomics gaps force verbose or fragile patterns in ordinary apps.
+
+Before filing, search existing issues to avoid duplicates. Include the use case, current vs. expected behavior, and a minimal YAML or Python reproduction. Prefer the issue plus a user-side workaround; do not fork, vendor, or monkey-patch the runtime unless the user explicitly asks, and tell the user what you reported.
 
 ## Minimal Python App
 

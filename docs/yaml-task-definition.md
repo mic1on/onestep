@@ -349,8 +349,47 @@ at-least-once: a later Sink failure does not roll back earlier writes, so each
 destination must be idempotent when duplicates matter.
 
 A binding mapping may contain only sink and transform; it cannot combine with
-when, then, or otherwise in this release. Conditional routes continue to send
-the same handler result to each selected Sink.
+when, then, or otherwise on the same entry. Bindings can appear inside the
+`then` and `otherwise` branches of a conditional route, so each sink in a
+branch can receive a distinct transformed payload.
+
+```yaml
+tasks:
+  - name: extract_entities
+    source: entity_events
+    emit:
+      - sink: entity_callback
+      - when:
+          ref: worker.tasks:has_bidding_id
+        then:
+          - sink: meta_sink
+            transform:
+              ref: worker.transforms:to_meta_row
+          - sink: rows_sink
+            transform:
+              ref: worker.transforms:to_bidding_row
+        otherwise:
+          - sink: fallback_sink
+            transform:
+              ref: worker.transforms:to_fallback_row
+    handler:
+      ref: worker.tasks:extract_entities
+```
+
+The top-level `emit` list supports the same entry shapes: plain sink names, and
+binding mappings with an optional `transform`.
+
+```yaml
+emit:
+  - audit_sink
+  - when:
+      ref: worker.routing:is_active
+    then:
+      - active_sink
+      - sink: metric_sink
+        transform:
+          ref: worker.transforms:to_metric
+```
 
 ### Level 5: Add Task Config
 

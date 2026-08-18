@@ -170,7 +170,32 @@ Sink dispatch remains at-least-once and non-transactional after preparation: if
 a later sink fails, an earlier successful sink can receive a duplicate on retry.
 Use stable business keys or sink idempotency when duplicates matter. A binding may
 contain only sink and transform; do not combine it with when, then, or otherwise
-in this release.
+on the same entry. Bindings can appear inside the `then` and `otherwise` branches
+of a conditional route, so each sink in a branch can receive a distinct transformed
+payload.
+
+```yaml
+tasks:
+  - name: extract_entities
+    source: entity_events
+    emit:
+      - sink: entity_callback
+      - when:
+          ref: worker.tasks:has_bidding_id
+        then:
+          - sink: meta_sink
+            transform:
+              ref: worker.transforms:to_meta_row
+          - sink: rows_sink
+            transform:
+              ref: worker.transforms:to_bidding_row
+        otherwise:
+          - sink: fallback_sink
+            transform:
+              ref: worker.transforms:to_fallback_row
+    handler:
+      ref: worker.tasks:extract_entities
+```
 
 ## Passthrough Tasks
 
