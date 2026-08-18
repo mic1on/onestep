@@ -304,7 +304,8 @@ def is_active_user(ctx, payload, result, *, status_field: str) -> bool:
 Rules:
 
 - `when` is a callable ref string or a `{ref, params}` mapping.
-- `then` is a sink name or list of sink names.
+- `then` is a sink name, a list of sink names, or a list of emit-binding
+  mappings (`{sink, transform}`) as shown in Per-Sink Payload Transforms below.
 - `otherwise` is optional; when omitted, a falsy predicate skips that route.
 - separate `emit` entries are evaluated independently and in order.
 - within one route, only `then` or `otherwise` is selected.
