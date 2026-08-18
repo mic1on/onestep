@@ -67,13 +67,7 @@ export default defineConfig({
           { text: 'Agent WS 协议', link: '/agent-ws-protocol' },
         ],
       },
-      {
-        text: '版本',
-        items: [
-          { text: '当前版本', link: '/guide/' },
-          { text: 'v0.5.x 归档', link: '/v0.5.x/' },
-        ],
-      },
+
     ],
     sidebar: [
       {
@@ -138,15 +132,7 @@ export default defineConfig({
           { text: '跨仓协作', link: '/ws-cross-repo-collaboration' },
         ],
       },
-      {
-        text: '旧版文档',
-        collapsed: true,
-        items: [
-          { text: 'v0.5.x 入口', link: '/v0.5.x/' },
-          { text: 'v0.5.x 教程', link: '/v0.5.x/guide/tutorial' },
-          { text: 'v0.5.x Broker', link: '/v0.5.x/core/broker' },
-        ],
-      },
+
     ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/mic1on/onestep' },
