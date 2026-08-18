@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## onestep 1.11.0
 
 - Extends conditional `emit` routes (`when`/`then`/`otherwise`) with per-sink
   transform bindings: `then`/`otherwise` branches accept emit-binding mappings
