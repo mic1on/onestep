@@ -227,6 +227,66 @@ def test_yaml_empty_update_columns_is_distinct_from_unset(tmp_path) -> None:
     assert sink.update_expr == {"updated_at": "NOW(6)"}
 
 
+def test_yaml_update_columns_accepts_policy_entries(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {"name": "mysql-plugin"},
+            "resources": {
+                "db": {"type": "mysql", "dsn": dsn},
+                "processed": {
+                    "type": "mysql_table_sink",
+                    "connector": "db",
+                    "table": "processed_users",
+                    "mode": "update",
+                    "keys": ["id"],
+                    "update_columns": [
+                        "name",
+                        {"name": "email", "policy": "skip_null"},
+                        {"name": "phone", "policy": "backfill"},
+                    ],
+                },
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+
+    sink = app.resources["processed"]
+    assert isinstance(sink, TableSink)
+    assert sink.update_columns == ("name", "email", "phone")
+    assert sink.column_policies == {"name": "overwrite", "email": "skip_null", "phone": "backfill"}
+
+
+def test_yaml_rejects_invalid_update_columns_policy(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    with pytest.raises(ValueError, match="policy"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "mysql-plugin"},
+                "resources": {
+                    "db": {"type": "mysql", "dsn": dsn},
+                    "processed": {
+                        "type": "mysql_table_sink",
+                        "connector": "db",
+                        "table": "processed_users",
+                        "mode": "update",
+                        "keys": ["id"],
+                        "update_columns": [{"name": "email", "policy": "sometimes"}],
+                    },
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
 def test_yaml_update_mode_builds_update_only_sink(tmp_path) -> None:
     dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
 

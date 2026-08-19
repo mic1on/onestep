@@ -430,6 +430,211 @@ def test_update_columns_and_update_expr_valid_in_update_mode() -> None:
 
 
 @pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_skip_null_policy_omits_null_columns() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=(
+            "title",
+            {"name": "content", "policy": "skip_null"},
+        ),
+    )
+    payload = dict(_payload(), title=None, content=None)
+
+    sql = _compile(sink._build_statement(payload, _candidate_table()))
+    set_clause = sql.split(" WHERE ", 1)[0]
+
+    assert "title=" in set_clause
+    assert "content=" not in set_clause
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_backfill_policy_renders_coalesce() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=(
+            "title",
+            {"name": "publish_at", "policy": "backfill"},
+        ),
+    )
+
+    sql = _compile(sink._build_statement(_payload(), _candidate_table()))
+    set_clause = sql.split(" WHERE ", 1)[0]
+
+    assert "title=" in set_clause
+    assert "coalesce(v2_clean_article_candidate.publish_at," in sql.replace(" ", "").lower()
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_explicit_overwrite_policy_matches_plain_string() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=({"name": "title", "policy": "overwrite"},),
+    )
+
+    sql = _compile(sink._build_statement(_payload(), _candidate_table()))
+    set_clause = sql.split(" WHERE ", 1)[0]
+
+    assert "title=" in set_clause
+    assert "coalesce" not in sql.lower()
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_all_skip_null_columns_returns_no_statement() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=({"name": "title", "policy": "skip_null"},),
+    )
+    payload = dict(_payload(), title=None)
+
+    assert sink._build_statement(payload, _candidate_table()) is None
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_skipped_statement_logs_without_touching_engine(caplog) -> None:
+    class _Engine:
+        def begin(self):
+            raise AssertionError("engine must not be used when statement is skipped")
+
+    class _Connector:
+        engine = _Engine()
+
+        async def _table(self, table_name):
+            return _candidate_table()
+
+    sink = TableSink(
+        connector=_Connector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=({"name": "title", "policy": "skip_null"},),
+    )
+
+    with caplog.at_level(logging.INFO, logger="onestep_mysql.connector"):
+        asyncio.run(sink._send(dict(_payload(), title=None)))
+
+    assert any("skipped write" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_upsert_mode_applies_policies_in_duplicate_clause() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="upsert",
+        keys=("article_identity",),
+        update_columns=(
+            "title",
+            {"name": "content", "policy": "skip_null"},
+            {"name": "publish_at", "policy": "backfill"},
+        ),
+    )
+    payload = dict(_payload(), content=None)
+
+    update = _update_clause(_compile(sink._build_statement(payload, _candidate_table())))
+
+    assert "title = " in update
+    assert "content = " not in update
+    assert "coalesce(" in update.lower()
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_rejects_unknown_policy() -> None:
+    with pytest.raises(ValueError, match="policy"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=({"name": "a", "policy": "sometimes"},),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_rejects_missing_name() -> None:
+    with pytest.raises(ValueError, match="name"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=({"policy": "backfill"},),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_rejects_unknown_entry_keys() -> None:
+    with pytest.raises(ValueError, match="unknown update_columns entry keys"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=({"name": "a", "policy": "backfill", "extra": 1},),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_rejects_duplicate_columns() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=("title", {"name": "title", "policy": "backfill"}),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_policy_rejects_key_column() -> None:
+    with pytest.raises(ValueError, match="key column"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=({"name": "id", "policy": "backfill"},),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_policy_conflicts_with_update_expr() -> None:
+    with pytest.raises(ValueError, match="conflicts with update_expr"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=({"name": "updated_at", "policy": "backfill"},),
+            update_expr={"updated_at": "NOW(6)"},
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_rejects_non_string_non_mapping_entry() -> None:
+    with pytest.raises(TypeError, match="strings or mappings"):
+        TableSink(
+            connector=_FakeConnector(),  # type: ignore[arg-type]
+            table="t",
+            mode="update",
+            keys=("id",),
+            update_columns=(123,),
+        )
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
 def test_update_mode_logs_when_no_rows_matched(caplog) -> None:
     class _Result:
         rowcount = 0
