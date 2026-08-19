@@ -973,19 +973,19 @@ class TableSink(Sink):
         serialize_json: str = "auto",
     ) -> None:
         super().__init__(f"mysql.table_sink:{table}")
-        if mode not in {"insert", "upsert"}:
-            raise ValueError("mode must be either 'insert' or 'upsert'")
-        if update_columns is not None and mode != "upsert":
-            raise ValueError("update_columns only applies to upsert mode")
+        if mode not in {"insert", "upsert", "update"}:
+            raise ValueError("mode must be one of 'insert', 'upsert' or 'update'")
+        if update_columns is not None and mode == "insert":
+            raise ValueError("update_columns only applies to upsert or update mode")
         update_columns_tuple = tuple(update_columns) if update_columns is not None else None
         update_expr_dict = dict(update_expr or {})
         if update_expr is not None:
-            if mode != "upsert":
-                raise ValueError("update_expr only applies to upsert mode")
+            if mode == "insert":
+                raise ValueError("update_expr only applies to upsert or update mode")
             if not all(isinstance(key, str) and isinstance(value, str) for key, value in update_expr.items()):
                 raise TypeError("update_expr keys and values must be strings")
-        if mode == "upsert" and update_columns_tuple == () and not update_expr_dict:
-            raise ValueError("upsert mode requires update_expr when update_columns is empty")
+        if mode in {"upsert", "update"} and update_columns_tuple == () and not update_expr_dict:
+            raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
         if serialize_json not in {"auto", "always", "never"}:
             raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
         self.connector = connector
@@ -1017,22 +1017,29 @@ class TableSink(Sink):
         table = await self.connector._table(self.table_name)
         stmt = self._build_statement(payload, table)
         async with self.connector.engine.begin() as conn:
-            await conn.execute(stmt)
+            result = await conn.execute(stmt)
+            if self.mode == "update" and result.rowcount == 0:
+                logger.info(
+                    "mysql table sink %s update matched no rows or values unchanged (keys=%s)",
+                    self.name,
+                    {key: payload.get(key) for key in self.keys},
+                )
 
     def _build_statement(self, payload: dict[str, Any], table: sa.Table):
         payload = self._coerce_json_values(payload, table)
         if self.mode == "insert":
             return sa.insert(table).values(**payload)
         if not self.keys:
-            raise ValueError("upsert mode requires keys")
-        if self.update_columns is not None:
-            update_payload = {key: value for key, value in payload.items() if key in self.update_columns}
-        else:
-            update_payload = {key: value for key, value in payload.items() if key not in self.keys}
-        for column, expr in self.update_expr.items():
-            update_payload[column] = sa.literal_column(expr)
+            raise ValueError(f"{self.mode} mode requires keys")
+        update_payload = self._update_payload(payload)
         if not update_payload:
-            raise ValueError("upsert mode requires at least one update column or update_expr")
+            raise ValueError(f"{self.mode} mode requires at least one update column or update_expr")
+        if self.mode == "update":
+            missing_keys = [key for key in self.keys if key not in payload]
+            if missing_keys:
+                raise ValueError(f"update mode requires keys present in payload: {', '.join(missing_keys)}")
+            conditions = [table.columns[key] == payload[key] for key in self.keys]
+            return sa.update(table).where(sa.and_(*conditions)).values(**update_payload)
         sync_engine = getattr(self.connector.engine, "sync_engine", self.connector.engine)
         dialect = sync_engine.dialect.name
         if dialect == "mysql":
@@ -1046,6 +1053,15 @@ class TableSink(Sink):
             stmt = sqlite_insert(table).values(**payload)
             return stmt.on_conflict_do_update(index_elements=list(self.keys), set_=update_payload)
         return sa.insert(table).values(**payload)
+
+    def _update_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.update_columns is not None:
+            update_payload = {key: value for key, value in payload.items() if key in self.update_columns}
+        else:
+            update_payload = {key: value for key, value in payload.items() if key not in self.keys}
+        for column, expr in self.update_expr.items():
+            update_payload[column] = sa.literal_column(expr)
+        return update_payload
 
     def _coerce_json_values(self, payload: dict[str, Any], table: sa.Table) -> dict[str, Any]:
         if self.serialize_json == "never":
