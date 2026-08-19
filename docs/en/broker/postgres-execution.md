@@ -51,19 +51,19 @@ Each `PostgresExecutionSource` can only bind to one task name. To execute multip
 After both packages are released, API and worker processes participating in the same execution chain use the same locked versions:
 
 ```bash
-pip install "onestep==1.9.0" "onestep-postgres==0.2.0"
+pip install "onestep>=1.9.0" "onestep-postgres>=0.2.0"
 ```
 
 Or use the core extra. Note that the extra declares `onestep-postgres>=0.2.0`; production environments should still pin the final resolved version via lockfile:
 
 ```bash
-pip install "onestep[postgres]==1.9.0"
+pip install "onestep[postgres]>=1.9.0"
 ```
 
 When using uv:
 
 ```bash
-uv add "onestep==1.9.0" "onestep-postgres==0.2.0"
+uv add "onestep>=1.9.0" "onestep-postgres>=0.2.0"
 uv run python -c "import onestep, onestep_postgres; print(onestep.__version__, onestep_postgres.__version__)"
 uv run pip check
 ```
@@ -77,7 +77,7 @@ Release order:
 5. Deploy the worker first and confirm it can connect to the database before opening the API submission endpoint.
 6. Avoid running mixed versions in the same business chain for extended periods.
 
-If the plugin is not yet released, `onestep[postgres]==1.9.0` and `onestep[all]==1.9.0` may not resolve dependencies fully. Plain `onestep==1.9.0` does not depend on the PostgreSQL plugin and can be installed independently.
+If the plugin is not yet released, `onestep[postgres]>=1.9.0` and `onestep[all]>=1.9.0` may not resolve dependencies fully. Plain `onestep>=1.9.0` does not depend on the PostgreSQL plugin and can be installed independently.
 
 ## 3. Database Initialization
 

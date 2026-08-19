@@ -164,7 +164,7 @@ Container deployment can use the official worker runtime image. The image adds t
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.9.0
+  ghcr.io/mic1on/onestep-worker:1.11.0
 ```
 
 See [Worker Runtime Image](/en/guide/worker-runtime-image) for details.

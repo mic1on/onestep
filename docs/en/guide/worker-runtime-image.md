@@ -20,7 +20,7 @@ onestep provides an official worker runtime image, suitable for running workers 
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.9.0
+  ghcr.io/mic1on/onestep-worker:1.11.0
 ```
 
 Startup sequence:
@@ -36,7 +36,7 @@ The image comes with `onestep[all]` pre-installed, including common plugin packa
 ## Custom Image
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.9.0
+FROM ghcr.io/mic1on/onestep-worker:1.11.0
 
 WORKDIR /workspace
 COPY . /workspace
