@@ -202,8 +202,8 @@ def test_cancel_queued_and_retrying_becomes_cancelled(tmp_path: Path) -> None:
         assert cancelled.status is ExecutionStatus.CANCELLED
 
         retrying = await backend.submit(_request(task_name="retry"))
-        with backend.engine.begin() as conn:
-            conn.execute(
+        async with backend.engine.begin() as conn:
+            await conn.execute(
                 sa.update(backend.tables.executions)
                 .where(backend.tables.executions.c.id == retrying.id)
                 .values(status=ExecutionStatus.RETRYING.value)
@@ -221,8 +221,8 @@ def test_cancel_running_becomes_cancel_requested(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = _backend(tmp_path / "execution.db")
         execution = await backend.submit(_request())
-        with backend.engine.begin() as conn:
-            conn.execute(
+        async with backend.engine.begin() as conn:
+            await conn.execute(
                 sa.update(backend.tables.executions)
                 .where(backend.tables.executions.c.id == execution.id)
                 .values(status=ExecutionStatus.RUNNING.value)
@@ -240,8 +240,8 @@ def test_cancel_terminal_is_idempotent(tmp_path: Path) -> None:
     async def scenario() -> None:
         backend = _backend(tmp_path / "execution.db")
         execution = await backend.submit(_request())
-        with backend.engine.begin() as conn:
-            conn.execute(
+        async with backend.engine.begin() as conn:
+            await conn.execute(
                 sa.update(backend.tables.executions)
                 .where(backend.tables.executions.c.id == execution.id)
                 .values(status=ExecutionStatus.SUCCEEDED.value, result={"ok": True})
@@ -280,8 +280,8 @@ def test_list_filters_task_and_status_with_keyset_cursor(tmp_path: Path) -> None
         assert len(set(ids)) == 3
         assert second.next_cursor is None
 
-        with backend.engine.begin() as conn:
-            conn.execute(
+        async with backend.engine.begin() as conn:
+            await conn.execute(
                 sa.update(backend.tables.executions)
                 .where(backend.tables.executions.c.id == ids[0])
                 .values(status=ExecutionStatus.SUCCEEDED.value)

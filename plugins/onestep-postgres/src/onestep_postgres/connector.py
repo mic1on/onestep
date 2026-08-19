@@ -15,24 +15,27 @@ from onestep.resilience import ConnectorOperation
 from onestep.state import CursorStore, InMemoryCursorStore
 
 from .resilience import as_postgres_connector_operation_error, collect_sensitive_tokens
-from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
+from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore, _async_dsn
 
 try:
     import sqlalchemy as sa
-    from sqlalchemy import create_engine
+    from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 except ImportError:  # pragma: no cover - exercised when optional deps are missing
     sa = None
-    create_engine = None
+    AsyncEngine = None
+    create_async_engine = None
 
 
 class PostgresConnector:
     def __init__(self, dsn: str, **engine_options: Any) -> None:
-        if create_engine is None:
+        if create_async_engine is None:
             raise RuntimeError("PostgresConnector requires SQLAlchemy. Install onestep-postgres.")
         self.dsn = dsn
         self._sensitive_tokens = collect_sensitive_tokens(dsn, engine_options)
-        self.engine = create_engine(dsn, future=True, pool_pre_ping=True, **engine_options)
+        engine_options.setdefault("pool_pre_ping", True)
+        self.engine: AsyncEngine = create_async_engine(_async_dsn(dsn), **engine_options)
         self._tables: dict[str, Any] = {}
+        self._table_lock: asyncio.Lock | None = None
 
     def _secret_tokens(self) -> list[str]:
         return self.secret_tokens()
@@ -42,7 +45,7 @@ class PostgresConnector:
         return list(self._sensitive_tokens)
 
     async def close(self) -> None:
-        await asyncio.to_thread(self.engine.dispose)
+        await self.engine.dispose()
 
     def state_store(
         self,
@@ -180,12 +183,24 @@ class PostgresConnector:
             reclaim_batch_size=reclaim_batch_size,
         )
 
-    def _table(self, table_name: str):
+    async def _table(self, table_name: str):
         table = self._tables.get(table_name)
         if table is None:
-            metadata = sa.MetaData()
-            table = sa.Table(table_name, metadata, autoload_with=self.engine)
-            self._tables[table_name] = table
+            lock = self._table_lock
+            if lock is None:
+                lock = asyncio.Lock()
+                self._table_lock = lock
+            async with lock:
+                table = self._tables.get(table_name)
+                if table is None:
+                    metadata = sa.MetaData()
+                    async with self.engine.connect() as conn:
+                        table = await conn.run_sync(
+                            lambda sync_conn: sa.Table(
+                                table_name, metadata, autoload_with=sync_conn
+                            )
+                        )
+                    self._tables[table_name] = table
         return table
 
 
@@ -267,7 +282,7 @@ class PostgresTableQueueSource(Source):
 
     async def fetch(self, limit: int) -> list[Delivery]:
         try:
-            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+            rows = await self._fetch(max(1, min(limit, self.batch_size)))
         except Exception as exc:
             connector_error = as_postgres_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -287,20 +302,20 @@ class PostgresTableQueueSource(Source):
             deliveries.append(PostgresTableQueueDelivery(self, envelope, row_ref))
         return deliveries
 
-    def _fetch_sync(self, limit: int) -> list[dict[str, Any]]:
-        table = self.connector._table(self.table_name)
-        with self.connector.engine.begin() as conn:
+    async def _fetch(self, limit: int) -> list[dict[str, Any]]:
+        table = await self.connector._table(self.table_name)
+        async with self.connector.engine.begin() as conn:
             stmt = sa.select(table).where(sa.text(self.where)).order_by(table.c[self.key]).limit(limit)
             try:
                 stmt = stmt.with_for_update(skip_locked=True)
             except TypeError:
                 stmt = stmt.with_for_update()
-            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
+            rows = [dict(row) for row in (await conn.execute(stmt)).mappings().all()]
             if not rows:
                 return []
             ids = [row[self.key] for row in rows]
-            conn.execute(sa.update(table).where(table.c[self.key].in_(ids)).values(**self.claim))
-            refreshed = conn.execute(
+            await conn.execute(sa.update(table).where(table.c[self.key].in_(ids)).values(**self.claim))
+            refreshed = await conn.execute(
                 sa.select(table).where(table.c[self.key].in_(ids)).order_by(table.c[self.key])
             )
             return [dict(row) for row in refreshed.mappings().all()]
@@ -320,14 +335,11 @@ class PostgresTableQueueSource(Source):
         await self.update_row(row_ref, self.nack)
 
     async def update_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
-        await asyncio.to_thread(self._update_row_sync, row_ref, dict(values))
-
-    def _update_row_sync(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
         if not values:
             return
-        table = self.connector._table(row_ref.table)
-        with self.connector.engine.begin() as conn:
-            conn.execute(
+        table = await self.connector._table(row_ref.table)
+        async with self.connector.engine.begin() as conn:
+            await conn.execute(
                 sa.update(table)
                 .where(table.c[row_ref.key] == row_ref.key_value)
                 .values(**dict(values))
@@ -400,7 +412,7 @@ class PostgresIncrementalSource(Source):
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
         try:
-            rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
+            rows = await self._fetch(max(1, min(limit, self.batch_size)))
         except Exception as exc:
             connector_error = as_postgres_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -421,8 +433,8 @@ class PostgresIncrementalSource(Source):
             deliveries.append(IncrementalDelivery(self, envelope, token))
         return deliveries
 
-    def _fetch_sync(self, limit: int) -> list[dict[str, Any]]:
-        table = self.connector._table(self.table_name)
+    async def _fetch(self, limit: int) -> list[dict[str, Any]]:
+        table = await self.connector._table(self.table_name)
         stmt = sa.select(table)
         predicates = []
         if self.where:
@@ -435,8 +447,8 @@ class PostgresIncrementalSource(Source):
             stmt = stmt.where(*predicates)
         order_columns = [table.c[name] for name in self.cursor]
         stmt = stmt.order_by(*order_columns).limit(limit)
-        with self.connector.engine.begin() as conn:
-            rows = conn.execute(stmt).mappings().all()
+        async with self.connector.engine.begin() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
         return [dict(row) for row in rows]
 
     async def ack_token(self, token: _CursorToken) -> None:
@@ -553,7 +565,7 @@ class PostgresTableSink(Sink):
         if not isinstance(envelope.body, Mapping):
             raise TypeError("PostgresTableSink only accepts mapping payloads")
         try:
-            await asyncio.to_thread(self._send_sync, dict(envelope.body))
+            await self._send(dict(envelope.body))
         except Exception as exc:
             connector_error = as_postgres_connector_operation_error(
                 operation=ConnectorOperation.SEND,
@@ -566,8 +578,9 @@ class PostgresTableSink(Sink):
                 raise
             raise connector_error from None
 
-    def _send_sync(self, payload: dict[str, Any]) -> None:
-        stmt = self._build_statement(payload)
+    async def _send(self, payload: dict[str, Any]) -> None:
+        table = await self.connector._table(self.table_name)
+        stmt = self._build_statement(payload, table)
         if stmt is None:
             logger.info(
                 "postgres table sink %s skipped write: all update columns are null under "
@@ -576,8 +589,8 @@ class PostgresTableSink(Sink):
                 {key: payload.get(key) for key in self.keys},
             )
             return
-        with self.connector.engine.begin() as conn:
-            result = conn.execute(stmt)
+        async with self.connector.engine.begin() as conn:
+            result = await conn.execute(stmt)
             if self.mode == "update" and result.rowcount == 0:
                 logger.info(
                     "postgres table sink %s update matched no rows (keys=%s)",
@@ -585,8 +598,7 @@ class PostgresTableSink(Sink):
                     {key: payload.get(key) for key in self.keys},
                 )
 
-    def _build_statement(self, payload: dict[str, Any]) -> Any | None:
-        table = self.connector._table(self.table_name)
+    def _build_statement(self, payload: dict[str, Any], table: sa.Table) -> Any | None:
         payload = self._coerce_json_values(payload, table)
         if self.mode == "insert":
             return sa.insert(table).values(**payload)

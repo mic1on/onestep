@@ -411,14 +411,14 @@ def test_postgres_connector_error_does_not_leak_connect_args_password() -> None:
     connector = PostgresConnector("sqlite://", connect_args={"password": secret})
     source = connector.incremental(table="users", key="id", cursor=("id",))
 
-    def fail_fetch(limit: int) -> list[dict[str, Any]]:
+    async def fail_fetch(limit: int) -> list[dict[Any, Any]]:
         raise sa.exc.OperationalError(
             statement="SELECT 1",
             params={},
             orig=Exception(f"password {secret} was rejected"),
         )
 
-    source._fetch_sync = fail_fetch
+    source._fetch = fail_fetch
 
     with pytest.raises(ConnectorOperationError) as exc_info:
         asyncio.run(source.fetch(1))

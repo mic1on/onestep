@@ -215,8 +215,8 @@ def test_claim_marks_expired_retrying_execution_terminal(tmp_path: Path) -> None
         clock = MutableClock(datetime(2026, 8, 9, tzinfo=timezone.utc))
         backend = _backend(tmp_path / "lease.db", clock)
         [lease] = await _claim_one(backend)
-        with backend.engine.begin() as conn:
-            conn.execute(
+        async with backend.engine.begin() as conn:
+            await conn.execute(
                 sa.update(backend.tables.executions)
                 .where(backend.tables.executions.c.id == lease.execution.id)
                 .values(expires_at=clock.current + timedelta(seconds=5))
@@ -341,12 +341,12 @@ def test_expired_running_lease_reclaims_even_after_business_expiry(tmp_path: Pat
         assert second.execution.status is ExecutionStatus.RUNNING
         assert second.execution.attempts == 2
         assert second.lease_token != first.lease_token
-        with backend.engine.begin() as conn:
-            old_attempt_status = conn.execute(
+        async with backend.engine.begin() as conn:
+            old_attempt_status = (await conn.execute(
                 sa.select(backend.tables.attempts.c.status).where(
                     backend.tables.attempts.c.id == first.attempt_id
                 )
-            ).scalar_one()
+            )).scalar_one()
         assert old_attempt_status == "lease_lost"
         with pytest.raises(StaleExecutionLease):
             await backend.complete(
@@ -435,12 +435,12 @@ def test_complete_success_updates_execution_and_attempt_in_one_transaction(tmp_p
         )
         assert completed.status is ExecutionStatus.SUCCEEDED
         assert completed.result == {"answer": 42}
-        with backend.engine.begin() as conn:
-            attempt = conn.execute(
+        async with backend.engine.begin() as conn:
+            attempt = (await conn.execute(
                 sa.select(backend.tables.attempts).where(
                     backend.tables.attempts.c.id == lease.attempt_id
                 )
-            ).mappings().one()
+            )).mappings().one()
         assert attempt["status"] == "succeeded"
 
     asyncio.run(scenario())
@@ -472,12 +472,12 @@ def test_cancel_request_wins_over_late_success_completion(tmp_path: Path) -> Non
         assert completed.error is None
         current = await backend.get("agent-api", lease.execution.id)
         assert current == completed
-        with backend.engine.begin() as conn:
-            attempt = conn.execute(
+        async with backend.engine.begin() as conn:
+            attempt = (await conn.execute(
                 sa.select(backend.tables.attempts).where(
                     backend.tables.attempts.c.id == lease.attempt_id
                 )
-            ).mappings().one()
+            )).mappings().one()
         assert attempt["status"] == "cancelled"
         assert attempt["error"] is None
         assert "result" not in attempt

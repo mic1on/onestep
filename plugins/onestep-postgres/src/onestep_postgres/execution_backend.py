@@ -5,7 +5,6 @@ import base64
 import hashlib
 import json
 import os
-import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -82,7 +81,8 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._ready = False
         self._open_count = 0
-        self._ready_lock = threading.Lock()
+        self._ready_lock: asyncio.Lock | None = None
+        self._ready_loop: asyncio.AbstractEventLoop | None = None
         for name, value in (
             ("max_payload_bytes", max_payload_bytes),
             ("max_metadata_bytes", max_metadata_bytes),
@@ -106,8 +106,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
 
     @property
     def engine(self) -> Any:
-        connector = self._ensure_connector_sync()
-        return connector.engine
+        return self._ensure_connector().engine
 
     def source(
         self,
@@ -134,20 +133,36 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         )
 
     async def open(self) -> None:
-        await asyncio.to_thread(self._open_sync)
+        async with self._runtime_ready_lock():
+            await self._ensure_ready_locked()
+            self._open_count += 1
 
     async def close(self) -> None:
-        await asyncio.to_thread(self._close_sync)
+        async with self._runtime_ready_lock():
+            current_pid = os.getpid()
+            if current_pid != self._pid:
+                if not self._owns_connector:
+                    raise self._fork_error(current_pid)
+                self._discard_inherited_connector(current_pid)
+                return
+            if self._open_count > 0:
+                self._open_count -= 1
+            if self._open_count > 0:
+                return
+            self._ready = False
+            if self._owns_connector and self._connector is not None:
+                await self._connector.engine.dispose()
+                self._connector = None
 
     async def submit(self, request: ExecutionRequest) -> Execution:
         encoded = self._encode_submission(request)
-        return await asyncio.to_thread(self._submit_sync, request, encoded)
+        return await self._submit(request, encoded)
 
     async def get(self, namespace: str, execution_id: UUID) -> Execution | None:
-        return await asyncio.to_thread(self._get_sync, namespace, execution_id)
+        return await self._get(namespace, execution_id)
 
     async def list(self, query: ExecutionQuery) -> ExecutionPage:
-        return await asyncio.to_thread(self._list_sync, query)
+        return await self._list(query)
 
     async def request_cancel(
         self,
@@ -156,12 +171,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         *,
         reason: str | None,
     ) -> Execution | None:
-        return await asyncio.to_thread(
-            self._request_cancel_sync,
-            namespace,
-            execution_id,
-            reason,
-        )
+        return await self._request_cancel(namespace, execution_id, reason)
 
     async def claim(
         self,
@@ -171,8 +181,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         lease_duration_s: float,
         worker_id: str,
     ) -> tuple[ExecutionLease, ...]:
-        return await asyncio.to_thread(
-            self._claim_sync,
+        return await self._claim(
             namespace,
             tuple(task_names),
             limit,
@@ -187,8 +196,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         lease_token: UUID,
         lease_duration_s: float,
     ) -> HeartbeatResult:
-        return await asyncio.to_thread(
-            self._heartbeat_sync,
+        return await self._heartbeat(
             execution_id,
             attempt_id,
             lease_token,
@@ -202,8 +210,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         lease_token: UUID,
         completion: ExecutionCompletion,
     ) -> Execution:
-        return await asyncio.to_thread(
-            self._complete_sync,
+        return await self._complete(
             execution_id,
             attempt_id,
             lease_token,
@@ -216,8 +223,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
         attempt_id: UUID,
         lease_token: UUID,
     ) -> Execution:
-        return await asyncio.to_thread(
-            self._release_sync,
+        return await self._release(
             execution_id,
             attempt_id,
             lease_token,
@@ -229,56 +235,43 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             raise ValueError("clock must return a timezone-aware datetime")
         return value.astimezone(timezone.utc)
 
-    def _transaction_now(self, conn: Any) -> datetime:
+    async def _transaction_now(self, conn: Any) -> datetime:
         # PostgreSQL's transaction timestamp is stable for all lease checks in
         # this transaction. SQLite uses the injected clock for deterministic
         # unit tests and non-PostgreSQL compatibility.
         if conn.dialect.name == "postgresql":
-            value = conn.execute(sa.select(sa.func.current_timestamp())).scalar_one()
+            value = (
+                await conn.execute(sa.select(sa.func.current_timestamp()))
+            ).scalar_one()
             return _aware_utc(value)
         return self._now()
 
-    def _lease_remaining_sync(self, lease_expires_at: datetime) -> float:
-        self._ensure_ready_sync()
-        with self.engine.begin() as conn:
-            now = self._transaction_now(conn)
+    async def _lease_remaining(self, lease_expires_at: datetime) -> float:
+        await self._ensure_ready()
+        async with self.engine.begin() as conn:
+            now = await self._transaction_now(conn)
         return (lease_expires_at - now).total_seconds()
 
     async def lease_remaining(self, lease_expires_at: datetime) -> float:
-        return await asyncio.to_thread(self._lease_remaining_sync, lease_expires_at)
+        return await self._lease_remaining(lease_expires_at)
 
-    def _open_sync(self) -> None:
-        with self._ready_lock:
-            self._ensure_ready_locked()
-            self._open_count += 1
+    def _runtime_ready_lock(self) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        if self._ready_lock is None or self._ready_loop is not current_loop:
+            self._ready_lock = asyncio.Lock()
+            self._ready_loop = current_loop
+        return self._ready_lock
 
-    def _close_sync(self) -> None:
-        with self._ready_lock:
-            current_pid = os.getpid()
-            if current_pid != self._pid:
-                if not self._owns_connector:
-                    raise self._fork_error(current_pid)
-                self._discard_inherited_connector_locked(current_pid)
-                return
-            if self._open_count > 0:
-                self._open_count -= 1
-            if self._open_count > 0:
-                return
-            self._ready = False
-            if self._owns_connector and self._connector is not None:
-                self._dispose_engine(self._connector.engine)
-                self._connector = None
-
-    def _ensure_connector_sync(self) -> Any:
-        with self._ready_lock:
-            return self._ensure_connector_locked()
-
-    def _ensure_connector_locked(self) -> Any:
+    def _ensure_connector(self) -> Any:
+        # Lock-free by design: constructing the connector performs no I/O
+        # (create_async_engine is lazy). Callers that run statements must hold
+        # the ready lock and use this helper inside it, or go through
+        # _ensure_ready/_ensure_ready_locked.
         current_pid = os.getpid()
         if current_pid != self._pid:
             if not self._owns_connector:
                 raise self._fork_error(current_pid)
-            self._discard_inherited_connector_locked(current_pid)
+            self._discard_inherited_connector(current_pid)
         if self._connector is None:
             from .connector import PostgresConnector
 
@@ -286,9 +279,13 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             self._connector = PostgresConnector(self._dsn, **self._engine_options)
         return self._connector
 
-    def _discard_inherited_connector_locked(self, current_pid: int) -> None:
-        if self._connector is not None:
-            self._dispose_engine(self._connector.engine, close=False)
+    def _discard_inherited_connector(self, current_pid: int) -> None:
+        # Drop the inherited engine reference WITHOUT disposing it:
+        # AsyncEngine.dispose() is a coroutine and must not be driven in a
+        # forked child over the inherited event loop. The child's sockets are
+        # fd copies of the parent's; garbage collecting them in the child only
+        # closes the child's descriptors and never touches the parent's
+        # server connections.
         self._connector = None
         self._ready = False
         self._open_count = 0
@@ -301,22 +298,12 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             f"{current_pid}); create the PostgresConnector in the child process"
         )
 
-    @staticmethod
-    def _dispose_engine(engine: Any, *, close: bool = True) -> None:
-        disposer = getattr(engine, "dispose", None)
-        if not callable(disposer):
-            return
-        if close:
-            disposer()
-        else:
-            disposer(close=False)
+    async def _ensure_ready(self) -> None:
+        async with self._runtime_ready_lock():
+            await self._ensure_ready_locked()
 
-    def _ensure_ready_sync(self) -> None:
-        with self._ready_lock:
-            self._ensure_ready_locked()
-
-    def _ensure_ready_locked(self) -> None:
-        connector = self._ensure_connector_locked()
+    async def _ensure_ready_locked(self) -> None:
+        connector = self._ensure_connector()
         if self._ready:
             return
         engine = connector.engine
@@ -329,26 +316,33 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                     byteorder="big",
                     signed=True,
                 )
-                with engine.begin() as conn:
-                    conn.execute(sa.select(sa.func.pg_advisory_xact_lock(lock_key)))
-                    self.tables.metadata.create_all(
-                        conn,
-                        tables=tables,
-                        checkfirst=True,
+                async with engine.begin() as conn:
+                    await conn.execute(sa.select(sa.func.pg_advisory_xact_lock(lock_key)))
+                    await conn.run_sync(
+                        lambda sync_conn: self.tables.metadata.create_all(
+                            sync_conn,
+                            tables=tables,
+                            checkfirst=True,
+                        )
                     )
             else:
-                self.tables.metadata.create_all(
-                    engine,
-                    tables=tables,
-                    checkfirst=True,
-                )
+                async with engine.begin() as conn:
+                    await conn.run_sync(
+                        lambda sync_conn: self.tables.metadata.create_all(
+                            sync_conn,
+                            tables=tables,
+                            checkfirst=True,
+                        )
+                    )
         else:
-            inspector = sa.inspect(engine)
-            missing = [
-                name
-                for name in (self.table_name, self.attempts_table_name)
-                if not inspector.has_table(name)
-            ]
+            async with engine.connect() as conn:
+                missing = await conn.run_sync(
+                    lambda sync_conn: [
+                        name
+                        for name in (self.table_name, self.attempts_table_name)
+                        if not sa.inspect(sync_conn).has_table(name)
+                    ]
+                )
             if missing:
                 raise RuntimeError(
                     "missing execution tables: " + ", ".join(missing)
@@ -399,16 +393,16 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             ).encode("ascii")
         )
 
-    def _submit_sync(
+    async def _submit(
         self,
         request: ExecutionRequest,
         encoded: dict[str, Any],
     ) -> Execution:
-        self._ensure_ready_sync()
+        await self._ensure_ready()
         execution_id = uuid4()
         try:
-            with self.engine.begin() as conn:
-                now = self._transaction_now(conn)
+            async with self.engine.begin() as conn:
+                now = await self._transaction_now(conn)
                 values = {
                     "id": execution_id,
                     "namespace": request.namespace,
@@ -425,18 +419,18 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                     "version": 0,
                     "expires_at": request.expires_at,
                 }
-                conn.execute(sa.insert(self.tables.executions).values(**values))
+                await conn.execute(sa.insert(self.tables.executions).values(**values))
         except sa.exc.IntegrityError:
             if request.idempotency_key is None:
                 raise
-            with self.engine.begin() as conn:
-                row = conn.execute(
+            async with self.engine.begin() as conn:
+                row = (await conn.execute(
                     sa.select(self.tables.executions).where(
                         self.tables.executions.c.namespace == request.namespace,
                         self.tables.executions.c.task_name == request.task_name,
                         self.tables.executions.c.idempotency_key == request.idempotency_key,
                     )
-                ).mappings().one_or_none()
+                )).mappings().one_or_none()
             if row is None:
                 raise
             if row["submission_digest"] != encoded["digest"]:
@@ -444,21 +438,21 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                     "idempotency key was already used with a different submission"
                 )
             return self._row_to_execution(row)
-        return self._get_sync(request.namespace, execution_id)
+        return await self._get(request.namespace, execution_id)
 
-    def _get_sync(self, namespace: str, execution_id: UUID) -> Execution | None:
-        self._ensure_ready_sync()
-        with self.engine.begin() as conn:
-            row = conn.execute(
+    async def _get(self, namespace: str, execution_id: UUID) -> Execution | None:
+        await self._ensure_ready()
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(
                 sa.select(self.tables.executions).where(
                     self.tables.executions.c.namespace == namespace,
                     self.tables.executions.c.id == execution_id,
                 )
-            ).mappings().one_or_none()
+            )).mappings().one_or_none()
         return None if row is None else self._row_to_execution(row)
 
-    def _list_sync(self, query: ExecutionQuery) -> ExecutionPage:
-        self._ensure_ready_sync()
+    async def _list(self, query: ExecutionQuery) -> ExecutionPage:
+        await self._ensure_ready()
         stmt = sa.select(self.tables.executions).where(
             self.tables.executions.c.namespace == query.namespace
         )
@@ -480,8 +474,8 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             self.tables.executions.c.created_at.desc(),
             self.tables.executions.c.id.desc(),
         ).limit(query.limit + 1)
-        with self.engine.begin() as conn:
-            rows = conn.execute(stmt).mappings().all()
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(stmt)).mappings().all()
         has_more = len(rows) > query.limit
         selected = rows[: query.limit]
         items = tuple(self._row_to_execution(row) for row in selected)
@@ -491,23 +485,23 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             next_cursor = self._encode_cursor(last.created_at, last.id)
         return ExecutionPage(items=items, next_cursor=next_cursor)
 
-    def _request_cancel_sync(
+    async def _request_cancel(
         self,
         namespace: str,
         execution_id: UUID,
         reason: str | None,
     ) -> Execution | None:
-        self._ensure_ready_sync()
-        with self.engine.begin() as conn:
-            now = self._transaction_now(conn)
-            row = conn.execute(
+        await self._ensure_ready()
+        async with self.engine.begin() as conn:
+            now = await self._transaction_now(conn)
+            row = (await conn.execute(
                 sa.select(self.tables.executions)
                 .where(
                     self.tables.executions.c.namespace == namespace,
                     self.tables.executions.c.id == execution_id,
                 )
                 .with_for_update()
-            ).mappings().one_or_none()
+            )).mappings().one_or_none()
             if row is None:
                 return None
             status = row["status"]
@@ -530,19 +524,19 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 }
             else:
                 return self._row_to_execution(row)
-            conn.execute(
+            await conn.execute(
                 sa.update(self.tables.executions)
                 .where(self.tables.executions.c.id == execution_id)
                 .values(**values)
             )
-            refreshed = conn.execute(
+            refreshed = (await conn.execute(
                 sa.select(self.tables.executions).where(
                     self.tables.executions.c.id == execution_id
                 )
-            ).mappings().one()
+            )).mappings().one()
         return self._row_to_execution(refreshed)
 
-    def _claim_sync(
+    async def _claim(
         self,
         namespace: str,
         task_names: tuple[str, ...],
@@ -558,25 +552,25 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             raise ValueError("lease_duration_s must be > 0")
         if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id) > 255:
             raise ValueError("worker_id must be non-empty and <= 255 characters")
-        self._ensure_ready_sync()
+        await self._ensure_ready()
         executions = self.tables.executions
         attempts = self.tables.attempts
         lease_lost_retry = self._lease_lost_retry_predicate(executions, attempts)
         leases: list[ExecutionLease] = []
-        with self.engine.begin() as conn:
-            now = self._transaction_now(conn)
-            self._expire_queued_sync(
+        async with self.engine.begin() as conn:
+            now = await self._transaction_now(conn)
+            await self._expire_queued(
                 conn,
                 now,
                 limit=self.reclaim_batch_size,
             )
-            self._expire_cancel_requests_sync(
+            await self._expire_cancel_requests(
                 conn,
                 attempts,
                 now,
                 limit=self.reclaim_batch_size,
             )
-            self._release_expired_leases_sync(
+            await self._release_expired_leases(
                 conn,
                 attempts,
                 now,
@@ -609,13 +603,13 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 stmt = stmt.with_for_update(skip_locked=True)
             except TypeError:
                 stmt = stmt.with_for_update()
-            rows = conn.execute(stmt).mappings().all()
+            rows = (await conn.execute(stmt)).mappings().all()
             for row in rows:
                 attempt_id = uuid4()
                 lease_token = uuid4()
                 lease_expires_at = now + timedelta(seconds=lease_duration_s)
                 attempt_no = row["attempts"] + 1
-                conn.execute(
+                await conn.execute(
                     sa.update(executions)
                     .where(executions.c.id == row["id"])
                     .values(
@@ -629,7 +623,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                         version=row["version"] + 1,
                     )
                 )
-                conn.execute(
+                await conn.execute(
                     sa.insert(attempts).values(
                         id=attempt_id,
                         execution_id=row["id"],
@@ -641,9 +635,9 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                         heartbeat_at=now,
                     )
                 )
-                refreshed = conn.execute(
+                refreshed = (await conn.execute(
                     sa.select(executions).where(executions.c.id == row["id"])
-                ).mappings().one()
+                )).mappings().one()
                 leases.append(
                     ExecutionLease(
                         execution=self._row_to_execution(refreshed),
@@ -654,7 +648,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 )
         return tuple(leases)
 
-    def _expire_queued_sync(
+    async def _expire_queued(
         self,
         conn: Any,
         now: datetime,
@@ -678,9 +672,9 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             .order_by(executions.c.expires_at, executions.c.id)
             .limit(limit)
         )
-        rows = conn.execute(stmt).all()
+        rows = (await conn.execute(stmt)).all()
         for row in rows:
-            conn.execute(
+            await conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == row.id,
@@ -701,7 +695,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 )
             )
 
-    def _expire_cancel_requests_sync(
+    async def _expire_cancel_requests(
         self,
         conn: Any,
         attempts: sa.Table,
@@ -724,9 +718,9 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             .order_by(executions.c.lease_expires_at, executions.c.id)
             .limit(limit)
         )
-        rows = conn.execute(stmt).all()
+        rows = (await conn.execute(stmt)).all()
         for row in rows:
-            updated = conn.execute(
+            updated = await conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == row.id,
@@ -748,7 +742,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             )
             if updated.rowcount != 1:
                 continue
-            conn.execute(
+            await conn.execute(
                 sa.update(attempts)
                 .where(
                     attempts.c.execution_id == row.id,
@@ -758,7 +752,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 .values(status="cancelled", finished_at=now)
             )
 
-    def _release_expired_leases_sync(
+    async def _release_expired_leases(
         self,
         conn: Any,
         attempts: sa.Table,
@@ -781,7 +775,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             .order_by(executions.c.lease_expires_at, executions.c.id)
             .limit(limit)
         )
-        rows = conn.execute(stmt).all()
+        rows = (await conn.execute(stmt)).all()
         for row in rows:
             values = {
                 "status": ExecutionStatus.RETRYING.value,
@@ -796,7 +790,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                     "version": executions.c.version + 1,
                 }
             )
-            updated = conn.execute(
+            updated = await conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == row.id,
@@ -810,7 +804,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             )
             if updated.rowcount != 1:
                 continue
-            conn.execute(
+            await conn.execute(
                 sa.update(attempts)
                 .where(
                     attempts.c.execution_id == row.id,
@@ -834,7 +828,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             ),
         )
 
-    def _heartbeat_sync(
+    async def _heartbeat(
         self,
         execution_id: UUID,
         attempt_id: UUID,
@@ -843,13 +837,13 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
     ) -> HeartbeatResult:
         if lease_duration_s <= 0:
             raise ValueError("lease_duration_s must be > 0")
-        self._ensure_ready_sync()
+        await self._ensure_ready()
         executions = self.tables.executions
         attempts = self.tables.attempts
-        with self.engine.begin() as conn:
-            now = self._transaction_now(conn)
+        async with self.engine.begin() as conn:
+            now = await self._transaction_now(conn)
             expires = now + timedelta(seconds=lease_duration_s)
-            updated = conn.execute(
+            updated = await conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == execution_id,
@@ -863,7 +857,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 )
                 .values(lease_expires_at=expires, updated_at=now)
             )
-            attempt_updated = conn.execute(
+            attempt_updated = await conn.execute(
                 sa.update(attempts)
                 .where(
                     attempts.c.id == attempt_id,
@@ -875,22 +869,22 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             )
             if updated.rowcount != 1 or attempt_updated.rowcount != 1:
                 raise StaleExecutionLease("execution lease is no longer valid")
-            row = conn.execute(
+            row = (await conn.execute(
                 sa.select(executions.c.status).where(executions.c.id == execution_id)
-            ).one()
+            )).one()
         return HeartbeatResult(
             lease_expires_at=_aware_utc(expires),
             cancel_requested=row.status == ExecutionStatus.CANCEL_REQUESTED.value,
         )
 
-    def _complete_sync(
+    async def _complete(
         self,
         execution_id: UUID,
         attempt_id: UUID,
         lease_token: UUID,
         completion: ExecutionCompletion,
     ) -> Execution:
-        self._ensure_ready_sync()
+        await self._ensure_ready()
         encoded_result = None
         error = None if completion.error is None else asdict(completion.error)
         executions = self.tables.executions
@@ -907,11 +901,11 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 ExecutionStatus.CANCEL_REQUESTED.value,
             ),
         }[completion.status]
-        with self.engine.begin() as conn:
-            now = self._transaction_now(conn)
-            current = conn.execute(
+        async with self.engine.begin() as conn:
+            now = await self._transaction_now(conn)
+            current = (await conn.execute(
                 sa.select(executions).where(executions.c.id == execution_id).with_for_update()
-            ).mappings().one_or_none()
+            )).mappings().one_or_none()
             if current is None:
                 raise StaleExecutionLease("execution does not exist")
 
@@ -955,7 +949,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 ExecutionStatus.FAILED: "failed",
                 ExecutionStatus.CANCELLED: "cancelled",
             }[effective_status]
-            updated = conn.execute(
+            updated = await conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == execution_id,
@@ -967,9 +961,9 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 .values(**values)
             )
             if updated.rowcount != 1:
-                current = conn.execute(
+                current = (await conn.execute(
                     sa.select(executions).where(executions.c.id == execution_id)
-                ).mappings().one_or_none()
+                )).mappings().one_or_none()
                 if current is None:
                     raise StaleExecutionLease("execution does not exist")
                 same_terminal_status = (
@@ -996,7 +990,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
                 ):
                     return self._row_to_execution(current)
                 raise StaleExecutionLease("execution lease is no longer valid")
-            attempt_updated = conn.execute(
+            attempt_updated = await conn.execute(
                 sa.update(attempts)
                 .where(
                     attempts.c.id == attempt_id,
@@ -1008,28 +1002,28 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             )
             if attempt_updated.rowcount != 1:
                 raise StaleExecutionLease("execution attempt is no longer valid")
-            row = conn.execute(
+            row = (await conn.execute(
                 sa.select(executions).where(executions.c.id == execution_id)
-            ).mappings().one()
+            )).mappings().one()
         return self._row_to_execution(row)
 
-    def _release_sync(
+    async def _release(
         self,
         execution_id: UUID,
         attempt_id: UUID,
         lease_token: UUID,
     ) -> Execution:
-        self._ensure_ready_sync()
+        await self._ensure_ready()
         executions = self.tables.executions
         attempts = self.tables.attempts
-        with self.engine.begin() as conn:
-            now = self._transaction_now(conn)
-            current = conn.execute(
+        async with self.engine.begin() as conn:
+            now = await self._transaction_now(conn)
+            current = (await conn.execute(
                 sa.select(executions).where(executions.c.id == execution_id)
-            ).mappings().one_or_none()
+            )).mappings().one_or_none()
             if current is None:
                 raise StaleExecutionLease("execution does not exist")
-            updated = conn.execute(
+            updated = await conn.execute(
                 sa.update(executions)
                 .where(
                     executions.c.id == execution_id,
@@ -1050,7 +1044,7 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             )
             if updated.rowcount != 1:
                 raise StaleExecutionLease("execution lease is no longer valid")
-            attempt_updated = conn.execute(
+            attempt_updated = await conn.execute(
                 sa.update(attempts)
                 .where(
                     attempts.c.id == attempt_id,
@@ -1062,9 +1056,9 @@ class PostgresExecutionBackend(LeasedExecutionBackend):
             )
             if attempt_updated.rowcount != 1:
                 raise StaleExecutionLease("execution attempt is no longer valid")
-            row = conn.execute(
+            row = (await conn.execute(
                 sa.select(executions).where(executions.c.id == execution_id)
-            ).mappings().one()
+            )).mappings().one()
         return self._row_to_execution(row)
 
     def _row_to_execution(self, row: Mapping[str, Any]) -> Execution:

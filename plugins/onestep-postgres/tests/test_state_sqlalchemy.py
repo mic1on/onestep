@@ -23,6 +23,15 @@ def test_sqlalchemy_state_store_persists_across_instances(tmp_path: Path) -> Non
     asyncio.run(scenario())
 
 
+def test_state_store_does_not_create_asyncio_lock_during_sync_construction(tmp_path: Path) -> None:
+    asyncio.set_event_loop(None)
+    store = SQLAlchemyStateStore(dsn=f"sqlite:///{tmp_path / 'state-lock.db'}")
+
+    assert store._ready_lock is None
+
+    asyncio.run(store.close())
+
+
 def test_postgres_connector_builds_shared_state_store(tmp_path: Path) -> None:
     db_url = f"sqlite:///{tmp_path / 'connector-state.db'}"
 
