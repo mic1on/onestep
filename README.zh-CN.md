@@ -130,6 +130,30 @@ Decimal、enum、tuple/namedtuple、set 和 frozenset 等常见值可无损往�
 支持的自定义值时会明确记录 capture 错误且不生成有损文件。YAML 策略见
 [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md)。
 
+## 渲染 worker 拓扑
+
+`onestep render` 将任意 Python 或 YAML 目标的拓扑输出为
+[Mermaid](https://mermaid.js.org) 流程图，可直接粘贴到 GitHub、Notion 或
+Obsidian 中渲染：
+
+```bash
+onestep render worker.yaml
+```
+
+```text
+graph LR
+  %% app: billing-sync
+  n0["extract_entities<br/>concurrency=4 · retry=NoRetry · timeout=300s"]
+  n1["sqs-orders<br/>MemoryQueue"]
+  n2["mysql.meta_sink<br/>MemoryQueue"]
+  n1 --> n0
+  n0 -->|"emit"| n2
+```
+
+任务节点标注并发数、重试策略和超时。边的标签为 `emit`（绑定了 transform 时附
+带 transform 引用）、条件路由的 `when`/`otherwise`，以及虚线的 `dead_letter`。
+被多个任务共享的资源只绘制一次，链式拓扑会呈现为连通图。
+
 ## 能做什么
 
 | 能力 | 入口 |
@@ -251,6 +275,7 @@ tasks:
 ```bash
 onestep run worker.yaml
 onestep check --strict worker.yaml   # schema 校验、未知字段检测
+onestep render worker.yaml           # 以 Mermaid 图渲染 worker 拓扑
 onestep init billing-sync            # 脚手架生成最小 YAML 工程
 onestep build worker.yaml --out dist/worker.zip
 ```

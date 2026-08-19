@@ -1,6 +1,6 @@
 [project]
 name = "onestep-mysql"
-version = "0.5.2"
+version = "0.6.0"
 description = "MySQL connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"

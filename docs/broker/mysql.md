@@ -211,6 +211,57 @@ sink = db.table_sink(
 - 两者仅适用于 `upsert` 和 `update` 模式；`update_columns` 为空且没有
   `update_expr` 时配置无效。
 
+### 按列写入策略（null 保护）
+
+`update_columns` 的条目可以是列名（默认无条件覆盖），也可以是
+`{name, policy}` 对象，按列声明载荷值与库中原值的合并方式。三种策略：
+
+| policy | 行为 | 生成 SQL |
+|---|---|---|
+| `overwrite`（默认） | 无条件用载荷值覆盖，载荷 `null` 也会写入 `NULL` | `SET col = :val` |
+| `skip_null` | 载荷值为 `null` 时该列不写，保留库中原值 | `null` → 列从 `SET` 剔除 |
+| `backfill` | 只在库中当前值为 `NULL` 时写入载荷值，原值非空则保持 | `SET col = COALESCE(col, :val)` |
+
+```yaml
+rows_sink:
+  type: mysql_table_sink
+  connector: downstream_mysql
+  table: bidding
+  mode: update
+  keys: [id]
+  update_columns:
+    - deadline              # 无条件覆盖
+    - tender_deadline       # 无条件覆盖
+    - name: tenderee
+      policy: skip_null     # 载荷 null 不写，避免清空已有值
+    - name: publish_date
+      policy: backfill      # 只回填空值，不覆盖已有值
+```
+
+Python 侧同样接受混合条目：
+
+```python
+sink = db.table_sink(
+    table="bidding",
+    mode="update",
+    keys=("id",),
+    update_columns=(
+        "deadline",
+        {"name": "tenderee", "policy": "skip_null"},
+    ),
+)
+```
+
+注意事项：
+
+- 策略对 `update` 和 `upsert` 同样生效（`ON DUPLICATE KEY UPDATE` 子句
+  应用相同规则）。
+- `skip_null` 过滤后整个 `SET` 为空时，该条载荷跳过并记录一条 INFO 日志，
+  不报错。
+- 策略列不能是 `keys` 中的列，也不能与 `update_expr` 中同列的原始 SQL
+  表达式同时配置（构造时报错）；纯列名条目与 `update_expr` 的覆盖关系
+  保持不变。
+
 ### JSON 序列化控制
 
 载荷中的 list/dict 值默认按目标列类型自动处理（`serialize_json="auto"`）：

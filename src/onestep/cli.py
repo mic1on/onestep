@@ -21,6 +21,7 @@ from .diagnostics.supervisor import supervise_diagnostic
 from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
 from .init_project import init_project
+from .render import render_mermaid
 
 _CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
@@ -161,6 +162,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Emit the build report as JSON",
     )
 
+    render_parser = subparsers.add_parser(
+        "render",
+        help="Render the worker topology of a target or YAML config as a diagram",
+    )
+    render_parser.add_argument("target", help="Python target (package.module:app) or path to *.yaml")
+    render_parser.add_argument(
+        "--format",
+        choices=("mermaid",),
+        default="mermaid",
+        help="Diagram format (default: mermaid)",
+    )
+    render_parser.add_argument(
+        "--env-file",
+        dest="env_file",
+        default=None,
+        help="Path to a .env file to load environment variables from (YAML targets only)",
+    )
+    render_parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        dest="strict_env",
+        default=None,
+        help="Check that all ${VAR} references resolve to environment variables (YAML targets only)",
+    )
+
     catalog_parser = subparsers.add_parser("catalog", help="Print installed source/sink resource catalog")
     catalog_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit the catalog as JSON")
     catalog_parser.add_argument(
@@ -284,6 +310,10 @@ def main(argv: list[str] | None = None) -> int:
         _print_summary(args.target, app, as_json=getattr(args, "as_json", False))
         return 0
 
+    if args.command == "render":
+        print(render_mermaid(app), end="")
+        return 0
+
     cli_logging_state: tuple[logging.Handler, int] | None = None
     try:
         cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
@@ -395,6 +425,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
         "init",
         "build",
         "catalog",
+        "render",
         "task",
     }:
         return argv

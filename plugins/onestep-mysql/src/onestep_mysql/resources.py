@@ -153,7 +153,7 @@ _MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("table", "string", required=True),
         ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert", "update")),
         ResourceCatalogField("keys", "string_list"),
-        ResourceCatalogField("update_columns", "string_list"),
+        ResourceCatalogField("update_columns", "json"),
         ResourceCatalogField("update_expr", "mapping"),
         ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
     ),
@@ -322,6 +322,15 @@ def _build_mysql_binlog(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> A
     )
 
 
+def _update_columns_value(value: Any, *, field: str) -> list[str | Mapping[str, str]]:
+    if not isinstance(value, list):
+        raise ValueError(f"'{field}' must be a list of column names or {{name, policy}} mappings")
+    for entry in value:
+        if not isinstance(entry, (str, Mapping)):
+            raise ValueError(f"'{field}' entries must be column names or {{name, policy}} mappings")
+    return value
+
+
 def _build_mysql_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Any:
     connector = ctx.resolve_dependency(spec, "connector")
     if not hasattr(connector, "table_sink"):
@@ -333,7 +342,7 @@ def _build_mysql_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) 
         table=ctx.require_string(spec, "table"),
         mode=spec.get("mode", "insert"),
         keys=tuple(ctx.string_list(keys, field=f"{ctx.field}.keys")) if keys is not None else (),
-        update_columns=tuple(ctx.string_list(update_columns, field=f"{ctx.field}.update_columns"))
+        update_columns=_update_columns_value(update_columns, field=f"{ctx.field}.update_columns")
         if update_columns is not None
         else None,
         update_expr=ctx.mapping_value(update_expr, field=f"{ctx.field}.update_expr")

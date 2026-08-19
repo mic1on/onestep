@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- Adds `onestep render <target>`: renders the worker topology of any Python or
+  YAML target as a Mermaid flowchart (`--format mermaid`, the only format for
+  now). Task nodes carry concurrency, retry, and timeout; edges are labeled
+  `emit` (plus transform refs), `when`/`otherwise` for conditional routes, and
+  dashed `dead_letter`; resources shared across tasks are drawn once.
+
+## onestep-mysql 0.6.0
+
+- Adds per-column null write policies to `mysql_table_sink`: `update_columns`
+  entries can be `{name, policy}` mappings alongside plain column names.
+  `skip_null` omits a column when the payload value is null (never clears
+  existing data), `backfill` renders `SET col = COALESCE(col, :val)` so
+  non-null stored values are preserved, and `overwrite` (the default) keeps
+  the existing unconditional behavior. Policies apply to both `update` and
+  `upsert` modes; rows whose `SET` clause becomes empty after `skip_null`
+  filtering are skipped with an INFO log.
+- Enforces policy configuration at construction time: policy entries cannot
+  target key columns, duplicate columns, or columns also configured in
+  `update_expr`.
+- Changes the `update_columns` catalog field type from `string_list` to
+  `json` to reflect the mixed entry shape.
+
 ## onestep-mysql 0.5.2
 
 - Adds `mode="update"` to `mysql_table_sink`: rows are written via
