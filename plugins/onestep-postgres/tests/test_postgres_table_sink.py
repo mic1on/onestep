@@ -300,3 +300,41 @@ def test_update_columns_rejects_non_string_non_mapping_entry() -> None:
 def test_update_expr_only_valid_in_upsert_or_update() -> None:
     with pytest.raises(ValueError, match="update_expr only applies to"):
         _sink(mode="insert", update_expr={"score": "score + 957"})
+
+
+# -- serialize_json coercion (aligned with mysql) --
+
+
+def test_auto_serializes_list_values_for_text_columns() -> None:
+    s = _sink()  # upsert, serialize_json="auto"
+    table = _FakeConnector()._table("users")
+    coerced = s._coerce_json_values({"id": 1, "name": "a", "tags": ["tech"]}, table)
+
+    assert coerced["tags"] == '["tech"]'
+    assert coerced["name"] == "a"
+
+
+def test_auto_keeps_list_values_for_json_columns() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table("t", metadata, sa.Column("meta", sa.JSON))
+
+    s = PostgresTableSink(
+        connector=_FakeConnector(),
+        table="t",
+        mode="insert",
+        keys=(),
+    )
+
+    coerced = s._coerce_json_values({"meta": {"k": [1, 2]}}, table)
+
+    assert coerced["meta"] == {"k": [1, 2]}
+
+
+def test_serialize_json_never_skips_coercion() -> None:
+    s = _sink(serialize_json="never")
+    payload = {"id": 1, "tags": ["tech"]}
+
+    coerced = s._coerce_json_values(payload, _FakeConnector()._table("users"))
+
+    assert coerced["tags"] == payload["tags"]
+    assert isinstance(coerced["tags"], list)

@@ -497,9 +497,7 @@ def _normalize_update_columns(
         elif isinstance(entry, Mapping):
             unknown_keys = set(entry) - {"name", "policy"}
             if unknown_keys:
-                raise ValueError(
-                    f"unknown update_columns entry keys: {', '.join(sorted(unknown_keys))}"
-                )
+                raise ValueError(f"unknown update_columns entry keys: {', '.join(sorted(unknown_keys))}")
             name = entry.get("name")
             policy = entry.get("policy", "overwrite")
             if not isinstance(name, str) or not name:
@@ -664,17 +662,13 @@ class PostgresTableSink(Sink):
         if self.serialize_json == "never":
             return payload
         coerced = dict(payload)
-        for column in table.columns:
-            if column.name not in coerced:
-                continue
-            value = coerced[column.name]
+        for column_name, value in list(payload.items()):
             if not isinstance(value, (list, dict)):
                 continue
-            if self.serialize_json == "always":
-                coerced[column.name] = json.dumps(value, ensure_ascii=False)
-            elif self.serialize_json == "auto":
-                col_type = str(column.type)
-                type_lower = col_type.lower()
-                if "json" not in type_lower and "text" in type_lower or "char" in type_lower:
-                    coerced[column.name] = json.dumps(value, ensure_ascii=False)
+            column = table.columns.get(column_name)
+            if column is None:
+                continue
+            is_json_column = isinstance(column.type, sa.JSON)
+            if self.serialize_json == "always" or not is_json_column:
+                coerced[column_name] = json.dumps(value, ensure_ascii=False)
         return coerced

@@ -1,8 +1,16 @@
 # onestep-postgres async SQLAlchemy 迁移评估与计划
 
-状态: 评估 / 计划（未实施）
+状态: 已实施（2026-08-20，issue #128）
 日期: 2026-08-19
 参考: onestep-mysql 0.4.0 async 迁移（commit `8db759c`、`1ae1a90`）；MongoDB 插件设计（原生 async 决策）
+
+> **实施备注（2026-08-20）**：实施时确认 §6 的 PR-1/PR-2/PR-3 无法独立落地——
+> `PostgresConnector.engine` 同时被数据路径（source/sink/state store）和
+> execution backend（YAML `postgres_execution_source` 与其他资源共享同一
+> connector）消费，engine 类型切换是全有或全无。因此按 mysql 0.4.0 的先例
+> **原子落地为单一变更集**（connector + state + sources + sink + execution
+> backend/source），分期退化为内部检查点；fork 丢弃策略按 §4-R1 决策执行
+> （子进程不 dispose 直接丢引用）。发布为 onestep-postgres 0.4.0。
 
 ## 1. 现状盘点：sync 表面到底有多大
 

@@ -7,6 +7,47 @@
   now). Task nodes carry concurrency, retry, and timeout; edges are labeled
   `emit` (plus transform refs), `when`/`otherwise` for conditional routes, and
   dashed `dead_letter`; resources shared across tasks are drawn once.
+- Adds a drift-detection CI job (`scripts/check_plugin_drift.py`) that diffs the
+  parallel mysql/postgres implementations (`state_sqlalchemy.py`, table-sink
+  policy helpers, incremental state-key) and fails when one side changes
+  without the other; intentional divergences are managed via an allowlist.
+
+## onestep-postgres 0.4.1
+
+- Fixes `serialize_json` column-type detection on `postgres_table_sink`: now
+  uses `isinstance(column.type, sa.JSON)` instead of string matching, aligning
+  with `onestep-mysql` and correctly serializing non-JSON columns under `auto`
+  mode.
+- Adds three `serialize_json` behavior tests to the postgres table-sink suite.
+
+## onestep-mysql 0.6.1
+
+- Internal refactor: moves `update_columns` policy conflict validation into
+  `_normalize_update_columns()` for source-level parity with the postgres
+  plugin. Error messages unchanged.
+- Aligns `SQLAlchemyStateStore` error message with postgres's shorter form
+  (cosmetic, no behavior change).
+
+## onestep-postgres 0.4.0
+
+- **Breaking**: `PostgresConnector.engine` (and every engine built from plugin
+  DSNs) is now an async `AsyncEngine` backed by native async SQLAlchemy. Code
+  that used `db.engine.begin()` synchronously must switch to
+  `async with db.engine.begin()`. YAML configurations are unchanged.
+- Migrates the entire plugin off `asyncio.to_thread` wrappers to native async
+  SQLAlchemy (mirroring `onestep-mysql 0.4.0`): connector table reflection,
+  table queue, incremental, table sink, state/cursor stores, and the execution
+  backend now await database work directly, so task cancellation propagates
+  to the driver and worker shutdown no longer queues on the thread pool.
+- Keeps the psycopg3 driver (natively dual-mode); DSNs without an explicit
+  driver are normalized to `postgresql+psycopg://`, and `sqlite://` test DSNs
+  to `sqlite+aiosqlite://`.
+- Preserves fork safety with adapted semantics: a forked child drops the
+  inherited engine reference without disposing it (AsyncEngine disposal is a
+  coroutine and must not run post-fork); the parent's connections are never
+  touched by the child.
+- Internal helpers renamed: `_fetch_sync`/`_send_sync`/`_release_expired_leases_sync`
+  and friends drop the `_sync` suffix and are now awaitable.
 
 ## onestep-postgres 0.3.0
 

@@ -32,6 +32,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  drift:
+    name: Plugin drift check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check mysql/postgres parallel implementations
+        run: python3 scripts/check_plugin_drift.py
+
   unit:
     name: Unit and Contract (py${{ matrix.python-version }})
     runs-on: ubuntu-latest

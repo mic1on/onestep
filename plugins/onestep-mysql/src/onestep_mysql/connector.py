@@ -967,6 +967,7 @@ def _normalize_update_columns(
     update_columns: Sequence[str | Mapping[str, str]] | None,
     *,
     keys: tuple[str, ...],
+    update_expr: Mapping[str, str] | None = None,
 ) -> tuple[tuple[str, ...] | None, dict[str, str]]:
     if update_columns is None:
         return None, {}
@@ -998,6 +999,10 @@ def _normalize_update_columns(
             raise ValueError(f"duplicate update column {name!r}")
         names.append(name)
         policies[name] = policy
+    update_expr_keys = set(update_expr) if update_expr else set()
+    conflicting = sorted(set(policies) & update_expr_keys)
+    if conflicting:
+        raise ValueError(f"update_columns policy conflicts with update_expr for: {', '.join(conflicting)}")
     return tuple(names), policies
 
 
@@ -1018,16 +1023,15 @@ class TableSink(Sink):
             raise ValueError("mode must be one of 'insert', 'upsert' or 'update'")
         if update_columns is not None and mode == "insert":
             raise ValueError("update_columns only applies to upsert or update mode")
-        update_columns_tuple, column_policies = _normalize_update_columns(update_columns, keys=keys)
         update_expr_dict = dict(update_expr or {})
+        update_columns_tuple, column_policies = _normalize_update_columns(
+            update_columns, keys=keys, update_expr=update_expr_dict
+        )
         if update_expr is not None:
             if mode == "insert":
                 raise ValueError("update_expr only applies to upsert or update mode")
             if not all(isinstance(key, str) and isinstance(value, str) for key, value in update_expr.items()):
                 raise TypeError("update_expr keys and values must be strings")
-        conflicting = sorted(set(column_policies) & set(update_expr_dict))
-        if conflicting:
-            raise ValueError(f"update_columns policy conflicts with update_expr for: {', '.join(conflicting)}")
         if mode in {"upsert", "update"} and update_columns_tuple == () and not update_expr_dict:
             raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
         if serialize_json not in {"auto", "always", "never"}:

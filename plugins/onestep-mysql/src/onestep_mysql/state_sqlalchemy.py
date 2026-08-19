@@ -40,7 +40,7 @@ class SQLAlchemyStateStore:
         **engine_options: Any,
     ) -> None:
         if create_async_engine is None or sa is None:
-            raise RuntimeError("SQLAlchemyStateStore requires SQLAlchemy. Install SQLAlchemy or onestep-mysql.")
+            raise RuntimeError("SQLAlchemyStateStore requires SQLAlchemy. Install onestep-mysql.")
         if engine is None and dsn is None:
             raise ValueError("dsn or engine is required")
         if engine is not None and dsn is not None:
