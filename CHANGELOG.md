@@ -1,6 +1,6 @@
 # Changelog
 
-## onestep-mysql 0.6.0
+## onestep-mysql 0.5.2
 
 - Adds `mode="update"` to `mysql_table_sink`: rows are written via
   `UPDATE ... WHERE keys` and never inserted, avoiding
