@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -307,3 +309,161 @@ def test_sqlite_upsert_uses_on_conflict() -> None:
 
     sql = str(stmt.compile(dialect=sqlite_dialect.dialect()))
     assert "ON CONFLICT" in sql
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_renders_update_where() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=("title", "status"),
+    )
+
+    sql = _compile(sink._build_statement(_payload(), _candidate_table()))
+    set_clause = sql.split(" WHERE ", 1)[0]
+
+    assert "UPDATE v2_clean_article_candidate SET" in sql
+    assert "title=" in set_clause
+    assert "status=" in set_clause
+    assert "content=" not in set_clause
+    assert "WHERE v2_clean_article_candidate.article_identity = " in sql
+    assert "INSERT" not in sql
+    assert "ON DUPLICATE KEY" not in sql
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_default_updates_all_non_key_columns() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+    )
+
+    sql = _compile(sink._build_statement(_payload(), _candidate_table()))
+    set_clause = sql.split(" WHERE ", 1)[0]
+
+    assert "title=" in set_clause
+    assert "trace_id=" in set_clause
+    assert "article_identity" not in set_clause
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_renders_update_expr_as_literal_sql() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=("title",),
+        update_expr={"updated_at": "NOW(6)"},
+    )
+
+    sql = _compile(sink._build_statement(_payload(), _candidate_table()))
+
+    assert "updated_at=NOW(6)" in sql
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_requires_keys() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="t",
+        mode="update",
+    )
+
+    with pytest.raises(ValueError, match="requires keys"):
+        sink._build_statement({"a": 1}, _candidate_table())
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_requires_keys_present_in_payload() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+    )
+
+    with pytest.raises(ValueError, match="keys present in payload"):
+        sink._build_statement({"title": "title"}, _candidate_table())
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_rejects_empty_update_payload() -> None:
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+    )
+
+    with pytest.raises(ValueError, match="at least one update column"):
+        sink._build_statement({"article_identity": "article-1"}, _candidate_table())
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_columns_and_update_expr_valid_in_update_mode() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "t",
+        metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True),
+        sa.Column("name", sa.String(64)),
+        sa.Column("updated_at", sa.DateTime),
+    )
+    sink = TableSink(
+        connector=_FakeConnector(),  # type: ignore[arg-type]
+        table="t",
+        mode="update",
+        keys=("id",),
+        update_columns=("name",),
+        update_expr={"updated_at": "NOW(6)"},
+    )
+
+    sql = _compile(sink._build_statement({"id": 1, "name": "n"}, table))
+
+    assert "name=%s" in sql
+    assert "updated_at=NOW(6)" in sql
+
+
+@pytest.mark.skipif(sa is None, reason="sqlalchemy not installed")
+def test_update_mode_logs_when_no_rows_matched(caplog) -> None:
+    class _Result:
+        rowcount = 0
+
+    class _Conn:
+        async def execute(self, stmt):
+            return _Result()
+
+    class _Begin:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    class _Engine:
+        def begin(self):
+            return _Begin()
+
+    class _Connector:
+        engine = _Engine()
+
+        async def _table(self, table_name):
+            return _candidate_table()
+
+    sink = TableSink(
+        connector=_Connector(),  # type: ignore[arg-type]
+        table="v2_clean_article_candidate",
+        mode="update",
+        keys=("article_identity",),
+        update_columns=("title",),
+    )
+
+    with caplog.at_level(logging.INFO, logger="onestep_mysql.connector"):
+        asyncio.run(sink._send(_payload()))
+
+    assert any("matched no rows" in record.getMessage() for record in caplog.records)

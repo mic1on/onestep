@@ -227,6 +227,37 @@ def test_yaml_empty_update_columns_is_distinct_from_unset(tmp_path) -> None:
     assert sink.update_expr == {"updated_at": "NOW(6)"}
 
 
+def test_yaml_update_mode_builds_update_only_sink(tmp_path) -> None:
+    dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
+
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {"name": "mysql-plugin"},
+            "resources": {
+                "db": {"type": "mysql", "dsn": dsn},
+                "processed": {
+                    "type": "mysql_table_sink",
+                    "connector": "db",
+                    "table": "processed_users",
+                    "mode": "update",
+                    "keys": ["id"],
+                    "update_columns": ["name", "email"],
+                },
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+
+    sink = app.resources["processed"]
+    assert isinstance(sink, TableSink)
+    assert sink.mode == "update"
+    assert sink.keys == ("id",)
+    assert sink.update_columns == ("name", "email")
+
+
 def test_yaml_rejects_empty_update_columns_without_update_expr(tmp_path) -> None:
     dsn = f"sqlite:///{tmp_path / 'mysql-plugin.db'}"
 
