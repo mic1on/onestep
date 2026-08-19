@@ -215,7 +215,7 @@ def test_expired_lease_cleanup_does_not_overwrite_renewal_live():
                             cleanup_clock["now"],
                         )
 
-            cleanup_task = asyncio.create_task(cleanup)
+            cleanup_task = asyncio.create_task(cleanup())
             await asyncio.wait_for(selected.wait(), 10)
             heartbeat = await second.heartbeat(
                 lease.execution.id,
