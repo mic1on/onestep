@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Adds `onestep render <target>`: renders the worker topology of any Python or
+  YAML target as a Mermaid flowchart (`--format mermaid`, the only format for
+  now). Task nodes carry concurrency, retry, and timeout; edges are labeled
+  `emit` (plus transform refs), `when`/`otherwise` for conditional routes, and
+  dashed `dead_letter`; resources shared across tasks are drawn once.
+
 ## onestep-mysql 0.5.2
 
 - Adds `mode="update"` to `mysql_table_sink`: rows are written via

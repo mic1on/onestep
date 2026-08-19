@@ -140,6 +140,31 @@ Unsupported custom values produce an explicit capture error and no file rather
 than a degraded record. See
 [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md) for YAML policy.
 
+## Render the worker topology
+
+`onestep render` prints the topology of any Python or YAML target as a
+[Mermaid](https://mermaid.js.org) flowchart, ready to paste into GitHub,
+Notion, or Obsidian:
+
+```bash
+onestep render worker.yaml
+```
+
+```text
+graph LR
+  %% app: billing-sync
+  n0["extract_entities<br/>concurrency=4 · retry=NoRetry · timeout=300s"]
+  n1["sqs-orders<br/>MemoryQueue"]
+  n2["mysql.meta_sink<br/>MemoryQueue"]
+  n1 --> n0
+  n0 -->|"emit"| n2
+```
+
+Each task node lists its concurrency, retry policy, and timeout. Edges are
+labeled `emit` (with the transform ref when a binding sets one), `when`/`otherwise`
+for conditional routes, and dashed `dead_letter` edges. Resources shared by
+multiple tasks appear once, so chained topologies are drawn as connected graphs.
+
 ## What it does
 
 | Capability | Where |
@@ -264,6 +289,7 @@ tasks:
 ```bash
 onestep run worker.yaml
 onestep check --strict worker.yaml   # schema validation, unknown-field detection
+onestep render worker.yaml           # worker topology as a Mermaid diagram
 onestep init billing-sync            # scaffold a minimal YAML project
 onestep build worker.yaml --out dist/worker.zip
 ```
