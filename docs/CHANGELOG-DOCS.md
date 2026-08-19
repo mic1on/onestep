@@ -1,5 +1,18 @@
 # 文档更新日志
 
+## 2026-08-19 - 新增 onestep render 拓扑渲染文档
+
+### 变更概述
+
+将 docs 分支同步到 `main` 的最新代码状态（PR #122、PR #123），补充 `onestep render` Mermaid 拓扑渲染命令的文档。
+
+### 更新内容
+
+- [生产部署](/guide/deploy) 与 [Production Deploy](/en/guide/deploy) 新增"渲染 worker 拓扑"章节：CLI 清单加入 `onestep render`，覆盖 Mermaid 输出示例、边标签语义（`emit`/`when`/`otherwise`/`dead_letter`）和共享资源去重行为。
+- [特性](/guide/features) 与 [Features](/en/guide/features) 在任务编排章节补充用 `onestep render` 快速验证链式接线。
+- [YAML 任务定义](/yaml-task-definition) 与 [YAML Task Definition](/en/yaml-task-definition) 新增"可视化拓扑"章节，说明与 strict 校验在 CI 中搭配使用及 `--env-file` 环境变量展开。
+- 同步 `main` 上 `onestep-mysql` 表 Sink 按列空值写入策略的设计文档（PR #123）。
+
 ## 2026-08-17 - 新增 MySQL 到飞书多维表格实战案例
 
 ### 变更概述

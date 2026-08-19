@@ -43,6 +43,17 @@ Strict mode is intended to catch configuration drift early:
 - invalid `app.logging.level` values when YAML opts into framework log control
 - invalid conditional `emit` route and per-Sink binding shapes
 
+## Visualizing the Topology
+
+`onestep render` renders a YAML target as a Mermaid flowchart — pair it with strict checks in CI, or paste the output into any Mermaid-capable documentation platform:
+
+```bash
+onestep render worker.yaml                  # mermaid by default
+onestep render worker.yaml --env-file .env  # same env expansion as check
+```
+
+Task nodes carry concurrency, retry policy, and timeout; `emit` edges include transform refs, conditional routes appear as `when <predicate>`/`otherwise`, and dead letters as dashed `dead_letter` edges. Resources shared across tasks are drawn once, so chained topologies render as connected graphs.
+
 ## Framework Logging
 
 Pure YAML workers can set the `onestep` logger namespace level directly:

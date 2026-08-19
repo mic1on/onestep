@@ -36,9 +36,35 @@ onestep check your_package.tasks:app
 
 # JSON 输出（适合 CI/CD）
 onestep check --json your_package.tasks:app
+
+# 渲染 worker 拓扑（Mermaid 图）
+onestep render your_package.tasks:app
 ```
 
 `onestep run` 默认把 INFO 级别的应用日志和任务生命周期事件写到 stdout，适合由 systemd、Docker 或日志采集器接管。使用 `--log-level DEBUG` 查看更详细的 fetched、started 和 sink-success 事件，或使用 `--no-task-events` 关闭自动任务事件。完整规则见 [日志与任务事件](/guide/logging)。
+
+### 渲染 worker 拓扑
+
+`onestep render` 把任意 Python 或 YAML 目标的拓扑输出为 Mermaid 流程图，可直接粘贴到 GitHub README、Notion 或 Obsidian 中渲染：
+
+```bash
+onestep render worker.yaml                  # 默认输出 Mermaid
+onestep render pkg.tasks:app --format mermaid
+```
+
+```text
+graph LR
+  %% app: billing-sync
+  n0["extract_entities<br/>concurrency=4 · retry=NoRetry · timeout=300s"]
+  n1["sqs-orders<br/>MemoryQueue"]
+  n2["audit-log<br/>MemoryQueue"]
+  n3["mysql.meta_sink<br/>MemoryQueue"]
+  n1 --> n0
+  n0 -->|"emit"| n2
+  n0 -->|"when app.predicates:is_valid · app.transforms:to_meta"| n3
+```
+
+任务节点标注并发数、重试策略和超时；边标签为 `emit`（绑定了 transform 时附带引用）、条件路由的 `when`/`otherwise`，以及虚线的 `dead_letter`。被多个任务共享的资源只绘制一次，链式拓扑会呈现为连通图。YAML 目标同样支持 `--env-file` 与 `--strict-env`。
 
 ## systemd 部署
 

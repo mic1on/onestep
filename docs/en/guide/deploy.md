@@ -36,9 +36,35 @@ onestep check your_package.tasks:app
 
 # JSON output (suitable for CI/CD)
 onestep check --json your_package.tasks:app
+
+# Render the worker topology (Mermaid diagram)
+onestep render your_package.tasks:app
 ```
 
 `onestep run` writes INFO-level application logs and task lifecycle events to stdout by default, suitable for ingestion by systemd, Docker, or log collectors. Use `--log-level DEBUG` to see more detailed fetched, started, and sink-success events, or `--no-task-events` to disable automatic task events. Full rules are documented in [Logging & Task Events](/en/guide/logging).
+
+### Render the Worker Topology
+
+`onestep render` prints the topology of any Python or YAML target as a Mermaid flowchart, ready to paste into GitHub READMEs, Notion, or Obsidian:
+
+```bash
+onestep render worker.yaml                  # mermaid by default
+onestep render pkg.tasks:app --format mermaid
+```
+
+```text
+graph LR
+  %% app: billing-sync
+  n0["extract_entities<br/>concurrency=4 · retry=NoRetry · timeout=300s"]
+  n1["sqs-orders<br/>MemoryQueue"]
+  n2["audit-log<br/>MemoryQueue"]
+  n3["mysql.meta_sink<br/>MemoryQueue"]
+  n1 --> n0
+  n0 -->|"emit"| n2
+  n0 -->|"when app.predicates:is_valid · app.transforms:to_meta"| n3
+```
+
+Task nodes carry concurrency, retry policy, and timeout; edges are labeled `emit` (plus the transform ref when a binding sets one), `when`/`otherwise` for conditional routes, and dashed `dead_letter` edges. Resources shared across tasks are drawn once, so chained topologies render as connected graphs. YAML targets also support `--env-file` and `--strict-env`.
 
 ## systemd Deployment
 

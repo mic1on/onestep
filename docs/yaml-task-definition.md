@@ -41,6 +41,17 @@ strict 模式用于尽早暴露配置漂移：
 - YAML 开启框架日志控制时非法的 `app.logging.level` 取值
 - 非法的条件 `emit` 路由和 per-Sink 绑定形状
 
+## 可视化拓扑
+
+`onestep render` 把 YAML 目标渲染为 Mermaid 流程图，可在 CI 中与 strict 校验搭配，或直接粘贴到支持 Mermaid 的文档平台：
+
+```bash
+onestep render worker.yaml                  # 默认 Mermaid
+onestep render worker.yaml --env-file .env  # 与 check 相同的环境变量展开
+```
+
+任务节点标注并发数、重试策略和超时；`emit` 边附带 transform 引用，条件路由显示为 `when <谓词>`/`otherwise`，死信为虚线 `dead_letter` 边。被多个任务共享的资源只绘制一次，链式拓扑会呈现为连通图。
+
 ## 框架日志
 
 纯 YAML worker 可以直接设置 `onestep` logger 命名空间级别：

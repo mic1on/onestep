@@ -230,6 +230,8 @@ async def final(ctx, item):
     print(f"结果：{item}")
 ```
 
+链式拓扑可以用 `onestep render your_package.tasks:app` 输出为 Mermaid 图快速确认接线是否正确，详见 [生产部署](/guide/deploy)。
+
 ### 优雅关闭
 
 ```python

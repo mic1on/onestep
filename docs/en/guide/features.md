@@ -230,6 +230,8 @@ async def final(ctx, item):
     print(f"Result: {item}")
 ```
 
+Use `onestep render your_package.tasks:app` to print chained topologies as a Mermaid diagram and quickly verify the wiring; see [Production Deploy](/en/guide/deploy).
+
 ### Graceful Shutdown
 
 ```python
