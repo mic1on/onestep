@@ -12,6 +12,23 @@
   policy helpers, incremental state-key) and fails when one side changes
   without the other; intentional divergences are managed via an allowlist.
 
+## onestep-postgres 0.5.0
+
+- Ports incremental source commit-waves, retry rows, and failure fencing from
+  `onestep-mysql 0.5.0`. `postgres_incremental` now:
+  - Redelivers rows on `retry()` with incremented `envelope.attempts`;
+    `retry(delay_s=...)` schedules the redelivery after the given delay.
+  - Coalesces concurrent contiguous acknowledgements into a single commit wave
+    via `_flush_commits()`, reducing state-store writes under concurrency.
+  - Blocks future fetches with `ConnectorOperationError(PERMANENT)` after
+    `fail()`, fencing the failed cursor prefix.
+  - Logs structured `postgres_incremental_fetch`, `postgres_incremental_retry`,
+    and `postgres_incremental_cursor_commit` events with timing and row counts.
+- Adds 7 new test scenarios covering retry redelivery with attempts,
+  retry-delay pause, terminal failure blocking, concurrent commit coalescence,
+  cursor-save-failure recovery, restart from datetime cursor, and structured
+  log content, bringing the postgres incremental suite from 4 to 11 tests.
+
 ## onestep-postgres 0.4.1
 
 - Fixes `serialize_json` column-type detection on `postgres_table_sink`: now

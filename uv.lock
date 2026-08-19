@@ -1729,7 +1729,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-postgres"
-version = "0.4.1"
+version = "0.5.0"
 source = { editable = "plugins/onestep-postgres" }
 dependencies = [
     { name = "aiosqlite" },
