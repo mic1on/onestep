@@ -1,5 +1,16 @@
 # Changelog
 
+## onestep-mysql 0.6.0
+
+- Adds `mode="update"` to `mysql_table_sink`: rows are written via
+  `UPDATE ... WHERE keys` and never inserted, avoiding
+  `Field 'xxx' doesn't have a default value` warnings on tables with `NOT NULL`
+  columns lacking defaults and removing accidental-insert risk; unmatched rows
+  are skipped with an INFO log.
+- Allows `update_columns`/`update_expr` in `update` mode with the same
+  semantics as `upsert`, and exposes `update` in the YAML resource catalog
+  `mode` options.
+
 ## onestep 1.11.0
 
 - Extends conditional `emit` routes (`when`/`then`/`otherwise`) with per-sink

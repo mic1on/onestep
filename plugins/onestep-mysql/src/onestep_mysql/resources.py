@@ -151,7 +151,7 @@ _MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
     fields=(
         ResourceCatalogField("connector", "ref", required=True),
         ResourceCatalogField("table", "string", required=True),
-        ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert")),
+        ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert", "update")),
         ResourceCatalogField("keys", "string_list"),
         ResourceCatalogField("update_columns", "string_list"),
         ResourceCatalogField("update_expr", "mapping"),

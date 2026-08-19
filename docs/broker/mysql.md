@@ -155,6 +155,12 @@ async def process(ctx, item):
     return {"id": item["id"], "data": item["data"]}
 ```
 
+> 注意：`upsert` 生成 `INSERT ... ON DUPLICATE KEY UPDATE`。即使键已存在、
+> 实际走更新分支，MySQL 仍会对 INSERT 部分做约束检查——目标表存在无默认值的
+> `NOT NULL` 列且载荷未提供这些列时，会产生
+> `Field 'xxx' doesn't have a default value` warning（更新本身仍会成功）。
+> 只需要更新已有行时，请改用 `mode="update"`。
+
 ### Insert 模式
 
 ```python
@@ -164,28 +170,46 @@ sink = db.table_sink(
 )
 ```
 
-### 更新控制（Upsert 冲突行为）
+### Update 模式
 
-`upsert` 模式下，可通过 `update_columns`、`update_expr` 精确控制冲突时的
-更新行为：
+只更新已存在的行，绝不插入新行（`UPDATE ... WHERE`）：
+
+```python
+sink = db.table_sink(
+    table="bidding",
+    mode="update",
+    keys=("id",),  # WHERE 匹配条件
+    update_columns=("deadline", "tender_deadline"),  # 只重写这些列
+)
+```
+
+- 适合"目标行由其他流程创建、本任务只回填部分字段"的场景。
+- 目标行不存在时跳过该条并记录一条 INFO 日志，不报错；MySQL 下"值未变化"
+  的重复更新同样按 0 行处理。
+- 不生成 `INSERT` 语句，目标表存在无默认值的 `NOT NULL` 列时也不会触发
+  warning，且不存在误插新行的风险。
+
+### 更新控制（Upsert / Update 行为）
+
+`upsert` 与 `update` 模式下，可通过 `update_columns`、`update_expr` 精确
+控制写入的列：
 
 ```python
 sink = db.table_sink(
     table="results",
     mode="upsert",
     keys=("id",),
-    update_columns=("data",),          # 冲突时只重写这些列
-    update_expr={"updated_at": "NOW(6)"},  # 冲突时执行的原始 SQL 表达式
+    update_columns=("data",),          # 只重写这些列
+    update_expr={"updated_at": "NOW(6)"},  # 写入时执行的原始 SQL 表达式
 )
 ```
 
-- `update_columns`：冲突时允许重写的白名单列；默认重写除 `keys` 外的所有
-  载荷列。设为空列表 `()` 表示冲突时不更新任何载荷列，只应用
-  `update_expr`。
-- `update_expr`：列名到原始 SQL 表达式的映射，在冲突时渲染执行（例如
+- `update_columns`：允许重写的白名单列；默认重写除 `keys` 外的所有载荷列。
+  设为空列表 `()` 表示不更新任何载荷列，只应用 `update_expr`。
+- `update_expr`：列名到原始 SQL 表达式的映射，写入时渲染执行（例如
   `updated_at=NOW(6)`）。
-- 两者仅适用于 `upsert` 模式；`update_columns` 为空且没有 `update_expr`
-  时配置无效。
+- 两者仅适用于 `upsert` 和 `update` 模式；`update_columns` 为空且没有
+  `update_expr` 时配置无效。
 
 ### JSON 序列化控制
 
