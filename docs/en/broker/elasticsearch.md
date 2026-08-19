@@ -13,7 +13,7 @@ outline: deep
 pip install onestep-elasticsearch
 ```
 
-Requires Python 3.9+ and `onestep>=1.9.0`.
+Requires Python 3.9+ and `onestep>=1.11.0`.
 
 ## Python Usage
 

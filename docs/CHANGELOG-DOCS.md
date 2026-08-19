@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-08-19 - 全站审计、版本号更新与 en 翻译补齐
+
+### 变更概述
+
+全站扫描 zh-CN 和 en-US 页面，修复版本号过时、内容漂移、链接错误和 en 页面缺失段落问题。
+
+### 更新内容
+
+- 版本号从 `1.9.0` 更新为 `1.11.0`：快速开始页、Docker 镜像标签（ghcr.io/mic1on/onestep-worker:1.11.0）、连接器插件最低版本要求。
+- PostgreSQL 跟踪执行安装示例从固定 `==1.9.0` 改为 `>=1.9.0`。
+- [MySQL](/en/broker/mysql) en 页面补齐缺失内容：Update Mode（`mode="update"`）、Per-Column Write Policies（`skip_null`/`backfill`/`overwrite`）、Update Control 节更新为覆盖 upsert 和 update 两种模式。
+- 修复 en 实战篇锚点链接：`#field-mapping` → `#field-conversion`，`#reliable-persistent-cursor-and-retry` → `#reliable-persistent-cursor-with-retry`。
+- 新增 en 缺失页面 [Tags](/en/tags)。
+- VitePress 构建验证通过（0 错误）。
+
 ## 2026-08-19 - 新增 onestep render 拓扑渲染文档
 
 ### 变更概述

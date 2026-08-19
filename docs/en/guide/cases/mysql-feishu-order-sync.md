@@ -141,7 +141,7 @@ async def to_feishu_fields(ctx, row):
 ```
 
 The mapping function should not alter the source data meaning of `orderCreateTime` or `orderKey`. If Feishu person fields use `user_id`, the returned structure must also match that field type; see
-[Feishu Bitable Field Mapping](/en/broker/feishu-bitable#field-mapping) for details.
+[Feishu Bitable Field Mapping](/en/broker/feishu-bitable#field-conversion) for details.
 
 ## First Deployment
 
@@ -199,6 +199,6 @@ Do not output DSN, `app_secret`, or `app_token` in logs or case configuration.
 
 ## Related Documentation
 
-- [MySQL: Reliable Persistent Cursor & Retry](/en/broker/mysql#reliable-persistent-cursor-and-retry)
+- [MySQL: Reliable Persistent Cursor & Retry](/en/broker/mysql#reliable-persistent-cursor-with-retry)
 - [Feishu Bitable: High-Throughput Insert Incremental Sync](/en/broker/feishu-bitable#high-throughput-insert-incremental-sync)
 - [YAML Task Definition](/en/yaml-task-definition)

@@ -7,7 +7,7 @@ outline: deep
 
 onestep is a lightweight Python async task runtime. It's organized around `OneStepApp`, `Source`, `Sink`, and task handler functions, suitable for queue consumption, periodic sync, webhook ingestion, and multi-stage data processing.
 
-Current package version is `1.9.0`. The docs site uses repository-locked VitePress `1.6.4`.
+Current package version is `1.11.0`. The docs site uses repository-locked VitePress `1.6.4`.
 
 ## Installation
 

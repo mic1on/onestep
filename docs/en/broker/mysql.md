@@ -164,10 +164,36 @@ sink = db.table_sink(
 )
 ```
 
-### Update Control (Upsert Conflict Behavior)
+> Note: `upsert` generates `INSERT ... ON DUPLICATE KEY UPDATE`. Even when the key already
+> exists and the update branch is taken, MySQL still applies constraint checks to the INSERT
+> part. When the target table has `NOT NULL` columns without default values and the payload
+> omits those columns, it produces a `Field 'xxx' doesn't have a default value` warning
+> (the update itself still succeeds). Use `mode="update"` when only existing rows need updating.
 
-In `upsert` mode, use `update_columns` and `update_expr` to precisely control
-update behavior on conflict:
+### Update Mode
+
+Updates only existing rows, never inserts new ones (`UPDATE ... WHERE`):
+
+```python
+sink = db.table_sink(
+    table="bidding",
+    mode="update",
+    keys=("id",),
+    update_columns=("deadline", "tender_deadline"),
+)
+```
+
+- Suitable for scenarios where "the target row is created by another process and this task
+  only backfills specific fields."
+- Skips non-matching rows with an INFO log (not an error); MySQL also treats no-change
+  updates as 0 affected rows.
+- Does not generate `INSERT` statements, so `NOT NULL` columns without defaults do not
+  trigger warnings, and there is no accidental-insert risk.
+
+### Update Control (Upsert / Update Behavior)
+
+In `upsert` and `update` modes, use `update_columns` and `update_expr` to precisely
+control which columns are written:
 
 ```python
 sink = db.table_sink(
@@ -184,7 +210,7 @@ sink = db.table_sink(
   payload columns are updated on conflict, only `update_expr` is applied.
 - `update_expr`: Mapping from column name to raw SQL expression executed on
   conflict (e.g., `updated_at=NOW(6)`).
-- Both only apply in `upsert` mode; configuration is invalid when
+- Both apply to `upsert` and `update` modes; configuration is invalid when
   `update_columns` is empty and there is no `update_expr`.
 
 ### JSON Serialization Control
@@ -203,6 +229,57 @@ sink = db.table_sink(
 
 `serialize_json` options: `auto` (default), `always` (always serialize to string),
 `never` (never serialize).
+
+### Per-Column Write Policies (null protection)
+
+`update_columns` entries can be plain column names (unconditional overwrite) or
+`{name, policy}` mappings that declare how payload values merge with existing
+stored values per column. Three policies:
+
+| policy | Behavior | Generated SQL |
+|---|---|---|
+| `overwrite` (default) | Unconditionally overwrite with payload value; payload `null` writes `NULL` | `SET col = :val` |
+| `skip_null` | Skip the column when payload value is null, preserve the stored value | `null` → column removed from `SET` |
+| `backfill` | Only write when the stored value is currently `NULL`; preserve non-null stored value | `SET col = COALESCE(col, :val)` |
+
+```yaml
+rows_sink:
+  type: mysql_table_sink
+  connector: downstream_mysql
+  table: bidding
+  mode: update
+  keys: [id]
+  update_columns:
+    - deadline              # unconditional overwrite
+    - tender_deadline       # unconditional overwrite
+    - name: tenderee
+      policy: skip_null     # payload null won't clear existing value
+    - name: publish_date
+      policy: backfill      # only fill null, don't overwrite existing
+```
+
+Python API accepts mixed entries:
+
+```python
+sink = db.table_sink(
+    table="bidding",
+    mode="update",
+    keys=("id",),
+    update_columns=(
+        "deadline",
+        {"name": "tenderee", "policy": "skip_null"},
+    ),
+)
+```
+
+Notes:
+
+- Policies apply to both `update` and `upsert` modes (the `ON DUPLICATE KEY UPDATE`
+  clause uses the same rules).
+- When `skip_null` filtering leaves the entire `SET` clause empty, that row is
+  skipped with an INFO log (not an error).
+- Policy columns cannot be in `keys`, nor can they be configured alongside
+  `update_expr` for the same column (construction-time error).
 
 ## State Store
 
