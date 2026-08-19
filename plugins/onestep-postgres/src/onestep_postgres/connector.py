@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import logging
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -140,8 +142,19 @@ class PostgresConnector:
         table: str,
         mode: str = "insert",
         keys: Sequence[str] = (),
+        update_columns: Sequence[str | Mapping[str, str]] | None = None,
+        update_expr: Mapping[str, str] | None = None,
+        serialize_json: str = "auto",
     ) -> "PostgresTableSink":
-        return PostgresTableSink(connector=self, table=table, mode=mode, keys=tuple(keys))
+        return PostgresTableSink(
+            connector=self,
+            table=table,
+            mode=mode,
+            keys=tuple(keys),
+            update_columns=tuple(update_columns) if update_columns is not None else None,
+            update_expr=update_expr,
+            serialize_json=serialize_json,
+        )
 
     def execution_backend(
         self,
@@ -448,15 +461,93 @@ class PostgresIncrementalSource(Source):
         return self._commit_lock
 
 
+logger = logging.getLogger(__name__)
+
+
+_UPDATE_COLUMN_POLICIES = frozenset({"overwrite", "skip_null", "backfill"})
+
+
+def _normalize_update_columns(
+    update_columns: Sequence[str | Mapping[str, str]] | None,
+    *,
+    keys: tuple[str, ...],
+    update_expr: Mapping[str, str] | None = None,
+) -> tuple[tuple[str, ...] | None, dict[str, str]]:
+    if update_columns is None:
+        return None, {}
+    names: list[str] = []
+    policies: dict[str, str] = {}
+    for entry in update_columns:
+        if isinstance(entry, str):
+            if not entry:
+                raise ValueError("update_columns entries must be non-empty")
+            name, policy = entry, "overwrite"
+        elif isinstance(entry, Mapping):
+            unknown_keys = set(entry) - {"name", "policy"}
+            if unknown_keys:
+                raise ValueError(
+                    f"unknown update_columns entry keys: {', '.join(sorted(unknown_keys))}"
+                )
+            name = entry.get("name")
+            policy = entry.get("policy", "overwrite")
+            if not isinstance(name, str) or not name:
+                raise ValueError("update_columns entry requires a non-empty 'name'")
+            if policy not in _UPDATE_COLUMN_POLICIES:
+                raise ValueError(
+                    "update_columns policy must be one of 'overwrite', 'skip_null' or 'backfill', "
+                    f"got {policy!r}"
+                )
+            if name in keys:
+                raise ValueError(f"update_columns policy cannot apply to key column {name!r}")
+        else:
+            raise TypeError("update_columns entries must be strings or mappings")
+        if name in policies:
+            raise ValueError(f"duplicate update column {name!r}")
+        names.append(name)
+        policies[name] = policy
+    update_expr_keys = set(update_expr) if update_expr else set()
+    conflicting = sorted(set(policies) & update_expr_keys)
+    if conflicting:
+        raise ValueError(f"update_columns policy conflicts with update_expr for: {', '.join(conflicting)}")
+    return tuple(names), policies
+
+
 class PostgresTableSink(Sink):
-    def __init__(self, *, connector: PostgresConnector, table: str, mode: str, keys: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        connector: PostgresConnector,
+        table: str,
+        mode: str,
+        keys: tuple[str, ...],
+        update_columns: Sequence[str | Mapping[str, str]] | None = None,
+        update_expr: Mapping[str, str] | None = None,
+        serialize_json: str = "auto",
+    ) -> None:
         super().__init__(f"postgres.table_sink:{table}")
-        if mode not in {"insert", "upsert"}:
-            raise ValueError("mode must be either 'insert' or 'upsert'")
+        if mode not in {"insert", "upsert", "update"}:
+            raise ValueError("mode must be one of 'insert', 'upsert' or 'update'")
+        if serialize_json not in {"auto", "always", "never"}:
+            raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
+        update_expr_dict = dict(update_expr or {})
+        if update_expr is not None:
+            if mode == "insert":
+                raise ValueError("update_expr only applies to upsert or update mode")
+            if not all(isinstance(key, str) and isinstance(value, str) for key, value in update_expr.items()):
+                raise TypeError("update_expr keys and values must be strings")
+        update_columns_tuple, column_policies = _normalize_update_columns(
+            update_columns, keys=keys, update_expr=update_expr_dict
+        )
+        if mode in {"upsert", "update"} and update_columns_tuple == () and not update_expr_dict:
+            raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
         self.connector = connector
         self.table_name = table
         self.mode = mode
         self.keys = keys
+        self.update_columns = update_columns_tuple
+        self.column_policies = column_policies
+        self.update_expr = update_expr_dict
+        self.serialize_json = serialize_json
 
     async def send(self, envelope: Envelope) -> None:
         if not isinstance(envelope.body, Mapping):
@@ -476,25 +567,102 @@ class PostgresTableSink(Sink):
             raise connector_error from None
 
     def _send_sync(self, payload: dict[str, Any]) -> None:
-        table = self.connector._table(self.table_name)
-        dialect = self.connector.engine.dialect.name
+        stmt = self._build_statement(payload)
+        if stmt is None:
+            logger.info(
+                "postgres table sink %s skipped write: all update columns are null under "
+                "skip_null policy (keys=%s)",
+                self.name,
+                {key: payload.get(key) for key in self.keys},
+            )
+            return
         with self.connector.engine.begin() as conn:
-            if self.mode == "insert":
-                conn.execute(sa.insert(table).values(**payload))
-                return
-            if not self.keys:
-                raise ValueError("upsert mode requires keys")
-            update_payload = {key: value for key, value in payload.items() if key not in self.keys}
-            if dialect == "postgresql":
-                from sqlalchemy.dialects.postgresql import insert as postgres_insert
+            result = conn.execute(stmt)
+            if self.mode == "update" and result.rowcount == 0:
+                logger.info(
+                    "postgres table sink %s update matched no rows (keys=%s)",
+                    self.name,
+                    {key: payload.get(key) for key in self.keys},
+                )
 
-                stmt = postgres_insert(table).values(**payload)
-                conn.execute(stmt.on_conflict_do_update(index_elements=list(self.keys), set_=update_payload))
-                return
-            if dialect == "sqlite":
-                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    def _build_statement(self, payload: dict[str, Any]) -> Any | None:
+        table = self.connector._table(self.table_name)
+        payload = self._coerce_json_values(payload, table)
+        if self.mode == "insert":
+            return sa.insert(table).values(**payload)
+        if not self.keys:
+            raise ValueError(f"{self.mode} mode requires keys")
+        if self.mode == "update":
+            missing_keys = [key for key in self.keys if key not in payload]
+            if missing_keys:
+                raise ValueError(
+                    f"update mode requires keys present in payload: {', '.join(missing_keys)}"
+                )
+            update_payload, skipped_by_policy = self._update_payload(payload, table)
+            if not update_payload:
+                if skipped_by_policy:
+                    return None
+                raise ValueError(f"{self.mode} mode requires at least one update column or update_expr")
+            conditions = [table.columns[key] == payload[key] for key in self.keys]
+            return sa.update(table).where(sa.and_(*conditions)).values(**update_payload)
+        # upsert mode
+        dialect = self.connector.engine.dialect.name
+        update_payload, skipped_by_policy = self._update_payload(payload, table)
+        if not update_payload:
+            if skipped_by_policy:
+                return None
+            raise ValueError(f"{self.mode} mode requires at least one update column or update_expr")
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as postgres_insert
 
-                stmt = sqlite_insert(table).values(**payload)
-                conn.execute(stmt.on_conflict_do_update(index_elements=list(self.keys), set_=update_payload))
-                return
-            conn.execute(sa.insert(table).values(**payload))
+            stmt = postgres_insert(table).values(**payload)
+            return stmt.on_conflict_do_update(
+                index_elements=list(self.keys), set_=update_payload
+            )
+        if dialect == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+            stmt = sqlite_insert(table).values(**payload)
+            return stmt.on_conflict_do_update(
+                index_elements=list(self.keys), set_=update_payload
+            )
+        return sa.insert(table).values(**payload)
+
+    def _update_payload(self, payload: dict[str, Any], table: sa.Table) -> tuple[dict[str, Any], bool]:
+        if self.update_columns is not None:
+            candidates = {key: value for key, value in payload.items() if key in self.update_columns}
+        else:
+            candidates = {key: value for key, value in payload.items() if key not in self.keys}
+        update_payload: dict[str, Any] = {}
+        skipped = False
+        for column, value in candidates.items():
+            policy = self.column_policies.get(column, "overwrite")
+            if policy == "skip_null" and value is None:
+                skipped = True
+                continue
+            if policy == "backfill":
+                update_payload[column] = sa.func.coalesce(table.columns[column], value)
+            else:
+                update_payload[column] = value
+        for column, expr in self.update_expr.items():
+            update_payload[column] = sa.literal_column(expr)
+        return update_payload, skipped
+
+    def _coerce_json_values(self, payload: dict[str, Any], table: sa.Table) -> dict[str, Any]:
+        if self.serialize_json == "never":
+            return payload
+        coerced = dict(payload)
+        for column in table.columns:
+            if column.name not in coerced:
+                continue
+            value = coerced[column.name]
+            if not isinstance(value, (list, dict)):
+                continue
+            if self.serialize_json == "always":
+                coerced[column.name] = json.dumps(value, ensure_ascii=False)
+            elif self.serialize_json == "auto":
+                col_type = str(column.type)
+                type_lower = col_type.lower()
+                if "json" not in type_lower and "text" in type_lower or "char" in type_lower:
+                    coerced[column.name] = json.dumps(value, ensure_ascii=False)
+        return coerced

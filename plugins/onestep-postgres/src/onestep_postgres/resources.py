@@ -27,7 +27,12 @@ _POSTGRES_TABLE_QUEUE_FIELDS = frozenset(
 _POSTGRES_INCREMENTAL_FIELDS = frozenset(
     {"type", "connector", "table", "key", "cursor", "where", "batch_size", "poll_interval_s", "state", "state_key"}
 )
-_POSTGRES_TABLE_SINK_FIELDS = frozenset({"type", "connector", "table", "mode", "keys"})
+_POSTGRES_TABLE_SINK_FIELDS = frozenset(
+    {
+        "type", "connector", "table", "mode", "keys",
+        "update_columns", "update_expr", "serialize_json",
+    }
+)
 _POSTGRES_EXECUTION_SOURCE_FIELDS = frozenset(
     {
         "type",
@@ -136,10 +141,13 @@ _POSTGRES_TABLE_SINK_CATALOG = ResourceCatalogEntry(
     fields=(
         ResourceCatalogField("connector", "ref", required=True),
         ResourceCatalogField("table", "string", required=True),
-        ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert")),
+        ResourceCatalogField("mode", "string", default="insert", options=("insert", "upsert", "update")),
         ResourceCatalogField("keys", "string_list"),
+        ResourceCatalogField("update_columns", "json"),
+        ResourceCatalogField("update_expr", "mapping"),
+        ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
     ),
-    topology_fields=("table", "mode", "keys"),
+    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json"),
 )
 _POSTGRES_EXECUTION_SOURCE_CATALOG = ResourceCatalogEntry(
     type="postgres_execution_source",
@@ -304,11 +312,29 @@ def _build_postgres_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any
     if not hasattr(connector, "table_sink"):
         raise TypeError(f"resource {spec['connector']!r} cannot build postgres_table_sink")
     keys = spec.get("keys")
+    update_columns = spec.get("update_columns")
+    update_expr = spec.get("update_expr")
     return connector.table_sink(
         table=ctx.require_string(spec, "table"),
         mode=spec.get("mode", "insert"),
         keys=tuple(ctx.string_list(keys, field=f"{ctx.field}.keys")) if keys is not None else (),
+        update_columns=_update_columns_value(update_columns, field=f"{ctx.field}.update_columns")
+        if update_columns is not None
+        else None,
+        update_expr=ctx.mapping_value(update_expr, field=f"{ctx.field}.update_expr")
+        if update_expr is not None
+        else None,
+        serialize_json=spec.get("serialize_json", "auto"),
     )
+
+
+def _update_columns_value(value: Any, *, field: str) -> list[str | Mapping[str, str]]:
+    if not isinstance(value, list):
+        raise ValueError(f"'{field}' must be a list of column names or {{name, policy}} mappings")
+    for entry in value:
+        if not isinstance(entry, (str, Mapping)):
+            raise ValueError(f"'{field}' entries must be column names or {{name, policy}} mappings")
+    return value
 
 
 def _build_postgres_execution_source(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Any:

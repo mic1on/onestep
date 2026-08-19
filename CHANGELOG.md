@@ -8,6 +8,29 @@
   `emit` (plus transform refs), `when`/`otherwise` for conditional routes, and
   dashed `dead_letter`; resources shared across tasks are drawn once.
 
+## onestep-postgres 0.3.0
+
+- Persists `datetime` components of incremental cursors as tagged ISO-8601 JSON
+  values and restores them for keyset queries after restart, mirroring
+  `onestep-mysql 0.5.1`.
+- Adds `mode="update"` to `postgres_table_sink`: rows are written via
+  `UPDATE ... WHERE keys` and never inserted, avoiding accidental-insert risk
+  and NOT NULL column warnings; unmatched rows are skipped with an INFO log.
+- Adds `update_columns`, `update_expr`, and `serialize_json` to
+  `postgres_table_sink`, mirroring `onestep-mysql`: whitelisted update columns,
+  literal SQL expressions, and automatic JSON coercion for TEXT/CHAR columns.
+- Adds per-column null write policies to `postgres_table_sink`:
+  `update_columns` entries accept `{name, policy}` mappings alongside plain
+  column names. `skip_null` omits a column when the payload value is null,
+  `backfill` renders `SET col = COALESCE(col, :val)`, and `overwrite` (the
+  default) keeps the existing unconditional behavior. Rows whose `SET` clause
+  becomes empty after `skip_null` filtering are skipped with an INFO log.
+- Enforces policy configuration at construction time: policy entries cannot
+  target key columns, duplicate columns, or columns also configured in
+  `update_expr`.
+- Changes the `update_columns` catalog field type from `string_list` to `json`
+  to reflect the mixed entry shape.
+
 ## onestep-mysql 0.6.0
 
 - Adds per-column null write policies to `mysql_table_sink`: `update_columns`
