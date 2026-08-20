@@ -7,6 +7,7 @@ requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
     "onestep>=1.7.3",
+    "onestep-sql>=0.1.0",
     "SQLAlchemy[asyncio]>=2.0.0",
     "asyncmy>=0.2.10",
     "aiosqlite>=0.20.0",
@@ -35,3 +36,4 @@ packages = ["src/onestep_mysql"]
 
 [tool.uv.sources]
 onestep = { workspace = true }
+onestep-sql = { workspace = true }

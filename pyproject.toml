@@ -120,6 +120,7 @@ members = [
     "plugins/onestep-elasticsearch",
     "plugins/onestep-clickhouse",
     "plugins/onestep-mongodb",
+    "plugins/onestep-sql",
 ]
 
 [tool.uv.sources]
@@ -133,6 +134,7 @@ onestep-kafka = { path = "plugins/onestep-kafka" }
 onestep-elasticsearch = { workspace = true }
 onestep-clickhouse = { workspace = true }
 onestep-mongodb = { workspace = true }
+onestep-sql = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
