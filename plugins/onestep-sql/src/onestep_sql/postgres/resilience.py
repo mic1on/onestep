@@ -1,99 +1,53 @@
+"""PostgreSQL resilience helpers.
+
+The secret-redaction scaffolding (token collection, message redaction, the
+error-cause base class and the ``ConnectorOperationError`` factory) is shared
+with MySQL in ``onestep_sql._shared.resilience`` (issue #133, Phase 2). Only
+the genuinely PostgreSQL-specific part stays here: the SQLAlchemy error
+classification table keyed to PostgreSQL server error messages.
+"""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
+from onestep_sql._shared.resilience import (
+    SQLErrorCause,
+    collect_sensitive_tokens,
+    redact_message,
+)
+from onestep_sql._shared.resilience import (
+    as_connector_operation_error as _shared_connector_operation_error,
+)
+
+__all__ = [
+    "PostgresErrorCause",
+    "as_postgres_connector_operation_error",
+    "classify_sqlalchemy_error",
+    "collect_sensitive_tokens",
+    "redacted_postgres_cause",
+]
 
 try:  # pragma: no cover - optional dependency
     import sqlalchemy as sa
 except ImportError:  # pragma: no cover - optional dependency
     sa = None
 
-_REDACTED = "<redacted>"
-_MAX_MESSAGE_LENGTH = 500
-_SECRET_OPTION_KEYS = frozenset(
-    {
-        "password",
-        "passwd",
-        "pwd",
-        "secret",
-        "token",
-        "access_token",
-        "api_key",
-        "apikey",
-        "credentials",
-        "authorization",
-    }
-)
-
 
 @dataclass(frozen=True)
-class PostgresErrorCause(Exception):
-    message: str
-
-    def __str__(self) -> str:
-        return f"postgres error: {self.message}"
-
-
-def collect_sensitive_tokens(*config_values: object) -> list[str]:
-    """Collect secret substrings that may surface in Postgres error messages.
-
-    SQLAlchemy masks the password in its rendered URL, but the underlying DBAPI
-    ``orig`` exception can still echo credentials (e.g. ``connection to server
-    at postgresql://user:pass@host ...``). Tokens are derived from connector
-    config (raw DSN + parsed userinfo + known secret option values) and used to
-    scrub error causes before they leave the plugin.
-    """
-    tokens: list[str] = []
-    seen: set[str] = set()
-
-    def add(value: object) -> None:
-        if value is None:
-            return
-        text = str(value)
-        if text and text not in seen:
-            seen.add(text)
-            tokens.append(text)
-
-    def collect_mapping(value: Mapping[object, object]) -> None:
-        for key, item in value.items():
-            if str(key).lower() in _SECRET_OPTION_KEYS:
-                add(item)
-            elif isinstance(item, Mapping):
-                collect_mapping(item)
-
-    for value in config_values:
-        if isinstance(value, Mapping):
-            collect_mapping(value)
-            continue
-        add(value)
-        try:
-            parsed = urlsplit(str(value))
-        except ValueError:
-            continue
-        username = parsed.username
-        password = parsed.password
-        if username and password:
-            add(f"{username}:{password}")
-            add(f"{username}:{password}@")
-        add(password)
-    return tokens
-
-
-def _redact_message(message: str, tokens: list[str]) -> str:
-    redacted = message
-    for token in sorted(tokens, key=len, reverse=True):
-        if token:
-            redacted = redacted.replace(token, _REDACTED)
-    return redacted[:_MAX_MESSAGE_LENGTH]
+class PostgresErrorCause(SQLErrorCause):
+    backend = "postgres"
 
 
 def redacted_postgres_cause(
     exc: BaseException, *, secrets: list[str] | None = None
 ) -> PostgresErrorCause:
-    return PostgresErrorCause(_redact_message(str(exc), secrets or []))
+    return PostgresErrorCause(redact_message(str(exc), secrets or []))
 
 
 def classify_sqlalchemy_error(exc: BaseException) -> ConnectorErrorKind | None:
@@ -140,14 +94,13 @@ def as_postgres_connector_operation_error(
     retry_delay_s: float | None = None,
     secrets: list[str] | None = None,
 ) -> ConnectorOperationError | None:
-    kind = classify_sqlalchemy_error(exc)
-    if kind is None:
-        return None
-    return ConnectorOperationError(
+    return _shared_connector_operation_error(
         backend="postgres",
         operation=operation,
-        kind=kind,
+        exc=exc,
+        classify=classify_sqlalchemy_error,
+        redacted_cause=redacted_postgres_cause,
         source_name=source_name,
         retry_delay_s=retry_delay_s,
-        cause=redacted_postgres_cause(exc, secrets=secrets),
+        secrets=secrets,
     )

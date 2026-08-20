@@ -7,10 +7,14 @@
   now). Task nodes carry concurrency, retry, and timeout; edges are labeled
   `emit` (plus transform refs), `when`/`otherwise` for conditional routes, and
   dashed `dead_letter`; resources shared across tasks are drawn once.
-- Adds a drift-detection CI job (`scripts/check_plugin_drift.py`) that diffs the
-  parallel mysql/postgres implementations (`state_sqlalchemy.py`, table-sink
-  policy helpers, incremental state-key) and fails when one side changes
-  without the other; intentional divergences are managed via an allowlist.
+- Consolidates the previously parallel mysql/postgres implementations into the
+  private `onestep_sql._shared` package so each exists exactly once (SQLAlchemy
+  state/cursor stores with per-backend asyncio driver mapping, table-sink
+  update policy, default incremental state-key, secret-redaction scaffolding).
+  The drift-detection CI job (`scripts/check_plugin_drift.py`, issue #125) is
+  retired and replaced by dual-backend contract tests
+  (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
+  for both backends.
 
 ## onestep-postgres 0.5.0
 

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 import time
 from collections import deque
@@ -14,6 +12,12 @@ from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 from onestep.state import CursorStore, InMemoryCursorStore
+
+from onestep_sql._shared.state_keys import _default_incremental_state_key
+from onestep_sql._shared.table_sink_policy import (
+    TableSinkUpdatePolicy,
+    _normalize_update_columns,
+)
 
 from .resilience import as_postgres_connector_operation_error, collect_sensitive_tokens
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore, _async_dsn
@@ -203,23 +207,6 @@ class PostgresConnector:
                         )
                     self._tables[table_name] = table
         return table
-
-
-def _default_incremental_state_key(
-    *,
-    table: str,
-    cursor: Sequence[str],
-    key: str,
-    where: str | None,
-) -> str:
-    normalized_where = " ".join((where or "").split())
-    if normalized_where:
-        where_fragment = normalized_where
-        if len(where_fragment) > 64:
-            where_fragment = f"sha1:{hashlib.sha1(where_fragment.encode('utf-8')).hexdigest()}"
-    else:
-        where_fragment = "-"
-    return f"{table}:{','.join(cursor)}:key={key}:where={where_fragment}"
 
 
 @dataclass
@@ -663,53 +650,7 @@ class PostgresIncrementalSource(Source):
 logger = logging.getLogger(__name__)
 
 
-_UPDATE_COLUMN_POLICIES = frozenset({"overwrite", "skip_null", "backfill"})
-
-
-def _normalize_update_columns(
-    update_columns: Sequence[str | Mapping[str, str]] | None,
-    *,
-    keys: tuple[str, ...],
-    update_expr: Mapping[str, str] | None = None,
-) -> tuple[tuple[str, ...] | None, dict[str, str]]:
-    if update_columns is None:
-        return None, {}
-    names: list[str] = []
-    policies: dict[str, str] = {}
-    for entry in update_columns:
-        if isinstance(entry, str):
-            if not entry:
-                raise ValueError("update_columns entries must be non-empty")
-            name, policy = entry, "overwrite"
-        elif isinstance(entry, Mapping):
-            unknown_keys = set(entry) - {"name", "policy"}
-            if unknown_keys:
-                raise ValueError(f"unknown update_columns entry keys: {', '.join(sorted(unknown_keys))}")
-            name = entry.get("name")
-            policy = entry.get("policy", "overwrite")
-            if not isinstance(name, str) or not name:
-                raise ValueError("update_columns entry requires a non-empty 'name'")
-            if policy not in _UPDATE_COLUMN_POLICIES:
-                raise ValueError(
-                    "update_columns policy must be one of 'overwrite', 'skip_null' or 'backfill', "
-                    f"got {policy!r}"
-                )
-            if name in keys:
-                raise ValueError(f"update_columns policy cannot apply to key column {name!r}")
-        else:
-            raise TypeError("update_columns entries must be strings or mappings")
-        if name in policies:
-            raise ValueError(f"duplicate update column {name!r}")
-        names.append(name)
-        policies[name] = policy
-    update_expr_keys = set(update_expr) if update_expr else set()
-    conflicting = sorted(set(policies) & update_expr_keys)
-    if conflicting:
-        raise ValueError(f"update_columns policy conflicts with update_expr for: {', '.join(conflicting)}")
-    return tuple(names), policies
-
-
-class PostgresTableSink(Sink):
+class PostgresTableSink(TableSinkUpdatePolicy, Sink):
     def __init__(
         self,
         *,
@@ -824,38 +765,3 @@ class PostgresTableSink(Sink):
                 index_elements=list(self.keys), set_=update_payload
             )
         return sa.insert(table).values(**payload)
-
-    def _update_payload(self, payload: dict[str, Any], table: sa.Table) -> tuple[dict[str, Any], bool]:
-        if self.update_columns is not None:
-            candidates = {key: value for key, value in payload.items() if key in self.update_columns}
-        else:
-            candidates = {key: value for key, value in payload.items() if key not in self.keys}
-        update_payload: dict[str, Any] = {}
-        skipped = False
-        for column, value in candidates.items():
-            policy = self.column_policies.get(column, "overwrite")
-            if policy == "skip_null" and value is None:
-                skipped = True
-                continue
-            if policy == "backfill":
-                update_payload[column] = sa.func.coalesce(table.columns[column], value)
-            else:
-                update_payload[column] = value
-        for column, expr in self.update_expr.items():
-            update_payload[column] = sa.literal_column(expr)
-        return update_payload, skipped
-
-    def _coerce_json_values(self, payload: dict[str, Any], table: sa.Table) -> dict[str, Any]:
-        if self.serialize_json == "never":
-            return payload
-        coerced = dict(payload)
-        for column_name, value in list(payload.items()):
-            if not isinstance(value, (list, dict)):
-                continue
-            column = table.columns.get(column_name)
-            if column is None:
-                continue
-            is_json_column = isinstance(column.type, sa.JSON)
-            if self.serialize_json == "always" or not is_json_column:
-                coerced[column_name] = json.dumps(value, ensure_ascii=False)
-        return coerced
