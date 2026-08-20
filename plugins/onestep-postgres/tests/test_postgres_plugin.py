@@ -27,12 +27,20 @@ from onestep_postgres.resilience import (
 )
 
 
-def test_package_exposes_onestep_resource_entry_point() -> None:
+def test_package_does_not_declare_its_own_resource_entry_point() -> None:
+    """Phase 3 (issue #133): onestep-postgres is a thin forwarding shim and
+    must not auto-register resource types. The canonical onestep-sql package
+    owns the single `sql` entry point that registers all 14 MySQL + PostgreSQL
+    types."""
     entry_points = _entry_points_for_group("onestep.resources")
 
+    assert not any(
+        entry_point.value.startswith("onestep_postgres:")
+        for entry_point in entry_points
+    )
     assert any(
-        entry_point.name == "postgres"
-        and entry_point.value == "onestep_postgres:register"
+        entry_point.name == "sql"
+        and entry_point.value == "onestep_sql:register_resources"
         for entry_point in entry_points
     )
 

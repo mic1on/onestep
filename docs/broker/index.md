@@ -35,8 +35,8 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 
 | 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [MySQL](/broker/mysql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出，安装 `onestep-mysql` |
-| [PostgreSQL](/broker/postgres) | 支持 | 支持 | 表队列/增量同步/表输出，安装 `onestep-postgres` |
+| [MySQL](/broker/mysql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出，安装 `onestep-sql[mysql]` |
+| [PostgreSQL](/broker/postgres) | 支持 | 支持 | 表队列/增量同步/表输出，安装 `onestep-sql[postgres]` |
 | [Feishu Bitable](/broker/feishu-bitable) | 支持 | 支持 | 飞书多维表格增量同步/表输出，安装 `onestep-feishu-bitable` |
 
 ### Web

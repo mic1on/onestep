@@ -19,10 +19,14 @@ mysql = [
 postgres = [
     "psycopg[binary]>=3.2.0",
 ]
+sqlite = [
+    "aiosqlite>=0.20.0",
+]
 all = [
     "asyncmy>=0.2.10",
     "mysql-replication>=1.0.15",
     "psycopg[binary]>=3.2.0",
+    "aiosqlite>=0.20.0",
 ]
 test = [
     "pytest>=8.0.0",

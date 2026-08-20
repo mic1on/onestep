@@ -11,15 +11,20 @@ namespace (`onestep_sql`). It is introduced incrementally per
 
 ## Status
 
-**Phase 1 — canonical package without changing consumers.**
+**Phase 3 — canonical distribution; legacy packages are thin forwarding shims.**
 
-* `onestep-sql[mysql]`, `[postgres]`, and `[all]` build, discover their
-  resources, and pass their suites.
-* `onestep_sql.mysql` and `onestep_sql.postgres` carry the copied, unchanged
-  implementations of the legacy packages.
-* The legacy `onestep-mysql` / `onestep-postgres` distributions still exist and
-  remain the recommended install until the later phases switch first-party
-  consumers over (Phase 3) and update the docs (Phase 4).
+* `onestep-sql[mysql]`, `[postgres]`, `[sqlite]`, and `[all]` build, discover
+  their resources, and pass their suites.
+* `onestep_sql.mysql` and `onestep_sql.postgres` carry the canonical
+  implementations; shared SQL behaviour lives once in `onestep_sql._shared`.
+* The root `onestep` extras (`mysql`, `postgres`, `sql`, `all`, `dev`,
+  `integration`) resolve through `onestep-sql`.
+* The legacy `onestep-mysql` / `onestep-postgres` distributions remain
+  available as thin forwarding shims without their own resource entry points;
+  existing `pip install onestep-mysql` and `from onestep_mysql import ...`
+  imports keep working unchanged.
+* All 14 YAML resource type names, catalog roles, fields, defaults, and
+  connector boundaries are unchanged.
 
 ## Install
 

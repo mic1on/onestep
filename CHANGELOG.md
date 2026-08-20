@@ -16,6 +16,39 @@
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
 
+## onestep-sql 0.1.0
+
+- First release of the canonical, unified MySQL **and** PostgreSQL connector
+  distribution for onestep (issue #133, design PR #134). `onestep-sql` is the
+  single package that registers all 14 existing YAML resource types
+  (`mysql_*`, `postgres_*`) through one `sql` entry point, with `mysql`,
+  `postgres`, `sqlite`, and `all` extras. New code should install
+  `onestep-sql[mysql]` / `onestep-sql[postgres]` and import from
+  `onestep_sql.mysql` / `onestep_sql.postgres`. Runtime behaviour, YAML names,
+  catalog roles, fields, defaults, and connector boundaries are unchanged; the
+  previously separate `onestep-mysql` / `onestep-postgres` distributions remain
+  available as thin forwarding shims without their own resource entry points.
+
+## onestep-mysql 0.7.0
+
+- Converts `onestep-mysql` into a thin forwarding distribution that delegates to
+  the canonical `onestep-sql` package (issue #133, Phase 3). The package no
+  longer declares its own `onestep.resources` entry point; installing it pulls
+  `onestep-sql[mysql,sqlite]` and re-exports the public API from
+  `onestep_sql.mysql` with object identity preserved. Existing
+  `from onestep_mysql import ...` imports and YAML configurations keep working
+  unchanged. Prefer `onestep-sql[mysql]` for new deployments.
+
+## onestep-postgres 0.6.0
+
+- Converts `onestep-postgres` into a thin forwarding distribution that delegates
+  to the canonical `onestep-sql` package (issue #133, Phase 3). The package no
+  longer declares its own `onestep.resources` entry point; installing it pulls
+  `onestep-sql[postgres,sqlite]` and re-exports the public API from
+  `onestep_sql.postgres` with object identity preserved. Existing
+  `from onestep_postgres import ...` imports and YAML configurations keep
+  working unchanged. Prefer `onestep-sql[postgres]` for new deployments.
+
 ## onestep-postgres 0.5.0
 
 - Ports incremental source commit-waves, retry rows, and failure fencing from

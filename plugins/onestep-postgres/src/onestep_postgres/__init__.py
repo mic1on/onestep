@@ -4,4 +4,4 @@
 # replacement while the MySQL+PostgreSQL consolidation lands.
 from onestep_sql.postgres import *  # noqa: F401,F403
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

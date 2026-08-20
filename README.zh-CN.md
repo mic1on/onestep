@@ -201,8 +201,8 @@ async def main():
 | 包 | 提供 | 安装 |
 | --- | --- | --- |
 | **核心** | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、`http_sink`、运行时、Reporter | `pip install onestep` |
-| **MySQL** | `table_queue`、`incremental`、binlog CDC、`table_sink`、state/cursor store | `pip install onestep-mysql` |
-| **PostgreSQL** | 与 MySQL 对等的原语，后端为 PostgreSQL | `pip install onestep-postgres` |
+| **MySQL** | `table_queue`、`incremental`、binlog CDC、`table_sink`、state/cursor store | `pip install 'onestep-sql[mysql]'`（`onestep-mysql` shim 仍可用） |
+| **PostgreSQL** | 与 MySQL 对等的原语，后端为 PostgreSQL | `pip install 'onestep-sql[postgres]'`（`onestep-postgres` shim 仍可用） |
 | **RabbitMQ** | `queue`，支持 exchange/routing-key 绑定与 prefetch | `pip install onestep-mq` |
 | **Redis** | `stream`，支持消费组、`XACK`、`XCLAIM`、`maxlen` | `pip install onestep-redis` |
 | **SQS** | `queue`，支持批量删除与心跳可见性续期 | `pip install onestep-sqs` |
