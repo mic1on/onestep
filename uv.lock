@@ -1342,9 +1342,8 @@ all = [
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
     { name = "onestep-mongodb" },
     { name = "onestep-mq" },
-    { name = "onestep-mysql" },
-    { name = "onestep-postgres" },
     { name = "onestep-redis" },
+    { name = "onestep-sql", extra = ["mysql", "postgres"] },
     { name = "onestep-sqs" },
     { name = "pyyaml" },
 ]
@@ -1361,9 +1360,8 @@ dev = [
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
     { name = "onestep-mongodb" },
     { name = "onestep-mq" },
-    { name = "onestep-mysql" },
-    { name = "onestep-postgres" },
     { name = "onestep-redis" },
+    { name = "onestep-sql", extra = ["mysql", "postgres"] },
     { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1380,9 +1378,8 @@ integration = [
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
     { name = "onestep-mongodb" },
     { name = "onestep-mq" },
-    { name = "onestep-mysql" },
-    { name = "onestep-postgres" },
     { name = "onestep-redis" },
+    { name = "onestep-sql", extra = ["mysql", "postgres"] },
     { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1397,16 +1394,19 @@ mongodb = [
     { name = "onestep-mongodb" },
 ]
 mysql = [
-    { name = "onestep-mysql" },
+    { name = "onestep-sql", extra = ["mysql"] },
 ]
 postgres = [
-    { name = "onestep-postgres" },
+    { name = "onestep-sql", extra = ["postgres"] },
 ]
 rabbitmq = [
     { name = "onestep-mq" },
 ]
 redis = [
     { name = "onestep-redis" },
+]
+sql = [
+    { name = "onestep-sql", extra = ["mysql", "postgres"] },
 ]
 sqs = [
     { name = "onestep-sqs" },
@@ -1447,18 +1447,16 @@ requires-dist = [
     { name = "onestep-mq", marker = "extra == 'dev'", editable = "plugins/onestep-rabbitmq" },
     { name = "onestep-mq", marker = "extra == 'integration'", editable = "plugins/onestep-rabbitmq" },
     { name = "onestep-mq", marker = "extra == 'rabbitmq'", editable = "plugins/onestep-rabbitmq" },
-    { name = "onestep-mysql", marker = "extra == 'all'", editable = "plugins/onestep-mysql" },
-    { name = "onestep-mysql", marker = "extra == 'dev'", editable = "plugins/onestep-mysql" },
-    { name = "onestep-mysql", marker = "extra == 'integration'", editable = "plugins/onestep-mysql" },
-    { name = "onestep-mysql", marker = "extra == 'mysql'", editable = "plugins/onestep-mysql" },
-    { name = "onestep-postgres", marker = "extra == 'all'", editable = "plugins/onestep-postgres" },
-    { name = "onestep-postgres", marker = "extra == 'dev'", editable = "plugins/onestep-postgres" },
-    { name = "onestep-postgres", marker = "extra == 'integration'", editable = "plugins/onestep-postgres" },
-    { name = "onestep-postgres", marker = "extra == 'postgres'", editable = "plugins/onestep-postgres" },
     { name = "onestep-redis", marker = "extra == 'all'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'dev'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'integration'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'redis'", editable = "plugins/onestep-redis" },
+    { name = "onestep-sql", extras = ["mysql"], marker = "extra == 'mysql'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'all'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'dev'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'integration'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'sql'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["postgres"], marker = "extra == 'postgres'", editable = "plugins/onestep-sql" },
     { name = "onestep-sqs", marker = "extra == 'all'", editable = "plugins/onestep-sqs" },
     { name = "onestep-sqs", marker = "extra == 'dev'", editable = "plugins/onestep-sqs" },
     { name = "onestep-sqs", marker = "extra == 'integration'", editable = "plugins/onestep-sqs" },
@@ -1475,7 +1473,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
 ]
-provides-extras = ["control-plane", "yaml", "mysql", "postgres", "rabbitmq", "redis", "sqs", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
+provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "rabbitmq", "redis", "sqs", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
 
 [[package]]
 name = "onestep-clickhouse"
@@ -1690,15 +1688,11 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mysql"
-version = "0.6.1"
+version = "0.7.0"
 source = { editable = "plugins/onestep-mysql" }
 dependencies = [
-    { name = "aiosqlite" },
-    { name = "asyncmy" },
-    { name = "mysql-replication" },
     { name = "onestep" },
-    { name = "onestep-sql" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "onestep-sql", extra = ["mysql", "sqlite"] },
 ]
 
 [package.optional-dependencies]
@@ -1717,30 +1711,22 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.20.0" },
-    { name = "asyncmy", specifier = ">=0.2.10" },
-    { name = "mysql-replication", specifier = ">=1.0.15" },
     { name = "onestep", editable = "." },
-    { name = "onestep-sql", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "sqlite"], editable = "plugins/onestep-sql" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
 ]
 provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-postgres"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "plugins/onestep-postgres" }
 dependencies = [
-    { name = "aiosqlite" },
     { name = "onestep" },
-    { name = "onestep-sql" },
-    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
-    { name = "psycopg", version = "3.3.4", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "onestep-sql", extra = ["postgres", "sqlite"] },
 ]
 
 [package.optional-dependencies]
@@ -1759,15 +1745,12 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "onestep", editable = "." },
-    { name = "onestep-sql", editable = "plugins/onestep-sql" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
+    { name = "onestep-sql", extras = ["postgres", "sqlite"], editable = "plugins/onestep-sql" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
 ]
 provides-extras = ["test", "dev"]
 
@@ -1822,6 +1805,7 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "aiosqlite" },
     { name = "asyncmy" },
     { name = "mysql-replication" },
     { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
@@ -1841,6 +1825,9 @@ postgres = [
     { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
     { name = "psycopg", version = "3.3.4", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
 ]
+sqlite = [
+    { name = "aiosqlite" },
+]
 test = [
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1851,6 +1838,8 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
+    { name = "aiosqlite", marker = "extra == 'all'", specifier = ">=0.20.0" },
+    { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.20.0" },
     { name = "asyncmy", marker = "extra == 'all'", specifier = ">=0.2.10" },
     { name = "asyncmy", marker = "extra == 'mysql'", specifier = ">=0.2.10" },
     { name = "mysql-replication", marker = "extra == 'all'", specifier = ">=1.0.15" },
@@ -1864,7 +1853,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
 ]
-provides-extras = ["mysql", "postgres", "all", "test", "dev"]
+provides-extras = ["mysql", "postgres", "sqlite", "all", "test", "dev"]
 
 [[package]]
 name = "onestep-sqs"

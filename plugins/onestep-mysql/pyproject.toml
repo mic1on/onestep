@@ -1,17 +1,13 @@
 [project]
 name = "onestep-mysql"
-version = "0.6.1"
+version = "0.7.0"
 description = "MySQL connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
     "onestep>=1.7.3",
-    "onestep-sql>=0.1.0",
-    "SQLAlchemy[asyncio]>=2.0.0",
-    "asyncmy>=0.2.10",
-    "aiosqlite>=0.20.0",
-    "mysql-replication>=1.0.15",
+    "onestep-sql[mysql,sqlite]>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -23,9 +19,6 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
-
-[project.entry-points."onestep.resources"]
-mysql = "onestep_mysql:register"
 
 [build-system]
 requires = ["hatchling"]
