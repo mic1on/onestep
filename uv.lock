@@ -19,6 +19,7 @@ members = [
     "onestep-mysql",
     "onestep-postgres",
     "onestep-redis",
+    "onestep-sql",
     "onestep-sqs",
 ]
 
@@ -1696,6 +1697,7 @@ dependencies = [
     { name = "asyncmy" },
     { name = "mysql-replication" },
     { name = "onestep" },
+    { name = "onestep-sql" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
@@ -1719,6 +1721,7 @@ requires-dist = [
     { name = "asyncmy", specifier = ">=0.2.10" },
     { name = "mysql-replication", specifier = ">=1.0.15" },
     { name = "onestep", editable = "." },
+    { name = "onestep-sql", editable = "plugins/onestep-sql" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
@@ -1734,6 +1737,7 @@ source = { editable = "plugins/onestep-postgres" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "onestep" },
+    { name = "onestep-sql" },
     { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
     { name = "psycopg", version = "3.3.4", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -1757,6 +1761,7 @@ test = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "onestep", editable = "." },
+    { name = "onestep-sql", editable = "plugins/onestep-sql" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
@@ -1804,6 +1809,62 @@ requires-dist = [
     { name = "redis", specifier = ">=4.2.0" },
 ]
 provides-extras = ["test", "dev"]
+
+[[package]]
+name = "onestep-sql"
+version = "0.1.0"
+source = { editable = "plugins/onestep-sql" }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "onestep" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "asyncmy" },
+    { name = "mysql-replication" },
+    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
+    { name = "psycopg", version = "3.3.4", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
+]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+mysql = [
+    { name = "asyncmy" },
+    { name = "mysql-replication" },
+]
+postgres = [
+    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
+    { name = "psycopg", version = "3.3.4", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20.0" },
+    { name = "asyncmy", marker = "extra == 'all'", specifier = ">=0.2.10" },
+    { name = "asyncmy", marker = "extra == 'mysql'", specifier = ">=0.2.10" },
+    { name = "mysql-replication", marker = "extra == 'all'", specifier = ">=1.0.15" },
+    { name = "mysql-replication", marker = "extra == 'mysql'", specifier = ">=1.0.15" },
+    { name = "onestep", editable = "." },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'all'", specifier = ">=3.2.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
+]
+provides-extras = ["mysql", "postgres", "all", "test", "dev"]
 
 [[package]]
 name = "onestep-sqs"

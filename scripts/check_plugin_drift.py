@@ -29,8 +29,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-MYSQL_SRC = REPO_ROOT / "plugins" / "onestep-mysql" / "src" / "onestep_mysql"
-POSTGRES_SRC = REPO_ROOT / "plugins" / "onestep-postgres" / "src" / "onestep_postgres"
+# The parallel implementations now live in the canonical onestep-sql package
+# (the legacy plugins/onestep-mysql and plugins/onestep-postgres distributions
+# are thin forwarders since the Phase 1 consolidation, issue #133). Keep
+# monitoring the real code until the Phase 2 _shared extraction retires the
+# parallel copies entirely.
+MYSQL_SRC = REPO_ROOT / "plugins" / "onestep-sql" / "src" / "onestep_sql" / "mysql"
+POSTGRES_SRC = REPO_ROOT / "plugins" / "onestep-sql" / "src" / "onestep_sql" / "postgres"
 
 # Token normalization applied to the mysql side so parallel code compares
 # equal. Order matters (longest/most specific first).

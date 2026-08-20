@@ -520,7 +520,7 @@ def test_postgres_incremental_logs_fetch_retry_commit_without_sensitive_values(
         await retry.ack()
         await db.close()
 
-    caplog.set_level(logging.INFO, logger="onestep_postgres.connector")
+    caplog.set_level(logging.INFO, logger="onestep_sql.postgres.connector")
     asyncio.run(scenario())
 
     records = {

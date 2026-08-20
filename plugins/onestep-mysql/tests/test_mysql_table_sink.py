@@ -521,7 +521,7 @@ def test_skipped_statement_logs_without_touching_engine(caplog) -> None:
         update_columns=({"name": "title", "policy": "skip_null"},),
     )
 
-    with caplog.at_level(logging.INFO, logger="onestep_mysql.connector"):
+    with caplog.at_level(logging.INFO, logger="onestep_sql.mysql.connector"):
         asyncio.run(sink._send(dict(_payload(), title=None)))
 
     assert any("skipped write" in record.getMessage() for record in caplog.records)
@@ -668,7 +668,7 @@ def test_update_mode_logs_when_no_rows_matched(caplog) -> None:
         update_columns=("title",),
     )
 
-    with caplog.at_level(logging.INFO, logger="onestep_mysql.connector"):
+    with caplog.at_level(logging.INFO, logger="onestep_sql.mysql.connector"):
         asyncio.run(sink._send(_payload()))
 
     assert any("matched no rows" in record.getMessage() for record in caplog.records)
