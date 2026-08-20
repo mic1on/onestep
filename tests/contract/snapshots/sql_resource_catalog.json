@@ -1,0 +1,989 @@
+{
+  "mysql": {
+    "connector_types": [],
+    "fields": [
+      {
+        "name": "dsn",
+        "required": true,
+        "secret": true,
+        "type": "string"
+      },
+      {
+        "name": "engine_options",
+        "required": false,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "name": "host",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "port",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "database",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "username",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "password",
+        "required": false,
+        "secret": true,
+        "type": "string"
+      }
+    ],
+    "label": "MySQL",
+    "roles": [
+      "connector"
+    ],
+    "topology_fields": [],
+    "type": "mysql"
+  },
+  "mysql_binlog": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "server_id",
+        "required": true,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "name": "schemas",
+        "required": false,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "name": "tables",
+        "required": false,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "default": [
+          "insert",
+          "update",
+          "delete"
+        ],
+        "name": "events",
+        "required": false,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "default": 100,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "name": "state",
+        "required": false,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "state_key",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": false,
+        "name": "blocking",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      }
+    ],
+    "label": "MySQL Binlog",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "schemas",
+      "tables",
+      "events",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "mysql_binlog"
+  },
+  "mysql_cursor_store": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "default": "onestep_cursor",
+        "name": "table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "cursor_key",
+        "name": "key_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "cursor_value",
+        "name": "value_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "updated_at",
+        "name": "updated_at_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": true,
+        "name": "auto_create",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      }
+    ],
+    "label": "MySQL Cursor Store",
+    "roles": [
+      "cursor_store"
+    ],
+    "topology_fields": [
+      "table",
+      "key_column"
+    ],
+    "type": "mysql_cursor_store"
+  },
+  "mysql_incremental": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "table",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "key",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "cursor",
+        "required": true,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "name": "where",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": 1000,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "name": "state",
+        "required": false,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "state_key",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      }
+    ],
+    "label": "MySQL Incremental",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "table",
+      "key",
+      "cursor",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "mysql_incremental"
+  },
+  "mysql_state_store": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "default": "onestep_state",
+        "name": "table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "state_key",
+        "name": "key_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "state_value",
+        "name": "value_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "updated_at",
+        "name": "updated_at_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": true,
+        "name": "auto_create",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      }
+    ],
+    "label": "MySQL State Store",
+    "roles": [
+      "state_store"
+    ],
+    "topology_fields": [
+      "table",
+      "key_column"
+    ],
+    "type": "mysql_state_store"
+  },
+  "mysql_table_queue": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "table",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "key",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "where",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "claim",
+        "required": true,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "name": "ack",
+        "required": true,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "name": "nack",
+        "required": false,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "default": 100,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      }
+    ],
+    "label": "MySQL Table Queue",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "table",
+      "key",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "mysql_table_queue"
+  },
+  "mysql_table_sink": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "table",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "insert",
+        "name": "mode",
+        "options": [
+          "insert",
+          "upsert",
+          "update"
+        ],
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "keys",
+        "required": false,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "name": "update_columns",
+        "required": false,
+        "secret": false,
+        "type": "json"
+      },
+      {
+        "name": "update_expr",
+        "required": false,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "default": "auto",
+        "name": "serialize_json",
+        "options": [
+          "auto",
+          "always",
+          "never"
+        ],
+        "required": false,
+        "secret": false,
+        "type": "string"
+      }
+    ],
+    "label": "MySQL Table Sink",
+    "roles": [
+      "sink"
+    ],
+    "topology_fields": [
+      "table",
+      "mode",
+      "keys",
+      "update_columns",
+      "update_expr",
+      "serialize_json"
+    ],
+    "type": "mysql_table_sink"
+  },
+  "postgres": {
+    "connector_types": [],
+    "fields": [
+      {
+        "name": "dsn",
+        "required": true,
+        "secret": true,
+        "type": "string"
+      },
+      {
+        "name": "engine_options",
+        "required": false,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "name": "host",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "port",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "database",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "username",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "password",
+        "required": false,
+        "secret": true,
+        "type": "string"
+      }
+    ],
+    "label": "Postgres",
+    "roles": [
+      "connector"
+    ],
+    "topology_fields": [],
+    "type": "postgres"
+  },
+  "postgres_cursor_store": {
+    "connector_types": [
+      "postgres"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "default": "onestep_cursor",
+        "name": "table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "cursor_key",
+        "name": "key_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "cursor_value",
+        "name": "value_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "updated_at",
+        "name": "updated_at_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": true,
+        "name": "auto_create",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      }
+    ],
+    "label": "Postgres Cursor Store",
+    "roles": [
+      "cursor_store"
+    ],
+    "topology_fields": [
+      "table",
+      "key_column"
+    ],
+    "type": "postgres_cursor_store"
+  },
+  "postgres_execution_source": {
+    "connector_types": [
+      "postgres"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "namespace",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "task_names",
+        "required": true,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "default": "onestep_executions",
+        "name": "table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "onestep_execution_attempts",
+        "name": "attempts_table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": 100,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "default": 90.0,
+        "name": "lease_duration_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "default": 30.0,
+        "name": "heartbeat_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "default": "onestep-worker",
+        "name": "worker_id",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": true,
+        "name": "auto_create",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      },
+      {
+        "default": 1048576,
+        "name": "max_payload_bytes",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 65536,
+        "name": "max_metadata_bytes",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1048576,
+        "name": "max_result_bytes",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 100,
+        "name": "reclaim_batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      }
+    ],
+    "label": "Postgres Execution Source",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "namespace",
+      "task_names",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "postgres_execution_source"
+  },
+  "postgres_incremental": {
+    "connector_types": [
+      "postgres"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "table",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "key",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "cursor",
+        "required": true,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "name": "where",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": 1000,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "name": "state",
+        "required": false,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "state_key",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      }
+    ],
+    "label": "Postgres Incremental",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "table",
+      "key",
+      "cursor",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "postgres_incremental"
+  },
+  "postgres_state_store": {
+    "connector_types": [
+      "postgres"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "default": "onestep_state",
+        "name": "table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "state_key",
+        "name": "key_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "state_value",
+        "name": "value_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "updated_at",
+        "name": "updated_at_column",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": true,
+        "name": "auto_create",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      }
+    ],
+    "label": "Postgres State Store",
+    "roles": [
+      "state_store"
+    ],
+    "topology_fields": [
+      "table",
+      "key_column"
+    ],
+    "type": "postgres_state_store"
+  },
+  "postgres_table_queue": {
+    "connector_types": [
+      "postgres"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "table",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "key",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "where",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "claim",
+        "required": true,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "name": "ack",
+        "required": true,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "name": "nack",
+        "required": false,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "default": 100,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      }
+    ],
+    "label": "Postgres Table Queue",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "table",
+      "key",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "postgres_table_queue"
+  },
+  "postgres_table_sink": {
+    "connector_types": [
+      "postgres"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "table",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "insert",
+        "name": "mode",
+        "options": [
+          "insert",
+          "upsert",
+          "update"
+        ],
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "keys",
+        "required": false,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "name": "update_columns",
+        "required": false,
+        "secret": false,
+        "type": "json"
+      },
+      {
+        "name": "update_expr",
+        "required": false,
+        "secret": false,
+        "type": "mapping"
+      },
+      {
+        "default": "auto",
+        "name": "serialize_json",
+        "options": [
+          "auto",
+          "always",
+          "never"
+        ],
+        "required": false,
+        "secret": false,
+        "type": "string"
+      }
+    ],
+    "label": "Postgres Table Sink",
+    "roles": [
+      "sink"
+    ],
+    "topology_fields": [
+      "table",
+      "mode",
+      "keys",
+      "update_columns",
+      "update_expr",
+      "serialize_json"
+    ],
+    "type": "postgres_table_sink"
+  }
+}
