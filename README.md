@@ -217,7 +217,7 @@ Each backend ships as its own package so you only install what you use:
 | **PostgreSQL** | same primitives as MySQL, backed by PostgreSQL | `pip install 'onestep-sql[postgres]'` (`onestep-postgres` shim available) |
 | **RabbitMQ** | `queue` with exchange/routing-key binding and prefetch | `pip install onestep-mq` |
 | **Redis** | `stream` with consumer groups, `XACK`, `XCLAIM`, `maxlen` | `pip install onestep-redis` |
-| **SQS** | `queue` with batched deletes and heartbeat visibility | `pip install onestep-sqs` |
+| **SQS** | `queue` with batched deletes and heartbeat visibility, plus an `sns_topic` fan-out sink | `pip install onestep-sqs` |
 | **Kafka** | `kafka_topic` source/sink with manual offset commits | `pip install onestep-kafka` |
 | **Feishu Bitable** | incremental source and upsert sink | `pip install onestep-feishu-bitable` |
 | **Elasticsearch/OpenSearch** | `elasticsearch` connector and acknowledged `elasticsearch_bulk_sink` over the common REST bulk boundary | `pip install 'onestep[elasticsearch]'` (`onestep-elasticsearch`) |

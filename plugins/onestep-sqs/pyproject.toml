@@ -1,7 +1,7 @@
 [project]
 name = "onestep-sqs"
-version = "0.2.3"
-description = "Amazon SQS connector plugin for onestep."
+version = "0.2.4"
+description = "Amazon SQS and SNS connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

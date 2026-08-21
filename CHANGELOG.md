@@ -393,6 +393,14 @@
 - Scrubs DSN credentials and secret values nested in SQLAlchemy engine options from normalized MySQL error causes.
 - Suppresses raw exception chaining for fetch and send failures so reported tracebacks do not expose secrets.
 
+## onestep-sqs 0.2.4
+
+- Adds an Amazon SNS topic sink (`sns` connector + `sns_topic` sink resource
+  types). `SNSTopic` publishes the standard OneStep envelope to a topic ARN,
+  supports optional `subject` and `message_attributes`, and requires
+  `message_group_id` (with optional `deduplication_id_factory`) for FIFO topics.
+  SNS is publish-only, so consume via an SQS queue subscribed to the topic.
+
 ## onestep-sqs 0.2.3
 
 - Scrubs AWS credentials and known secret connector options from normalized SQS error causes.
