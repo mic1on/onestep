@@ -1361,7 +1361,7 @@ dev = [
     { name = "onestep-mongodb" },
     { name = "onestep-mq" },
     { name = "onestep-redis" },
-    { name = "onestep-sql", extra = ["mysql", "postgres"] },
+    { name = "onestep-sql", extra = ["mysql", "postgres", "sqlite"] },
     { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1406,7 +1406,7 @@ redis = [
     { name = "onestep-redis" },
 ]
 sql = [
-    { name = "onestep-sql", extra = ["mysql", "postgres"] },
+    { name = "onestep-sql", extra = ["mysql", "postgres", "sqlite"] },
 ]
 sqlite = [
     { name = "onestep-sql", extra = ["sqlite"] },
@@ -1455,10 +1455,10 @@ requires-dist = [
     { name = "onestep-redis", marker = "extra == 'integration'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'redis'", editable = "plugins/onestep-redis" },
     { name = "onestep-sql", extras = ["mysql"], marker = "extra == 'mysql'", editable = "plugins/onestep-sql" },
-    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'dev'", editable = "plugins/onestep-sql" },
-    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'sql'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["mysql", "postgres", "sqlite"], marker = "extra == 'all'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres", "sqlite"], marker = "extra == 'dev'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["mysql", "postgres", "sqlite"], marker = "extra == 'integration'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres", "sqlite"], marker = "extra == 'sql'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["postgres"], marker = "extra == 'postgres'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["sqlite"], marker = "extra == 'sqlite'", editable = "plugins/onestep-sql" },
     { name = "onestep-sqs", marker = "extra == 'all'", editable = "plugins/onestep-sqs" },
@@ -1799,7 +1799,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-sql"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "plugins/onestep-sql" }
 dependencies = [
     { name = "aiosqlite" },

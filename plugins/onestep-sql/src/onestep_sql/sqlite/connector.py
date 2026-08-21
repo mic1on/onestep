@@ -38,7 +38,14 @@ except ImportError:  # pragma: no cover - exercised when optional deps are missi
 
 
 def _normalize_dsn(dsn: str) -> str:
-    """Accept a bare file path or a ``sqlite://`` URL and return an async URL."""
+    """Accept a bare file path or a ``sqlite://`` URL and return an async URL.
+
+    A bare ``":memory:"`` is kept as an in-memory database (StaticPool); any
+    other bare token is treated as a filesystem path so it gets the same engine
+    tuning (busy timeout, no ``pool_pre_ping``) as an explicit ``sqlite://`` URL.
+    """
+    if dsn == ":memory:":
+        return "sqlite+aiosqlite:///:memory:"
     if "://" not in dsn:
         from pathlib import Path
 
@@ -52,7 +59,10 @@ class SQLiteConnector:
             raise RuntimeError("SQLiteConnector requires SQLAlchemy. Install onestep-sql with the 'sqlite' extra.")
         self.dsn = dsn
         self._sensitive_tokens = collect_sensitive_tokens(dsn, engine_options)
-        parsed = urlparse(dsn)
+        # Normalize first (bare path / ":memory:" -> async URL) so the SQLite
+        # engine tuning below applies uniformly regardless of DSN spelling.
+        normalized_dsn = _normalize_dsn(dsn)
+        parsed = urlparse(normalized_dsn)
         if parsed.scheme.startswith("sqlite"):
             # File-based single-writer backend: tolerate busy writers and do not
             # ping (sqlite has no server).
@@ -63,7 +73,7 @@ class SQLiteConnector:
                 from sqlalchemy.pool import StaticPool
 
                 engine_options.setdefault("poolclass", StaticPool)
-        self.engine: AsyncEngine = create_async_engine(_normalize_dsn(dsn), **engine_options)
+        self.engine: AsyncEngine = create_async_engine(normalized_dsn, **engine_options)
         self._tables: dict[str, Any] = {}
         self._table_lock: asyncio.Lock | None = None
 
@@ -290,14 +300,29 @@ class TableQueueSource(Source):
 
     async def _fetch(self, limit: int) -> list[dict[str, Any]]:
         table = await self.connector._table(self.table_name)
+        # SQLite has no ``SELECT ... FOR UPDATE SKIP LOCKED`` (mysql/connector.py
+        # uses it to claim). Instead we claim and read in one atomic statement:
+        # the write lock is held for the whole UPDATE, so two consumers can never
+        # both select the same candidate rows before either commits. The
+        # subquery re-applies the user ``where`` predicate and ``limit`` under the
+        # lock, and ``RETURNING`` hands back the post-claim rows (matching the
+        # mysql connector's post-claim re-read, see issue #4 of the PR review).
+        claim_stmt = (
+            sa.update(table)
+            .where(
+                table.c[self.key].in_(
+                    sa.select(table.c[self.key])
+                    .where(sa.text(self.where))
+                    .order_by(table.c[self.key])
+                    .limit(limit)
+                )
+            )
+            .values(**self.claim)
+            .returning(*table.c)
+        )
         async with self.connector.engine.begin() as conn:
-            stmt = sa.select(table).where(sa.text(self.where)).order_by(table.c[self.key]).limit(limit)
-            rows = (await conn.execute(stmt)).mappings().all()
-            if not rows:
-                return []
-            ids = [row[self.key] for row in rows]
-            await conn.execute(sa.update(table).where(table.c[self.key].in_(ids)).values(**self.claim))
-        return [dict(row) for row in rows]
+            claimed = (await conn.execute(claim_stmt)).mappings().all()
+        return [dict(row) for row in claimed]
 
     async def ack_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.ack)

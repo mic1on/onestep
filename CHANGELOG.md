@@ -16,6 +16,26 @@
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
 
+## onestep-sql 0.2.0
+
+- Publicly exposes the SQLite backend of the canonical `onestep-sql` package
+  (issue #141). `onestep-sql[sqlite]` now installs the `sqlite` asyncio extra
+  and registers six new YAML resource types through the single `sql` entry
+  point: `sqlite`, `sqlite_state_store`, `sqlite_cursor_store`,
+  `sqlite_table_queue`, `sqlite_incremental`, and `sqlite_table_sink`. SQLite is
+  embedded (no server): it reuses the shared SQLAlchemy state/cursor stores,
+  table-sink policy, and incremental commit-coalescing logic, and adds no
+  binlog CDC or tracked-execution capability.
+- Fixes a `sqlite_table_queue` claim race. MySQL/PostgreSQL claim rows with
+  `SELECT ... FOR UPDATE SKIP LOCKED`; SQLite now claims and reads in one atomic
+  `UPDATE ... RETURNING` statement so the write lock is held for the whole claim
+  and two consumers can never deliver the same rows (previously a concurrent
+  poll could double-claim). The returned delivery body is the post-claim row,
+  matching the MySQL/PostgreSQL envelope contract.
+- Maps `sqlite` / `sqlite+pysqlite` DSNs (and a bare file path or `:memory:`)
+  onto the `sqlite+aiosqlite` dialect, with a 30s busy timeout and no
+  `pool_pre_ping`, so a bare path no longer silently skips the engine tuning.
+
 ## onestep-sql 0.1.0
 
 - First release of the canonical, unified MySQL **and** PostgreSQL connector
