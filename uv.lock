@@ -1343,7 +1343,7 @@ all = [
     { name = "onestep-mongodb" },
     { name = "onestep-mq" },
     { name = "onestep-redis" },
-    { name = "onestep-sql", extra = ["mysql", "postgres"] },
+    { name = "onestep-sql", extra = ["mysql", "postgres", "sqlite"] },
     { name = "onestep-sqs" },
     { name = "pyyaml" },
 ]
@@ -1379,7 +1379,7 @@ integration = [
     { name = "onestep-mongodb" },
     { name = "onestep-mq" },
     { name = "onestep-redis" },
-    { name = "onestep-sql", extra = ["mysql", "postgres"] },
+    { name = "onestep-sql", extra = ["mysql", "postgres", "sqlite"] },
     { name = "onestep-sqs" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1407,6 +1407,9 @@ redis = [
 ]
 sql = [
     { name = "onestep-sql", extra = ["mysql", "postgres"] },
+]
+sqlite = [
+    { name = "onestep-sql", extra = ["sqlite"] },
 ]
 sqs = [
     { name = "onestep-sqs" },
@@ -1452,11 +1455,12 @@ requires-dist = [
     { name = "onestep-redis", marker = "extra == 'integration'", editable = "plugins/onestep-redis" },
     { name = "onestep-redis", marker = "extra == 'redis'", editable = "plugins/onestep-redis" },
     { name = "onestep-sql", extras = ["mysql"], marker = "extra == 'mysql'", editable = "plugins/onestep-sql" },
-    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'all'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'dev'", editable = "plugins/onestep-sql" },
-    { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'integration'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["mysql", "postgres"], marker = "extra == 'sql'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres", "sqlite"], marker = "extra == 'all'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["mysql", "postgres", "sqlite"], marker = "extra == 'integration'", editable = "plugins/onestep-sql" },
     { name = "onestep-sql", extras = ["postgres"], marker = "extra == 'postgres'", editable = "plugins/onestep-sql" },
+    { name = "onestep-sql", extras = ["sqlite"], marker = "extra == 'sqlite'", editable = "plugins/onestep-sql" },
     { name = "onestep-sqs", marker = "extra == 'all'", editable = "plugins/onestep-sqs" },
     { name = "onestep-sqs", marker = "extra == 'dev'", editable = "plugins/onestep-sqs" },
     { name = "onestep-sqs", marker = "extra == 'integration'", editable = "plugins/onestep-sqs" },
@@ -1473,7 +1477,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
 ]
-provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "rabbitmq", "redis", "sqs", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
+provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite", "rabbitmq", "redis", "sqs", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
 
 [[package]]
 name = "onestep-clickhouse"
