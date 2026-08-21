@@ -213,8 +213,8 @@ Each backend ships as its own package so you only install what you use:
 | --- | --- | --- |
 | **core** | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, `http_sink`, runtime | `pip install onestep` |
 | **Control plane** | reporter telemetry and remote commands | `pip install 'onestep[control-plane]'` |
-| **MySQL** | `table_queue`, `incremental`, binlog CDC, `table_sink`, state/cursor stores | `pip install onestep-mysql` |
-| **PostgreSQL** | same primitives as MySQL, backed by PostgreSQL | `pip install onestep-postgres` |
+| **MySQL** | `table_queue`, `incremental`, binlog CDC, `table_sink`, state/cursor stores | `pip install 'onestep-sql[mysql]'` (`onestep-mysql` shim available) |
+| **PostgreSQL** | same primitives as MySQL, backed by PostgreSQL | `pip install 'onestep-sql[postgres]'` (`onestep-postgres` shim available) |
 | **RabbitMQ** | `queue` with exchange/routing-key binding and prefetch | `pip install onestep-mq` |
 | **Redis** | `stream` with consumer groups, `XACK`, `XCLAIM`, `maxlen` | `pip install onestep-redis` |
 | **SQS** | `queue` with batched deletes and heartbeat visibility | `pip install onestep-sqs` |
@@ -242,6 +242,15 @@ Or install everything at once:
 ```bash
 pip install 'onestep[all]'
 ```
+
+> **MySQL/PostgreSQL consolidation (issue #133):** `onestep-sql` is now the
+> canonical distribution for both MySQL and PostgreSQL. New deployments should
+> install `onestep-sql[mysql]` / `onestep-sql[postgres]` (or `onestep[mysql]` /
+> `onestep[postgres]`). The legacy `onestep-mysql` / `onestep-postgres` packages
+> remain available as thin forwarding shims — existing `pip install
+> onestep-mysql` and `from onestep_mysql import ...` imports keep working
+> unchanged. All 14 YAML resource type names are unchanged. See
+> [the migration guide](docs/guide/migrate-to-onestep-sql.md) for details.
 
 ## Configuration styles
 

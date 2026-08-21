@@ -1,11 +1,23 @@
 # onestep-postgres
 
+> **Deprecation notice (issue #133):** `onestep-postgres` is now a thin
+> forwarding shim that delegates to the canonical
+> [`onestep-sql`](https://pypi.org/project/onestep-sql/) package. New deployments
+> should install `onestep-sql[postgres]` (or `onestep[postgres]`) and import from
+> `onestep_sql.postgres`. This package remains available so existing
+> `pip install onestep-postgres` and `from onestep_postgres import ...` keep
+> working unchanged; it no longer declares its own resource entry point. All 14
+> YAML resource type names are unchanged. See the
+> [migration guide](../../docs/guide/migrate-to-onestep-sql.md) for details.
+
 PostgreSQL connector plugin for onestep.
 
 Install it with:
 
 ```bash
 pip install onestep-postgres
+# or the canonical package
+# pip install 'onestep-sql[postgres]'
 ```
 
 YAML resources are available after the plugin is installed:

@@ -59,8 +59,8 @@ def test_postgres_table_queue_claim_ack_and_retry_live():
         await batch[0].ack()
         await batch[1].retry()
 
-        with db.engine.begin() as conn:
-            rows = conn.execute(sa.select(orders).order_by(orders.c.id)).mappings().all()
+        async with db.engine.begin() as conn:
+            rows = (await conn.execute(sa.select(orders).order_by(orders.c.id))).mappings().all()
         assert [dict(row)["status"] for row in rows] == [1, 0]
 
         await db.close()
@@ -133,8 +133,8 @@ def test_postgres_incremental_cursor_recovers_after_restart_live():
         empty = await restarted_source.fetch(10)
         assert empty == []
 
-        with restarted.engine.begin() as conn:
-            conn.execute(sa.insert(users), [{"id": 3, "name": "C", "updated_at": 11, "deleted": 0}])
+        async with restarted.engine.begin() as conn:
+            await conn.execute(sa.insert(users), [{"id": 3, "name": "C", "updated_at": 11, "deleted": 0}])
 
         next_batch = await restarted_source.fetch(10)
         assert [item.payload["id"] for item in next_batch] == [3]
@@ -174,8 +174,8 @@ def test_postgres_table_sink_upserts_live():
         await sink.send(Envelope(body={"id": 1, "payload": "alpha", "status": "new"}))
         await sink.send(Envelope(body={"id": 1, "payload": "alpha", "status": "done"}))
 
-        with db.engine.begin() as conn:
-            rows = conn.execute(sa.select(processed).order_by(processed.c.id)).mappings().all()
+        async with db.engine.begin() as conn:
+            rows = (await conn.execute(sa.select(processed).order_by(processed.c.id))).mappings().all()
         assert [dict(row) for row in rows] == [{"id": 1, "payload": "alpha", "status": "done"}]
 
         await db.close()

@@ -5,7 +5,7 @@ outline: deep
 
 # PostgreSQL Tracked Execution
 
-本文说明 `onestep==1.9.0` 和 `onestep-postgres==0.2.0` 都发布后，业务系统如何把 PostgreSQL 用作长任务的提交、状态、结果、取消和租约存储。
+本文说明 `onestep==1.9.0` 和 `onestep-sql[postgres]==0.1.0` 都发布后，业务系统如何把 PostgreSQL 用作长任务的提交、状态、结果、取消和租约存储。
 
 适用场景：HTTP 请求提交一个可能运行数秒、数分钟甚至更久的任务，API 需要返回任务 ID，业务端再查询状态或结果。典型例子包括 Agent、报表生成、文件处理、异步导入和批量同步。
 
@@ -17,9 +17,9 @@ outline: deep
 | --- | --- | --- |
 | 继续使用普通 queue、schedule、webhook | `onestep==1.9.0` | 不需要 |
 | 继续使用旧 PostgreSQL table queue、incremental、state 或 sink | `onestep==1.9.0` + 兼容的 PostgreSQL plugin | 通常不需要 |
-| 使用本页的提交、查询、结果和取消能力 | `onestep==1.9.0` + `onestep-postgres==0.2.0` | 需要按本文部署 API 和 worker |
+| 使用本页的提交、查询、结果和取消能力 | `onestep==1.9.0` + `onestep-sql[postgres]==0.1.0` | 需要按本文部署 API 和 worker |
 
-`onestep-postgres==0.2.0` 依赖 `onestep>=1.9.0`，不能与 `onestep==1.8.1` 组合。反过来，只发布或安装 `onestep==1.9.0` 不会自动启用 tracked execution；没有安装 PostgreSQL plugin 的普通 worker 可以照常运行。
+`onestep-sql[postgres]==0.1.0` 依赖 `onestep>=1.9.0`，不能与 `onestep==1.8.1` 组合。反过来，只发布或安装 `onestep==1.9.0` 不会自动启用 tracked execution；没有安装 PostgreSQL plugin 的普通 worker 可以照常运行。
 
 ## 1. 运行架构
 
@@ -51,33 +51,35 @@ POST /executions/{id}/cancel         heartbeat + lease completion
 两个包都发布后，参与同一条 execution 链路的 API 和 worker 使用同一组锁定版本：
 
 ```bash
-pip install "onestep>=1.9.0" "onestep-postgres>=0.2.0"
+pip install "onestep==1.9.0" "onestep-sql[postgres]==0.1.0"
 ```
 
-也可以使用 core 的 extra。注意 extra 声明的是 `onestep-postgres>=0.2.0`；生产环境仍建议通过 lockfile 固定最终解析版本：
+也可以使用 core 的 extra。注意 extra 声明的是 `onestep-sql[postgres]>=0.1.0`；生产环境仍建议通过 lockfile 固定最终解析版本：
 
 ```bash
-pip install "onestep[postgres]>=1.9.0"
+pip install "onestep[postgres]==1.9.0"
 ```
 
 项目使用 uv 时：
 
 ```bash
-uv add "onestep>=1.9.0" "onestep-postgres>=0.2.0"
-uv run python -c "import onestep, onestep_postgres; print(onestep.__version__, onestep_postgres.__version__)"
+uv add "onestep==1.9.0" "onestep-sql[postgres]==0.1.0"
+uv run python -c "import onestep, onestep_sql.postgres; print(onestep.__version__, onestep_sql.postgres.__version__)"
 uv run pip check
 ```
+
+> `onestep-sql` 是 MySQL 与 PostgreSQL 的规范发行包（issue #133）。旧的 `onestep-postgres` 仍可用作转发 shim，但新部署建议使用 `onestep-sql[postgres]`。Python 导入路径 `from onestep_postgres import ...` 保持兼容。
 
 发布顺序必须是：
 
 1. 发布 `onestep==1.9.0`。
 2. 确认 `onestep==1.9.0` 已经可以从 PyPI 安装。
-3. 发布 `onestep-postgres==0.2.0`。
+3. 发布 `onestep-sql==0.1.0`（含 PostgreSQL 后端）。
 4. 锁定依赖，完成数据库初始化。
 5. 先部署 worker 并确认能连接数据库，再开放 API 提交入口。
 6. 避免同一业务链路长期运行混合版本。
 
-如果 plugin 尚未发布，`onestep[postgres]>=1.9.0` 和 `onestep[all]>=1.9.0` 不能完整解析依赖。普通 `onestep>=1.9.0` 不依赖 PostgreSQL plugin，可以独立安装。
+如果 plugin 尚未发布，`onestep[postgres]==1.9.0` 和 `onestep[all]==1.9.0` 不能完整解析依赖。普通 `onestep==1.9.0` 不依赖 PostgreSQL plugin，可以独立安装。
 
 ## 3. 数据库初始化
 
@@ -690,9 +692,9 @@ ORDER BY attempt_no;
 
 上线前按顺序确认：
 
-- [ ] PyPI 中同时存在 `onestep==1.9.0` 和 `onestep-postgres==0.2.0`。
+- [ ] PyPI 中同时存在 `onestep==1.9.0` 和 `onestep-sql==0.1.0`（含 PostgreSQL 后端）。
 - [ ] API 和 worker 的 `pip check` 通过，两个进程使用相同版本组合。
-- [ ] API 和 worker 都打印并核对过 `onestep`、`onestep-postgres` 的实际版本。
+- [ ] API 和 worker 都打印并核对过 `onestep`、`onestep_sql.postgres` 的实际版本。
 - [ ] 以 migration 身份完成 execution 两张表的初始化。
 - [ ] API 和 worker 都使用 `auto_create=False`。
 - [ ] API 和 worker 的 DSN、namespace、表名一致。
@@ -719,7 +721,7 @@ ORDER BY attempt_no;
 
 1. 先停止 API 继续提交新的 tracked execution。
 2. 等待或人工处理当前 `running`、`cancel_requested` 和 `retrying` 记录。
-3. API 和 worker 一起回滚到兼容的 core/plugin 版本，例如 `onestep==1.8.1` 与 `onestep-postgres==0.1.3`。
+3. API 和 worker 一起回滚到兼容的 core/plugin 版本，例如 `onestep==1.8.1` 与 `onestep-postgres==0.1.3`（旧转发 shim 仍可安装）。
 4. 保留 `onestep_executions` 和 `onestep_execution_attempts` 表，不要直接 drop。它们包含审计和恢复信息。
 5. 如果恢复到新版本，先执行 smoke test，再重新放开业务提交。
 

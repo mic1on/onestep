@@ -13,8 +13,12 @@ MySQL Connector 提供三种模式：
 ## 安装
 
 ```bash
-pip install onestep-mysql
+pip install 'onestep-sql[mysql]'
+# 或使用 core extra
+# pip install 'onestep[mysql]'
 ```
+
+> `onestep-sql` 是 MySQL 与 PostgreSQL 的规范发行包（issue #133）。旧的 `pip install onestep-mysql` 仍可用作转发 shim，但新部署建议使用 `onestep-sql[mysql]`。所有 YAML 资源类型名不变。
 
 ## 表队列 (Table Queue)
 

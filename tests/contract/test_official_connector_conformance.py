@@ -104,42 +104,33 @@ PROFILES = (
         },
     ),
     ConnectorConformanceProfile(
-        name="mysql",
+        name="sql",
         contracts={
+            # The canonical onestep-sql package is the Phase 1 consolidation of
+            # onestep-mysql + onestep-postgres; its conformance is the union of
+            # both backends (issue #133, design PR #134). The legacy
+            # onestep-mysql / onestep-postgres distributions became thin
+            # forwarding shims in Phase 3 and no longer declare their own
+            # resource entry points, so their conformance is owned here.
             Capability.BASIC_SOURCE: (
                 "plugins/onestep-mysql/tests/test_mysql_table_queue.py::test_mysql_table_queue_round_trip",
+                "plugins/onestep-postgres/tests/test_postgres_table_queue.py::test_postgres_table_queue_round_trip",
             ),
             Capability.CHECKPOINT_SOURCE: (
                 "plugins/onestep-mysql/tests/test_mysql_incremental.py::test_mysql_incremental_cursor_advances_in_order",
                 "plugins/onestep-mysql/tests/test_mysql_binlog.py::test_mysql_binlog_cursor_advances_in_order",
-            ),
-            Capability.CLAIMED_SOURCE: (
-                "plugins/onestep-mysql/tests/test_mysql_runtime_contract.py::test_table_queue_stop_controls_release_claimed_rows",
-            ),
-            Capability.ACKNOWLEDGED_SINK: (
-                "plugins/onestep-mysql/tests/test_mysql_table_queue.py::test_mysql_table_queue_round_trip",
-            ),
-            Capability.PUBLIC_ERRORS: (
-                "plugins/onestep-mysql/tests/test_mysql_plugin.py::test_mysql_connector_error_does_not_leak_dsn_credentials",
-            ),
-        },
-    ),
-    ConnectorConformanceProfile(
-        name="postgres",
-        contracts={
-            Capability.BASIC_SOURCE: (
-                "plugins/onestep-postgres/tests/test_postgres_table_queue.py::test_postgres_table_queue_round_trip",
-            ),
-            Capability.CHECKPOINT_SOURCE: (
                 "plugins/onestep-postgres/tests/test_postgres_incremental.py::test_postgres_incremental_cursor_advances_in_order",
             ),
             Capability.CLAIMED_SOURCE: (
+                "plugins/onestep-mysql/tests/test_mysql_runtime_contract.py::test_table_queue_stop_controls_release_claimed_rows",
                 "plugins/onestep-postgres/tests/test_postgres_runtime_contract.py::test_table_queue_stop_controls_release_claimed_rows",
             ),
             Capability.ACKNOWLEDGED_SINK: (
+                "plugins/onestep-mysql/tests/test_mysql_table_queue.py::test_mysql_table_queue_round_trip",
                 "plugins/onestep-postgres/tests/test_postgres_table_queue.py::test_postgres_table_queue_round_trip",
             ),
             Capability.PUBLIC_ERRORS: (
+                "plugins/onestep-mysql/tests/test_mysql_plugin.py::test_mysql_connector_error_does_not_leak_dsn_credentials",
                 "plugins/onestep-postgres/tests/test_postgres_plugin.py::test_postgres_connector_error_does_not_leak_dsn_credentials",
             ),
         },

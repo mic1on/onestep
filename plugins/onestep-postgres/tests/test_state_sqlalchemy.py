@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from datetime import datetime
 
 from onestep_postgres import PostgresConnector, SQLAlchemyStateStore
 
@@ -22,6 +23,15 @@ def test_sqlalchemy_state_store_persists_across_instances(tmp_path: Path) -> Non
     asyncio.run(scenario())
 
 
+def test_state_store_does_not_create_asyncio_lock_during_sync_construction(tmp_path: Path) -> None:
+    asyncio.set_event_loop(None)
+    store = SQLAlchemyStateStore(dsn=f"sqlite:///{tmp_path / 'state-lock.db'}")
+
+    assert store._ready_lock is None
+
+    asyncio.run(store.close())
+
+
 def test_postgres_connector_builds_shared_state_store(tmp_path: Path) -> None:
     db_url = f"sqlite:///{tmp_path / 'connector-state.db'}"
 
@@ -41,3 +51,38 @@ def test_postgres_connector_builds_shared_state_store(tmp_path: Path) -> None:
         await db.close()
 
     asyncio.run(scenario())
+
+
+def test_postgres_cursor_store_round_trips_datetime_cursor_values(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'datetime-cursor.db'}"
+    cursor_value = datetime(2026, 8, 17, 0, 53, 55, 640000)  # noqa: DTZ001
+
+    async def scenario() -> None:
+        db = PostgresConnector(db_url)
+        cursor = db.cursor_store(table="onestep_cursor")
+
+        await cursor.save("follow-records", [cursor_value, "u_123"])
+
+        assert await cursor.load("follow-records") == [cursor_value, "u_123"]
+
+        raw_state = SQLAlchemyStateStore(
+            engine=db.engine,
+            table="onestep_cursor",
+            key_column="cursor_key",
+            value_column="cursor_value",
+        )
+        assert await raw_state.load("follow-records") == [
+            {
+                "__onestep_cursor_type__": "datetime",
+                "value": "2026-08-17T00:53:55.640000",
+            },
+            "u_123",
+        ]
+
+        await raw_state.save("legacy", [10, "u_456"])
+        assert await cursor.load("legacy") == [10, "u_456"]
+        await db.close()
+
+    asyncio.run(scenario())
+
+

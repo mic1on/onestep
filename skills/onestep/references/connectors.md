@@ -4,10 +4,11 @@ Use this reference when wiring onestep resources to queues, polling backends, sc
 
 ## General Rules
 
-- Install only the needed package: `onestep-mysql`, `onestep-postgres`,
-  `onestep-mq`, `onestep-redis`, `onestep-sqs`, `onestep-kafka`,
-  `onestep-elasticsearch`, `onestep-clickhouse`, `onestep-mongodb`, or
-  `onestep[yaml]`.
+- Install only the needed package: `onestep-sql[mysql]`,
+  `onestep-sql[postgres]`, `onestep-mq`, `onestep-redis`, `onestep-sqs`,
+  `onestep-kafka`, `onestep-elasticsearch`, `onestep-clickhouse`,
+  `onestep-mongodb`, or `onestep[yaml]`. Legacy `onestep-mysql` /
+  `onestep-postgres` shims still work (issue #133).
 - Prefer environment variables for DSNs, tokens, and queue URLs in YAML.
 - In YAML, define shared connection resources first, then sources/sinks that reference them by name.
 - Keep connector options minimal until the deployment requires tuning.

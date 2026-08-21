@@ -1,41 +1,7 @@
-from __future__ import annotations
+# Forwarding shim (issue #133 / design PR #134).
+# onestep-mysql now delegates to the canonical onestep-sql package so the
+# public API (class/function/exception identities) is preserved as a drop-in
+# replacement while the MySQL+PostgreSQL consolidation lands.
+from onestep_sql.mysql import *  # noqa: F401,F403
 
-from importlib.metadata import PackageNotFoundError, version as _package_version
-
-from .connector import (
-    BinlogDelivery,
-    BinlogSource,
-    IncrementalDelivery,
-    IncrementalTableSource,
-    MySQLConnector,
-    TableQueueDelivery,
-    TableQueueSource,
-    TableSink,
-)
-from .resources import register_resources
-from .resilience import classify_sqlalchemy_error
-from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
-
-try:
-    __version__ = _package_version("onestep-mysql")
-except PackageNotFoundError:  # pragma: no cover - local source tree before install
-    __version__ = "dev"
-
-register = register_resources
-
-__all__ = [
-    "BinlogDelivery",
-    "BinlogSource",
-    "IncrementalDelivery",
-    "IncrementalTableSource",
-    "MySQLConnector",
-    "SQLAlchemyCursorStore",
-    "SQLAlchemyStateStore",
-    "TableQueueDelivery",
-    "TableQueueSource",
-    "TableSink",
-    "__version__",
-    "classify_sqlalchemy_error",
-    "register",
-    "register_resources",
-]
+__version__ = "0.7.0"

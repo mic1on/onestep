@@ -14,7 +14,7 @@ Common extras and connector plugins:
 
 ```bash
 pip install 'onestep[yaml]'
-pip install onestep-mysql
+pip install 'onestep-sql[mysql]'
 pip install onestep-mq
 pip install onestep-redis
 pip install onestep-sqs

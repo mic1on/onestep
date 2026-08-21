@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from pathlib import Path
 
 import pytest
@@ -60,18 +59,17 @@ def test_table_queue_stop_controls_release_claimed_rows(
             batch_size=1,
             poll_interval_s=0.01,
         )
-        fetch_started = threading.Event()
-        release_fetch = threading.Event()
-        original_fetch = source._fetch_sync
+        fetch_started = asyncio.Event()
+        release_fetch = asyncio.Event()
+        original_fetch = source._fetch
 
-        def blocking_fetch(limit: int):
-            rows = original_fetch(limit)
+        async def blocking_fetch(limit: int):
+            rows = await original_fetch(limit)
             fetch_started.set()
-            if not release_fetch.wait(timeout=1.0):
-                raise TimeoutError("test did not release the PostgreSQL table queue fetch")
+            await release_fetch.wait()
             return rows
 
-        source._fetch_sync = blocking_fetch
+        source._fetch = blocking_fetch
 
         def assert_released() -> None:
             assert _load_order_rows(db_url, orders) == [(1, 0)]
@@ -80,7 +78,7 @@ def test_table_queue_stop_controls_release_claimed_rows(
             await run_claimed_source_stop_contract(
                 ClaimedSourceHarness(
                     source=source,
-                    wait_for_fetch_started=lambda: _wait_for_thread_event(fetch_started),
+                    wait_for_fetch_started=lambda: fetch_started.wait(),
                     release_fetch=release_fetch.set,
                     assert_released=assert_released,
                 ),
@@ -91,12 +89,3 @@ def test_table_queue_stop_controls_release_claimed_rows(
             await db.close()
 
     asyncio.run(scenario())
-
-
-async def _wait_for_thread_event(event: threading.Event) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 1.0
-    while not event.is_set():
-        if loop.time() >= deadline:
-            raise TimeoutError("table queue fetch did not start")
-        await asyncio.sleep(0.001)

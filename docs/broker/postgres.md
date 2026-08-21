@@ -12,8 +12,12 @@ outline: deep
 ## 安装
 
 ```bash
-pip install onestep-postgres
+pip install 'onestep-sql[postgres]'
+# 或使用 core extra
+# pip install 'onestep[postgres]'
 ```
+
+> `onestep-sql` 是 MySQL 与 PostgreSQL 的规范发行包（issue #133）。旧的 `pip install onestep-postgres` 仍可用作转发 shim，但新部署建议使用 `onestep-sql[postgres]`。所有 YAML 资源类型名不变。
 
 ## 基本用法
 

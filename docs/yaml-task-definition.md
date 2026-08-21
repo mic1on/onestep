@@ -670,7 +670,7 @@ strict 模式下，`memory` 资源必须设置正数 `maxsize`；这可以避免
 
 - `onestep-elasticsearch`：`elasticsearch`、`elasticsearch_bulk_sink`
 - `onestep-clickhouse`：`clickhouse`、`clickhouse_table_sink`
-- `onestep-mysql`：`mysql`、`mysql_state_store`、`mysql_cursor_store`、`mysql_table_queue`、`mysql_incremental`、`mysql_table_sink`
+- `onestep-sql`：`mysql`、`mysql_state_store`、`mysql_cursor_store`、`mysql_table_queue`、`mysql_incremental`、`mysql_table_sink`、`mysql_binlog`、`postgres`、`postgres_state_store`、`postgres_cursor_store`、`postgres_table_queue`、`postgres_incremental`、`postgres_table_sink`、`postgres_execution_source`（旧的 `onestep-mysql` / `onestep-postgres` 转发 shim 仍通过 `onestep-sql` 注册相同类型）
 - `onestep-mq`：`rabbitmq`、`rabbitmq_queue`
 - `onestep-redis`：`redis`、`redis_stream`
 - `onestep-sqs`：`sqs`、`sqs_queue`

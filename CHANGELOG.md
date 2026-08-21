@@ -7,6 +7,124 @@
   now). Task nodes carry concurrency, retry, and timeout; edges are labeled
   `emit` (plus transform refs), `when`/`otherwise` for conditional routes, and
   dashed `dead_letter`; resources shared across tasks are drawn once.
+- Consolidates the previously parallel mysql/postgres implementations into the
+  private `onestep_sql._shared` package so each exists exactly once (SQLAlchemy
+  state/cursor stores with per-backend asyncio driver mapping, table-sink
+  update policy, default incremental state-key, secret-redaction scaffolding).
+  The drift-detection CI job (`scripts/check_plugin_drift.py`, issue #125) is
+  retired and replaced by dual-backend contract tests
+  (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
+  for both backends.
+
+## onestep-sql 0.1.0
+
+- First release of the canonical, unified MySQL **and** PostgreSQL connector
+  distribution for onestep (issue #133, design PR #134). `onestep-sql` is the
+  single package that registers all 14 existing YAML resource types
+  (`mysql_*`, `postgres_*`) through one `sql` entry point, with `mysql`,
+  `postgres`, `sqlite`, and `all` extras. New code should install
+  `onestep-sql[mysql]` / `onestep-sql[postgres]` and import from
+  `onestep_sql.mysql` / `onestep_sql.postgres`. Runtime behaviour, YAML names,
+  catalog roles, fields, defaults, and connector boundaries are unchanged; the
+  previously separate `onestep-mysql` / `onestep-postgres` distributions remain
+  available as thin forwarding shims without their own resource entry points.
+
+## onestep-mysql 0.7.0
+
+- Converts `onestep-mysql` into a thin forwarding distribution that delegates to
+  the canonical `onestep-sql` package (issue #133, Phase 3). The package no
+  longer declares its own `onestep.resources` entry point; installing it pulls
+  `onestep-sql[mysql,sqlite]` and re-exports the public API from
+  `onestep_sql.mysql` with object identity preserved. Existing
+  `from onestep_mysql import ...` imports and YAML configurations keep working
+  unchanged. Prefer `onestep-sql[mysql]` for new deployments.
+
+## onestep-postgres 0.6.0
+
+- Converts `onestep-postgres` into a thin forwarding distribution that delegates
+  to the canonical `onestep-sql` package (issue #133, Phase 3). The package no
+  longer declares its own `onestep.resources` entry point; installing it pulls
+  `onestep-sql[postgres,sqlite]` and re-exports the public API from
+  `onestep_sql.postgres` with object identity preserved. Existing
+  `from onestep_postgres import ...` imports and YAML configurations keep
+  working unchanged. Prefer `onestep-sql[postgres]` for new deployments.
+
+## onestep-postgres 0.5.0
+
+- Ports incremental source commit-waves, retry rows, and failure fencing from
+  `onestep-mysql 0.5.0`. `postgres_incremental` now:
+  - Redelivers rows on `retry()` with incremented `envelope.attempts`;
+    `retry(delay_s=...)` schedules the redelivery after the given delay.
+  - Coalesces concurrent contiguous acknowledgements into a single commit wave
+    via `_flush_commits()`, reducing state-store writes under concurrency.
+  - Blocks future fetches with `ConnectorOperationError(PERMANENT)` after
+    `fail()`, fencing the failed cursor prefix.
+  - Logs structured `postgres_incremental_fetch`, `postgres_incremental_retry`,
+    and `postgres_incremental_cursor_commit` events with timing and row counts.
+- Adds 7 new test scenarios covering retry redelivery with attempts,
+  retry-delay pause, terminal failure blocking, concurrent commit coalescence,
+  cursor-save-failure recovery, restart from datetime cursor, and structured
+  log content, bringing the postgres incremental suite from 4 to 11 tests.
+
+## onestep-postgres 0.4.1
+
+- Fixes `serialize_json` column-type detection on `postgres_table_sink`: now
+  uses `isinstance(column.type, sa.JSON)` instead of string matching, aligning
+  with `onestep-mysql` and correctly serializing non-JSON columns under `auto`
+  mode.
+- Adds three `serialize_json` behavior tests to the postgres table-sink suite.
+
+## onestep-mysql 0.6.1
+
+- Internal refactor: moves `update_columns` policy conflict validation into
+  `_normalize_update_columns()` for source-level parity with the postgres
+  plugin. Error messages unchanged.
+- Aligns `SQLAlchemyStateStore` error message with postgres's shorter form
+  (cosmetic, no behavior change).
+
+## onestep-postgres 0.4.0
+
+- **Breaking**: `PostgresConnector.engine` (and every engine built from plugin
+  DSNs) is now an async `AsyncEngine` backed by native async SQLAlchemy. Code
+  that used `db.engine.begin()` synchronously must switch to
+  `async with db.engine.begin()`. YAML configurations are unchanged.
+- Migrates the entire plugin off `asyncio.to_thread` wrappers to native async
+  SQLAlchemy (mirroring `onestep-mysql 0.4.0`): connector table reflection,
+  table queue, incremental, table sink, state/cursor stores, and the execution
+  backend now await database work directly, so task cancellation propagates
+  to the driver and worker shutdown no longer queues on the thread pool.
+- Keeps the psycopg3 driver (natively dual-mode); DSNs without an explicit
+  driver are normalized to `postgresql+psycopg://`, and `sqlite://` test DSNs
+  to `sqlite+aiosqlite://`.
+- Preserves fork safety with adapted semantics: a forked child drops the
+  inherited engine reference without disposing it (AsyncEngine disposal is a
+  coroutine and must not run post-fork); the parent's connections are never
+  touched by the child.
+- Internal helpers renamed: `_fetch_sync`/`_send_sync`/`_release_expired_leases_sync`
+  and friends drop the `_sync` suffix and are now awaitable.
+
+## onestep-postgres 0.3.0
+
+- Persists `datetime` components of incremental cursors as tagged ISO-8601 JSON
+  values and restores them for keyset queries after restart, mirroring
+  `onestep-mysql 0.5.1`.
+- Adds `mode="update"` to `postgres_table_sink`: rows are written via
+  `UPDATE ... WHERE keys` and never inserted, avoiding accidental-insert risk
+  and NOT NULL column warnings; unmatched rows are skipped with an INFO log.
+- Adds `update_columns`, `update_expr`, and `serialize_json` to
+  `postgres_table_sink`, mirroring `onestep-mysql`: whitelisted update columns,
+  literal SQL expressions, and automatic JSON coercion for TEXT/CHAR columns.
+- Adds per-column null write policies to `postgres_table_sink`:
+  `update_columns` entries accept `{name, policy}` mappings alongside plain
+  column names. `skip_null` omits a column when the payload value is null,
+  `backfill` renders `SET col = COALESCE(col, :val)`, and `overwrite` (the
+  default) keeps the existing unconditional behavior. Rows whose `SET` clause
+  becomes empty after `skip_null` filtering are skipped with an INFO log.
+- Enforces policy configuration at construction time: policy entries cannot
+  target key columns, duplicate columns, or columns also configured in
+  `update_expr`.
+- Changes the `update_columns` catalog field type from `string_list` to `json`
+  to reflect the mixed entry shape.
 
 ## onestep-mysql 0.6.0
 

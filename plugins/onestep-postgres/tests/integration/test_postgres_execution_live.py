@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -51,25 +50,27 @@ async def _close_and_drop(connectors: list[PostgresConnector], tables: tuple[str
     await asyncio.gather(*(connector.close() for connector in connectors))
 
 
-class _PauseAfterSelect:
+class _AsyncPauseAfterSelect:
     def __init__(
         self,
         conn,
         *,
-        selected: threading.Event,
-        resume: threading.Event,
+        selected: asyncio.Event,
+        resume: asyncio.Event,
     ) -> None:
         self._conn = conn
         self._selected = selected
         self._resume = resume
         self._paused = False
 
-    def execute(self, statement, *args, **kwargs):
-        result = self._conn.execute(statement, *args, **kwargs)
+    async def execute(self, statement, *args, **kwargs):
+        result = await self._conn.execute(statement, *args, **kwargs)
         if not self._paused and isinstance(statement, sa.sql.Select):
             self._paused = True
             self._selected.set()
-            if not self._resume.wait(timeout=10):
+            try:
+                await asyncio.wait_for(self._resume.wait(), 10)
+            except asyncio.TimeoutError:
                 raise TimeoutError("expired lease cleanup barrier timed out")
         return result
 
@@ -167,8 +168,8 @@ def test_expired_lease_cleanup_does_not_overwrite_renewal_live():
         base_time = datetime(2026, 8, 9, tzinfo=timezone.utc)
         cleanup_clock = {"now": base_time}
         heartbeat_clock = {"now": base_time + timedelta(seconds=0.5)}
-        selected = threading.Event()
-        resume = threading.Event()
+        selected = asyncio.Event()
+        resume = asyncio.Event()
         first = PostgresExecutionBackend(
             connector=first_connector,
             table=execution_table,
@@ -200,21 +201,22 @@ def test_expired_lease_cleanup_does_not_overwrite_renewal_live():
             )
             cleanup_clock["now"] = base_time + timedelta(seconds=2)
 
-            def cleanup() -> None:
-                with first.engine.begin() as raw_conn:
-                    conn = _PauseAfterSelect(
+            async def cleanup() -> None:
+                async with first.engine.connect() as raw_conn:
+                    conn = _AsyncPauseAfterSelect(
                         raw_conn,
                         selected=selected,
                         resume=resume,
                     )
-                    first._release_expired_leases_sync(
-                        conn,
-                        first.tables.attempts,
-                        cleanup_clock["now"],
-                    )
+                    async with raw_conn.begin():
+                        await first._release_expired_leases(
+                            conn,
+                            first.tables.attempts,
+                            cleanup_clock["now"],
+                        )
 
-            cleanup_task = asyncio.create_task(asyncio.to_thread(cleanup))
-            assert await asyncio.to_thread(selected.wait, 10)
+            cleanup_task = asyncio.create_task(cleanup())
+            await asyncio.wait_for(selected.wait(), 10)
             heartbeat = await second.heartbeat(
                 lease.execution.id,
                 lease.attempt_id,
@@ -226,12 +228,12 @@ def test_expired_lease_cleanup_does_not_overwrite_renewal_live():
 
             current = await first.get("agent-api", lease.execution.id)
             assert current is not None and current.status is ExecutionStatus.RUNNING
-            with first.engine.begin() as conn:
-                attempt_status = conn.execute(
+            async with first.engine.begin() as conn:
+                attempt_status = (await conn.execute(
                     sa.select(first.tables.attempts.c.status).where(
                         first.tables.attempts.c.id == lease.attempt_id
                     )
-                ).scalar_one()
+                )).scalar_one()
             assert attempt_status == "running"
             assert heartbeat.lease_expires_at > cleanup_clock["now"]
         finally:
@@ -450,12 +452,12 @@ def test_cancel_and_complete_race_has_one_terminal_winner_live():
             assert completed is None or completed.status is final.status
             if final.status is ExecutionStatus.CANCELLED:
                 assert final.result is None
-                with first.engine.begin() as conn:
-                    attempt = conn.execute(
+                async with first.engine.begin() as conn:
+                    attempt = (await conn.execute(
                         sa.select(first.tables.attempts).where(
                             first.tables.attempts.c.id == lease.attempt_id
                         )
-                    ).mappings().one()
+                    )).mappings().one()
                 assert attempt["status"] == "cancelled"
                 assert attempt["error"] is None
                 assert "result" not in attempt
@@ -500,12 +502,12 @@ def test_cancel_won_success_completion_preserves_cancelled_attempt_live():
             assert completed.status is ExecutionStatus.CANCELLED
             assert completed.result is None
             assert completed.error is None
-            with backend.engine.begin() as conn:
-                attempt = conn.execute(
+            async with backend.engine.begin() as conn:
+                attempt = (await conn.execute(
                     sa.select(backend.tables.attempts).where(
                         backend.tables.attempts.c.id == lease.attempt_id
                     )
-                ).mappings().one()
+                )).mappings().one()
             assert attempt["status"] == "cancelled"
             assert attempt["error"] is None
             assert "result" not in attempt
