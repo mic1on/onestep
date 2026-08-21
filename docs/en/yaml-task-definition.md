@@ -713,7 +713,7 @@ Plugin resource types:
 
 - `onestep-elasticsearch`: `elasticsearch`, `elasticsearch_bulk_sink`
 - `onestep-clickhouse`: `clickhouse`, `clickhouse_table_sink`
-- `onestep-mysql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`
+- `onestep-sql`: `mysql`, `mysql_state_store`, `mysql_cursor_store`, `mysql_table_queue`, `mysql_incremental`, `mysql_table_sink`, `mysql_binlog`, `postgres`, `postgres_state_store`, `postgres_cursor_store`, `postgres_table_queue`, `postgres_incremental`, `postgres_table_sink`, `postgres_execution_source` (the legacy `onestep-mysql` / `onestep-postgres` forwarding shims still register the same types via `onestep-sql`)
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`

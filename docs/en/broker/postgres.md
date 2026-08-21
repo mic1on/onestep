@@ -12,8 +12,12 @@ For the full business integration flow for long-running tasks, see [PostgreSQL T
 ## Installation
 
 ```bash
-pip install onestep-postgres
+pip install 'onestep-sql[postgres]'
+# or use the core extra
+# pip install 'onestep[postgres]'
 ```
+
+> `onestep-sql` is the canonical distribution package for MySQL and PostgreSQL (issue #133). The legacy `pip install onestep-postgres` still works as a forwarding shim, but new deployments should use `onestep-sql[postgres]`. All YAML resource type names are unchanged.
 
 ## Basic Usage
 

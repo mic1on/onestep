@@ -1,5 +1,22 @@
 # 文档更新日志
 
+## 2026-08-21 - 同步 main 与 onestep-sql 包名对齐
+
+### 变更概述
+
+将 docs 分支合并到 `main` 的最新代码状态（up to #140），中英文页面统一对齐 `onestep-sql` 规范发行包口径，并补齐迁移指南英文版。
+
+### 更新内容
+
+- 合入 `main` 的 onestep-sql 整合（Phase 0-3，#133-#140）、PostgreSQL async SQLAlchemy 迁移（#128）、per-sink transform bindings（#117/#118）与 `onestep render` 拓扑渲染的代码与设计文档。
+- 中英文连接器概览与 MySQL/PostgreSQL 连接器页安装命令统一为 `onestep-sql[mysql]` / `onestep-sql[postgres]`，并补充旧包转发 shim 说明。
+- 新增 [Migrate to onestep-sql](/en/guide/migrate-to-onestep-sql) 英文页与导航条目（中文版由 `main` 合入）。
+- 中英文 YAML 任务定义的插件资源类型列表更新为 `onestep-sql` 单一 entry point 注册的 14 个资源类型。
+- 中英文 PostgreSQL Tracked Execution 安装示例切换到 `onestep-sql[postgres]`（保留 `>=` 下限风格），发布顺序与上线检查清单同步更新。
+- MySQL 到飞书多维表格实战案例安装命令更新为 `onestep-sql[mysql]>=0.1.0`。
+- 版本号口径（`1.11.0`、worker 镜像标签）保持 docs 分支审计结果。
+- VitePress 构建验证通过（0 错误）。
+
 ## 2026-08-19 - 全站审计、版本号更新与 en 翻译补齐
 
 ### 变更概述

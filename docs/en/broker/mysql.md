@@ -13,8 +13,12 @@ MySQL Connector provides three modes:
 ## Installation
 
 ```bash
-pip install onestep-mysql
+pip install 'onestep-sql[mysql]'
+# or use the core extra
+# pip install 'onestep[mysql]'
 ```
+
+> `onestep-sql` is the canonical distribution package for MySQL and PostgreSQL (issue #133). The legacy `pip install onestep-mysql` still works as a forwarding shim, but new deployments should use `onestep-sql[mysql]`. All YAML resource type names are unchanged.
 
 ## Table Queue
 

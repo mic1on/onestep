@@ -57,6 +57,7 @@ export default defineConfig({
               { text: 'Features', link: '/en/guide/features' },
               { text: 'Production Deploy', link: '/en/guide/deploy' },
               { text: 'Worker Runtime Image', link: '/en/guide/worker-runtime-image' },
+              { text: 'Migrate to onestep-sql', link: '/en/guide/migrate-to-onestep-sql' },
             ],
           },
           {

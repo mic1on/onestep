@@ -36,11 +36,11 @@ pip install 'onestep[yaml]'
 ```
 
 ```bash [MySQL]
-pip install onestep-mysql
+pip install 'onestep-sql[mysql]'
 ```
 
 ```bash [PostgreSQL]
-pip install onestep-postgres
+pip install 'onestep-sql[postgres]'
 ```
 
 ```bash [RabbitMQ]

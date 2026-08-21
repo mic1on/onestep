@@ -26,10 +26,10 @@ view_order_sync
 Install these versions or later:
 
 ```bash
-pip install 'onestep-mysql>=0.5.1' 'onestep-feishu-bitable>=0.4.0'
+pip install 'onestep-sql[mysql]>=0.1.0' 'onestep-feishu-bitable>=0.4.0'
 ```
 
-`onestep-mysql 0.5.1` persists and restores MySQL `DATETIME` cursor components with microsecond precision preserved. `onestep-feishu-bitable 0.4.0` provides bounded startup key indexing and indeterminate batch write recovery.
+`onestep-sql[mysql]` (consolidated from `onestep-mysql 0.5.1`) persists and restores MySQL `DATETIME` cursor components with microsecond precision preserved. `onestep-feishu-bitable 0.4.0` provides bounded startup key indexing and indeterminate batch write recovery.
 
 Before starting, verify:
 
@@ -169,7 +169,7 @@ If an old `0.5.0` worker reports the following error after `mysql incremental cu
 TypeError: Object of type datetime is not JSON serializable
 ```
 
-Stop the old worker, upgrade to `onestep-mysql>=0.5.1`, and restart with the same `state_key`.
+Stop the old worker, upgrade to `onestep-sql[mysql]>=0.1.0` (or the `onestep-mysql>=0.5.1` forwarding shim), and restart with the same `state_key`.
 **Do not manually advance `onestep_cursor` past the failing row**: Feishu may have accepted some records, and unconfirmed records cannot be skipped. Replay will recognize them as already existing via the `订单编号` key index.
 
 ### Observation Points

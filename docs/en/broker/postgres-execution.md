@@ -5,7 +5,7 @@ outline: deep
 
 # PostgreSQL Tracked Execution
 
-This document explains how business systems can use PostgreSQL as a submission, state, result, cancellation, and lease store for long-running tasks after the release of `onestep==1.9.0` and `onestep-postgres==0.2.0`.
+This document explains how business systems can use PostgreSQL as a submission, state, result, cancellation, and lease store for long-running tasks after the release of `onestep==1.9.0` and `onestep-sql[postgres]==0.1.0`.
 
 Use cases: An HTTP request submits a task that may run for seconds, minutes, or longer. The API returns a task ID, and the business side polls for status or results. Typical examples include Agents, report generation, file processing, async imports, and batch syncs.
 
@@ -17,9 +17,9 @@ This feature is optional. Existing `MemoryQueue`, RabbitMQ, Redis, SQS, schedule
 | --- | --- | --- |
 | Continue using regular queue, schedule, webhook | `onestep==1.9.0` | No |
 | Continue using existing PostgreSQL table queue, incremental, state or sink | `onestep==1.9.0` + compatible PostgreSQL plugin | Usually no |
-| Use submission, query, result, and cancellation from this page | `onestep==1.9.0` + `onestep-postgres==0.2.0` | Deploy API and worker per this page |
+| Use submission, query, result, and cancellation from this page | `onestep==1.9.0` + `onestep-sql[postgres]==0.1.0` | Deploy API and worker per this page |
 
-`onestep-postgres==0.2.0` depends on `onestep>=1.9.0` and cannot be combined with `onestep==1.8.1`. Conversely, installing `onestep==1.9.0` alone does not automatically enable tracked execution; workers without the PostgreSQL plugin can run normally.
+`onestep-sql[postgres]==0.1.0` depends on `onestep>=1.9.0` and cannot be combined with `onestep==1.8.1`. Conversely, installing `onestep==1.9.0` alone does not automatically enable tracked execution; workers without the PostgreSQL plugin can run normally.
 
 ## 1. Runtime Architecture
 
@@ -51,10 +51,10 @@ Each `PostgresExecutionSource` can only bind to one task name. To execute multip
 After both packages are released, API and worker processes participating in the same execution chain use the same locked versions:
 
 ```bash
-pip install "onestep>=1.9.0" "onestep-postgres>=0.2.0"
+pip install "onestep>=1.9.0" "onestep-sql[postgres]>=0.1.0"
 ```
 
-Or use the core extra. Note that the extra declares `onestep-postgres>=0.2.0`; production environments should still pin the final resolved version via lockfile:
+Or use the core extra. Note that the extra declares `onestep-sql[postgres]>=0.1.0`; production environments should still pin the final resolved version via lockfile:
 
 ```bash
 pip install "onestep[postgres]>=1.9.0"
@@ -63,16 +63,18 @@ pip install "onestep[postgres]>=1.9.0"
 When using uv:
 
 ```bash
-uv add "onestep>=1.9.0" "onestep-postgres>=0.2.0"
-uv run python -c "import onestep, onestep_postgres; print(onestep.__version__, onestep_postgres.__version__)"
+uv add "onestep>=1.9.0" "onestep-sql[postgres]>=0.1.0"
+uv run python -c "import onestep, onestep_sql.postgres; print(onestep.__version__, onestep_sql.postgres.__version__)"
 uv run pip check
 ```
+
+> `onestep-sql` is the canonical distribution package for MySQL and PostgreSQL (issue #133). The legacy `onestep-postgres` still works as a forwarding shim, but new deployments should use `onestep-sql[postgres]`. The Python import path `from onestep_postgres import ...` remains compatible.
 
 Release order:
 
 1. Release `onestep==1.9.0`.
 2. Confirm `onestep==1.9.0` is installable from PyPI.
-3. Release `onestep-postgres==0.2.0`.
+3. Release `onestep-sql==0.1.0` (with the PostgreSQL backend).
 4. Lock dependencies, complete database initialization.
 5. Deploy the worker first and confirm it can connect to the database before opening the API submission endpoint.
 6. Avoid running mixed versions in the same business chain for extended periods.
@@ -694,9 +696,9 @@ Key alerts:
 
 Confirm in order before going live:
 
-- [ ] Both `onestep==1.9.0` and `onestep-postgres==0.2.0` exist on PyPI.
+- [ ] Both `onestep==1.9.0` and `onestep-sql==0.1.0` (with the PostgreSQL backend) exist on PyPI.
 - [ ] `pip check` passes on API and worker; both processes use the same version combination.
-- [ ] Both API and worker print and verify the actual versions of `onestep` and `onestep-postgres`.
+- [ ] Both API and worker print and verify the actual versions of `onestep` and `onestep_sql.postgres`.
 - [ ] As migration role, complete initialization of both execution tables.
 - [ ] Both API and worker use `auto_create=False`.
 - [ ] DSN, namespace, and table names are consistent between API and worker.
@@ -723,7 +725,7 @@ If the new execution backend has issues:
 
 1. Stop the API from submitting new tracked executions first.
 2. Wait for or manually handle current `running`, `cancel_requested`, and `retrying` records.
-3. Roll back API and worker together to compatible core/plugin versions, e.g., `onestep==1.8.1` with `onestep-postgres==0.1.3`.
+3. Roll back API and worker together to compatible core/plugin versions, e.g., `onestep==1.8.1` with `onestep-postgres==0.1.3` (the legacy forwarding shim remains installable).
 4. Keep the `onestep_executions` and `onestep_execution_attempts` tables; do not drop them directly. They contain audit and recovery information.
 5. When restoring to a newer version, run the smoke test first, then re-enable business submissions.
 

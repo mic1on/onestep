@@ -31,11 +31,12 @@ view_order_sync
 安装下列版本或更高版本：
 
 ```bash
-pip install 'onestep-mysql>=0.5.1' 'onestep-feishu-bitable>=0.4.0'
+pip install 'onestep-sql[mysql]>=0.1.0' 'onestep-feishu-bitable>=0.4.0'
 ```
 
-`onestep-mysql 0.5.1` 能持久化并恢复 MySQL `DATETIME` 游标组件，保留微秒
-精度。`onestep-feishu-bitable 0.4.0` 提供受限的启动键索引与不确定批写入恢复。
+`onestep-sql[mysql]`（收敛自 `onestep-mysql 0.5.1`）能持久化并恢复 MySQL
+`DATETIME` 游标组件，保留微秒精度。`onestep-feishu-bitable 0.4.0` 提供受限的
+启动键索引与不确定批写入恢复。
 
 开始前确认：
 
@@ -188,7 +189,8 @@ async def to_feishu_fields(ctx, row):
 TypeError: Object of type datetime is not JSON serializable
 ```
 
-应停止旧 worker，升级到 `onestep-mysql>=0.5.1` 后使用相同的 `state_key` 重启。
+应停止旧 worker，升级到 `onestep-sql[mysql]>=0.1.0`（或 `onestep-mysql>=0.5.1`
+转发 shim）后使用相同的 `state_key` 重启。
 **不要手工把 `onestep_cursor` 推进到报错行之后**：飞书可能已接受一部分记录，
 而尚未确认的记录不能被跳过。重放会由 `订单编号` 键索引识别为已存在并跳过。
 

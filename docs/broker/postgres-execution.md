@@ -51,19 +51,19 @@ POST /executions/{id}/cancel         heartbeat + lease completion
 两个包都发布后，参与同一条 execution 链路的 API 和 worker 使用同一组锁定版本：
 
 ```bash
-pip install "onestep==1.9.0" "onestep-sql[postgres]==0.1.0"
+pip install "onestep>=1.9.0" "onestep-sql[postgres]>=0.1.0"
 ```
 
 也可以使用 core 的 extra。注意 extra 声明的是 `onestep-sql[postgres]>=0.1.0`；生产环境仍建议通过 lockfile 固定最终解析版本：
 
 ```bash
-pip install "onestep[postgres]==1.9.0"
+pip install "onestep[postgres]>=1.9.0"
 ```
 
 项目使用 uv 时：
 
 ```bash
-uv add "onestep==1.9.0" "onestep-sql[postgres]==0.1.0"
+uv add "onestep>=1.9.0" "onestep-sql[postgres]>=0.1.0"
 uv run python -c "import onestep, onestep_sql.postgres; print(onestep.__version__, onestep_sql.postgres.__version__)"
 uv run pip check
 ```
@@ -79,7 +79,7 @@ uv run pip check
 5. 先部署 worker 并确认能连接数据库，再开放 API 提交入口。
 6. 避免同一业务链路长期运行混合版本。
 
-如果 plugin 尚未发布，`onestep[postgres]==1.9.0` 和 `onestep[all]==1.9.0` 不能完整解析依赖。普通 `onestep==1.9.0` 不依赖 PostgreSQL plugin，可以独立安装。
+如果 plugin 尚未发布，`onestep[postgres]>=1.9.0` 和 `onestep[all]>=1.9.0` 不能完整解析依赖。普通 `onestep>=1.9.0` 不依赖 PostgreSQL plugin，可以独立安装。
 
 ## 3. 数据库初始化
 
