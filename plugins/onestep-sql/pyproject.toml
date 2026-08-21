@@ -1,7 +1,7 @@
 [project]
 name = "onestep-sql"
-version = "0.1.0"
-description = "Unified MySQL and PostgreSQL connector plugin for onestep."
+version = "0.2.0"
+description = "Unified MySQL, PostgreSQL, and SQLite connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

@@ -36,6 +36,7 @@ import pytest
 import sqlalchemy as sa
 from onestep_sql import mysql as mysql_pkg
 from onestep_sql import postgres as postgres_pkg
+from onestep_sql import sqlite as sqlite_pkg
 from onestep_sql._shared import resilience as shared_resilience
 from onestep_sql._shared import state_keys as shared_state_keys
 from onestep_sql._shared import state_sqlalchemy as shared_state
@@ -47,29 +48,37 @@ from onestep_sql.mysql import state_sqlalchemy as mysql_state
 from onestep_sql.postgres import connector as postgres_connector
 from onestep_sql.postgres import resilience as postgres_resilience
 from onestep_sql.postgres import state_sqlalchemy as postgres_state
+from onestep_sql.sqlite import connector as sqlite_connector
+from onestep_sql.sqlite import resilience as sqlite_resilience
+from onestep_sql.sqlite import state_sqlalchemy as sqlite_state
 from sqlalchemy.ext.asyncio import create_async_engine as _create_async_engine
 
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation
 
-BACKENDS = ("mysql", "postgres")
+BACKENDS = ("mysql", "postgres", "sqlite")
 
 
 def _backend_state_module(backend: str):
-    return {"mysql": mysql_state, "postgres": postgres_state}[backend]
+    return {"mysql": mysql_state, "postgres": postgres_state, "sqlite": sqlite_state}[backend]
 
 
 def _backend_connector_module(backend: str):
-    return {"mysql": mysql_connector, "postgres": postgres_connector}[backend]
+    return {"mysql": mysql_connector, "postgres": postgres_connector, "sqlite": sqlite_connector}[backend]
 
 
 def _backend_sink_cls(backend: str):
-    return {"mysql": mysql_pkg.TableSink, "postgres": postgres_pkg.PostgresTableSink}[backend]
+    return {
+        "mysql": mysql_pkg.TableSink,
+        "postgres": postgres_pkg.PostgresTableSink,
+        "sqlite": sqlite_pkg.TableSink,
+    }[backend]
 
 
 def _backend_connector_cls(backend: str):
     return {
         "mysql": mysql_pkg.MySQLConnector,
         "postgres": postgres_pkg.PostgresConnector,
+        "sqlite": sqlite_pkg.SQLiteConnector,
     }[backend]
 
 
@@ -79,12 +88,16 @@ def _backend_connector_cls(backend: str):
 
 
 def test_state_store_implementation_lives_once_in_shared() -> None:
-    for state in (mysql_state, postgres_state):
+    for state in (mysql_state, postgres_state, sqlite_state):
         assert issubclass(state.SQLAlchemyStateStore, shared_state.SQLAlchemyStateStore)
         assert issubclass(state.SQLAlchemyCursorStore, shared_state.SQLAlchemyCursorStore)
     # Backend classes stay distinct public identities per backend.
     assert mysql_state.SQLAlchemyStateStore is not postgres_state.SQLAlchemyStateStore
+    assert mysql_state.SQLAlchemyStateStore is not sqlite_state.SQLAlchemyStateStore
+    assert postgres_state.SQLAlchemyStateStore is not sqlite_state.SQLAlchemyStateStore
     assert mysql_state.SQLAlchemyCursorStore is not postgres_state.SQLAlchemyCursorStore
+    assert mysql_state.SQLAlchemyCursorStore is not sqlite_state.SQLAlchemyCursorStore
+    assert postgres_state.SQLAlchemyCursorStore is not sqlite_state.SQLAlchemyCursorStore
     # Every behavioural method is implemented on the shared classes only.
     shared_module = "onestep_sql._shared.state_sqlalchemy"
     for name in ("__init__", "load", "save", "delete", "close", "_ensure_ready"):
@@ -118,15 +131,18 @@ def test_table_sink_policy_lives_once_in_shared() -> None:
     assert (
         mysql_pkg.TableSink._update_payload
         is postgres_pkg.PostgresTableSink._update_payload
+        is sqlite_pkg.TableSink._update_payload
         is shared_policy.TableSinkUpdatePolicy._update_payload
     )
     assert (
         mysql_pkg.TableSink._coerce_json_values
         is postgres_pkg.PostgresTableSink._coerce_json_values
+        is sqlite_pkg.TableSink._coerce_json_values
         is shared_policy.TableSinkUpdatePolicy._coerce_json_values
     )
     assert issubclass(mysql_pkg.TableSink, shared_policy.TableSinkUpdatePolicy)
     assert issubclass(postgres_pkg.PostgresTableSink, shared_policy.TableSinkUpdatePolicy)
+    assert issubclass(sqlite_pkg.TableSink, shared_policy.TableSinkUpdatePolicy)
 
 
 def test_incremental_state_key_lives_once_in_shared() -> None:
@@ -143,14 +159,24 @@ def test_secret_redaction_scaffolding_lives_once_in_shared() -> None:
         is postgres_resilience.collect_sensitive_tokens
         is shared_resilience.collect_sensitive_tokens
     )
-    assert mysql_resilience.redact_message is postgres_resilience.redact_message is redact_message
+    assert (
+        mysql_resilience.redact_message
+        is postgres_resilience.redact_message
+        is sqlite_resilience.redact_message
+        is redact_message
+    )
     assert issubclass(mysql_resilience.MySQLErrorCause, shared_resilience.SQLErrorCause)
     assert issubclass(postgres_resilience.PostgresErrorCause, shared_resilience.SQLErrorCause)
+    assert issubclass(sqlite_resilience.SQLiteErrorCause, shared_resilience.SQLErrorCause)
     # The dialect-specific classification tables stay per backend (and are
     # genuinely different code, not a shared copy).
     assert (
         mysql_resilience.classify_sqlalchemy_error
         is not postgres_resilience.classify_sqlalchemy_error
+    )
+    assert (
+        mysql_resilience.classify_sqlalchemy_error
+        is not sqlite_resilience.classify_sqlalchemy_error
     )
 
 
@@ -492,7 +518,7 @@ def test_connectors_derive_identical_default_state_keys(tmp_path: Path) -> None:
         )
         # key not in cursor -> appended automatically
         assert sources[backend].cursor == ("updated_at", "id")
-    assert sources["mysql"].state_key == sources["postgres"].state_key
+    assert sources["mysql"].state_key == sources["postgres"].state_key == sources["sqlite"].state_key
     assert sources["mysql"].state_key == "users:updated_at,id:key=id:where=status = 1"
 
 
@@ -532,12 +558,14 @@ def test_redact_message_longest_first_and_truncation() -> None:
     [
         ("mysql", "mysql error: "),
         ("postgres", "postgres error: "),
+        ("sqlite", "sqlite error: "),
     ],
 )
 def test_error_cause_classes(backend: str, prefix: str) -> None:
     cause_type = {
         "mysql": mysql_resilience.MySQLErrorCause,
         "postgres": postgres_resilience.PostgresErrorCause,
+        "sqlite": sqlite_resilience.SQLiteErrorCause,
     }[backend]
     cause = cause_type("boom")
     assert str(cause) == f"{prefix}boom"
@@ -549,14 +577,16 @@ def test_error_cause_classes(backend: str, prefix: str) -> None:
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_connector_operation_error_factory_shared_behaviour(backend: str) -> None:
-    module = {"mysql": mysql_resilience, "postgres": postgres_resilience}[backend]
+    module = {"mysql": mysql_resilience, "postgres": postgres_resilience, "sqlite": sqlite_resilience}[backend]
     factory = {
         "mysql": mysql_resilience.as_mysql_connector_operation_error,
         "postgres": postgres_resilience.as_postgres_connector_operation_error,
+        "sqlite": sqlite_resilience.as_sqlite_connector_operation_error,
     }[backend]
     cause_type = {
         "mysql": mysql_resilience.MySQLErrorCause,
         "postgres": postgres_resilience.PostgresErrorCause,
+        "sqlite": sqlite_resilience.SQLiteErrorCause,
     }[backend]
 
     assert module.classify_sqlalchemy_error(TimeoutError("timeout")) is None
@@ -583,6 +613,7 @@ def test_connector_operation_error_redacts_secrets(backend: str) -> None:
     factory = {
         "mysql": mysql_resilience.as_mysql_connector_operation_error,
         "postgres": postgres_resilience.as_postgres_connector_operation_error,
+        "sqlite": sqlite_resilience.as_sqlite_connector_operation_error,
     }[backend]
     error = sa.exc.OperationalError("stmt", {}, Exception("access denied for 'alice' (using password: hunter2)"))
     normalized = factory(
@@ -619,13 +650,23 @@ def test_error_classification_tables_stay_per_dialect() -> None:
         mysql_resilience.classify_sqlalchemy_error(op_error("server closed the connection"))
         is ConnectorErrorKind.TRANSIENT
     )
-    # Shared SQLAlchemy-level classification still agrees on both sides.
-    for module in (mysql_resilience, postgres_resilience):
+    # Shared SQLAlchemy-level classification still agrees across all backends.
+    for module in (mysql_resilience, postgres_resilience, sqlite_resilience):
         assert module.classify_sqlalchemy_error(sa.exc.TimeoutError("t")) is ConnectorErrorKind.TRANSIENT
         assert (
             module.classify_sqlalchemy_error(sa.exc.InterfaceError("stmt", {}, Exception("i")))
             is ConnectorErrorKind.DISCONNECTED
         )
+    # SQLite's own dialect-specific message must stay distinct: "database is
+    # locked" maps to TRANSIENT (retryable busy), unlike either server backend.
+    assert (
+        sqlite_resilience.classify_sqlalchemy_error(op_error("database is locked"))
+        is ConnectorErrorKind.TRANSIENT
+    )
+    assert (
+        mysql_resilience.classify_sqlalchemy_error(op_error("database is locked"))
+        is ConnectorErrorKind.TRANSIENT  # mysql falls through to the OperationalError fallback
+    )
 
 
 # ---------------------------------------------------------------------------
