@@ -3,13 +3,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import httpx
-
 from onestep.resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
     ConnectorOperationError,
 )
+
+try:  # pragma: no cover - optional dependency
+    from cloudflare import (
+        APIConnectionError,
+        APIStatusError,
+        APITimeoutError,
+    )
+except ImportError:  # pragma: no cover - optional dependency
+    APIConnectionError = None
+    APIStatusError = None
+    APITimeoutError = None
 
 _REDACTED = "<redacted>"
 _MAX_MESSAGE_LENGTH = 500
@@ -85,39 +94,23 @@ def classify_cf_status(status: int) -> ConnectorErrorKind:
     return ConnectorErrorKind.PERMANENT
 
 
-def classify_cf_exception(exc: BaseException) -> ConnectorErrorKind | None:
-    if isinstance(exc, httpx.ConnectTimeout):
-        return ConnectorErrorKind.DISCONNECTED
-    if isinstance(exc, httpx.ConnectError):
-        return ConnectorErrorKind.DISCONNECTED
-    if isinstance(exc, (httpx.ReadTimeout, httpx.WriteError, httpx.ReadError)):
+def classify_cf_error(exc: BaseException) -> ConnectorErrorKind | None:
+    """Classify an exception raised by the official ``cloudflare`` SDK.
+
+    ``APIStatusError`` carries a response ``status_code`` and is mapped through
+    :func:`classify_cf_status`. ``APITimeoutError`` / ``APIConnectionError`` are
+    transport-level failures. Plain socket/OS errors are also treated as
+    disconnects so the runtime can degrade and retry the source loop.
+    """
+    if APITimeoutError is not None and isinstance(exc, APITimeoutError):
         return ConnectorErrorKind.UNCERTAIN
-    if isinstance(exc, httpx.TimeoutException):
-        return ConnectorErrorKind.UNCERTAIN
+    if APIStatusError is not None and isinstance(exc, APIStatusError):
+        return classify_cf_status(exc.status_code)
+    if APIConnectionError is not None and isinstance(exc, APIConnectionError):
+        return ConnectorErrorKind.DISCONNECTED
     if isinstance(exc, (ConnectionError, OSError, TimeoutError)):
         return ConnectorErrorKind.DISCONNECTED
     return None
-
-
-def classify_cf_error(exc: BaseException) -> ConnectorErrorKind | None:
-    """Classify an exception raised while talking to the Cloudflare API.
-
-    ``CFQueuesHTTPError`` carries the response status and is mapped through
-    :func:`classify_cf_status`. Transport-level exceptions are mapped through
-    :func:`classify_cf_exception`.
-    """
-    if isinstance(exc, CFQueuesHTTPError):
-        return classify_cf_status(exc.status)
-    return classify_cf_exception(exc)
-
-
-class CFQueuesHTTPError(Exception):
-    """Raised when the Cloudflare Queues API returns a non-success response."""
-
-    def __init__(self, status: int, message: str) -> None:
-        self.status = status
-        self.message = message
-        super().__init__(f"cloudflare queues API returned HTTP {status}: {message[:200]}")
 
 
 def as_cf_connector_operation_error(

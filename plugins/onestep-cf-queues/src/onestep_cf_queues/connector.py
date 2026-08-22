@@ -12,18 +12,12 @@ from onestep.connectors.codec import decode_envelope, encode_envelope
 from onestep.envelope import Envelope
 from onestep.resilience import ConnectorOperation, ConnectorOperationError
 
-from .resilience import (
-    CFQueuesHTTPError,
-    as_cf_connector_operation_error,
-    collect_sensitive_tokens,
-)
+from .resilience import as_cf_connector_operation_error, collect_sensitive_tokens
 
 try:  # pragma: no cover - optional dependency
-    import httpx
+    from cloudflare import AsyncCloudflare
 except ImportError:  # pragma: no cover - optional dependency
-    httpx = None
-
-_DEFAULT_BASE_URL = "https://api.cloudflare.com/client/v4"
+    AsyncCloudflare = None
 
 # Cloudflare Queues limits (see docs/platform/limits).
 _MAX_BATCH_SIZE = 100
@@ -63,26 +57,38 @@ def _decode_message_body(raw: Any) -> Envelope:
     return decode_envelope(raw)
 
 
+def _message_field(message: Any, key: str) -> Any:
+    """Read a field from an SDK model or a plain mapping."""
+    if isinstance(message, dict):
+        return message.get(key)
+    return getattr(message, key, None)
+
+
 class CFQueuesDelivery(Delivery):
-    def __init__(self, queue: "CFQueue", message: dict[str, Any]) -> None:
-        envelope = _decode_message_body(message.get("body"))
+    def __init__(self, queue: "CFQueue", message: Any) -> None:
+        body = _message_field(message, "body")
+        envelope = _decode_message_body(body)
         existing_meta = envelope.meta.get("cf_queues")
         cf_meta = dict(existing_meta) if isinstance(existing_meta, dict) else {}
         for key in ("id", "timestamp_ms", "attempts", "metadata"):
             cf_meta.pop(key, None)
-        if "id" in message:
-            cf_meta["id"] = message["id"]
-        if "timestamp_ms" in message:
-            cf_meta["timestamp_ms"] = message["timestamp_ms"]
-        if "attempts" in message:
-            cf_meta["attempts"] = message["attempts"]
-        if isinstance(message.get("metadata"), dict):
-            cf_meta["metadata"] = dict(message["metadata"])
+        message_id = _message_field(message, "id")
+        if message_id is not None:
+            cf_meta["id"] = message_id
+        timestamp_ms = _message_field(message, "timestamp_ms")
+        if timestamp_ms is not None:
+            cf_meta["timestamp_ms"] = timestamp_ms
+        attempts = _message_field(message, "attempts")
+        if attempts is not None:
+            cf_meta["attempts"] = attempts
+        metadata = _message_field(message, "metadata")
+        if isinstance(metadata, dict):
+            cf_meta["metadata"] = dict(metadata)
         envelope.meta["cf_queues"] = cf_meta
         super().__init__(envelope)
         self._queue = queue
         self._message = message
-        self._lease_id = message["lease_id"]
+        self._lease_id = _message_field(message, "lease_id")
 
     async def ack(self) -> None:
         await self._queue.stage_ack(self._lease_id)
@@ -105,11 +111,12 @@ class CFQueuesDelivery(Delivery):
         await self._queue.stage_retry(self._lease_id, delay_seconds=0)
         await self._queue.flush_acks()
 
+
 @dataclass
 class CFQueuesConnector:
     account_id: str
     api_token: str
-    base_url: str = _DEFAULT_BASE_URL
+    base_url: str | None = None
     timeout_s: float = 10.0
     client: Any | None = None
     _client: Any | None = field(default=None, init=False, repr=False)
@@ -149,32 +156,29 @@ class CFQueuesConnector:
         if self.client is not None:
             return self.client
         if self._client is None:
-            if httpx is None:
+            if AsyncCloudflare is None:
                 raise RuntimeError(
-                    "CFQueuesConnector requires httpx. Install onestep-cf-queues."
+                    "CFQueuesConnector requires the cloudflare SDK. "
+                    "Install onestep-cf-queues."
                 )
-            self._client = httpx.AsyncClient(timeout=self.timeout_s)
+            kwargs: dict[str, Any] = {
+                "api_token": self.api_token,
+                "timeout": self.timeout_s,
+            }
+            if self.base_url is not None:
+                kwargs["base_url"] = self.base_url
+            self._client = AsyncCloudflare(**kwargs)
         return self._client
-
-    def auth_headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json",
-        }
-
-    def queue_url(self, queue_id: str, action: str) -> str:
-        base = self.base_url.rstrip("/")
-        return f"{base}/accounts/{self.account_id}/queues/{queue_id}/messages/{action}"
 
     async def close(self) -> None:
         if self._client is not None:
-            await self._client.aclose()
+            await self._client.close()
             self._client = None
 
 
 class CFQueue(Source, Sink):
     # Cloudflare pull is short-polling (returns immediately), so fetch is safe
-    # to cancel: no message is claimed until the HTTP response is parsed.
+    # to cancel: no message is claimed until the response is parsed.
     fetch_is_cancel_safe = True
 
     def __init__(
@@ -248,14 +252,14 @@ class CFQueue(Source, Sink):
     async def fetch(self, limit: int) -> list[Delivery]:
         try:
             await self.open()
-            body: dict[str, Any] = {
+            params: dict[str, Any] = {
+                "account_id": self.connector.account_id,
                 "batch_size": max(1, min(limit, self.batch_size, _MAX_BATCH_SIZE)),
             }
             if self.visibility_timeout_ms is not None:
-                body["visibility_timeout_ms"] = self.visibility_timeout_ms
-            payload = await self._request("pull", body)
-            result = payload.get("result") or {}
-            messages = result.get("messages") or []
+                params["visibility_timeout_ms"] = self.visibility_timeout_ms
+            response = await self.client.queues.messages.pull(self.queue_id, **params)
+            messages = getattr(response, "messages", None) or []
             return [CFQueuesDelivery(self, message) for message in messages]
         except ConnectorOperationError:
             raise
@@ -265,13 +269,12 @@ class CFQueue(Source, Sink):
     async def send(self, envelope: Envelope) -> None:
         try:
             await self.open()
-            base = self.connector.base_url.rstrip("/")
-            url = (
-                f"{base}/accounts/{self.connector.account_id}"
-                f"/queues/{self.queue_id}/messages"
+            await self.client.queues.messages.push(
+                self.queue_id,
+                account_id=self.connector.account_id,
+                body=encode_envelope(envelope).decode("utf-8"),
+                content_type="text",
             )
-            body = {"body": encode_envelope(envelope).decode("utf-8")}
-            await self._raw_request("POST", url, body)
         except ConnectorOperationError:
             raise
         except Exception as exc:
@@ -350,35 +353,14 @@ class CFQueue(Source, Sink):
             acks = self._pending_acks[: self.ack_batch_size]
             remaining = self.ack_batch_size - len(acks)
             retries = self._pending_retries[:remaining] if remaining > 0 else []
-            body = {"acks": list(acks), "retries": list(retries)}
-            await self._request("ack", body)
+            await self.client.queues.messages.ack(
+                self.queue_id,
+                account_id=self.connector.account_id,
+                acks=list(acks),
+                retries=list(retries),
+            )
             self._pending_acks = self._pending_acks[len(acks) :]
             self._pending_retries = self._pending_retries[len(retries) :]
-
-    async def _request(self, action: str, body: dict[str, Any]) -> dict[str, Any]:
-        url = self.connector.queue_url(self.queue_id, action)
-        return await self._raw_request("POST", url, body)
-
-    async def _raw_request(
-        self, method: str, url: str, body: dict[str, Any]
-    ) -> dict[str, Any]:
-        response = await self.client.request(
-            method,
-            url,
-            headers=self.connector.auth_headers(),
-            content=json.dumps(body).encode("utf-8"),
-        )
-        if response.status_code >= 400:
-            raise CFQueuesHTTPError(response.status_code, response.text)
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {}
-        if isinstance(payload, dict) and payload.get("success") is False:
-            errors = payload.get("errors") or []
-            message = json.dumps(errors) if errors else "request was not successful"
-            raise CFQueuesHTTPError(response.status_code, message)
-        return payload if isinstance(payload, dict) else {}
 
     def _normalize(
         self, operation: ConnectorOperation, exc: Exception

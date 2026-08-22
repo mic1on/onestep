@@ -1,7 +1,9 @@
 # onestep-cf-queues
 
-Cloudflare Queues connector plugin for `onestep`. It consumes and publishes over
-the [HTTP pull-consumer REST API](https://developers.cloudflare.com/queues/configuration/pull-consumers/),
+Cloudflare Queues connector plugin for `onestep`. It uses the official
+[`cloudflare` Python SDK](https://github.com/cloudflare/cloudflare-python) to
+consume and publish over the
+[HTTP pull-consumer REST API](https://developers.cloudflare.com/queues/configuration/pull-consumers/),
 so it runs from any environment outside Cloudflare Workers.
 
 ```bash
@@ -63,12 +65,15 @@ tasks:
 
 ## How it maps to onestep
 
-| onestep | Cloudflare Queues API |
+The connector wraps the official `cloudflare` SDK's async client
+(`AsyncCloudflare().queues.messages`):
+
+| onestep | cloudflare SDK call |
 |---|---|
-| `Source.fetch` | `POST /accounts/{id}/queues/{qid}/messages/pull` |
-| `Delivery.ack` | `POST .../messages/ack` with `acks: [{lease_id}]` |
-| `Delivery.retry(delay_s)` | `POST .../messages/ack` with `retries: [{lease_id, delay_seconds}]` |
-| `Sink.send` | `POST .../messages` (single message) |
+| `Source.fetch` | `queues.messages.pull(queue_id, account_id=...)` |
+| `Delivery.ack` | `queues.messages.ack(..., acks=[{lease_id}])` |
+| `Delivery.retry(delay_s)` | `queues.messages.ack(..., retries=[{lease_id, delay_seconds}])` |
+| `Sink.send` | `queues.messages.push(...)` |
 
 Acks and retries are buffered and flushed in batches (`ack_batch_size`, up to
 100 per request) or on a timer (`ack_flush_interval_s`), then combined into a

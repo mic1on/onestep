@@ -5,7 +5,6 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from .connector import CFQueue, CFQueuesConnector, CFQueuesDelivery
 from .resilience import (
     CFQueuesErrorCause,
-    CFQueuesHTTPError,
     as_cf_connector_operation_error,
     classify_cf_error,
 )
@@ -23,7 +22,6 @@ __all__ = [
     "CFQueuesConnector",
     "CFQueuesDelivery",
     "CFQueuesErrorCause",
-    "CFQueuesHTTPError",
     "__version__",
     "as_cf_connector_operation_error",
     "classify_cf_error",

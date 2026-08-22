@@ -5,7 +5,8 @@ outline: deep
 
 # Cloudflare Queues
 
-[Cloudflare Queues](https://developers.cloudflare.com/queues/) 是 Cloudflare 提供的托管消息队列。onestep 通过其
+[Cloudflare Queues](https://developers.cloudflare.com/queues/) 是 Cloudflare 提供的托管消息队列。onestep 通过官方
+[`cloudflare` Python SDK](https://github.com/cloudflare/cloudflare-python) 调用其
 [HTTP 拉取消费者（pull consumer）REST API](https://developers.cloudflare.com/queues/configuration/pull-consumers/)
 接入，因此可以在 Cloudflare Workers 之外的任意环境中消费和投递消息。
 
@@ -73,7 +74,7 @@ tasks:
 
 ## 资源类型
 
-- `cf_queues`：连接器，持有 `account_id`、`api_token`、`base_url`、`timeout_s`。
+- `cf_queues`：连接器，持有 `account_id`、`api_token`，以及可选 `base_url`、`timeout_s`。
 - `cf_queue`：既是 source 又是 sink，通过 `connector` 引用连接器。
 
 `cf_queue` 字段：
@@ -90,12 +91,14 @@ tasks:
 
 ## 语义映射
 
-| onestep | Cloudflare Queues API |
+连接器封装官方 `cloudflare` SDK 的异步客户端（`AsyncCloudflare().queues.messages`）：
+
+| onestep | cloudflare SDK 调用 |
 | --- | --- |
-| `Source.fetch` | `POST /accounts/{id}/queues/{qid}/messages/pull` |
-| `Delivery.ack` | `POST .../messages/ack`，`acks: [{lease_id}]` |
-| `Delivery.retry(delay_s)` | `POST .../messages/ack`，`retries: [{lease_id, delay_seconds}]` |
-| `Sink.send` | `POST .../messages` |
+| `Source.fetch` | `queues.messages.pull(queue_id, account_id=...)` |
+| `Delivery.ack` | `queues.messages.ack(..., acks=[{lease_id}])` |
+| `Delivery.retry(delay_s)` | `queues.messages.ack(..., retries=[{lease_id, delay_seconds}])` |
+| `Sink.send` | `queues.messages.push(...)` |
 
 ack 与 retry 会被缓冲，达到 `ack_batch_size` 或经过 `ack_flush_interval_s` 后合并为单次 `/ack` 请求。
 

@@ -46,7 +46,6 @@ _CF_QUEUES_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField(
             "base_url",
             "string",
-            default="https://api.cloudflare.com/client/v4",
         ),
         ResourceCatalogField("timeout_s", "number", default=10.0),
     ),
@@ -101,7 +100,7 @@ def _build_cf_queues(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> CFQu
     return CFQueuesConnector(
         account_id=ctx.require_string(spec, "account_id"),
         api_token=ctx.require_string(spec, "api_token"),
-        base_url=spec.get("base_url", "https://api.cloudflare.com/client/v4"),
+        base_url=spec.get("base_url"),
         timeout_s=spec.get("timeout_s", 10.0),
     )
 

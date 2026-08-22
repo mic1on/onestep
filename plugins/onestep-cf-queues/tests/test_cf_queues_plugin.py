@@ -6,9 +6,9 @@ from typing import Any
 from onestep_cf_queues import CFQueue, CFQueuesConnector, register
 from onestep_cf_queues.resilience import (
     CFQueuesErrorCause,
-    CFQueuesHTTPError,
     as_cf_connector_operation_error,
     classify_cf_error,
+    classify_cf_status,
 )
 
 from onestep.config import load_app_config
@@ -101,15 +101,17 @@ def test_cf_queues_plugin_normalizes_transport_errors() -> None:
 
 
 def test_cf_queues_status_classification() -> None:
-    assert classify_cf_error(CFQueuesHTTPError(429, "too many")) is ConnectorErrorKind.THROTTLED
-    assert classify_cf_error(CFQueuesHTTPError(503, "down")) is ConnectorErrorKind.TRANSIENT
-    assert classify_cf_error(CFQueuesHTTPError(403, "denied")) is ConnectorErrorKind.MISCONFIGURED
-    assert classify_cf_error(CFQueuesHTTPError(400, "bad")) is ConnectorErrorKind.PERMANENT
+    from onestep.resilience import ConnectorErrorKind as Kind
+
+    assert classify_cf_status(429) is Kind.THROTTLED
+    assert classify_cf_status(503) is Kind.TRANSIENT
+    assert classify_cf_status(403) is Kind.MISCONFIGURED
+    assert classify_cf_status(400) is Kind.PERMANENT
 
 
 def test_cf_queues_error_does_not_leak_api_token() -> None:
     secret = "cf-token-super-secret-value"
-    exc = CFQueuesHTTPError(403, f"denied for Bearer {secret}")
+    exc = ConnectionError(f"connect failed for Bearer {secret}")
 
     normalized = as_cf_connector_operation_error(
         operation=ConnectorOperation.FETCH,

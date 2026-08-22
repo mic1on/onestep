@@ -9,84 +9,99 @@ from onestep_cf_queues import CFQueuesConnector
 from onestep_cf_queues.connector import _decode_message_body
 
 
-class FakeResponse:
-    def __init__(self, status_code: int, payload: dict | None = None, text: str = "") -> None:
-        self.status_code = status_code
-        self._payload = payload
-        self.text = text or (json.dumps(payload) if payload is not None else "")
+class SDKMessage:
+    """Mimics cloudflare.types.queues.MessagePullResponse.Message."""
 
-    def json(self):
-        if self._payload is None:
-            raise ValueError("no json body")
-        return self._payload
+    def __init__(self, **kwargs) -> None:
+        self.id = kwargs.get("id")
+        self.body = kwargs.get("body")
+        self.lease_id = kwargs.get("lease_id")
+        self.timestamp_ms = kwargs.get("timestamp_ms")
+        self.attempts = kwargs.get("attempts")
+        self.metadata = kwargs.get("metadata")
+
+
+class SDKPullResponse:
+    def __init__(self, messages) -> None:
+        self.messages = messages
+        self.message_backlog_count = 0
+        self.metadata = None
+
+
+class FakeMessages:
+    """Stand-in for client.queues.messages.* on the async SDK."""
+
+    def __init__(self, parent: "FakeCFClient") -> None:
+        self._p = parent
+
+    async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+        self._p.pull_calls.append(
+            {
+                "queue_id": queue_id,
+                "account_id": account_id,
+                "batch_size": batch_size,
+                "visibility_timeout_ms": visibility_timeout_ms,
+            }
+        )
+        messages = []
+        while self._p.available and len(messages) < batch_size:
+            message = self._p.available.pop(0)
+            self._p.inflight[message.lease_id] = message
+            messages.append(message)
+        return SDKPullResponse(messages)
+
+    async def ack(self, queue_id, *, account_id, acks=None, retries=None):
+        for entry in acks or []:
+            lease_id = entry["lease_id"]
+            self._p.acked.append(lease_id)
+            self._p.inflight.pop(lease_id, None)
+        for entry in retries or []:
+            self._p.retried.append(entry)
+            message = self._p.inflight.pop(entry["lease_id"], None)
+            if message is not None:
+                self._p.available.append(message)
+        return None
+
+    async def push(self, queue_id, *, account_id, body=None, content_type=None, delay_seconds=None):
+        self._p.sent.append({"body": body, "content_type": content_type})
+        return None
+
+
+class FakeQueues:
+    def __init__(self, parent: "FakeCFClient") -> None:
+        self.messages = FakeMessages(parent)
 
 
 class FakeCFClient:
-    """Minimal stand-in for the Cloudflare Queues HTTP API over httpx."""
+    """Minimal stand-in for cloudflare.AsyncCloudflare."""
 
     def __init__(self) -> None:
-        self.available: list[dict] = []
-        self.inflight: dict[str, dict] = {}
+        self.available: list[SDKMessage] = []
+        self.inflight: dict[str, SDKMessage] = {}
         self.acked: list[str] = []
         self.retried: list[dict] = []
         self.sent: list[dict] = []
         self.pull_calls: list[dict] = []
         self._counter = 0
         self.closed = False
+        self.queues = FakeQueues(self)
 
     def enqueue(self, body, *, lease_prefix: str = "lease") -> str:
         self._counter += 1
         lease_id = f"{lease_prefix}-{self._counter}"
-        message = {
-            "body": body,
-            "id": f"id-{self._counter}",
-            "timestamp_ms": 1689615013586,
-            "attempts": 1,
-            "metadata": {"CF-Content-Type": "json"},
-            "lease_id": lease_id,
-        }
-        self.available.append(message)
+        self.available.append(
+            SDKMessage(
+                id=f"id-{self._counter}",
+                body=body,
+                timestamp_ms=1689615013586,
+                attempts=1,
+                metadata={"CF-Content-Type": "json"},
+                lease_id=lease_id,
+            )
+        )
         return lease_id
 
-    async def request(self, method, url, *, headers=None, content=None):
-        body = json.loads(content.decode("utf-8")) if content else {}
-        if url.endswith("/messages/pull"):
-            self.pull_calls.append(body)
-            take = body.get("batch_size", 5)
-            messages = []
-            while self.available and len(messages) < take:
-                message = self.available.pop(0)
-                self.inflight[message["lease_id"]] = message
-                messages.append(message)
-            return FakeResponse(
-                200,
-                {
-                    "success": True,
-                    "errors": [],
-                    "messages": [],
-                    "result": {
-                        "message_backlog_count": len(self.available),
-                        "messages": messages,
-                    },
-                },
-            )
-        if url.endswith("/messages/ack"):
-            for entry in body.get("acks", []):
-                lease_id = entry["lease_id"]
-                self.acked.append(lease_id)
-                self.inflight.pop(lease_id, None)
-            for entry in body.get("retries", []):
-                self.retried.append(entry)
-                message = self.inflight.pop(entry["lease_id"], None)
-                if message is not None:
-                    self.available.append(message)
-            return FakeResponse(200, {"success": True, "errors": [], "result": {}})
-        if url.endswith("/messages"):
-            self.sent.append(body)
-            return FakeResponse(200, {"success": True, "errors": []})
-        return FakeResponse(404, {"success": False, "errors": ["not found"]})
-
-    async def aclose(self):
+    async def close(self):
         self.closed = True
 
 
@@ -115,6 +130,24 @@ def test_cf_queue_pull_decodes_body_and_injects_metadata():
         assert cf_meta["metadata"] == {"CF-Content-Type": "json"}
         # lease_id must not leak onto the envelope metadata.
         assert "lease_id" not in cf_meta
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_pull_forwards_account_and_visibility():
+    async def scenario():
+        client = FakeCFClient()
+        client.enqueue('{"body": 1}')
+        queue = _connector(client).queue(
+            "q1", visibility_timeout_ms=45000, ack_flush_interval_s=0
+        )
+
+        await queue.fetch(5)
+
+        call = client.pull_calls[0]
+        assert call["account_id"] == "acct-1"
+        assert call["queue_id"] == "q1"
+        assert call["visibility_timeout_ms"] == 45000
 
     asyncio.run(scenario())
 
@@ -253,15 +286,14 @@ def test_decode_message_body_handles_structured_dict():
     assert envelope.attempts == 3
 
 
-def test_cf_queue_http_error_is_normalized():
+def test_cf_queue_sdk_status_error_is_normalized():
     async def scenario():
-        class ErrorClient(FakeCFClient):
-            async def request(self, method, url, *, headers=None, content=None):
-                if url.endswith("/messages/pull"):
-                    return FakeResponse(429, text="rate limited")
-                return await super().request(method, url, headers=headers, content=content)
+        class ErrorMessages(FakeMessages):
+            async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+                raise ConnectionError("network down")
 
-        client = ErrorClient()
+        client = FakeCFClient()
+        client.queues.messages = ErrorMessages(client)
         queue = _connector(client).queue("q1", ack_flush_interval_s=0)
 
         try:

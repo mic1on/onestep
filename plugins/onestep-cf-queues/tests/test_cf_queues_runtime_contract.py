@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 from onestep import OneStepApp
 from onestep.testing import (
@@ -14,36 +13,50 @@ from onestep.testing import (
 from onestep_cf_queues import CFQueuesConnector
 
 
-class FakeResponse:
-    def __init__(self, status_code: int, payload: dict) -> None:
-        self.status_code = status_code
-        self._payload = payload
-        self.text = json.dumps(payload)
+class SDKMessage:
+    def __init__(self, **kwargs) -> None:
+        self.id = kwargs.get("id")
+        self.body = kwargs.get("body")
+        self.lease_id = kwargs.get("lease_id")
+        self.timestamp_ms = kwargs.get("timestamp_ms")
+        self.attempts = kwargs.get("attempts")
+        self.metadata = kwargs.get("metadata")
 
-    def json(self):
-        return self._payload
+
+class SDKPullResponse:
+    def __init__(self, messages) -> None:
+        self.messages = messages
+        self.message_backlog_count = 0
+        self.metadata = None
+
+
+class BlockingSendMessages:
+    """messages.* where push (publish) blocks until released."""
+
+    def __init__(self, parent) -> None:
+        self._p = parent
+
+    async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+        return SDKPullResponse([])
+
+    async def ack(self, queue_id, *, account_id, acks=None, retries=None):
+        return None
+
+    async def push(self, queue_id, *, account_id, body=None, content_type=None, delay_seconds=None):
+        self._p.send_started.set()
+        await self._p.release_send.wait()
+        self._p.sent.append({"body": body})
+        return None
 
 
 class BlockingSendClient:
-    """Client that blocks on the publish (POST /messages) request."""
-
     def __init__(self) -> None:
         self.send_started = asyncio.Event()
         self.release_send = asyncio.Event()
         self.sent: list[dict] = []
+        self.queues = type("Q", (), {"messages": BlockingSendMessages(self)})()
 
-    async def request(self, method, url, *, headers=None, content=None):
-        body = json.loads(content.decode("utf-8")) if content else {}
-        if url.endswith("/messages/ack") or url.endswith("/messages/pull"):
-            return FakeResponse(200, {"success": True, "errors": [], "result": {}})
-        if url.endswith("/messages"):
-            self.send_started.set()
-            await self.release_send.wait()
-            self.sent.append(body)
-            return FakeResponse(200, {"success": True, "errors": []})
-        return FakeResponse(404, {"success": False, "errors": ["not found"]})
-
-    async def aclose(self):
+    async def close(self):
         return None
 
 
@@ -65,45 +78,49 @@ def test_runtime_ack_follows_cf_queues_publish_acknowledgement() -> None:
     asyncio.run(scenario())
 
 
-class BlockingPullClient:
-    """Client that blocks on the pull request until released."""
+class BlockingPullMessages:
+    """messages.* where pull blocks until released, then serves one message."""
 
+    def __init__(self, parent) -> None:
+        self._p = parent
+
+    async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+        self._p.pull_started.set()
+        await self._p.release_pull.wait()
+        if self._p.served:
+            return SDKPullResponse([])
+        self._p.served = True
+        return SDKPullResponse(
+            [
+                SDKMessage(
+                    id="id-1",
+                    body='{"body": {"value": 1}}',
+                    timestamp_ms=1,
+                    attempts=1,
+                    metadata={},
+                    lease_id="lease-1",
+                )
+            ]
+        )
+
+    async def ack(self, queue_id, *, account_id, acks=None, retries=None):
+        for entry in retries or []:
+            self._p.retried.append(entry)
+        return None
+
+    async def push(self, queue_id, *, account_id, body=None, content_type=None, delay_seconds=None):
+        return None
+
+
+class BlockingPullClient:
     def __init__(self) -> None:
         self.pull_started = asyncio.Event()
         self.release_pull = asyncio.Event()
         self.retried: list[dict] = []
-        self._served = False
+        self.served = False
+        self.queues = type("Q", (), {"messages": BlockingPullMessages(self)})()
 
-    async def request(self, method, url, *, headers=None, content=None):
-        body = json.loads(content.decode("utf-8")) if content else {}
-        if url.endswith("/messages/pull"):
-            self.pull_started.set()
-            await self.release_pull.wait()
-            if self._served:
-                messages: list[dict] = []
-            else:
-                self._served = True
-                messages = [
-                    {
-                        "body": '{"body": {"value": 1}}',
-                        "id": "id-1",
-                        "timestamp_ms": 1,
-                        "attempts": 1,
-                        "metadata": {},
-                        "lease_id": "lease-1",
-                    }
-                ]
-            return FakeResponse(
-                200,
-                {"success": True, "errors": [], "result": {"messages": messages}},
-            )
-        if url.endswith("/messages/ack"):
-            for entry in body.get("retries", []):
-                self.retried.append(entry)
-            return FakeResponse(200, {"success": True, "errors": [], "result": {}})
-        return FakeResponse(404, {"success": False, "errors": ["not found"]})
-
-    async def aclose(self):
+    async def close(self):
         return None
 
 
@@ -114,8 +131,8 @@ def test_stop_controls_release_fetched_unstarted_cf_delivery() -> None:
             account_id="acct-1", api_token="secret-token", client=client
         )
         source = connector.queue("q-in", ack_flush_interval_s=0)
-        # This queue reports a cancel-safe fetch; the claimed-source contract
-        # verifies the release path when intake stops before handling.
+        # The claimed-source contract verifies the release path when intake
+        # stops before handling; force the non-cancel-safe branch to exercise it.
         source.fetch_is_cancel_safe = False
 
         harness = ClaimedSourceHarness(
