@@ -16,6 +16,13 @@
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
 
+## onestep-control-plane 0.1.2
+
+- Teaches the reporter to describe the `onestep-sqs` SNS topic sink: maps
+  `SNSTopic` to the `sns_topic` kind and emits its `arn`, `subject`,
+  `message_group_id`, `message_attributes`, and `retry_delay_s` in the topology
+  descriptor so the control plane renders SNS fan-out sinks correctly.
+
 ## onestep-sql 0.2.0
 
 - Publicly exposes the SQLite backend of the canonical `onestep-sql` package
