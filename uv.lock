@@ -10,6 +10,7 @@ resolution-markers = [
 [manifest]
 members = [
     "onestep",
+    "onestep-cf-queues",
     "onestep-clickhouse",
     "onestep-control-plane",
     "onestep-elasticsearch",
@@ -1336,6 +1337,7 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 all = [
+    { name = "onestep-cf-queues" },
     { name = "onestep-clickhouse" },
     { name = "onestep-control-plane" },
     { name = "onestep-elasticsearch" },
@@ -1350,10 +1352,14 @@ all = [
 clickhouse = [
     { name = "onestep-clickhouse" },
 ]
+cloudflare = [
+    { name = "onestep-cf-queues" },
+]
 control-plane = [
     { name = "onestep-control-plane" },
 ]
 dev = [
+    { name = "onestep-cf-queues" },
     { name = "onestep-clickhouse" },
     { name = "onestep-control-plane" },
     { name = "onestep-elasticsearch" },
@@ -1373,6 +1379,7 @@ elasticsearch = [
     { name = "onestep-elasticsearch" },
 ]
 integration = [
+    { name = "onestep-cf-queues" },
     { name = "onestep-clickhouse" },
     { name = "onestep-elasticsearch" },
     { name = "onestep-kafka", marker = "python_full_version >= '3.10'" },
@@ -1427,6 +1434,10 @@ yaml = [
 
 [package.metadata]
 requires-dist = [
+    { name = "onestep-cf-queues", marker = "extra == 'all'", editable = "plugins/onestep-cf-queues" },
+    { name = "onestep-cf-queues", marker = "extra == 'cloudflare'", editable = "plugins/onestep-cf-queues" },
+    { name = "onestep-cf-queues", marker = "extra == 'dev'", editable = "plugins/onestep-cf-queues" },
+    { name = "onestep-cf-queues", marker = "extra == 'integration'", editable = "plugins/onestep-cf-queues" },
     { name = "onestep-clickhouse", marker = "extra == 'all'", editable = "plugins/onestep-clickhouse" },
     { name = "onestep-clickhouse", marker = "extra == 'clickhouse'", editable = "plugins/onestep-clickhouse" },
     { name = "onestep-clickhouse", marker = "extra == 'dev'", editable = "plugins/onestep-clickhouse" },
@@ -1477,7 +1488,41 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
 ]
-provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite", "rabbitmq", "redis", "sqs", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
+provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite", "rabbitmq", "redis", "sqs", "cloudflare", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
+
+[[package]]
+name = "onestep-cf-queues"
+version = "0.1.0"
+source = { editable = "plugins/onestep-cf-queues" }
+dependencies = [
+    { name = "httpx" },
+    { name = "onestep" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+test = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-asyncio", version = "1.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest-asyncio", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "onestep", editable = "." },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.23.0" },
+]
+provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-clickhouse"
@@ -1516,7 +1561,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-control-plane"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "plugins/onestep-control-plane" }
 dependencies = [
     { name = "onestep" },
@@ -1861,7 +1906,7 @@ provides-extras = ["mysql", "postgres", "sqlite", "all", "test", "dev"]
 
 [[package]]
 name = "onestep-sqs"
-version = "0.2.3"
+version = "0.2.4"
 source = { editable = "plugins/onestep-sqs" }
 dependencies = [
     { name = "boto3" },

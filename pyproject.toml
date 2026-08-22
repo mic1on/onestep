@@ -51,6 +51,9 @@ redis = [
 sqs = [
     "onestep-sqs>=0.2.2",
 ]
+cloudflare = [
+    "onestep-cf-queues>=0.1.0",
+]
 kafka = [
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
 ]
@@ -76,6 +79,7 @@ integration = [
     "onestep-redis>=0.2.1",
     "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
     "onestep-sqs>=0.2.2",
+    "onestep-cf-queues>=0.1.0",
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
@@ -88,6 +92,7 @@ all = [
     "onestep-redis>=0.2.1",
     "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
     "onestep-sqs>=0.2.2",
+    "onestep-cf-queues>=0.1.0",
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
@@ -102,6 +107,7 @@ dev = [
     "onestep-redis>=0.2.1",
     "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
     "onestep-sqs>=0.2.2",
+    "onestep-cf-queues>=0.1.0",
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
@@ -120,6 +126,7 @@ members = [
     "plugins/onestep-mysql",
     "plugins/onestep-postgres",
     "plugins/onestep-sqs",
+    "plugins/onestep-cf-queues",
     "plugins/onestep-elasticsearch",
     "plugins/onestep-clickhouse",
     "plugins/onestep-mongodb",
@@ -130,6 +137,7 @@ members = [
 onestep-mq = { workspace = true }
 onestep-redis = { workspace = true }
 onestep-sqs = { workspace = true }
+onestep-cf-queues = { workspace = true }
 onestep-control-plane = { workspace = true }
 onestep-kafka = { path = "plugins/onestep-kafka" }
 onestep-elasticsearch = { workspace = true }
