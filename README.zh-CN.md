@@ -158,7 +158,7 @@ graph LR
 
 | 能力 | 入口 |
 | --- | --- |
-| **拉取任务**：队列、调度、Webhook、DB 游标 | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、MySQL `table_queue` / `incremental` / binlog、RabbitMQ `queue`、Redis `stream`、SQS `queue`、Kafka `kafka_topic`、MongoDB `mongodb_polling` / `mongodb_change_stream` |
+| **拉取任务**：队列、调度、Webhook、DB 游标 | `MemoryQueue`、`IntervalSource`、`CronSource`、`WebhookSource`、MySQL `table_queue` / `incremental` / binlog、RabbitMQ `queue`、Redis `stream`、SQS `queue`、Cloudflare `cf_queue`、Kafka `kafka_topic`、MongoDB `mongodb_polling` / `mongodb_change_stream` |
 | **输出结果**：写入下游 sink | 任意 source 也可作 sink；MySQL `table_sink`；Kafka `kafka_topic`；Elasticsearch/OpenSearch `elasticsearch_bulk_sink`；ClickHouse `clickhouse_table_sink`；MongoDB `mongodb_collection_sink`；HTTP `http_sink`；飞书多维表格 sink |
 | **定时调度**：周期任务 | `IntervalSource.every(...)`、`CronSource(...)`，支持重叠控制（`allow` / `skip` / `queue`） |
 | **接收外部事件** | `WebhookSource`，支持 Bearer 鉴权、共享监听、多种 body 解析 |
@@ -205,7 +205,8 @@ async def main():
 | **PostgreSQL** | 与 MySQL 对等的原语，后端为 PostgreSQL | `pip install 'onestep-sql[postgres]'`（`onestep-postgres` shim 仍可用） |
 | **RabbitMQ** | `queue`，支持 exchange/routing-key 绑定与 prefetch | `pip install onestep-mq` |
 | **Redis** | `stream`，支持消费组、`XACK`、`XCLAIM`、`maxlen` | `pip install onestep-redis` |
-| **SQS** | `queue`，支持批量删除与心跳可见性续期 | `pip install onestep-sqs` |
+| **SQS** | `queue`，支持批量删除与心跳可见性续期，并提供 `sns_topic` 扇出 sink | `pip install onestep-sqs` |
+| **Cloudflare Queues** | `cf_queue` HTTP 拉取消费者 source/sink（官方 `cloudflare` SDK），支持批量 lease ack/retry | `pip install 'onestep[cloudflare]'`（`onestep-cf-queues`） |
 | **Kafka** | `kafka_topic` source/sink，使用手动 offset commit | `pip install onestep-kafka` |
 | **飞书多维表格** | 增量 source 与 upsert sink | `pip install onestep-feishu-bitable` |
 | **Elasticsearch/OpenSearch** | `elasticsearch` 连接器和基于共同 REST bulk 边界、等待确认的 `elasticsearch_bulk_sink` | `pip install 'onestep[elasticsearch]'`（`onestep-elasticsearch`） |

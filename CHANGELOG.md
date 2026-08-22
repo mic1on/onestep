@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that
+  wraps the official `cloudflare` Python SDK to consume and publish over the
+  HTTP pull-consumer REST API (works outside Cloudflare Workers). Registers
+  YAML resource types `cf_queues` (connector) and `cf_queue` (source + sink),
+  with batched lease ack/retry, base64 body decoding for the `json`/`bytes`
+  content types, `on_fail` policy (`leave`/`retry`/`ack`), and short-polling
+  `fetch` (`fetch_is_cancel_safe`). Install via
+  `pip install 'onestep[cloudflare]'`.
+
 - Adds `onestep render <target>`: renders the worker topology of any Python or
   YAML target as a Mermaid flowchart (`--format mermaid`, the only format for
   now). Task nodes carry concurrency, retry, and timeout; edges are labeled
@@ -15,6 +24,33 @@
   retired and replaced by dual-backend contract tests
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
+
+## onestep-control-plane 0.1.2
+
+- Teaches the reporter to describe the `onestep-sqs` SNS topic sink: maps
+  `SNSTopic` to the `sns_topic` kind and emits its `arn`, `subject`,
+  `message_group_id`, `message_attributes`, and `retry_delay_s` in the topology
+  descriptor so the control plane renders SNS fan-out sinks correctly.
+
+## onestep-sql 0.2.0
+
+- Publicly exposes the SQLite backend of the canonical `onestep-sql` package
+  (issue #141). `onestep-sql[sqlite]` now installs the `sqlite` asyncio extra
+  and registers six new YAML resource types through the single `sql` entry
+  point: `sqlite`, `sqlite_state_store`, `sqlite_cursor_store`,
+  `sqlite_table_queue`, `sqlite_incremental`, and `sqlite_table_sink`. SQLite is
+  embedded (no server): it reuses the shared SQLAlchemy state/cursor stores,
+  table-sink policy, and incremental commit-coalescing logic, and adds no
+  binlog CDC or tracked-execution capability.
+- Fixes a `sqlite_table_queue` claim race. MySQL/PostgreSQL claim rows with
+  `SELECT ... FOR UPDATE SKIP LOCKED`; SQLite now claims and reads in one atomic
+  `UPDATE ... RETURNING` statement so the write lock is held for the whole claim
+  and two consumers can never deliver the same rows (previously a concurrent
+  poll could double-claim). The returned delivery body is the post-claim row,
+  matching the MySQL/PostgreSQL envelope contract.
+- Maps `sqlite` / `sqlite+pysqlite` DSNs (and a bare file path or `:memory:`)
+  onto the `sqlite+aiosqlite` dialect, with a 30s busy timeout and no
+  `pool_pre_ping`, so a bare path no longer silently skips the engine tuning.
 
 ## onestep-sql 0.1.0
 
@@ -372,6 +408,14 @@
 
 - Scrubs DSN credentials and secret values nested in SQLAlchemy engine options from normalized MySQL error causes.
 - Suppresses raw exception chaining for fetch and send failures so reported tracebacks do not expose secrets.
+
+## onestep-sqs 0.2.4
+
+- Adds an Amazon SNS topic sink (`sns` connector + `sns_topic` sink resource
+  types). `SNSTopic` publishes the standard OneStep envelope to a topic ARN,
+  supports optional `subject` and `message_attributes`, and requires
+  `message_group_id` (with optional `deduplication_id_factory`) for FIFO topics.
+  SNS is publish-only, so consume via an SQS queue subscribed to the topic.
 
 ## onestep-sqs 0.2.3
 

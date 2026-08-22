@@ -257,3 +257,48 @@ async def might_fail(ctx, item):
 - `NumberOfMessagesReceived`: 接收消息数
 - `NumberOfMessagesDeleted`: 删除消息数
 - `NumberOfMessagesFailed`: 失败消息数
+
+## SNS Topic Sink {#sns-topic-sink}
+
+SNS 是发布/订阅服务，只能发布、无法消费，因此 `SNSTopic` 只实现 `Sink`。
+要消费 SNS 消息，标准做法是让 SQS 队列订阅该 Topic，再用 `sqs_queue` 作为 Source。
+
+```python
+from onestep import MemoryQueue, OneStepApp
+from onestep_sqs import SNSConnector
+
+app = OneStepApp("sns-demo")
+sns = SNSConnector(region_name="us-east-1")
+
+notify = sns.topic(
+    "arn:aws:sns:us-east-1:123456789012:events",
+    subject="onestep-event",
+)
+
+
+@app.task(source=MemoryQueue("jobs"), emit=notify)
+async def publish_event(ctx, job):
+    return {"id": job["id"], "status": "done"}
+```
+
+任务返回值会经标准信封编码后作为 SNS `Message` 发布。配置项：
+
+- `subject`：可选的 SNS `Subject`。
+- `message_attributes`：原始 SNS `MessageAttributes` 映射，供订阅过滤策略使用。
+- `message_group_id` / `deduplication_id_factory`：FIFO Topic（ARN 以 `.fifo`
+  结尾）必填分组，去重工厂可选，接收 `Envelope` 并返回去重 ID 字符串。
+- `retry_delay_s`：连接器错误归一化时应用的重试退避提示。
+
+YAML 配置：
+
+```yaml
+resources:
+  sns:
+    type: sns
+    region_name: us-east-1
+  notify:
+    type: sns_topic
+    connector: sns
+    arn: arn:aws:sns:us-east-1:123456789012:events
+    subject: onestep-event
+```

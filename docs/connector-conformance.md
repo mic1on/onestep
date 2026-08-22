@@ -67,6 +67,7 @@ The repository-level conformance manifest covers every plugin that registers an 
 | Connector | Source | Checkpoint | Claim release | Acknowledged sink | Chunked | Replay-safe mode | Public errors |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ClickHouse |  |  |  | yes | yes |  | yes |
+| Cloudflare Queues | yes |  | yes | yes |  |  | yes |
 | Elasticsearch / OpenSearch |  |  |  | yes | yes |  | yes |
 | Feishu Bitable | yes | yes |  | yes |  | yes | yes |
 | Kafka | yes | yes | yes | yes |  |  | yes |

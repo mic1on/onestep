@@ -257,3 +257,46 @@ Use CloudWatch to monitor queues:
 - `NumberOfMessagesReceived`: Received messages count
 - `NumberOfMessagesDeleted`: Deleted messages count
 - `NumberOfMessagesFailed`: Failed messages count
+
+
+## SNS Topic Sink {#sns-topic-sink}
+
+SNS is a publish/subscribe service: it can only publish, not consume, so `SNSTopic` implements `Sink` only.
+To consume SNS messages, the standard approach is to subscribe an SQS queue to the topic and use `sqs_queue` as the Source.
+
+```python
+from onestep import MemoryQueue, OneStepApp
+from onestep_sqs import SNSConnector
+
+app = OneStepApp("sns-demo")
+sns = SNSConnector(region_name="us-east-1")
+notify = sns.topic(
+    "arn:aws:sns:us-east-1:123456789012:events",
+    subject="onestep-event",
+)
+
+@app.task(source=MemoryQueue("jobs"), emit=notify)
+async def publish_event(ctx, job):
+    return {"id": job["id"], "status": "done"}
+```
+
+The task return value is envelope-encoded and published as the SNS `Message`. Configuration options:
+
+- `subject`: optional SNS `Subject`.
+- `message_attributes`: raw SNS `MessageAttributes` mapping used by subscription filter policies.
+- `message_group_id` / `deduplication_id_factory`: required group id for FIFO topics (ARN ending in `.fifo`); the deduplication factory is optional and receives an `Envelope`, returning a deduplication id string.
+- `retry_delay_s`: retry backoff hint applied when normalizing connector errors.
+
+YAML configuration:
+
+```yaml
+resources:
+  sns:
+    type: sns
+    region_name: us-east-1
+  notify:
+    type: sns_topic
+    connector: sns
+    arn: arn:aws:sns:us-east-1:123456789012:events
+    subject: onestep-event
+```

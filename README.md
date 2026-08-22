@@ -169,7 +169,7 @@ multiple tasks appear once, so chained topologies are drawn as connected graphs.
 
 | Capability | Where |
 | --- | --- |
-| **Fetch work** from a queue, schedule, webhook, or DB cursor | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, MySQL `table_queue` / `incremental` / binlog, RabbitMQ `queue`, Redis `stream`, SQS `queue`, Kafka `kafka_topic`, MongoDB `mongodb_polling` / `mongodb_change_stream` |
+| **Fetch work** from a queue, schedule, webhook, or DB cursor | `MemoryQueue`, `IntervalSource`, `CronSource`, `WebhookSource`, MySQL `table_queue` / `incremental` / binlog, RabbitMQ `queue`, Redis `stream`, SQS `queue`, Cloudflare `cf_queue`, Kafka `kafka_topic`, MongoDB `mongodb_polling` / `mongodb_change_stream` |
 | **Emit results** to a downstream sink | any source doubles as a sink; MySQL `table_sink`; Kafka `kafka_topic`; Elasticsearch/OpenSearch `elasticsearch_bulk_sink`; ClickHouse `clickhouse_table_sink`; MongoDB `mongodb_collection_sink`; HTTP `http_sink`; Feishu Bitable sink |
 | **Schedule** recurring work | `IntervalSource.every(...)`, `CronSource(...)` with overlap control (`allow` / `skip` / `queue`) |
 | **Ingest external events** | `WebhookSource` with bearer auth, shared listeners, body parsing |
@@ -217,7 +217,8 @@ Each backend ships as its own package so you only install what you use:
 | **PostgreSQL** | same primitives as MySQL, backed by PostgreSQL | `pip install 'onestep-sql[postgres]'` (`onestep-postgres` shim available) |
 | **RabbitMQ** | `queue` with exchange/routing-key binding and prefetch | `pip install onestep-mq` |
 | **Redis** | `stream` with consumer groups, `XACK`, `XCLAIM`, `maxlen` | `pip install onestep-redis` |
-| **SQS** | `queue` with batched deletes and heartbeat visibility | `pip install onestep-sqs` |
+| **SQS** | `queue` with batched deletes and heartbeat visibility, plus an `sns_topic` fan-out sink | `pip install onestep-sqs` |
+| **Cloudflare Queues** | `cf_queue` HTTP pull-consumer source/sink (official `cloudflare` SDK) with batched lease ack/retry | `pip install 'onestep[cloudflare]'` (`onestep-cf-queues`) |
 | **Kafka** | `kafka_topic` source/sink with manual offset commits | `pip install onestep-kafka` |
 | **Feishu Bitable** | incremental source and upsert sink | `pip install onestep-feishu-bitable` |
 | **Elasticsearch/OpenSearch** | `elasticsearch` connector and acknowledged `elasticsearch_bulk_sink` over the common REST bulk boundary | `pip install 'onestep[elasticsearch]'` (`onestep-elasticsearch`) |
@@ -303,16 +304,14 @@ onestep init billing-sync            # scaffold a minimal YAML project
 onestep build worker.yaml --out dist/worker.zip
 ```
 
-The full YAML schema, resource types, per-Sink payload transforms, conditional
-routing, and state binding are covered in
-[`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
+The full YAML schema, resource types, conditional routing, and state binding
+are covered in [`docs/yaml-task-definition.md`](docs/yaml-task-definition.md).
 
 ### Build a deployable worker package
 
 `onestep build` packages a YAML worker project into a zip that a worker agent can
 download and run. It validates the target first, collects the YAML entrypoint,
-local Python modules referenced by handler, hook, per-Sink transform, and
-conditional routing refs,
+local Python modules referenced by handler, hook, and conditional routing refs,
 dependency declaration files such as `pyproject.toml`, `requirements.txt`, and
 `uv.lock`, packaging metadata such as README and license files, and writes an
 `onestep-package.json` manifest into the zip.

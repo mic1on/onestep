@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-08-22 - 同步 main 并新增 Cloudflare Queues 连接器文档
+
+### 变更概述
+
+将 docs 分支同步到 `main` 最新状态（合入 #142 SNS topic sink、#143 control-plane SNS 拓扑、#144 Cloudflare Queues 连接器），并为新连接器补齐中英文文档。
+
+### 更新内容
+
+- 新增中英文 Cloudflare Queues 连接器页 [/broker/cf-queues](/broker/cf-queues) 与 [/en/broker/cf-queues](/en/broker/cf-queues)：基于官方 `cloudflare` Python SDK 的 HTTP 拉取消费者 source/sink，覆盖安装、前置条件（`wrangler queues consumer http add`、Queues Edit token）、`cf_queues`/`cf_queue` 资源类型、语义映射、消息元数据、content-type/base64 编码、`on_fail` 策略、短轮询与无租约续期、限制说明。
+- VitePress 侧边栏中英文均在 AWS SQS 之后新增 Cloudflare Queues 条目。
+- 中英文 SQS 连接器页补齐 SNS Topic Sink（`sns_topic` 扇出 sink）章节，与 `main` 一致。
+- README（中英文）连接器表新增 Cloudflare Queues 行、SQS 行补充 `sns_topic` 扇出说明、拉取任务能力表新增 `cf_queue`；CHANGELOG 与 main 对齐。
+- 连接器一致性清单（connector-conformance）新增 Cloudflare Queues 行（source / claim release / acknowledged sink / public errors）。
+- VitePress 构建验证通过（0 错误）。
+
 ## 2026-08-21 - 同步 main 与 onestep-sql 包名对齐
 
 ### 变更概述
