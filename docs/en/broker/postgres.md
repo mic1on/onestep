@@ -5,6 +5,13 @@ outline: deep
 
 # PostgreSQL
 
+::: tip Migration note
+`onestep-postgres` is now a forwarding shim for `onestep-sql`. For new projects,
+install `onestep-sql[postgres]` and import from `onestep_sql.postgres`; the
+legacy `onestep-postgres` package and `from onestep_postgres import ...` keep
+working. See [Migrate to onestep-sql](/en/guide/migrate-to-onestep-sql).
+:::
+
 `onestep-postgres` provides PostgreSQL table queue, incremental polling, table sink, and SQLAlchemy-backed state/cursor storage. The first release does not include logical replication or CDC.
 
 For the full business integration flow for long-running tasks, see [PostgreSQL Tracked Execution](/en/broker/postgres-execution).

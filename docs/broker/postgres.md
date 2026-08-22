@@ -5,6 +5,10 @@ outline: deep
 
 # PostgreSQL
 
+::: tip 迁移提示
+`onestep-postgres` 现在是 `onestep-sql` 的转发 shim。新项目请安装 `onestep-sql[postgres]` 并从 `onestep_sql.postgres` 导入；旧的 `onestep-postgres` 包与 `from onestep_postgres import ...` 仍可用。详见[迁移到 onestep-sql](/guide/migrate-to-onestep-sql)。
+:::
+
 `onestep-postgres` 提供 PostgreSQL 版的表队列、增量轮询、表输出，以及 SQLAlchemy-backed 状态/游标存储。第一版不包含 logical replication 或 CDC。
 
 长任务的完整业务接入流程见 [PostgreSQL Tracked Execution](/broker/postgres-execution)。

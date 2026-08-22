@@ -5,6 +5,13 @@ outline: deep
 
 # MySQL
 
+::: tip Migration note
+`onestep-mysql` is now a forwarding shim for `onestep-sql`. For new projects,
+install `onestep-sql[mysql]` and import from `onestep_sql.mysql`; the legacy
+`onestep-mysql` package and `from onestep_mysql import ...` keep working. See
+[Migrate to onestep-sql](/en/guide/migrate-to-onestep-sql).
+:::
+
 MySQL Connector provides three modes:
 - **Table Queue**: Use a database table as a task queue
 - **Incremental Sync**: Logstash-style sync based on `(updated_at, id)`

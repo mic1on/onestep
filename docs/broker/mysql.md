@@ -5,6 +5,10 @@ outline: deep
 
 # MySQL
 
+::: tip 迁移提示
+`onestep-mysql` 现在是 `onestep-sql` 的转发 shim。新项目请安装 `onestep-sql[mysql]` 并从 `onestep_sql.mysql` 导入；旧的 `onestep-mysql` 包与 `from onestep_mysql import ...` 仍可用。详见[迁移到 onestep-sql](/guide/migrate-to-onestep-sql)。
+:::
+
 MySQL Connector 提供三种模式：
 - **表队列**: 将数据库表作为任务队列
 - **增量同步**: 基于 `(updated_at, id)` 的 Logstash 风格同步
