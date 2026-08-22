@@ -3,7 +3,7 @@ title: MySQL | Broker
 outline: deep
 ---
 
-# MySQL
+# MySQL <Badge type="warning" text="即将下线" />
 
 ::: tip 迁移提示
 `onestep-mysql` 现在是 `onestep-sql` 的转发 shim。新项目请安装 `onestep-sql[mysql]` 并从 `onestep_sql.mysql` 导入；旧的 `onestep-mysql` 包与 `from onestep_mysql import ...` 仍可用。详见[迁移到 onestep-sql](/guide/migrate-to-onestep-sql)。

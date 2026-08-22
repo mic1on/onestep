@@ -3,7 +3,7 @@ title: MySQL | Broker
 outline: deep
 ---
 
-# MySQL
+# MySQL <Badge type="warning" text="Sunsetting" />
 
 ::: tip Migration note
 `onestep-mysql` is now a forwarding shim for `onestep-sql`. For new projects,

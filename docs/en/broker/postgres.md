@@ -3,7 +3,7 @@ title: PostgreSQL | Broker
 outline: deep
 ---
 
-# PostgreSQL
+# PostgreSQL <Badge type="warning" text="Sunsetting" />
 
 ::: tip Migration note
 `onestep-postgres` is now a forwarding shim for `onestep-sql`. For new projects,

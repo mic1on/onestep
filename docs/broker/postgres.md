@@ -3,7 +3,7 @@ title: PostgreSQL | Broker
 outline: deep
 ---
 
-# PostgreSQL
+# PostgreSQL <Badge type="warning" text="即将下线" />
 
 ::: tip 迁移提示
 `onestep-postgres` 现在是 `onestep-sql` 的转发 shim。新项目请安装 `onestep-sql[postgres]` 并从 `onestep_sql.postgres` 导入；旧的 `onestep-postgres` 包与 `from onestep_postgres import ...` 仍可用。详见[迁移到 onestep-sql](/guide/migrate-to-onestep-sql)。
