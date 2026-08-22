@@ -104,16 +104,177 @@ sudo systemctl status onestep-app
 sudo journalctl -u onestep-app -f
 ```
 
+## Docker Deployment
+
+The official worker image bundles `onestep[all]` and a startup script that runs
+`onestep check` and then `onestep run`. See
+[Worker Runtime Image](/en/guide/worker-runtime-image) for details.
+
+### Mounted workspace
+
+```bash
+docker run --rm \
+  -e ONESTEP_TARGET=/workspace/worker.yaml \
+  -v "$PWD:/workspace" \
+  ghcr.io/mic1on/onestep-worker:1.11.0
+```
+
+Startup behavior:
+
+1. adds `/workspace` and `/workspace/src` to `PYTHONPATH`
+2. installs `/workspace/requirements.txt` if present; otherwise installs the
+   current project when `/workspace/pyproject.toml` exists
+3. runs `onestep check`, then `onestep run` on success
+
+### Derived image (recommended for production)
+
+Bake the code and YAML into the image instead of mounting and installing at
+runtime:
+
+```dockerfile
+FROM ghcr.io/mic1on/onestep-worker:1.11.0
+
+WORKDIR /workspace
+COPY . /workspace
+ENV ONESTEP_TARGET=/workspace/worker.yaml
+```
+
+```bash
+docker build -t my-worker .
+docker run --rm my-worker
+```
+
+A worker is a long-running process. `onestep run` writes INFO logs and task
+events to stdout, so a container log driver can collect them directly. If the
+YAML uses a plugin not bundled in the image (e.g. `onestep-feishu-bitable`),
+declare it in the workspace `requirements.txt` or `pyproject.toml`.
+
+## Docker Compose Deployment
+
+```yaml
+# docker-compose.yml
+services:
+  worker:
+    image: ghcr.io/mic1on/onestep-worker:1.11.0
+    environment:
+      ONESTEP_TARGET: /workspace/worker.yaml
+    volumes:
+      - ./:/workspace
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d          # start in the background
+docker compose logs -f worker # follow logs
+docker compose stop worker    # send SIGTERM, triggering graceful shutdown
+```
+
+For production, prefer a derived image (`build:` pointing at a Dockerfile that
+contains your code and YAML) over mounting the source tree. `restart:
+unless-stopped` restarts the worker after an abnormal exit; `docker compose
+stop` sends `SIGTERM`, which `OneStepApp` handles as a normal shutdown request
+and waits for in-flight tasks to complete.
+
+Multi-connector workers can be orchestrated alongside their dependencies (e.g.
+RabbitMQ, Redis) in the same compose file, using `depends_on` for startup order
+and environment variables to inject DSNs/tokens.
+
+## AWS EC2 Deployment
+
+Running as a long-lived systemd service on EC2 is the recommended shape (see
+"systemd Deployment" above). Typical steps:
+
+1. Prepare the instance: install an onestep-compatible Python (3.9+), clone the
+   app repo to `/srv/onestep-app`, create a virtualenv at
+   `/srv/onestep-app/.venv`, and `pip install` the app plus required plugins.
+2. Configure the service:
+
+   ```bash
+   sudo mkdir -p /etc/onestep
+   sudo cp deploy/env/onestep-app.env.example /etc/onestep/onestep-app.env
+   # edit APP_CWD / APP_TARGET / ONESTEP_BIN
+   sudo cp deploy/systemd/onestep-app.service /etc/systemd/system/onestep-app.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now onestep-app
+   ```
+
+3. `ExecStartPre` runs `onestep check` as a preflight and refuses to start on
+   failure; `ExecStart` then runs `onestep run`. The unit's `Restart=on-failure`
+   handles crash recovery, and `TimeoutStopSec=45` leaves room for graceful
+   shutdown.
+
+You can also run the Docker / Docker Compose approach above directly on EC2
+(after installing Docker Engine), which suits already-containerized teams.
+Either way, put credentials in `/etc/onestep/*.env` or the instance IAM role /
+SSM parameters, not in code.
+
+Scale by adding instances according to source semantics: queue-style sources
+(SQS, RabbitMQ, Redis Stream, Cloudflare Queues, ...) support multiple instances
+consuming in parallel; schedule/polling sources (interval, cron, DB incremental)
+should usually run a single instance, or use `overlap: skip` with a persisted
+cursor to avoid duplication.
+
+## AWS Lambda Deployment
+
+Lambda is a request/response, short-lived model that does not match the
+long-running loop of `onestep run`. **Do not** call `app.run()` / `app.serve()`
+inside a Lambda. The correct approach is `OneStepApp.run_task_once()`, which
+processes a single payload synchronously per invocation while reusing the same
+handler and retry logic:
+
+```python
+# handler.py
+import asyncio
+from onestep import MemoryQueue, OneStepApp
+
+app = OneStepApp("lambda-worker")
+
+
+@app.task(source=MemoryQueue("in"))
+async def handle(ctx, item):
+    # business logic; the return value is the processing result
+    return {"ok": True, "echo": item}
+
+
+def lambda_handler(event, context=None):
+    # process one payload per invocation; run_task_once runs the handler and retries
+    return asyncio.run(app.run_task_once("handle", payload=event))
+```
+
+Notes:
+
+- `run_task_once(task_name, payload=...)` requires the task's source to support
+  manual runs (sources with `supports_manual_run=True` such as `MemoryQueue`,
+  `interval`, `cron`). It runs the handler, returns a result dict on success,
+  retries per the task's retry policy on failure, and finally raises (which
+  Lambda records as an invocation failure).
+- Use it to turn the Lambda event source (API Gateway, an SQS trigger,
+  EventBridge, ...) into a payload. Note that message ack/retry is then owned by
+  the Lambda event source, not by an onestep source loop.
+- Packaging: use a Lambda container image (based on the official worker image or
+  self-built, with `onestep` and plugins installed) or a Layer/zip. Make sure
+  boto3-style plugins and any binary dependencies match the platform
+  (`manylinux`).
+- If your workload is essentially "continuously consume a queue", a long-lived
+  worker on EC2/containers is usually a better fit than Lambda; Lambda suits
+  event-driven, bursty, pay-per-invocation scenarios.
+
 ## Environment Variables
 
 Key configuration variables:
 
 | Variable | Description |
 |----------|-------------|
-| `APP_CWD` | Application working directory |
+| `APP_CWD` | Application working directory (systemd template) |
+| `APP_TARGET` | App target, e.g. `your_package.tasks:app` (systemd template) |
+| `ONESTEP_BIN` | Path to the `onestep` executable (systemd template) |
+| `ONESTEP_TARGET` | YAML path or Python target (worker image) |
+| `WORKSPACE_DIR` | Workspace path, default `/workspace` (worker image) |
 | `PYTHONPATH` | Python module search path |
 
-The deployment template automatically adds `APP_CWD` to `PYTHONPATH`, ensuring modules within the repository can be imported correctly.
+The systemd template automatically adds `APP_CWD` to `PYTHONPATH`; the worker
+image automatically adds `WORKSPACE_DIR` and its `src/` to `PYTHONPATH`, so
+in-repo modules import reliably.
 
 ## YAML Configuration
 
@@ -204,4 +365,5 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 - [MySQL](/en/broker/mysql) - database integration
 - [PostgreSQL](/en/broker/postgres) - PostgreSQL integration
 - [Kafka](/en/broker/kafka) - Kafka topic source/sink
+- [Cloudflare Queues](/en/broker/cf-queues) - HTTP pull consumer
 - [Worker Runtime Image](/en/guide/worker-runtime-image) - containerized YAML workers

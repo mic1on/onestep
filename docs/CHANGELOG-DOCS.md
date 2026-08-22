@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-08-22 - 生产部署补充 Docker / Compose / EC2 / Lambda
+
+### 变更概述
+
+在中英文《生产部署》指南中新增 Docker、Docker Compose、AWS EC2、AWS Lambda 四种部署方式，所有命令与 API 均已本地验证。
+
+### 更新内容
+
+- Docker：官方 worker 镜像挂载工作区与派生镜像两种模式（本地 `docker build` + `docker run` 已验证）。
+- Docker Compose：`docker-compose.yml` 示例、`up -d`/`logs -f`/`stop` 生命周期，`restart: unless-stopped` 与 `SIGTERM` 优雅关闭（本地 `docker compose up/logs/stop` 已验证任务正常轮询、SIGTERM 优雅退出 exit code 0）。
+- AWS EC2：以 systemd 常驻为主，`onestep check` 启动前校验 + `onestep run`，凭据走 env/IAM/SSM；按 source 语义横向扩容说明。
+- AWS Lambda：明确不可用 `run()`/`serve()`，改用 `OneStepApp.run_task_once(task, payload=...)` 请求-响应模型；本地验证成功返回结果字典、失败按重试策略重试 3 次后抛出。
+- 环境变量表补齐 `APP_TARGET`/`ONESTEP_BIN`/`ONESTEP_TARGET`/`WORKSPACE_DIR`，并区分 systemd 模板与 worker 镜像。
+- 两页「下一步」新增 Cloudflare Queues 链接。VitePress 构建通过（0 错误）。
+
 ## 2026-08-22 - 同步 main 并新增 Cloudflare Queues 连接器文档
 
 ### 变更概述
