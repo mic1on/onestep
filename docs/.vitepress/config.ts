@@ -65,6 +65,9 @@ export default defineConfig({
             items: [
               { text: 'Cases Overview', link: '/en/guide/cases/' },
               { text: 'MySQL to Feishu Bitable Order Sync', link: '/en/guide/cases/mysql-feishu-order-sync' },
+              { text: 'SQS Messages to MySQL', link: '/en/guide/cases/sqs-to-mysql' },
+              { text: 'Multi-Connector Event Fan-out', link: '/en/guide/cases/multi-connector-fanout' },
+              { text: 'FastAPI Execution Scheduling', link: '/en/guide/cases/fastapi-execution-scheduling' },
             ],
           },
           {
@@ -218,6 +221,9 @@ export default defineConfig({
         items: [
           { text: '案例总览', link: '/guide/cases/' },
           { text: '订单流水同步到飞书多维表格', link: '/guide/cases/mysql-feishu-order-sync' },
+          { text: 'SQS 消息落库到 MySQL', link: '/guide/cases/sqs-to-mysql' },
+          { text: '多连接器事件分发', link: '/guide/cases/multi-connector-fanout' },
+          { text: 'FastAPI 调度长任务', link: '/guide/cases/fastapi-execution-scheduling' },
         ],
       },
       {

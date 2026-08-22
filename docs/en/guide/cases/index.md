@@ -14,6 +14,15 @@ Business field transformations should still be implemented by the application's 
 - [MySQL Order Stream Incremental Sync to Feishu Bitable](/en/guide/cases/mysql-feishu-order-sync):
   Uses MySQL composite cursor, persistent progress, and Feishu Insert key index to reliably write
   immutable order records into a Bitable.
+- [SQS Messages Reliably Persisted to MySQL](/en/guide/cases/sqs-to-mysql):
+  Handles SQS at-least-once delivery, using visibility heartbeat and an `upsert` idempotency key to
+  reliably write messages into MySQL, with failures going to a dead-letter queue.
+- [Multi-Connector Event Fan-out Pipeline](/en/guide/cases/multi-connector-fanout):
+  One task reads from Redis Streams and fans out via conditional routing and per-sink transforms to
+  MySQL, an HTTP callback, and an audit stream, with terminal failures going to dead-letter.
+- [FastAPI Submits Long Tasks and Schedules Workers](/en/guide/cases/fastapi-execution-scheduling):
+  Uses PostgreSQL tracked execution so FastAPI submits tasks and returns an ID while a separate worker
+  asynchronously claims and executes, supporting idempotent submission, lease heartbeat, and cancellation.
 
 ## How to Read
 

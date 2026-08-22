@@ -1,5 +1,18 @@
 # 文档更新日志
 
+## 2026-08-22 - 用户案例新增 SQS→MySQL、多连接器协调、FastAPI 调度
+
+### 变更概述
+
+在《用户案例 / 实战篇》原有飞书场景之外新增三篇中英文实战案例，覆盖消息队列落库、多连接器扇出协调、Web 框架下的长任务调度。
+
+### 更新内容
+
+- 新增 [SQS 消息可靠落库到 MySQL](/guide/cases/sqs-to-mysql)（含 [/en](/en/guide/cases/sqs-to-mysql)）：讲清 SQS at-least-once 语义、可见性超时与心跳续期、`upsert`+唯一键幂等落库、`on_fail: leave` 配合 Redrive Policy 走死信队列。
+- 新增 [多连接器协调的事件分发管道](/guide/cases/multi-connector-fanout)（含 [/en](/en/guide/cases/multi-connector-fanout)）：一个任务从 Redis Streams 读取，用条件 Sink 路由 + per-sink transform 扇出到 MySQL、HTTP 回调与审计流，说明多 Sink at-least-once 不跨事务、每个目的地必须幂等、终态进入 `dead_letter`。
+- 新增 [FastAPI 提交长任务并调度 Worker](/guide/cases/fastapi-execution-scheduling)（含 [/en](/en/guide/cases/fastapi-execution-scheduling)）：基于 PostgreSQL tracked execution 的 API/worker 双进程模型，覆盖 `Idempotency-Key` 提交幂等、租约心跳与 fencing、取消、部署顺序；示例导入统一为 `onestep_sql.postgres`。
+- 案例总览与中英文 VitePress 侧边栏均补齐四条案例入口。VitePress 构建通过（0 错误，死链检查有效）。
+
 ## 2026-08-22 - 生产部署补充 Docker / Compose / EC2 / Lambda
 
 ### 变更概述
