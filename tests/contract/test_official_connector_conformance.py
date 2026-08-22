@@ -186,6 +186,23 @@ PROFILES = (
             ),
         },
     ),
+    ConnectorConformanceProfile(
+        name="cf-queues",
+        contracts={
+            Capability.BASIC_SOURCE: (
+                "plugins/onestep-cf-queues/tests/test_cf_queues_connector.py::test_cf_queue_pull_decodes_body_and_injects_metadata",
+            ),
+            Capability.CLAIMED_SOURCE: (
+                "plugins/onestep-cf-queues/tests/test_cf_queues_runtime_contract.py::test_stop_controls_release_fetched_unstarted_cf_delivery",
+            ),
+            Capability.ACKNOWLEDGED_SINK: (
+                "plugins/onestep-cf-queues/tests/test_cf_queues_runtime_contract.py::test_runtime_ack_follows_cf_queues_publish_acknowledgement",
+            ),
+            Capability.PUBLIC_ERRORS: (
+                "plugins/onestep-cf-queues/tests/test_cf_queues_plugin.py::test_cf_queues_error_does_not_leak_api_token",
+            ),
+        },
+    ),
 )
 
 

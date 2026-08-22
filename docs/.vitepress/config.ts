@@ -97,6 +97,7 @@ export default defineConfig({
           { text: 'RabbitMQ', link: '/broker/rabbitmq' },
           { text: 'Redis Streams', link: '/broker/redis' },
           { text: 'AWS SQS', link: '/broker/sqs' },
+          { text: 'Cloudflare Queues', link: '/broker/cf-queues' },
           { text: 'MySQL', link: '/broker/mysql' },
           { text: 'PostgreSQL', link: '/broker/postgres' },
           { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },

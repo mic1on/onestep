@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that
+  wraps the official `cloudflare` Python SDK to consume and publish over the
+  HTTP pull-consumer REST API (works outside Cloudflare Workers). Registers
+  YAML resource types `cf_queues` (connector) and `cf_queue` (source + sink),
+  with batched lease ack/retry, base64 body decoding for the `json`/`bytes`
+  content types, `on_fail` policy (`leave`/`retry`/`ack`), and short-polling
+  `fetch` (`fetch_is_cancel_safe`). Install via
+  `pip install 'onestep[cloudflare]'`.
+
 - Adds `onestep render <target>`: renders the worker topology of any Python or
   YAML target as a Mermaid flowchart (`--format mermaid`, the only format for
   now). Task nodes carry concurrency, retry, and timeout; edges are labeled

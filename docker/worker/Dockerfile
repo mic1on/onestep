@@ -26,6 +26,8 @@ COPY plugins/onestep-postgres/pyproject.toml plugins/onestep-postgres/README.md 
 COPY plugins/onestep-postgres/src/onestep_postgres /tmp/onestep/plugins/onestep-postgres/src/onestep_postgres
 COPY plugins/onestep-sqs/pyproject.toml plugins/onestep-sqs/README.md /tmp/onestep/plugins/onestep-sqs/
 COPY plugins/onestep-sqs/src/onestep_sqs /tmp/onestep/plugins/onestep-sqs/src/onestep_sqs
+COPY plugins/onestep-cf-queues/pyproject.toml plugins/onestep-cf-queues/README.md /tmp/onestep/plugins/onestep-cf-queues/
+COPY plugins/onestep-cf-queues/src/onestep_cf_queues /tmp/onestep/plugins/onestep-cf-queues/src/onestep_cf_queues
 COPY plugins/onestep-kafka/pyproject.toml plugins/onestep-kafka/README.md /tmp/onestep/plugins/onestep-kafka/
 COPY plugins/onestep-kafka/src/onestep_kafka /tmp/onestep/plugins/onestep-kafka/src/onestep_kafka
 COPY plugins/onestep-elasticsearch/pyproject.toml plugins/onestep-elasticsearch/README.md /tmp/onestep/plugins/onestep-elasticsearch/
@@ -45,6 +47,7 @@ RUN python -m pip install --upgrade pip \
         /tmp/onestep/plugins/onestep-mysql \
         /tmp/onestep/plugins/onestep-postgres \
         /tmp/onestep/plugins/onestep-sqs \
+        /tmp/onestep/plugins/onestep-cf-queues \
         /tmp/onestep/plugins/onestep-kafka \
         /tmp/onestep/plugins/onestep-elasticsearch \
         /tmp/onestep/plugins/onestep-clickhouse \

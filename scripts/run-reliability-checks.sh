@@ -24,6 +24,7 @@ plugin_paths=(
   "plugins/onestep-rabbitmq/tests"
   "plugins/onestep-redis/tests"
   "plugins/onestep-sqs/tests"
+  "plugins/onestep-cf-queues/tests"
 )
 
 echo "==> Running plugin non-integration tests in isolated pytest processes"

@@ -106,6 +106,7 @@ def _read_env(*names: str) -> str | None:
 
 
 _KIND_OVERRIDES = {
+    "CFQueue": "cf_queue",
     "CronSource": "cron",
     "HttpSink": "http_sink",
     "IncrementalTableSource": "mysql_incremental",
