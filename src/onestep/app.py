@@ -344,17 +344,21 @@ class OneStepApp:
         return self._lifecycle._install_signal_handlers()
 
     # ----- contract-visible state (read-only views of the controller) -----
+    # See runtime/lifecycle.py: LifecycleController._runners / ._runner_tasks / ._resources.
 
     @property
     def _runners(self) -> list[Any]:
+        # see runtime/lifecycle.py LifecycleController._runners
         return self._lifecycle._runners
 
     @property
     def _runner_tasks(self) -> dict[str, Any]:
+        # see runtime/lifecycle.py LifecycleController._runner_tasks
         return self._lifecycle._runner_tasks
 
     @property
     def _resources(self) -> list[Any]:
+        # see runtime/lifecycle.py LifecycleController._resources
         return self._lifecycle._resources
 
 
