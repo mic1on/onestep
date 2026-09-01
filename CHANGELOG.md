@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Adds built-in Prometheus observability (`onestep[metrics]`, issue #153): a
+  dependency-free `PrometheusExporter` (`src/onestep/observability.py`)
+  consumes the `TaskEvent` stream and exposes `onestep_deliveries_fetched_total`,
+  `onestep_tasks_processed_total{status}`, `onestep_task_duration_seconds`
+  (histogram), `onestep_inflight_tasks`, `onestep_tasks_retried_total`,
+  `onestep_tasks_dead_lettered_total`, `onestep_tasks_cancelled_total`,
+  `onestep_task_failures_total{failure_kind}`, `onestep_build_info`, plus
+  every custom task metric from `CustomMetricsRegistry` — read through a new
+  non-destructive `snapshot()` so counters stay monotonic across the
+  control-plane reporter's `rotate_task()` window resets. The new
+  `onestep run --metrics-addr host:port` flag (or `install_metrics(app)`)
+  serves `/metrics` and a `/healthz` probe (runtime + per-source liveness,
+  usable as a K8s liveness/readiness endpoint) from a tiny asyncio HTTP
+  server coexisting with webhook sources. A ready-made monitoring stack
+  lives in `examples/prometheus/` (onestep + Prometheus + Grafana with a
+  provisioned dashboard).
+
 - Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that
   wraps the official `cloudflare` Python SDK to consume and publish over the
   HTTP pull-consumer REST API (works outside Cloudflare Workers). Registers

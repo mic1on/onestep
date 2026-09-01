@@ -58,6 +58,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Set the onestep logger level (default: target configuration or INFO)",
     )
     run_parser.add_argument(
+        "--metrics-addr",
+        dest="metrics_addr",
+        type=str,
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Expose Prometheus /metrics and /healthz on HOST:PORT "
+            "(use :PORT to bind all interfaces; e.g. :9100)"
+        ),
+    )
+    run_parser.add_argument(
         "--task-events",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -319,6 +330,11 @@ def main(argv: list[str] | None = None) -> int:
         cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
         if args.task_events:
             app.enable_structured_event_logging()
+        if args.metrics_addr:
+            host, port = _parse_metrics_addr(args.metrics_addr)
+            from .observability import install_metrics
+
+            install_metrics(app, host=host, port=port)
         app.run()
     except Exception as exc:
         print(f"onestep: {args.target} failed while running: {exc}", file=sys.stderr)
@@ -331,6 +347,27 @@ def main(argv: list[str] | None = None) -> int:
             root_logger.setLevel(previous_root_level)
             cli_handler.close()
     return 0
+
+
+def _parse_metrics_addr(value: str) -> tuple[str, int]:
+    """Parse ``HOST:PORT`` / ``:PORT`` / ``PORT`` for ``--metrics-addr``."""
+    text = value.strip()
+    if not text:
+        raise ValueError("--metrics-addr must not be empty")
+    if text.startswith(":"):
+        host_part, _, port_part = "", text[1:], ""
+    else:
+        host_part, sep, port_part = text.rpartition(":")
+        if not sep:
+            host_part, port_part = "", text
+    try:
+        port = int(port_part)
+    except ValueError as exc:
+        raise ValueError(f"invalid --metrics-addr port in {value!r}") from exc
+    if not 0 < port < 65536:
+        raise ValueError(f"invalid --metrics-addr port in {value!r}")
+    host = host_part.strip("[]") or "127.0.0.1"
+    return host, port
 
 
 def _configure_run_logging(
