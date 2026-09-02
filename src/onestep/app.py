@@ -1,60 +1,37 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import copy
 import importlib
 import inspect
 import logging
-import signal
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from .capture.config import FailureCaptureConfig
 from .capture.writer import FailureCaptureWriter
 from .connectors.base import Sink, Source
-from .envelope import Envelope
 from .events import StructuredEventLogger, TaskEvent
-from .invoke import invoke_callback
 from .metrics import CustomMetricsRegistry
 from .retry import RetryPolicy
+from .runtime.event_hub import EventHub
+from .runtime.lifecycle import LifecycleController
 from .runtime.runner import TaskRunner
+from .runtime.task_ops import TaskOperations
 from .state import InMemoryStateStore, StateStore
 from .task import EmitTarget, TaskHandler, TaskHooks, TaskSpec
 
 
-class _SyntheticManualRunDelivery:
-    def __init__(self, envelope: Envelope) -> None:
-        self.envelope = envelope
-        self.acked = False
-        self.failed = False
-        self.retry_requested = False
-        self.retry_delay_s: float | None = None
-
-    @property
-    def payload(self) -> Any:
-        return self.envelope.body
-
-    async def start_processing(self) -> None:
-        return None
-
-    async def ack(self) -> None:
-        self.acked = True
-
-    async def retry(self, *, delay_s: float | None = None) -> None:
-        self.retry_requested = True
-        self.retry_delay_s = delay_s
-        self.envelope = Envelope(
-            body=copy.deepcopy(self.envelope.body),
-            meta=copy.deepcopy(self.envelope.meta),
-            attempts=self.envelope.attempts + 1,
-        )
-
-    async def fail(self, exc: Exception | None = None) -> None:
-        self.failed = True
-
-
 class OneStepApp:
+    """Facade for an onestep async task runtime.
+
+    Construction, task/resource registration, ``describe``/``load``/``run``,
+    and the event-hook surface live here. The asyncio lifecycle, the per-task
+    runner registry, the control-plane state snapshots, the dead-letter /
+    manual-run operations, and the event hub are delegated to
+    ``LifecycleController``, ``TaskOperations``, and ``EventHub``. Public
+    method names, signatures, and return structures are unchanged.
+    """
+
     def __init__(
         self,
         name: str,
@@ -79,26 +56,12 @@ class OneStepApp:
         self.custom_metrics = CustomMetricsRegistry()
         self._tasks: list[TaskSpec] = []
         self._named_resources: dict[str, Any] = {}
-        self._shutdown: asyncio.Event | None = None
-        self._shutdown_requested = False
-        self._drain: asyncio.Event | None = None
-        self._drain_requested = False
-        self._restart_requested = False
-        self._paused_tasks: set[str] = set()
-        self._runner_state: asyncio.Event | None = None
-        self._runners: list[TaskRunner] = []
-        # Per-task asyncio.Task handles for each runner coroutine, keyed by task
-        # name. Captured so a single task's runner can be cancelled and respawned
-        # (see stop_task_runner / start_task_runner / restart_task_runner)
-        # without restarting the whole process. Cleared together with _runners.
-        self._runner_tasks: dict[str, asyncio.Task[None]] = {}
-        self._resources: list[Any] = []
-        self._startup_hooks: list[Callable[..., Any]] = []
-        self._shutdown_hooks: list[Callable[..., Any]] = []
-        self._event_handlers: list[Callable[..., Any]] = []
         self._reporter_summary: dict[str, Any] | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._events_logger = logging.getLogger(f"onestep.{name}.events")
+        self._events = EventHub(self)
+        self._task_ops = TaskOperations(self)
+        self._lifecycle = LifecycleController(self)
+
+    # ----- task / resource registry (owned by the facade) -----------------
 
     @property
     def tasks(self) -> tuple[TaskSpec, ...]:
@@ -107,61 +70,6 @@ class OneStepApp:
     @property
     def resources(self) -> Mapping[str, Any]:
         return self._named_resources
-
-    @property
-    def is_stopping(self) -> bool:
-        return self._shutdown_requested or (self._shutdown.is_set() if self._shutdown is not None else False)
-
-    @property
-    def is_draining(self) -> bool:
-        return self._drain_requested and not self.is_stopping
-
-    @property
-    def restart_requested(self) -> bool:
-        return self._restart_requested
-
-    def is_task_paused(self, task_name: str) -> bool:
-        return task_name in self._paused_tasks and not self.is_stopping
-
-    def request_shutdown(self) -> None:
-        self._shutdown_requested = True
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        if self._shutdown is None:
-            return
-        if self._loop is None or self._loop is current_loop:
-            self._shutdown.set()
-            return
-        self._loop.call_soon_threadsafe(self._shutdown.set)
-
-    def request_restart(self) -> None:
-        self._restart_requested = True
-        self.request_shutdown()
-
-    def request_drain(self) -> None:
-        self._drain_requested = True
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        drain = self._ensure_drain_event()
-        if self._loop is None or self._loop is current_loop:
-            drain.set()
-        else:
-            self._loop.call_soon_threadsafe(drain.set)
-        self.notify_runner_state_changed()
-
-    def request_task_pause(self, task_name: str) -> None:
-        self._require_controllable_task(task_name)
-        self._paused_tasks.add(task_name)
-        self.notify_runner_state_changed()
-
-    def request_task_resume(self, task_name: str) -> None:
-        self._require_controllable_task(task_name)
-        self._paused_tasks.discard(task_name)
-        self.notify_runner_state_changed()
 
     def bind_resources(self, resources: Mapping[str, Any]) -> None:
         self._named_resources = dict(resources)
@@ -173,122 +81,45 @@ class OneStepApp:
     def set_reporter_summary(self, reporter: Mapping[str, Any] | None) -> None:
         self._reporter_summary = None if reporter is None else copy.deepcopy(dict(reporter))
 
+    # ----- lifecycle state (delegated to LifecycleController) -------------
+
+    @property
+    def is_stopping(self) -> bool:
+        return self._lifecycle.is_stopping
+
+    @property
+    def is_draining(self) -> bool:
+        return self._lifecycle.is_draining
+
+    @property
+    def restart_requested(self) -> bool:
+        return self._lifecycle.restart_requested
+
+    def is_task_paused(self, task_name: str) -> bool:
+        return self._lifecycle.is_task_paused(task_name)
+
+    def request_shutdown(self) -> None:
+        self._lifecycle.request_shutdown()
+
+    def request_restart(self) -> None:
+        self._lifecycle.request_restart()
+
+    def request_drain(self) -> None:
+        self._lifecycle.request_drain()
+
+    def request_task_pause(self, task_name: str) -> None:
+        self._lifecycle.request_task_pause(task_name)
+
+    def request_task_resume(self, task_name: str) -> None:
+        self._lifecycle.request_task_resume(task_name)
+
+    # ----- task operations (delegated to TaskOperations) ------------------
+
     async def replay_task_dead_letters(self, task_name: str, *, limit: int) -> dict[str, Any]:
-        if limit < 1:
-            raise ValueError("dead-letter replay limit must be >= 1")
-        task = self._require_dead_letter_replay_task(task_name)
-        assert task.source is not None
-        assert isinstance(task.source, Sink)
-        dead_letter_source = task.dead_letter_sinks[0]
-        assert isinstance(dead_letter_source, Source)
-
-        attempted_count = 0
-        replayed_count = 0
-        failed_count = 0
-
-        for delivery in await dead_letter_source.fetch(limit):
-            attempted_count += 1
-            try:
-                replay_envelope = self._build_dead_letter_replay_envelope(delivery.envelope)
-            except Exception:
-                failed_count += 1
-                self._events_logger.exception(
-                    "dead-letter replay payload was invalid",
-                    extra={"task_name": task_name},
-                )
-                with contextlib.suppress(Exception):
-                    await delivery.retry()
-                continue
-
-            try:
-                await task.source.send(replay_envelope)
-            except Exception:
-                failed_count += 1
-                self._events_logger.exception(
-                    "dead-letter replay publish failed",
-                    extra={"task_name": task_name},
-                )
-                with contextlib.suppress(Exception):
-                    await delivery.retry()
-                continue
-
-            try:
-                await delivery.ack()
-            except Exception:
-                failed_count += 1
-                self._events_logger.exception(
-                    "dead-letter replay ack failed after publish",
-                    extra={"task_name": task_name},
-                )
-                continue
-
-            replayed_count += 1
-
-        if attempted_count == 0:
-            completion = "complete"
-        elif failed_count == 0:
-            completion = "complete"
-        elif replayed_count > 0:
-            completion = "partial"
-        else:
-            completion = "failed"
-
-        return {
-            "operation": "replay_dead_letters",
-            "task_name": task_name,
-            "requested": True,
-            "completion": completion,
-            "requested_limit": limit,
-            "attempted_count": attempted_count,
-            "replayed_count": replayed_count,
-            "failed_count": failed_count,
-            "empty": attempted_count == 0,
-        }
+        return await self._task_ops.replay_task_dead_letters(task_name, limit=limit)
 
     async def discard_task_dead_letters(self, task_name: str, *, limit: int) -> dict[str, Any]:
-        if limit < 1:
-            raise ValueError("dead-letter discard limit must be >= 1")
-        task = self._require_dead_letter_discard_task(task_name)
-        dead_letter_source = task.dead_letter_sinks[0]
-        assert isinstance(dead_letter_source, Source)
-
-        attempted_count = 0
-        discarded_count = 0
-        failed_count = 0
-
-        for delivery in await dead_letter_source.fetch(limit):
-            attempted_count += 1
-            try:
-                await delivery.ack()
-            except Exception:
-                failed_count += 1
-                self._events_logger.exception(
-                    "dead-letter discard ack failed",
-                    extra={"task_name": task_name},
-                )
-                continue
-            discarded_count += 1
-
-        if attempted_count == 0:
-            completion = "complete"
-        elif failed_count == 0:
-            completion = "complete"
-        elif discarded_count > 0:
-            completion = "partial"
-        else:
-            completion = "failed"
-
-        return {
-            "operation": "discard_dead_letters",
-            "task_name": task_name,
-            "requested": True,
-            "completion": completion,
-            "requested_limit": limit,
-            "attempted_count": attempted_count,
-            "discarded_count": discarded_count,
-            "failed_count": failed_count,
-            "empty": attempted_count == 0,
-        }
+        return await self._task_ops.discard_task_dead_letters(task_name, limit=limit)
 
     async def run_task_once(
         self,
@@ -296,356 +127,96 @@ class OneStepApp:
         *,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        task = self._require_manual_run_task(task_name)
-        delivery = _SyntheticManualRunDelivery(
-            Envelope(
-                body=copy.deepcopy(dict(payload)),
-                meta={
-                    "manual_run": True,
-                    "task_name": task_name,
-                },
-                attempts=0,
-            )
-        )
-        runner = TaskRunner(self, task)
-
-        attempted_count = 0
-        completed = False
-        last_failure: Exception | None = None
-
-        while True:
-            attempted_count += 1
-            await runner._handle_delivery(delivery)
-            if delivery.acked:
-                completed = True
-                break
-            if not delivery.retry_requested:
-                break
-            delivery.retry_requested = False
-            last_failure = RuntimeError("manual run exhausted retries")
-
-        if completed:
-            return {
-                "operation": "run_task_once",
-                "task_name": task_name,
-                "requested": True,
-                "completion": "complete",
-                "attempted_count": attempted_count,
-                "manual_run": True,
-            }
-
-        if delivery.failed:
-            raise RuntimeError(
-                f"manual run failed for task {task_name} after {attempted_count} attempt(s)"
-            ) from last_failure
-
-        raise RuntimeError(
-            f"manual run did not reach a terminal successful state for task {task_name}"
-        )
-
-    async def wait_for_shutdown(self) -> None:
-        shutdown = self._ensure_shutdown_event()
-        await shutdown.wait()
-
-    async def wait_for_drain_request(self) -> None:
-        drain = self._ensure_drain_event()
-        await drain.wait()
-
-    async def wait_for_task_pause_request(self, task_name: str) -> None:
-        while not self.is_task_paused(task_name) and not self.is_stopping:
-            runner_state = self._ensure_runner_state_event()
-            await runner_state.wait()
-            runner_state.clear()
-
-    async def wait_for_stop_fetching(self, task_name: str | None = None) -> None:
-        shutdown_task = asyncio.create_task(self.wait_for_shutdown())
-        drain_task = asyncio.create_task(self.wait_for_drain_request())
-        waiters = {shutdown_task, drain_task}
-        if task_name is not None:
-            waiters.add(asyncio.create_task(self.wait_for_task_pause_request(task_name)))
-        try:
-            done, pending = await asyncio.wait(
-                waiters,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except asyncio.CancelledError:
-            for waiter in waiters:
-                waiter.cancel()
-            await asyncio.gather(*waiters, return_exceptions=True)
-            raise
-        for pending_task in pending:
-            pending_task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        await asyncio.gather(*done, return_exceptions=True)
-
-    async def wait_for_drain(self) -> dict[str, Any]:
-        while True:
-            status = self.drain_status()
-            if status["drained"]:
-                return status
-            runner_state = self._ensure_runner_state_event()
-            await runner_state.wait()
-            runner_state.clear()
-
-    async def wait_for_task_pause(self, task_name: str) -> dict[str, Any]:
-        while True:
-            status = self.task_pause_status(task_name)
-            if status["paused"]:
-                return status
-            runner_state = self._ensure_runner_state_event()
-            await runner_state.wait()
-            runner_state.clear()
-
-    async def wait_for_task_resume(self, task_name: str) -> dict[str, Any]:
-        while True:
-            status = self.task_resume_status(task_name)
-            if status["accepting_new_work"]:
-                return status
-            runner_state = self._ensure_runner_state_event()
-            await runner_state.wait()
-            runner_state.clear()
-
-    def register_runners(self, runners: Sequence[TaskRunner]) -> None:
-        self._runners = list(runners)
-        self.notify_runner_state_changed()
-
-    def _task_resources(self, task: TaskSpec) -> list[Any]:
-        """All resources owned by a task: its source, sinks, dead-letter sinks."""
-        resources: list[Any] = []
-        if task.source is not None:
-            resources.append(task.source)
-        resources.extend(task.sinks)
-        resources.extend(task.dead_letter_sinks)
-        return resources
-
-    def _referenced_resource_ids(self, *, exclude_task_name: str | None) -> set[int]:
-        """ids() of resources still referenced by other live tasks and named
-        resources. Used to decide which resources are safe to close when
-        restarting a single task: a resource shared with another task or a named
-        resource must not be closed (mirrors startup()'s dedupe-by-id policy)."""
-        referenced: set[int] = set()
-        for name, resource in self._named_resources.items():
-            if resource is not None:
-                referenced.add(id(resource))
-        if id(self.state) is not None:
-            referenced.add(id(self.state))
-        for task in self._tasks:
-            if task.name == exclude_task_name:
-                continue
-            for resource in self._task_resources(task):
-                referenced.add(id(resource))
-        return referenced
-
-    async def stop_task_runner(self, task_name: str) -> dict[str, Any]:
-        """Tear down a single task's runner: cancel its coroutine (letting the
-        runner's finally block drain inflight work and release fetch state),
-        remove it from the registries, and close the task's *private* resources
-        (source/sinks not referenced by any other live task or named resource).
-        Other tasks and the process as a whole are not affected."""
-        task = self._require_controllable_task(task_name)
-        runner_handle = self._runner_tasks.pop(task_name, None)
-        if runner_handle is not None and not runner_handle.done():
-            runner_handle.cancel()
-            await asyncio.gather(runner_handle, return_exceptions=True)
-        self._runners = [runner for runner in self._runners if runner.task.name != task_name]
-        self._paused_tasks.discard(task_name)
-
-        # Close only resources private to this task; shared ones stay open.
-        still_referenced = self._referenced_resource_ids(exclude_task_name=task_name)
-        for resource in self._task_resources(task):
-            if resource is None or id(resource) in still_referenced:
-                continue
-            with contextlib.suppress(Exception):
-                self._events_logger.debug(
-                    "closing private resource on task restart",
-                    extra={"task_name": task_name, "resource": getattr(resource, "name", resource.__class__.__name__)},
-                )
-                await _close_resource(resource)
-
-        self.notify_runner_state_changed()
-        return self.task_control_snapshot(task_name)
-
-    async def start_task_runner(self, task_name: str) -> dict[str, Any]:
-        """Re-open the task's private source and spawn a fresh runner for it.
-        Counterpart to stop_task_runner. Resources shared with other tasks are
-        expected to already be open (they were never closed)."""
-        task = self._require_controllable_task(task_name)
-        assert task.source is not None
-        # Re-open the task's resources. Shared resources already open are
-        # idempotent to re-open for connectors whose open() is a no-op when
-        # already connected; for safety, only open resources not currently
-        # referenced by another live task (i.e. private ones we just closed).
-        already_open_ids = self._referenced_resource_ids(exclude_task_name=task_name)
-        for resource in self._task_resources(task):
-            if resource is None or id(resource) in already_open_ids:
-                continue
-            await _open_resource(resource)
-
-        runner = TaskRunner(self, task)
-        self._runners.append(runner)
-        runner_handle = asyncio.create_task(
-            runner.run(), name=f"onestep-runner-{task_name}"
-        )
-        self._runner_tasks[task_name] = runner_handle
-        self.notify_runner_state_changed()
-        return self.task_control_snapshot(task_name)
-
-    async def restart_task_runner(self, task_name: str) -> dict[str, Any]:
-        """True per-task restart: cancel the existing runner, close and reopen
-        its private source/sinks, and spawn a fresh runner coroutine. Other
-        tasks keep running and the process is not restarted. Returns the task
-        control snapshot for the restarted task."""
-        await self.stop_task_runner(task_name)
-        return await self.start_task_runner(task_name)
-
-    def notify_runner_state_changed(self) -> None:
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        runner_state = self._ensure_runner_state_event()
-        if self._loop is None or self._loop is current_loop:
-            runner_state.set()
-            return
-        self._loop.call_soon_threadsafe(runner_state.set)
-
-    def drain_status(self) -> dict[str, Any]:
-        inflight_task_count = sum(runner.inflight_count for runner in self._runners)
-        fetching_runner_count = sum(1 for runner in self._runners if runner.is_fetching)
-        parked_runner_count = sum(1 for runner in self._runners if runner.is_drain_parked)
-        runner_count = len(self._runners)
-        drained = (
-            self._drain_requested
-            and inflight_task_count == 0
-            and fetching_runner_count == 0
-            and parked_runner_count == runner_count
-        )
-        return {
-            "operation": "drain",
-            "requested": self._drain_requested,
-            "completion": "complete" if drained else "in_progress",
-            "drained": drained,
-            "accepting_new_work": not self._drain_requested,
-            "runner_count": runner_count,
-            "parked_runner_count": parked_runner_count,
-            "fetching_runner_count": fetching_runner_count,
-            "inflight_task_count": inflight_task_count,
-        }
-
-    def task_pause_status(self, task_name: str) -> dict[str, Any]:
-        status = self._task_runtime_status(task_name)
-        paused = (
-            status["pause_requested"]
-            and status["inflight_task_count"] == 0
-            and status["fetching_runner_count"] == 0
-            and status["parked_runner_count"] == status["runner_count"]
-        )
-        return {
-            "operation": "pause_task",
-            "task_name": task_name,
-            "requested": status["pause_requested"],
-            "completion": "complete" if paused else "in_progress",
-            "paused": paused,
-            "accepting_new_work": not status["pause_requested"],
-            "runner_count": status["runner_count"],
-            "parked_runner_count": status["parked_runner_count"],
-            "fetching_runner_count": status["fetching_runner_count"],
-            "inflight_task_count": status["inflight_task_count"],
-        }
-
-    def task_control_snapshot(self, task_name: str) -> dict[str, Any]:
-        task = next((task for task in self._tasks if task.name == task_name), None)
-        if task is None:
-            raise ValueError(f"task {task_name} was not found")
-        if task.source is None:
-            raise ValueError(f"task {task_name} does not have a controllable source runner")
-
-        runners = [runner for runner in self._runners if runner.task.name == task_name]
-        pause_requested = self.is_task_paused(task_name)
-        fetching_runner_count = sum(1 for runner in runners if runner.is_fetching)
-        parked_runner_count = sum(1 for runner in runners if runner.is_pause_parked)
-        inflight_task_count = sum(runner.inflight_count for runner in runners)
-        runner_count = len(runners)
-        paused = (
-            pause_requested
-            and inflight_task_count == 0
-            and fetching_runner_count == 0
-            and parked_runner_count == runner_count
-        )
-        return {
-            "task_name": task_name,
-            "supported_commands": self.task_supported_commands(task_name),
-            "pause_requested": pause_requested,
-            "paused": paused,
-            "accepting_new_work": not pause_requested,
-            "runner_count": runner_count,
-            "parked_runner_count": parked_runner_count,
-            "fetching_runner_count": fetching_runner_count,
-            "inflight_task_count": inflight_task_count,
-        }
-
-    def task_control_snapshots(self) -> list[dict[str, Any]]:
-        return [
-            self.task_control_snapshot(task.name)
-            for task in self._tasks
-            if task.source is not None
-        ]
-
-    def task_supported_commands(self, task_name: str) -> list[str]:
-        task = self._require_controllable_task(task_name)
-        supported_commands = ["pause_task", "resume_task", "restart_task"]
-        if self._task_supports_dead_letter_discard(task):
-            supported_commands.append("discard_dead_letters")
-        if self._task_supports_dead_letter_replay(task):
-            supported_commands.append("replay_dead_letters")
-        if self._task_supports_manual_run(task):
-            supported_commands.append("run_task_once")
-        return supported_commands
+        return await self._task_ops.run_task_once(task_name, payload=payload)
 
     def supports_dead_letter_replay_commands(self) -> bool:
-        return any(self._task_supports_dead_letter_replay(task) for task in self._tasks)
+        return self._task_ops.supports_dead_letter_replay_commands()
 
     def supports_dead_letter_discard_commands(self) -> bool:
-        return any(self._task_supports_dead_letter_discard(task) for task in self._tasks)
+        return self._task_ops.supports_dead_letter_discard_commands()
 
     def supports_manual_run_commands(self) -> bool:
-        return any(self._task_supports_manual_run(task) for task in self._tasks)
+        return self._task_ops.supports_manual_run_commands()
+
+    # ----- waiters (delegated to LifecycleController) ---------------------
+
+    async def wait_for_shutdown(self) -> None:
+        await self._lifecycle.wait_for_shutdown()
+
+    async def wait_for_drain_request(self) -> None:
+        await self._lifecycle.wait_for_drain_request()
+
+    async def wait_for_task_pause_request(self, task_name: str) -> None:
+        await self._lifecycle.wait_for_task_pause_request(task_name)
+
+    async def wait_for_stop_fetching(self, task_name: str | None = None) -> None:
+        await self._lifecycle.wait_for_stop_fetching(task_name)
+
+    async def wait_for_drain(self) -> dict[str, Any]:
+        return await self._lifecycle.wait_for_drain()
+
+    async def wait_for_task_pause(self, task_name: str) -> dict[str, Any]:
+        return await self._lifecycle.wait_for_task_pause(task_name)
+
+    async def wait_for_task_resume(self, task_name: str) -> dict[str, Any]:
+        return await self._lifecycle.wait_for_task_resume(task_name)
+
+    # ----- runner registry (delegated to LifecycleController) -------------
+
+    def register_runners(self, runners: Sequence[TaskRunner]) -> None:
+        self._lifecycle.register_runners(runners)
+
+    async def stop_task_runner(self, task_name: str) -> dict[str, Any]:
+        return await self._lifecycle.stop_task_runner(task_name)
+
+    async def start_task_runner(self, task_name: str) -> dict[str, Any]:
+        return await self._lifecycle.start_task_runner(task_name)
+
+    async def restart_task_runner(self, task_name: str) -> dict[str, Any]:
+        return await self._lifecycle.restart_task_runner(task_name)
+
+    def notify_runner_state_changed(self) -> None:
+        self._lifecycle.notify_runner_state_changed()
+
+    # ----- control-plane snapshots (delegated to LifecycleController) -----
+
+    def drain_status(self) -> dict[str, Any]:
+        return self._lifecycle.drain_status()
+
+    def task_pause_status(self, task_name: str) -> dict[str, Any]:
+        return self._lifecycle.task_pause_status(task_name)
+
+    def task_control_snapshot(self, task_name: str) -> dict[str, Any]:
+        return self._lifecycle.task_control_snapshot(task_name)
+
+    def task_control_snapshots(self) -> list[dict[str, Any]]:
+        return self._lifecycle.task_control_snapshots()
+
+    def task_supported_commands(self, task_name: str) -> list[str]:
+        return self._lifecycle.task_supported_commands(task_name)
 
     def task_resume_status(self, task_name: str) -> dict[str, Any]:
-        status = self._task_runtime_status(task_name)
-        accepting_new_work = (
-            not status["pause_requested"]
-            and status["parked_runner_count"] == 0
-        )
-        return {
-            "operation": "resume_task",
-            "task_name": task_name,
-            "requested": True,
-            "completion": "complete" if accepting_new_work else "in_progress",
-            "paused": not accepting_new_work,
-            "accepting_new_work": accepting_new_work,
-            "runner_count": status["runner_count"],
-            "parked_runner_count": status["parked_runner_count"],
-            "fetching_runner_count": status["fetching_runner_count"],
-            "inflight_task_count": status["inflight_task_count"],
-        }
+        return self._lifecycle.task_resume_status(task_name)
+
+    # ----- event hub (delegated to EventHub) ------------------------------
+
+    @property
+    def events_logger(self) -> logging.Logger:
+        return self._events.events_logger
 
     def on_startup(self, func: Callable[..., Any] | None = None):
-        return self._register_hook(self._startup_hooks, func)
+        return self._events.on_startup(func)
 
     def on_shutdown(self, func: Callable[..., Any] | None = None):
-        return self._register_hook(self._shutdown_hooks, func)
+        return self._events.on_shutdown(func)
 
     def on_event(self, func: Callable[..., Any] | None = None):
-        return self._register_hook(self._event_handlers, func)
+        return self._events.on_event(func)
 
     def enable_structured_event_logging(self) -> StructuredEventLogger:
-        for handler in self._event_handlers:
-            if isinstance(handler, StructuredEventLogger):
-                return handler
-        handler = StructuredEventLogger()
-        self.on_event(handler)
-        return handler
+        return self._events.enable_structured_event_logging()
+
+    # ----- task declaration ----------------------------------------------
 
     def task(
         self,
@@ -668,174 +239,30 @@ class OneStepApp:
             validate_task = getattr(source, "validate_task", None)
             if callable(validate_task):
                 validate_task(task_name)
-            task = TaskSpec.build(
-                name=task_name,
-                description=description,
-                handler=func,
-                handler_ref=handler_ref,
-                source=source,
-                sinks=emit,
-                dead_letter=dead_letter,
-                config=config,
-                metadata=metadata,
-                hooks=hooks,
-                concurrency=concurrency,
-                retry=retry,
-                timeout_s=timeout_s,
-            )
+            task = TaskSpec.build(name=task_name, description=description, handler=func,
+                handler_ref=handler_ref, source=source, sinks=emit, dead_letter=dead_letter,
+                config=config, metadata=metadata, hooks=hooks, concurrency=concurrency,
+                retry=retry, timeout_s=timeout_s)
             self._tasks.append(task)
             return func
 
         return decorator
 
+    # ----- lifecycle phases (delegated to LifecycleController) ------------
+
     async def startup(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        self._shutdown_requested = False
-        self._drain_requested = False
-        self._restart_requested = False
-        self._paused_tasks = set()
-        self._shutdown = asyncio.Event()
-        self._drain = asyncio.Event()
-        self._runner_state = asyncio.Event()
-        self._runners = []
-        self._runner_tasks = {}
-        resources: list[Any] = []
-        seen: set[int] = set()
-
-        def add_resource(resource: Any) -> None:
-            if resource is None or id(resource) in seen:
-                return
-            resources.append(resource)
-            seen.add(id(resource))
-
-        for resource in self._named_resources.values():
-            add_resource(resource)
-        add_resource(self.state)
-        for task in self._tasks:
-            if task.source is not None:
-                add_resource(task.source)
-            for sink in task.sinks:
-                add_resource(sink)
-            for sink in task.dead_letter_sinks:
-                add_resource(sink)
-        opened: list[Any] = []
-        self._resources = []
-        try:
-            for resource in resources:
-                await _open_resource(resource)
-                opened.append(resource)
-            self._resources = list(opened)
-            await self._run_hooks(self._startup_hooks)
-        except Exception:
-            await self._close_resources(opened, suppress_exceptions=True)
-            self._resources = []
-            raise
+        await self._lifecycle.startup()
 
     async def shutdown(self) -> None:
-        self._shutdown_requested = True
-        if self._shutdown is not None:
-            self._shutdown.set()
-        hook_error: BaseException | None = None
-        try:
-            await self._run_hooks(self._shutdown_hooks)
-        except BaseException as exc:
-            hook_error = exc
-        finally:
-            close_error = await self._close_resources(self._resources, suppress_exceptions=False)
-            self._resources = []
-            # Cancel any runner task handles that somehow outlived serve()'s own
-            # gather/wait (e.g. a per-task restart spawned a new runner right as
-            # shutdown began). Swallow CancelledError — we are tearing down.
-            for runner_task in self._runner_tasks.values():
-                if not runner_task.done():
-                    runner_task.cancel()
-            if self._runner_tasks:
-                await asyncio.gather(*self._runner_tasks.values(), return_exceptions=True)
-            self._runner_tasks = {}
-            self._runners = []
-            self._paused_tasks = set()
-            self.notify_runner_state_changed()
-        if hook_error is not None:
-            raise hook_error
-        if close_error is not None:
-            raise close_error
+        await self._lifecycle.shutdown()
 
     async def serve(self) -> None:
-        await self.startup()
-        runners = [TaskRunner(self, task) for task in self._tasks if task.source is not None]
-        self.register_runners(runners)
-        try:
-            if not runners:
-                return
-            # Spawn each runner as its own asyncio.Task and keep the handles in
-            # _runner_tasks so they can be cancelled individually (per-task
-            # restart via stop_task_runner). We wait with FIRST_COMPLETED and
-            # loop, re-reading _runner_tasks each iteration so cancellations
-            # and runners spawned by a per-task restart are picked up promptly.
-            # A runner that ends with CancelledError because it was individually
-            # cancelled for a restart must NOT bring down the whole process:
-            # drop it and keep waiting. Any other exception is a real runner
-            # error: cancel the remaining runners and propagate (matching the
-            # previous asyncio.gather semantics).
-            runner_tasks = [
-                asyncio.create_task(runner.run(), name=f"onestep-runner-{runner.task.name}")
-                for runner in runners
-            ]
-            self._runner_tasks = {runner.task.name: task for runner, task in zip(runners, runner_tasks)}
-            # Tasks we have already inspected; do not re-await them.
-            inspected: set[asyncio.Task[None]] = set()
-            while True:
-                live = {task for task in self._runner_tasks.values() if task not in inspected}
-                if not live:
-                    # No runner currently tracked. This is expected *transiently*
-                    # during a per-task restart (stop_task_runner removes the old
-                    # handle before start_task_runner adds the new one). Only exit
-                    # when the app is actually shutting down; otherwise briefly
-                    # yield and re-check the registry so a freshly spawned runner
-                    # is picked up.
-                    if self.is_stopping:
-                        break
-                    try:
-                        await asyncio.wait_for(self.wait_for_shutdown(), timeout=0.05)
-                    except asyncio.TimeoutError:
-                        pass
-                    inspected = {task for task in inspected if task in self._runner_tasks.values()}
-                    continue
-                done, _pending = await asyncio.wait(live, return_when=asyncio.FIRST_COMPLETED)
-                inspected |= done
-                first_exc: BaseException | None = None
-                for task in done:
-                    # A cancelled runner task raises CancelledError from
-                    # .exception(); skip via .cancelled() first. Per-task restart
-                    # (or shutdown) cancels individual runners and must not bring
-                    # down the whole process.
-                    if task.cancelled():
-                        continue
-                    exc = task.exception()
-                    if exc is None:
-                        continue
-                    if isinstance(exc, asyncio.CancelledError):
-                        continue
-                    if first_exc is None:
-                        first_exc = exc
-                if first_exc is not None:
-                    remaining = {task for task in self._runner_tasks.values() if task not in inspected}
-                    for task in remaining:
-                        task.cancel()
-                    if remaining:
-                        await asyncio.gather(*remaining, return_exceptions=True)
-                    raise first_exc
-            # All currently-tracked runners exited cleanly (normally via
-            # request_shutdown or a per-task stop). Nothing left to await.
-        finally:
-            await self.shutdown()
+        await self._lifecycle.serve()
 
     def run(self) -> None:
-        try:
-            with self._install_signal_handlers():
-                asyncio.run(self.serve())
-        except KeyboardInterrupt:
-            return None
+        self._lifecycle.run()
+
+    # ----- introspection / loading ---------------------------------------
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -851,9 +278,9 @@ class OneStepApp:
                 for name, resource in self._named_resources.items()
             ],
             "hooks": {
-                "startup": len(self._startup_hooks),
-                "shutdown": len(self._shutdown_hooks),
-                "events": len(self._event_handlers),
+                "startup": self._events.startup_hook_count,
+                "shutdown": self._events.shutdown_hook_count,
+                "events": self._events.event_handler_count,
             },
             "tasks": [
                 {
@@ -862,21 +289,11 @@ class OneStepApp:
                     "handler_ref": task.handler_ref,
                     "source": _describe_resource(task.source),
                     "emit": [_describe_resource(sink) for sink in task.sinks],
-                    "emit_bindings": [
-                        {
-                            "sink": _describe_resource(binding.sink),
-                            "transform_ref": binding.transform_ref,
-                        }
-                        for binding in task.emit_bindings
-                    ],
+                    "emit_bindings": [{"sink": _describe_resource(b.sink), "transform_ref": b.transform_ref} for b in task.emit_bindings],
                     "dead_letter": [_describe_resource(sink) for sink in task.dead_letter_sinks],
                     "config": copy.deepcopy(task.config),
                     "metadata": copy.deepcopy(task.metadata),
-                    "hooks": {
-                        "before": len(task.hooks.before),
-                        "after_success": len(task.hooks.after_success),
-                        "on_failure": len(task.hooks.on_failure),
-                    },
+                    "hooks": {"before": len(task.hooks.before), "after_success": len(task.hooks.after_success), "on_failure": len(task.hooks.on_failure)},
                     "concurrency": task.concurrency,
                     "timeout_s": task.timeout_s,
                     "retry": task.retry.__class__.__name__,
@@ -908,183 +325,41 @@ class OneStepApp:
                 return resolved
         raise TypeError(f"{target} did not resolve to OneStepApp or a zero-argument factory")
 
+    # ----- event hub internals (delegated to EventHub) --------------------
+
     def _register_hook(
         self,
         storage: list[Callable[..., Any]],
         func: Callable[..., Any] | None,
     ):
-        def decorator(callback: Callable[..., Any]) -> Callable[..., Any]:
-            storage.append(callback)
-            return callback
-
-        if func is None:
-            return decorator
-        return decorator(func)
+        return self._events._register_hook(storage, func)
 
     async def _run_hooks(self, hooks: Sequence[Callable[..., Any]]) -> None:
-        for hook in hooks:
-            result = invoke_callback(hook, self)
-            if inspect.isawaitable(result):
-                await result
+        await self._events.run_hooks(hooks)
 
     async def emit_event(self, event: TaskEvent) -> None:
-        for handler in self._event_handlers:
-            try:
-                result = invoke_callback(handler, event)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                self._events_logger.exception("event handler failed", extra={"event_kind": event.kind.value})
+        await self._events.emit_event(event)
 
-    async def _close_resources(
-        self,
-        resources: Sequence[Any],
-        *,
-        suppress_exceptions: bool,
-    ) -> BaseException | None:
-        first_error: BaseException | None = None
-        for resource in reversed(resources):
-            try:
-                await _close_resource(resource)
-            except BaseException as exc:
-                if first_error is None:
-                    first_error = exc
-                self._events_logger.exception(
-                    "resource close failed",
-                    extra={"resource_name": getattr(resource, "name", resource.__class__.__name__)},
-                )
-        if first_error is not None and not suppress_exceptions:
-            return first_error
-        return None
-
-    def _ensure_shutdown_event(self) -> asyncio.Event:
-        current_loop = asyncio.get_running_loop()
-        if self._shutdown is None or self._loop is not current_loop:
-            self._loop = current_loop
-            self._shutdown = asyncio.Event()
-            if self._shutdown_requested:
-                self._shutdown.set()
-        return self._shutdown
-
-    def _ensure_drain_event(self) -> asyncio.Event:
-        current_loop = asyncio.get_running_loop()
-        if self._drain is None or self._loop is not current_loop:
-            self._loop = current_loop
-            self._drain = asyncio.Event()
-            if self._drain_requested:
-                self._drain.set()
-        return self._drain
-
-    def _require_controllable_task(self, task_name: str) -> TaskSpec:
-        task = next((task for task in self._tasks if task.name == task_name), None)
-        if task is None:
-            raise ValueError(f"task {task_name} was not found")
-        if task.source is None:
-            raise ValueError(f"task {task_name} does not have a controllable source runner")
-        return task
-
-    def _require_task_runners(self, task_name: str) -> list[TaskRunner]:
-        self._require_controllable_task(task_name)
-        return [runner for runner in self._runners if runner.task.name == task_name]
-
-    def _require_dead_letter_replay_task(self, task_name: str) -> TaskSpec:
-        task = self._require_controllable_task(task_name)
-        if not self._task_supports_dead_letter_replay(task):
-            raise ValueError(
-                f"task {task_name} does not support dead-letter replay with the configured source and dead-letter connectors"
-            )
-        return task
-
-    def _require_dead_letter_discard_task(self, task_name: str) -> TaskSpec:
-        task = self._require_controllable_task(task_name)
-        if not self._task_supports_dead_letter_discard(task):
-            raise ValueError(
-                f"task {task_name} does not support dead-letter discard with the configured dead-letter connectors"
-            )
-        return task
-
-    def _require_manual_run_task(self, task_name: str) -> TaskSpec:
-        task = self._require_controllable_task(task_name)
-        if not self._task_supports_manual_run(task):
-            raise ValueError(
-                f"task {task_name} does not support manual run with the configured source"
-            )
-        return task
-
-    def _task_supports_dead_letter_discard(self, task: TaskSpec) -> bool:
-        return len(task.dead_letter_sinks) == 1 and isinstance(task.dead_letter_sinks[0], Source)
-
-    def _task_supports_dead_letter_replay(self, task: TaskSpec) -> bool:
-        return (
-            task.source is not None
-            and isinstance(task.source, Sink)
-            and self._task_supports_dead_letter_discard(task)
-        )
-
-    def _task_supports_manual_run(self, task: TaskSpec) -> bool:
-        return task.source is not None and bool(getattr(task.source, "supports_manual_run", False))
-
-    def _build_dead_letter_replay_envelope(self, dead_letter_envelope: Envelope) -> Envelope:
-        if not isinstance(dead_letter_envelope.body, Mapping):
-            raise ValueError("dead-letter envelope body must be a mapping")
-        if "payload" not in dead_letter_envelope.body:
-            raise ValueError("dead-letter envelope body is missing payload")
-
-        original_payload = copy.deepcopy(dead_letter_envelope.body["payload"])
-        original_meta = dead_letter_envelope.meta.get("original_meta")
-        if not isinstance(original_meta, Mapping):
-            replay_meta: dict[str, Any] = {}
-        else:
-            replay_meta = copy.deepcopy(dict(original_meta))
-
-        original_attempts = dead_letter_envelope.meta.get("original_attempts")
-        replay_attempts = original_attempts if isinstance(original_attempts, int) and original_attempts >= 0 else 0
-        return Envelope(
-            body=original_payload,
-            meta=replay_meta,
-            attempts=replay_attempts,
-        )
-
-    def _task_runtime_status(self, task_name: str) -> dict[str, Any]:
-        runners = self._require_task_runners(task_name)
-        return {
-            "pause_requested": self.is_task_paused(task_name),
-            "runner_count": len(runners),
-            "parked_runner_count": sum(1 for runner in runners if runner.is_pause_parked),
-            "fetching_runner_count": sum(1 for runner in runners if runner.is_fetching),
-            "inflight_task_count": sum(runner.inflight_count for runner in runners),
-        }
-
-    def _ensure_runner_state_event(self) -> asyncio.Event:
-        current_loop = asyncio.get_running_loop()
-        if self._runner_state is None or self._loop is not current_loop:
-            self._loop = current_loop
-            self._runner_state = asyncio.Event()
-        return self._runner_state
-
-    @contextlib.contextmanager
     def _install_signal_handlers(self):
-        installed: list[tuple[int, Any]] = []
+        return self._lifecycle._install_signal_handlers()
 
-        def handle_signal(signum, frame) -> None:
-            self.request_shutdown()
+    # ----- contract-visible state (read-only views of the controller) -----
+    # See runtime/lifecycle.py: LifecycleController._runners / ._runner_tasks / ._resources.
 
-        for sig_name in ("SIGINT", "SIGTERM"):
-            sig = getattr(signal, sig_name, None)
-            if sig is None:
-                continue
-            try:
-                previous = signal.getsignal(sig)
-                signal.signal(sig, handle_signal)
-            except (ValueError, OSError):
-                continue
-            installed.append((sig, previous))
-        try:
-            yield
-        finally:
-            for sig, previous in reversed(installed):
-                with contextlib.suppress(ValueError, OSError):
-                    signal.signal(sig, previous)
+    @property
+    def _runners(self) -> list[Any]:
+        # see runtime/lifecycle.py LifecycleController._runners
+        return self._lifecycle._runners
+
+    @property
+    def _runner_tasks(self) -> dict[str, Any]:
+        # see runtime/lifecycle.py LifecycleController._runner_tasks
+        return self._lifecycle._runner_tasks
+
+    @property
+    def _resources(self) -> list[Any]:
+        # see runtime/lifecycle.py LifecycleController._resources
+        return self._lifecycle._resources
 
 
 def _describe_resource(resource: Source | Sink | None) -> dict[str, str] | None:
@@ -1094,37 +369,6 @@ def _describe_resource(resource: Source | Sink | None) -> dict[str, str] | None:
         "name": resource.name,
         "type": resource.__class__.__name__,
     }
-
-
-async def _open_resource(resource: Any) -> None:
-    opener = getattr(resource, "open", None)
-    if not callable(opener):
-        return
-    try:
-        result = opener()
-        if inspect.isawaitable(result):
-            await result
-    except BaseException:
-        if isinstance(resource, Source):
-            resource._set_open_state(False)
-        raise
-    if isinstance(resource, Source):
-        resource._set_open_state(True)
-
-
-async def _close_resource(resource: Any) -> None:
-    closer = getattr(resource, "close", None)
-    if not callable(closer):
-        if isinstance(resource, Source):
-            resource._set_open_state(False)
-        return
-    try:
-        result = closer()
-        if inspect.isawaitable(result):
-            await result
-    finally:
-        if isinstance(resource, Source):
-            resource._set_open_state(False)
 
 
 def _invoke_app_factory(target: str, factory: Callable[..., Any]) -> Any:

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## onestep 1.12.0a1
+
+- Decomposes the `OneStepApp` god-object into a thin facade plus dedicated
+  runtime controllers under `src/onestep/runtime/` (`LifecycleController`,
+  `TaskOperations`, `EventHub`). Public API, `describe()` output, and all
+  contract-visible state are preserved; `from onestep import OneStepApp`
+  continues to work unchanged (issue #146).
 
 - Adds built-in Prometheus observability (`onestep[metrics]`, issue #153): a
   dependency-free `PrometheusExporter` (`src/onestep/observability.py`)

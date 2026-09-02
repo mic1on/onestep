@@ -60,6 +60,7 @@ jobs:
       publish_worker_image: ${{ steps.resolve.outputs.publish_worker_image }}
       publish_pypi: ${{ steps.resolve.outputs.publish_pypi }}
       publish_github_release: ${{ steps.resolve.outputs.publish_github_release }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
 
     steps:
       - name: Resolve checkout ref and publish targets
@@ -185,6 +186,15 @@ jobs:
             fi
           fi
 
+          PRERELEASE=false
+          if [ -n "$VERSION" ]; then
+            case "$VERSION" in
+              *[aA][0-9]*|*[bB][0-9]*|*[rR][cC][0-9]*|*.[dD][eE][vV][0-9]*|*-*)
+                PRERELEASE=true
+                ;;
+            esac
+          fi
+
           if [ "$PUBLISH_WORKER_IMAGE" = "true" ]; then
             if [ -n "$INPUT_WORKER_IMAGE_VERSION" ]; then
               if ! assign_version_fields "$INPUT_WORKER_IMAGE_VERSION" WORKER_IMAGE_VERSION WORKER_IMAGE_MAJOR_MINOR; then
@@ -212,6 +222,7 @@ jobs:
             echo "publish_worker_image=$PUBLISH_WORKER_IMAGE"
             echo "publish_pypi=$PUBLISH_PYPI"
             echo "publish_github_release=$PUBLISH_GITHUB_RELEASE"
+            echo "prerelease=$PRERELEASE"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -306,6 +317,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.checkout_ref }}
           files: dist/*
           generate_release_notes: true
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
 
   worker-image:
     name: Publish worker image
