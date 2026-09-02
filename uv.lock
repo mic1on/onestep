@@ -1540,7 +1540,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'test'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0" },
 ]
-provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite", "rabbitmq", "redis", "sqs", "cloudflare", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
+provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite", "rabbitmq", "redis", "sqs", "cloudflare", "metrics", "kafka", "elasticsearch", "clickhouse", "mongodb", "test", "integration", "all", "dev"]
 
 [[package]]
 name = "onestep-cf-queues"

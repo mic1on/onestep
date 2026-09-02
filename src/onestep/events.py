@@ -31,6 +31,10 @@ class TaskEvent:
     duration_s: float | None = None
     failure: FailureInfo | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    # Runtime-only correlation for observability. It is intentionally not
+    # serialized into diagnostic/control-plane payloads, whose schemas remain
+    # unchanged.
+    attempt_id: str | None = None
 
 
 class InMemoryMetrics:

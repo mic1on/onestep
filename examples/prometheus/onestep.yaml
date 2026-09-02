@@ -1,0 +1,19 @@
+# Minimal worker config for the monitoring stack example: one interval task
+# writing to a memory sink, so Grafana has throughput/duration data to show.
+app:
+  name: metrics-demo
+
+resources:
+  tick:
+    type: interval
+    seconds: 5
+    immediate: true
+  seen:
+    type: memory
+
+tasks:
+  - name: heartbeat
+    source: tick
+    handler:
+      ref: handlers:heartbeat
+    emit: [seen]

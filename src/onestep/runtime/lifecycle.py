@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .runner import TaskRunner
+from ..connectors.base import Source
 
 
 class LifecycleController:
@@ -635,15 +636,28 @@ async def _open_resource(resource: Any) -> None:
     opener = getattr(resource, "open", None)
     if not callable(opener):
         return
-    result = opener()
-    if inspect.isawaitable(result):
-        await result
+    try:
+        result = opener()
+        if inspect.isawaitable(result):
+            await result
+    except BaseException:
+        if isinstance(resource, Source):
+            resource._set_open_state(False)
+        raise
+    if isinstance(resource, Source):
+        resource._set_open_state(True)
 
 
 async def _close_resource(resource: Any) -> None:
     closer = getattr(resource, "close", None)
     if not callable(closer):
+        if isinstance(resource, Source):
+            resource._set_open_state(False)
         return
-    result = closer()
-    if inspect.isawaitable(result):
-        await result
+    try:
+        result = closer()
+        if inspect.isawaitable(result):
+            await result
+    finally:
+        if isinstance(resource, Source):
+            resource._set_open_state(False)
