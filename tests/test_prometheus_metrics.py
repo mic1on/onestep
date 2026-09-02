@@ -18,6 +18,7 @@ def make_event(
     attempts: int = 0,
     duration_s: Optional[float] = None,
     failure: Optional[FailureInfo] = None,
+    attempt_id: str | None = None,
 ) -> TaskEvent:
     return TaskEvent(
         kind=kind,
@@ -27,6 +28,7 @@ def make_event(
         attempts=attempts,
         duration_s=duration_s,
         failure=failure,
+        attempt_id=attempt_id,
     )
 
 
@@ -103,7 +105,7 @@ def test_exporter_inflight_gauge_never_goes_negative() -> None:
 def test_exporter_counts_retries_dead_letters_and_failure_kinds() -> None:
     exporter = PrometheusExporter(app_name="billing")
 
-    exporter(make_event(TaskEventKind.RETRIED, duration_s=0.2))
+    exporter(make_event(TaskEventKind.RETRIED, duration_s=0.2, attempt_id="retry"))
     exporter(make_event(TaskEventKind.DEAD_LETTERED))
     exporter(
         make_event(
@@ -116,14 +118,15 @@ def test_exporter_counts_retries_dead_letters_and_failure_kinds() -> None:
             ),
         )
     )
-    exporter(make_event(TaskEventKind.CANCELLED))
+    exporter(make_event(TaskEventKind.CANCELLED, attempt_id="cancel"))
     exporter(make_event(TaskEventKind.FETCHED))
     lines = render_lines(exporter)
 
     assert 'onestep_tasks_retried_total{app="billing",task="sync"} 1' in lines
     assert 'onestep_tasks_dead_lettered_total{app="billing",task="sync"} 1' in lines
     assert 'onestep_tasks_cancelled_total{app="billing",task="sync"} 1' in lines
-    assert 'onestep_deliveries_fetched_total{app="billing",task="sync"} 1' in lines
+    fetched = [line for line in lines if line.startswith("onestep_deliveries_fetched_total")]
+    assert fetched == ['onestep_deliveries_fetched_total{app="billing",task="sync"} 1']
     assert (
         'onestep_tasks_processed_total{app="billing",task="sync",status="failed"} 1'
         in lines
@@ -132,6 +135,27 @@ def test_exporter_counts_retries_dead_letters_and_failure_kinds() -> None:
         'onestep_task_failures_total{app="billing",task="sync",failure_kind="timeout"} 1'
         in lines
     )
+
+
+def test_exporter_matches_cancelled_and_retried_by_attempt_id() -> None:
+    exporter = PrometheusExporter(app_name="billing")
+
+    exporter(make_event(TaskEventKind.STARTED, attempt_id="a"))
+    exporter(make_event(TaskEventKind.STARTED, attempt_id="b"))
+    exporter(make_event(TaskEventKind.CANCELLED, attempt_id="a"))
+    exporter(make_event(TaskEventKind.RETRIED, attempt_id="b"))
+
+    assert 'onestep_inflight_tasks{app="billing",task="sync"} 0' in render_lines(exporter)
+
+
+def test_exporter_does_not_double_close_cancelled_retry_pair() -> None:
+    exporter = PrometheusExporter(app_name="billing")
+
+    exporter(make_event(TaskEventKind.STARTED, attempt_id="a"))
+    exporter(make_event(TaskEventKind.CANCELLED, attempt_id="a"))
+    exporter(make_event(TaskEventKind.RETRIED, attempt_id="a"))
+
+    assert 'onestep_inflight_tasks{app="billing",task="sync"} 0' in render_lines(exporter)
 
 
 def test_exporter_keeps_processed_total_free_of_double_counting() -> None:

@@ -7,6 +7,7 @@ from typing import Optional
 import pytest
 
 from onestep.app import OneStepApp
+from onestep.connectors.memory import MemoryQueue
 from onestep.events import TaskEvent, TaskEventKind
 from onestep.observability import MetricsServer, PrometheusExporter, install_metrics
 
@@ -111,6 +112,34 @@ async def test_healthz_reports_runtime_and_sources() -> None:
 
 
 @pytest.mark.asyncio
+async def test_healthz_reports_source_liveness() -> None:
+    source = MemoryQueue("incoming")
+    app = OneStepApp("healthz-source")
+
+    @app.task(source=source)
+    async def consume(ctx, payload):
+        return payload
+
+    handle = install_metrics(app, host="127.0.0.1", port=0)
+    await app.startup()
+    try:
+        status, _, body = await _http_get(handle.bound_port, "/healthz")
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["status"] == "ok"
+        assert payload["tasks"][0]["source"]["alive"] is True
+
+        source._set_open_state(False)
+        status, _, body = await _http_get(handle.bound_port, "/healthz")
+        assert status == 503
+        payload = json.loads(body)
+        assert payload["status"] == "degraded"
+        assert payload["tasks"][0]["source"]["alive"] is False
+    finally:
+        await app.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_unknown_path_returns_404() -> None:
     exporter = PrometheusExporter(app_name="solo")
     server = MetricsServer(exporter, host="127.0.0.1", port=0)
@@ -139,7 +168,16 @@ async def test_server_stop_releases_port() -> None:
 
 
 def test_run_accepts_metrics_addr_flag() -> None:
-    from onestep.cli import parse_args
+    from onestep.cli import _parse_metrics_addr, parse_args
+
+    assert _parse_metrics_addr(":9100") == ("127.0.0.1", 9100)
+    assert _parse_metrics_addr("9100") == ("127.0.0.1", 9100)
+    assert _parse_metrics_addr("0.0.0.0:9100") == ("0.0.0.0", 9100)
+    assert _parse_metrics_addr("[::1]:9100") == ("::1", 9100)
+
+    for value in ("", ":", "host:not-a-port", "host:0", "host:65536"):
+        with pytest.raises(ValueError):
+            _parse_metrics_addr(value)
 
     args = parse_args(["run", "app.yaml", "--metrics-addr", ":9100"])
     assert args.metrics_addr == ":9100"

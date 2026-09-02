@@ -42,6 +42,15 @@ class Source(abc.ABC):
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self._is_open = False
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the runtime has successfully opened this source."""
+        return self._is_open
+
+    def _set_open_state(self, value: bool) -> None:
+        self._is_open = value
 
     async def open(self) -> None:
         return None

@@ -170,9 +170,11 @@ class PrometheusExporter:
         self._failures: dict[tuple[str, str, str], float] = {}
         # (app, task) -> duration histogram accumulator
         self._histograms: dict[tuple[str, str], _Histogram] = {}
-        # (app, task) -> last attempt-scoped event kind; guards the
-        # CANCELLED -> RETRIED pair against double-close.
-        self._last_attempt_event: dict[tuple[str, str], TaskEventKind] = {}
+        # Attempt identity is carried in events. This avoids using a task-wide
+        # "last event" guard when attempts run concurrently. The set contains
+        # attempts which emitted STARTED and remain open.
+        self._open_attempts: set[tuple[str, str, str]] = set()
+
 
     def __call__(self, event: TaskEvent) -> None:
         with self._lock:
@@ -203,6 +205,7 @@ class PrometheusExporter:
                 "Deliveries fetched from sources",
                 counters,
                 _series_order(counters),
+                fixed_suffix="fetched",
             )
         )
         lines.extend(
@@ -284,23 +287,23 @@ class PrometheusExporter:
             self._bump(self._counters, (*series, "fetched"))
         elif kind is TaskEventKind.STARTED:
             self._inflight[series] = self._inflight.get(series, 0.0) + 1.0
+            attempt_id = self._attempt_id(event)
+            if attempt_id is not None:
+                self._open_attempts.add((*series, attempt_id))
         elif kind is TaskEventKind.SUCCEEDED:
             self._bump(self._processed, (*series, "succeeded"))
             self._observe_duration(series, event.duration_s)
-            self._close_attempt(series)
+            self._finish_attempt(event)
         elif kind is TaskEventKind.RETRIED:
             self._bump(self._counters, (*series, "retried"))
-            # RETRIED closes the attempt unless it trails CANCELLED, which
-            # already closed it (cancel-with-retry emits both events).
-            if self._last_attempt_event.get(series) is not TaskEventKind.CANCELLED:
-                self._observe_duration(series, event.duration_s)
-                self._close_attempt(series)
+            self._observe_duration(series, event.duration_s)
+            self._finish_attempt(event)
         elif kind is TaskEventKind.FAILED:
             self._bump(self._processed, (*series, "failed"))
             if event.failure is not None:
                 self._bump(self._failures, (*series, event.failure.kind.value))
             self._observe_duration(series, event.duration_s)
-            self._close_attempt(series)
+            self._finish_attempt(event)
         elif kind is TaskEventKind.DEAD_LETTERED:
             # DEAD_LETTERED is followed by FAILED on the terminal path; the
             # terminal outcome must count once, so only the dedicated counter
@@ -309,12 +312,16 @@ class PrometheusExporter:
         elif kind is TaskEventKind.CANCELLED:
             self._bump(self._counters, (*series, "cancelled"))
             self._observe_duration(series, event.duration_s)
-            self._close_attempt(series)
-        # Unknown kinds are recorded as the latest attempt event and otherwise
-        # ignored, keeping the exporter forward-compatible with new kinds.
-
-        if kind is not TaskEventKind.FETCHED:
-            self._last_attempt_event[series] = kind
+            attempt_id = self._attempt_id(event)
+            if attempt_id is None:
+                self._close_attempt(series)
+            else:
+                attempt_key = (*series, attempt_id)
+                if attempt_key in self._open_attempts:
+                    self._open_attempts.remove(attempt_key)
+                    self._close_attempt(series)
+        # Unknown kinds are ignored, keeping the exporter forward-compatible
+        # with new event kinds.
 
     def _bump(
         self,
@@ -334,6 +341,31 @@ class PrometheusExporter:
 
     def _close_attempt(self, series: tuple[str, str]) -> None:
         self._inflight[series] = max(0.0, self._inflight.get(series, 0.0) - 1.0)
+
+    def _finish_attempt(self, event: TaskEvent) -> None:
+        series = (event.app, event.task)
+        attempt_id = self._attempt_id(event)
+        if attempt_id is None:
+            self._close_attempt(series)
+            return
+        attempt_key = (*series, attempt_id)
+        if attempt_key in self._open_attempts:
+            self._open_attempts.remove(attempt_key)
+            self._close_attempt(series)
+
+    @staticmethod
+    def _attempt_id(event: TaskEvent) -> str | None:
+        if isinstance(event.attempt_id, str) and event.attempt_id:
+            return event.attempt_id
+        value = event.meta.get("onestep.attempt_id")
+        if isinstance(value, str) and value:
+            return value
+        execution = event.meta.get("onestep.execution")
+        if isinstance(execution, dict):
+            value = execution.get("attempt_id")
+            if isinstance(value, str) and value:
+                return value
+        return None
 
 
 # ----------------------------------------------------------------------
@@ -596,14 +628,17 @@ def _build_health_snapshot(
 ) -> dict[str, Any]:
     """Runtime + per-source liveness payload for ``/healthz``."""
     tasks: list[dict[str, Any]] = []
+    all_sources_alive = True
     for task in app.tasks:
         source = task.source
         source_info: dict[str, Any] | None = None
         if source is not None:
+            alive = bool(getattr(source, "is_open", False))
+            all_sources_alive = all_sources_alive and alive
             source_info = {
                 "name": getattr(source, "name", type(source).__name__),
                 "kind": type(source).__name__,
-                "alive": bool(getattr(source, "is_open", True)),
+                "alive": alive,
             }
         tasks.append(
             {
@@ -618,7 +653,7 @@ def _build_health_snapshot(
         )
 
     return {
-        "status": "ok",
+        "status": "ok" if all_sources_alive and not app.is_stopping else "degraded",
         "app": app.name,
         "version": _resolve_version(),
         "uptime_s": round(max(0.0, time.monotonic() - started_at_monotonic), 3),
@@ -678,14 +713,23 @@ def install_metrics(
         host=host,
         port=port,
     )
-    started_at_monotonic = time.monotonic()
+    started_at_monotonic: float | None = None
 
     def _health() -> dict[str, Any]:
-        return _build_health_snapshot(app, started_at_monotonic=started_at_monotonic)
+        return _build_health_snapshot(
+            app,
+            started_at_monotonic=(
+                started_at_monotonic
+                if started_at_monotonic is not None
+                else time.monotonic()
+            ),
+        )
 
     server._health_provider = _health
 
     async def _startup() -> None:
+        nonlocal started_at_monotonic
+        started_at_monotonic = time.monotonic()
         await server.start()
         logging.getLogger("onestep.observability").info(
             "metrics server listening on %s:%d", host, server.bound_port

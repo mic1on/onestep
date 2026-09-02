@@ -325,13 +325,21 @@ def main(argv: list[str] | None = None) -> int:
         print(render_mermaid(app), end="")
         return 0
 
+    metrics_addr: tuple[str, int] | None = None
+    if args.metrics_addr:
+        try:
+            metrics_addr = _parse_metrics_addr(args.metrics_addr)
+        except ValueError as exc:
+            print(f"onestep: {exc}", file=sys.stderr)
+            return 2
+
     cli_logging_state: tuple[logging.Handler, int] | None = None
     try:
         cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
         if args.task_events:
             app.enable_structured_event_logging()
-        if args.metrics_addr:
-            host, port = _parse_metrics_addr(args.metrics_addr)
+        if metrics_addr is not None:
+            host, port = metrics_addr
             from .observability import install_metrics
 
             install_metrics(app, host=host, port=port)
@@ -355,7 +363,7 @@ def _parse_metrics_addr(value: str) -> tuple[str, int]:
     if not text:
         raise ValueError("--metrics-addr must not be empty")
     if text.startswith(":"):
-        host_part, _, port_part = "", text[1:], ""
+        host_part, port_part = "", text[1:]
     else:
         host_part, sep, port_part = text.rpartition(":")
         if not sep:
