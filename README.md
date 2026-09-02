@@ -40,6 +40,18 @@ pip install 'onestep[clickhouse]'    # ClickHouse table sink
 pip install 'onestep[mongodb]'       # MongoDB polling, change streams, and sink
 ```
 
+Or scaffold a ready-to-run project from a scenario template:
+
+```bash
+onestep init my-worker --template redis   # interval | webhook | redis | sql-cdc
+cd my-worker
+pip install -e '.[redis,yaml]'
+onestep run worker.yaml
+```
+
+`onestep init --help` lists all templates; each generates a minimal `worker.yaml`
+plus handler package and prints the `pip install` line it needs.
+
 Define an app, then run it with the `onestep` CLI:
 
 ```python
@@ -237,6 +249,267 @@ surface rather than either vendor's Python client. MongoDB polling and change
 streams can use in-memory state for development, but production restart
 guarantees require an explicit durable cursor store; change streams emit raw
 events and default to `full_document: updateLookup`.
+
+### Which connector should I use?
+
+| You want to... | Use | Install |
+| --- | --- | --- |
+| Run a task every N seconds / on a cron schedule | `interval` / `cron` (core) | `pip install 'onestep[yaml]'` |
+| Receive HTTP webhooks | `webhook` (core) | `pip install 'onestep[yaml]'` |
+| Consume a Redis Stream | `redis_stream` | `pip install 'onestep[redis,yaml]'` |
+| Consume a RabbitMQ queue | `rabbitmq_queue` | `pip install 'onestep[rabbitmq,yaml]'` |
+| Consume an AWS SQS queue | `sqs_queue` | `pip install 'onestep[sqs,yaml]'` |
+| Consume a Cloudflare Queue | `cf_queue` | `pip install 'onestep[cloudflare,yaml]'` |
+| Poll new/changed MySQL rows | `mysql_incremental` | `pip install 'onestep[mysql,yaml]'` |
+| Stream MySQL binlog changes (CDC) | `mysql_binlog` | `pip install 'onestep[mysql,yaml]'` |
+| Use a MySQL table as a work queue | `mysql_table_queue` | `pip install 'onestep[mysql,yaml]'` |
+| Poll new/changed PostgreSQL rows | `postgres_incremental` | `pip install 'onestep[postgres,yaml]'` |
+| Claim jobs from PostgreSQL | `postgres_execution_source` | `pip install 'onestep[postgres,yaml]'` |
+| Consume a Kafka topic | `kafka_topic` | `pip install 'onestep[kafka,yaml]'` (Python 3.10+) |
+| Poll MongoDB / watch change streams | `mongodb_polling` / `mongodb_change_stream` | `pip install 'onestep[mongodb,yaml]'` |
+| Read SaaS tables (Feishu Bitable) | `feishu_bitable_incremental` | `pip install onestep-feishu-bitable` |
+| Write to MySQL / PostgreSQL | `mysql_table_sink` / `postgres_table_sink` | `pip install 'onestep[mysql,yaml]'` / `pip install 'onestep[postgres,yaml]'` |
+| Write to MongoDB | `mongodb_collection_sink` | `pip install 'onestep[mongodb,yaml]'` |
+| Write to Elasticsearch/OpenSearch | `elasticsearch_bulk_sink` | `pip install 'onestep[elasticsearch,yaml]'` |
+| Write to ClickHouse | `clickhouse_table_sink` | `pip install 'onestep[clickhouse,yaml]'` |
+| Call an HTTP endpoint per item | `http_sink` (core) | `pip install 'onestep[yaml]'` |
+
+Prefer `interval` for prototypes and scheduled jobs, a queue connector
+(Redis/RabbitMQ/SQS/Cloudflare/Kafka) when work arrives as events or needs
+competing consumers, and the CDC/incremental sources when the source of truth
+is a database table. `onestep init --template {interval,webhook,redis,sql-cdc}`
+scaffolds the four most common setups as ready-to-run projects.
+
+### Minimal YAML per connector
+
+Each snippet shows only the `resources:` block; pair it with a task that binds
+your handler:
+
+```yaml
+tasks:
+  - name: run
+    source: <source-resource>
+    emit: [<sink-resource>]        # optional
+    handler:
+      ref: your_pkg.tasks:run
+```
+
+Core (built-in):
+
+```yaml
+resources:
+  tick:
+    type: interval
+    seconds: 60
+    immediate: true
+  nightly:
+    type: cron
+    expression: "0 3 * * *"
+  intake:
+    type: webhook
+    path: /hooks/in
+    methods: [POST]
+  notify:
+    type: http_sink
+    url: https://example.invalid/hook
+```
+
+Redis Streams (`pip install 'onestep[redis,yaml]'`):
+
+```yaml
+resources:
+  redis:
+    type: redis
+    url: redis://localhost:6379
+  jobs:
+    type: redis_stream
+    connector: redis
+    stream: jobs
+    group: workers
+    create_group: true
+```
+
+RabbitMQ (`pip install 'onestep[rabbitmq,yaml]'`):
+
+```yaml
+resources:
+  rmq:
+    type: rabbitmq
+    url: amqp://guest:guest@localhost/
+  jobs:
+    type: rabbitmq_queue
+    connector: rmq
+    queue: incoming_jobs
+    prefetch: 50
+```
+
+AWS SQS (`pip install 'onestep[sqs,yaml]'`):
+
+```yaml
+resources:
+  sqs:
+    type: sqs
+    region_name: us-east-1
+  jobs:
+    type: sqs_queue
+    connector: sqs
+    url: https://sqs.us-east-1.amazonaws.com/123456789012/jobs
+```
+
+Cloudflare Queues (`pip install 'onestep[cloudflare,yaml]'`):
+
+```yaml
+resources:
+  cf:
+    type: cf_queues
+    account_id: your-account-id
+    api_token: your-api-token
+  jobs:
+    type: cf_queue
+    connector: cf
+    queue_id: your-queue-id
+```
+
+MySQL (`pip install 'onestep[mysql,yaml]'`) — incremental polling, binlog CDC,
+and a table sink share one connector; CDC needs a cursor store to resume:
+
+```yaml
+resources:
+  db:
+    type: mysql
+    dsn: mysql+pymysql://user:password@localhost:3306/app
+  cursor:
+    type: mysql_cursor_store
+    connector: db
+  changed_rows:
+    type: mysql_incremental
+    connector: db
+    table: orders
+    key: id
+    cursor: [updated_at, id]
+    state: cursor
+  cdc:
+    type: mysql_binlog
+    connector: db
+    server_id: 18491
+    schemas: [app]
+    tables: [orders]
+    state: cursor
+    state_key: orders-cdc
+  processed:
+    type: mysql_table_sink
+    connector: db
+    table: processed_orders
+    mode: upsert
+    keys: [id]
+```
+
+PostgreSQL (`pip install 'onestep[postgres,yaml]'`):
+
+```yaml
+resources:
+  db:
+    type: postgres
+    dsn: postgresql+psycopg://user:password@localhost:5432/app
+  cursor:
+    type: postgres_cursor_store
+    connector: db
+  changed_rows:
+    type: postgres_incremental
+    connector: db
+    table: orders
+    key: id
+    cursor: [updated_at, id]
+    state: cursor
+  jobs:
+    type: postgres_execution_source
+    connector: db
+    namespace: my-worker
+    task_names: [run_report]
+  processed:
+    type: postgres_table_sink
+    connector: db
+    table: processed_orders
+```
+
+Kafka (`pip install 'onestep[kafka,yaml]'`, Python 3.10+):
+
+```yaml
+resources:
+  kafka:
+    type: kafka
+    bootstrap_servers: localhost:9092
+  orders:
+    type: kafka_topic
+    connector: kafka
+    topic: orders.events
+    group_id: orders-workers
+```
+
+MongoDB (`pip install 'onestep[mongodb,yaml]'`) — `state` is omitted here so
+polling/change streams use in-memory cursors for development; wire a durable
+cursor store (e.g. `postgres_cursor_store`) via `state:` for restart guarantees:
+
+```yaml
+resources:
+  mongo:
+    type: mongodb
+    uri: mongodb://localhost:27017
+    database: app
+  changes:
+    type: mongodb_change_stream
+    connector: mongo
+    collection: events
+  archive:
+    type: mongodb_collection_sink
+    connector: mongo
+    collection: archive
+    mode: upsert
+    keys: [event_id]
+```
+
+Elasticsearch/OpenSearch (`pip install 'onestep[elasticsearch,yaml]'`):
+
+```yaml
+resources:
+  search:
+    type: elasticsearch
+    hosts: ["https://localhost:9200"]
+  indexed:
+    type: elasticsearch_bulk_sink
+    connector: search
+    index: events
+    operation: index
+```
+
+ClickHouse (`pip install 'onestep[clickhouse,yaml]'`):
+
+```yaml
+resources:
+  db:
+    type: clickhouse
+    dsn: http://localhost:8123/default
+  events:
+    type: clickhouse_table_sink
+    connector: db
+    table: events
+```
+
+Feishu Bitable (`pip install onestep-feishu-bitable`):
+
+```yaml
+resources:
+  bitable:
+    type: feishu_bitable
+    app_id: your-app-id
+    app_secret: your-app-secret
+  rows:
+    type: feishu_bitable_incremental
+    connector: bitable
+    app_token: your-app-token
+    table_id: tblxxx
+    cursor_field: updated_at
+```
 
 Or install everything at once:
 

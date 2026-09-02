@@ -905,6 +905,154 @@ def test_cli_init_force_overwrites_existing_files(tmp_path, capsys) -> None:
     assert "apiVersion: onestep/v1alpha1" in existing_worker.read_text(encoding="utf-8")
 
 
+def test_cli_init_lists_template_choices_in_help(capsys) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["init", "--help"])
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    assert "interval" in captured.out
+    assert "webhook" in captured.out
+    assert "redis" in captured.out
+    assert "sql-cdc" in captured.out
+
+
+def test_cli_init_rejects_unknown_template(tmp_path, capsys) -> None:
+    exit_code = main(["init", str(tmp_path / "worker"), "--template", "kafka"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "unknown template 'kafka'" in captured.err
+    assert "interval, webhook, redis, sql-cdc" in captured.err
+
+
+def test_cli_init_webhook_template_scaffolds_strict_valid_yaml(tmp_path, monkeypatch, capsys) -> None:
+    project_dir = tmp_path / "hook-receiver"
+
+    exit_code = main(["init", str(project_dir), "--template", "webhook"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Template: webhook" in captured.out
+    assert "pip install 'onestep[yaml]'" in captured.out
+    worker = project_dir / "worker.yaml"
+    worker_text = worker.read_text(encoding="utf-8")
+    assert "type: webhook" in worker_text
+    assert "path: /hooks/demo" in worker_text
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry)
+            not in {os.path.abspath(str(project_dir)), os.path.abspath(str(project_dir / "src"))}
+        ],
+    )
+    clear_modules(
+        monkeypatch,
+        "hook_receiver",
+        "hook_receiver.tasks",
+        "hook_receiver.tasks.demo",
+        "hook_receiver.transforms",
+        "hook_receiver.transforms.demo",
+    )
+
+    exit_code = main(["check", "--strict", "worker.yaml"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err or captured.out
+    assert "App: hook-receiver" in captured.out
+
+
+def test_cli_init_redis_template_scaffolds_strict_valid_yaml(tmp_path, monkeypatch, capsys) -> None:
+    pytest.importorskip("onestep_redis")
+    project_dir = tmp_path / "queue-worker"
+
+    exit_code = main(["init", str(project_dir), "--template", "redis"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Template: redis" in captured.out
+    assert "pip install 'onestep[redis,yaml]'" in captured.out
+    worker = project_dir / "worker.yaml"
+    worker_text = worker.read_text(encoding="utf-8")
+    assert "type: redis" in worker_text
+    assert "type: redis_stream" in worker_text
+    assert "connector: redis" in worker_text
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry)
+            not in {os.path.abspath(str(project_dir)), os.path.abspath(str(project_dir / "src"))}
+        ],
+    )
+    clear_modules(
+        monkeypatch,
+        "queue_worker",
+        "queue_worker.tasks",
+        "queue_worker.tasks.demo",
+        "queue_worker.transforms",
+        "queue_worker.transforms.demo",
+    )
+
+    exit_code = main(["check", "--strict", "worker.yaml"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err or captured.out
+    assert "App: queue-worker" in captured.out
+
+
+def test_cli_init_sql_cdc_template_scaffolds_strict_valid_yaml(tmp_path, monkeypatch, capsys) -> None:
+    pytest.importorskip("onestep_sql")
+    pytest.importorskip("sqlalchemy")
+    pytest.importorskip("asyncmy")
+    project_dir = tmp_path / "cdc-worker"
+
+    exit_code = main(["init", str(project_dir), "--template", "sql-cdc"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Template: sql-cdc" in captured.out
+    assert "pip install 'onestep[mysql,yaml]'" in captured.out
+    worker = project_dir / "worker.yaml"
+    worker_text = worker.read_text(encoding="utf-8")
+    assert "type: mysql_binlog" in worker_text
+    assert "type: mysql_table_sink" in worker_text
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if os.path.abspath(entry)
+            not in {os.path.abspath(str(project_dir)), os.path.abspath(str(project_dir / "src"))}
+        ],
+    )
+    clear_modules(
+        monkeypatch,
+        "cdc_worker",
+        "cdc_worker.tasks",
+        "cdc_worker.tasks.demo",
+        "cdc_worker.transforms",
+        "cdc_worker.transforms.demo",
+    )
+
+    exit_code = main(["check", "--strict", "worker.yaml"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err or captured.out
+    assert "App: cdc-worker" in captured.out
+
+
 def test_cli_check_loads_modules_from_current_working_directory(tmp_path, monkeypatch, capsys) -> None:
     example_dir = tmp_path / "example"
     example_dir.mkdir()
