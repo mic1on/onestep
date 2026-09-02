@@ -158,6 +158,28 @@ def test_exporter_does_not_double_close_cancelled_retry_pair() -> None:
     assert 'onestep_inflight_tasks{app="billing",task="sync"} 0' in render_lines(exporter)
 
 
+def test_exporter_counts_cancel_retry_duration_once() -> None:
+    """CANCELLED and its trailing RETRIED carry the same attempt and the same
+    duration_s (see DeliveryExecutor._handle_cancel); the histogram must
+    observe that duration exactly once. A fresh retry whose attempt is still
+    open keeps observing its duration."""
+    exporter = PrometheusExporter(app_name="billing")
+
+    exporter(make_event(TaskEventKind.STARTED, attempt_id="a"))
+    exporter(make_event(TaskEventKind.CANCELLED, duration_s=0.5, attempt_id="a"))
+    exporter(make_event(TaskEventKind.RETRIED, duration_s=0.5, attempt_id="a"))
+    exporter(make_event(TaskEventKind.STARTED, attempt_id="b"))
+    exporter(make_event(TaskEventKind.RETRIED, duration_s=0.2, attempt_id="b"))
+
+    lines = render_lines(exporter)
+    assert (
+        'onestep_task_duration_seconds_count{app="billing",task="sync"} 2' in lines
+    )
+    assert (
+        'onestep_task_duration_seconds_sum{app="billing",task="sync"} 0.7' in lines
+    )
+
+
 def test_exporter_keeps_processed_total_free_of_double_counting() -> None:
     """A dead-lettered delivery emits DEAD_LETTERED and then FAILED (see
     DeliveryExecutor._handle_failure). processed_total must count that as one

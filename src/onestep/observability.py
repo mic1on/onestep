@@ -296,7 +296,13 @@ class PrometheusExporter:
             self._finish_attempt(event)
         elif kind is TaskEventKind.RETRIED:
             self._bump(self._counters, (*series, "retried"))
-            self._observe_duration(series, event.duration_s)
+            # A fresh RETRIED finds its attempt still open. The trailing
+            # RETRIED of the CANCELLED + RETRIED pair (same attempt, same
+            # duration_s; see DeliveryExecutor._handle_cancel) must not
+            # observe the duration a second time.
+            attempt_id = self._attempt_id(event)
+            if attempt_id is None or (*series, attempt_id) in self._open_attempts:
+                self._observe_duration(series, event.duration_s)
             self._finish_attempt(event)
         elif kind is TaskEventKind.FAILED:
             self._bump(self._processed, (*series, "failed"))
@@ -312,14 +318,7 @@ class PrometheusExporter:
         elif kind is TaskEventKind.CANCELLED:
             self._bump(self._counters, (*series, "cancelled"))
             self._observe_duration(series, event.duration_s)
-            attempt_id = self._attempt_id(event)
-            if attempt_id is None:
-                self._close_attempt(series)
-            else:
-                attempt_key = (*series, attempt_id)
-                if attempt_key in self._open_attempts:
-                    self._open_attempts.remove(attempt_key)
-                    self._close_attempt(series)
+            self._finish_attempt(event)
         # Unknown kinds are ignored, keeping the exporter forward-compatible
         # with new event kinds.
 
