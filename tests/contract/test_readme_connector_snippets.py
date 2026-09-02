@@ -70,8 +70,8 @@ def _resource_types(block: str) -> set[str]:
     types: set[str] = set()
     for line in block.splitlines():
         stripped = line.strip()
-        if stripped.startswith("type:") and ":" in stripped[5:]:
-            value = stripped[5:].strip().strip("\"'")
+        if stripped.startswith("type:"):
+            value = stripped[len("type:") :].strip().strip("\"'")
             if value:
                 types.add(value)
     return types
