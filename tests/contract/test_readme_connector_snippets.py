@@ -13,6 +13,7 @@ any other strict-validation error fails the suite. Placeholder snippets (the
 """
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import re
 from pathlib import Path
@@ -112,6 +113,15 @@ def test_readme_yaml_resources_block_passes_strict_validation(index: int, block:
     missing = _missing_plugin_modules(block)
     if missing:
         pytest.skip(f"connector plugins not installed: {sorted(missing)}")
+
+    # Some connectors create asyncio primitives (locks/queues) at construction
+    # time. On Python 3.9 those bind the *current* event loop eagerly, and a
+    # previous async test in the same process may have cleared it, so make
+    # sure one exists before strict validation runs.
+    try:
+        asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     import yaml
 
