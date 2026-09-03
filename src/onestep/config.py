@@ -86,7 +86,8 @@ _STRICT_APP_FIELDS = frozenset(
         "failure_capture",
     }
 )
-_STRICT_APP_LOGGING_FIELDS = frozenset({"level"})
+_STRICT_APP_LOGGING_FIELDS = frozenset({"level", "format"})
+_LOG_FORMATS = frozenset({"text", "json"})
 _STRICT_HANDLER_FIELDS = frozenset({"ref", "params"})
 _STRICT_EMIT_ROUTE_FIELDS = frozenset({"when", "then", "otherwise"})
 _STRICT_EMIT_BINDING_FIELDS = frozenset({"sink", "transform"})
@@ -905,16 +906,34 @@ def _validate_reporter_config(raw_reporter: Any) -> None:
     validate_reporter_spec(spec, registry=reporter_registry)
 
 
+def _logging_level_from_mapping(raw_logging: Mapping[str, Any]) -> int | None:
+    level = _require_string(raw_logging, "level")
+    resolved = getattr(logging, level.strip().upper(), None)
+    if not isinstance(resolved, int):
+        raise ValueError(f"unsupported logging level {level!r}")
+    return resolved
+
+
+def _logging_format_from_mapping(raw_logging: Mapping[str, Any]) -> str | None:
+    value = raw_logging.get("format")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("'format' must be a non-empty string")
+    resolved = value.strip().lower()
+    if resolved not in _LOG_FORMATS:
+        raise ValueError(f"unsupported logging format {value!r}; expected 'text' or 'json'")
+    return resolved
+
+
 def _validate_app_logging(raw_logging: Any) -> None:
     if raw_logging is None:
         return
     if not isinstance(raw_logging, Mapping):
         raise TypeError("'app.logging' must be a mapping")
     _validate_unknown_fields(raw_logging, _STRICT_APP_LOGGING_FIELDS, field="app.logging")
-    level = _require_string(raw_logging, "level")
-    resolved = getattr(logging, level.strip().upper(), None)
-    if not isinstance(resolved, int):
-        raise ValueError(f"unsupported logging level {level!r}")
+    _logging_level_from_mapping(raw_logging)
+    _logging_format_from_mapping(raw_logging)
 
 
 def _validate_app_env_file(raw_env_file: Any) -> None:
@@ -937,11 +956,10 @@ def _apply_app_logging(app: OneStepApp, raw_logging: Any) -> None:
     if not isinstance(raw_logging, Mapping):
         raise TypeError("'app.logging' must be a mapping")
     _validate_unknown_fields(raw_logging, _STRICT_APP_LOGGING_FIELDS, field="app.logging")
-    level = _require_string(raw_logging, "level")
-    resolved = getattr(logging, level.strip().upper(), None)
-    if not isinstance(resolved, int):
-        raise ValueError(f"unsupported logging level {level!r}")
-    logging.getLogger("onestep").setLevel(resolved)
+    level = _logging_level_from_mapping(raw_logging)
+    if level is not None:
+        logging.getLogger("onestep").setLevel(level)
+    app.logging_format = _logging_format_from_mapping(raw_logging)
 
 
 def _validate_hooks_config(raw_hooks: Any, *, field: str, allowed: frozenset[str]) -> None:

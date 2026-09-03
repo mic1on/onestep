@@ -11,6 +11,10 @@
   Loki/ELK can index them without a parsing pipeline. Other records keep
   their `extra` attributes nested under `extra`; unserializable values fall
   back to `repr` so logging never raises. Default `text` output is unchanged.
+  The format can also be configured in YAML via `app.logging.format: json`
+  (validated by `load_app_config(strict=True)`); an explicit `--log-format`
+  flag overrides the YAML value, and the precedence is
+  CLI flag > `app.logging.format` > default `text`.
 
 - Decomposes the `OneStepApp` god-object into a thin facade plus dedicated
   runtime controllers under `src/onestep/runtime/` (`LifecycleController`,

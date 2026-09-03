@@ -72,10 +72,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--log-format",
         dest="log_format",
         choices=("text", "json"),
-        default="text",
+        default=None,
         help=(
             "Log output format: text (default) or one-JSON-object-per-line for "
-            "log collectors such as Loki/ELK"
+            "log collectors such as Loki/ELK; overrides YAML app.logging.format"
         ),
     )
     run_parser.add_argument(
@@ -348,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         cli_logging_state = _configure_run_logging(
             explicit_level=args.log_level,
             log_format=args.log_format,
+            config_format=getattr(app, "logging_format", None),
         )
         if args.task_events:
             app.enable_structured_event_logging()
@@ -394,7 +395,8 @@ def _parse_metrics_addr(value: str) -> tuple[str, int]:
 def _configure_run_logging(
     *,
     explicit_level: str | None,
-    log_format: str = "text",
+    log_format: str | None = None,
+    config_format: str | None = None,
 ) -> tuple[logging.Handler, int] | None:
     framework_logger = logging.getLogger("onestep")
     if explicit_level is not None:
@@ -402,11 +404,12 @@ def _configure_run_logging(
     elif framework_logger.level == logging.NOTSET:
         framework_logger.setLevel(logging.INFO)
 
+    resolved_format = log_format or config_format or "text"
     root_logger = logging.getLogger()
     if root_logger.handlers:
         return None
     handler = logging.StreamHandler(sys.stdout)
-    if log_format == "json":
+    if resolved_format == "json":
         from .jsonlog import JsonLogFormatter
 
         handler.setFormatter(JsonLogFormatter())

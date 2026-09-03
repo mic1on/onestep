@@ -32,6 +32,7 @@ from onestep.diagnostics.models import (
     DiagnosticReport,
 )
 from onestep.envelope import Envelope
+from onestep.jsonlog import JsonLogFormatter
 from onestep.retry import FailureInfo, FailureKind
 from onestep.task import EmitBinding, EmitRoute
 
@@ -238,7 +239,7 @@ def test_cli_run_parses_logging_options() -> None:
 
     assert args.log_level == "DEBUG"
     assert args.task_events is False
-    assert args.log_format == "text"
+    assert args.log_format is None
 
 
 def test_cli_run_parses_log_format_json() -> None:
@@ -1434,6 +1435,70 @@ def test_cli_log_level_precedence_over_yaml(
     }
 
 
+@pytest.mark.parametrize(
+    ("yaml_format", "cli_format", "expected"),
+    [
+        ("json", None, True), # YAML json wins when CLI flag absent
+        ("json", "text", False), # explicit CLI flag overrides YAML
+        ("text", "json", True), # explicit CLI json overrides YAML text
+        (None, None, False), # default text everywhere
+    ],
+)
+def test_cli_log_format_precedence_over_yaml(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    yaml_format: Optional[str],
+    cli_format: Optional[str],
+    expected: bool,
+) -> None:
+    logging_section: dict = {"level": "INFO"}
+    if yaml_format is not None:
+        logging_section["format"] = yaml_format
+    config_path = tmp_path / "log-format.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "name": "yaml-log-format",
+                    "logging": logging_section,
+                },
+                "tasks": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed: dict = {}
+
+    def fake_run() -> None:
+        root_handlers = logging.getLogger().handlers
+        formatter = root_handlers[0].formatter if root_handlers else None
+        observed["is_json"] = isinstance(formatter, JsonLogFormatter)
+        logging.getLogger("precedence.app").info("precedence message")
+
+    app = OneStepApp("placeholder")
+    monkeypatch.setattr(OneStepApp, "run", lambda self: fake_run())
+
+    argv = ["run", str(config_path)]
+    if cli_format is not None:
+        argv.extend(["--log-format", cli_format])
+
+    captured = capsys.readouterr()
+    with isolated_logging(), registered_yaml_module():
+        assert main(argv) == 0
+
+    out = capsys.readouterr().out
+    assert observed["is_json"] is expected
+    if expected:
+        line = next(line for line in out.splitlines() if "precedence message" in line)
+        payload = json.loads(line)
+        assert payload["message"] == "precedence message"
+        assert payload["logger"] == "precedence.app"
+    else:
+        assert "precedence message" in out
+        assert not any(line.strip().startswith("{") for line in out.splitlines())
+
+
 def test_load_app_config_strict_rejects_invalid_yaml_logging_level_type() -> None:
     with pytest.raises(ValueError, match="'level' must be a non-empty string"):
         load_app_config(
@@ -1475,6 +1540,55 @@ def test_load_app_config_strict_rejects_unknown_yaml_logging_fields() -> None:
                 "app": {
                     "name": "yaml-logging-invalid-field",
                     "logging": {"unexpected": True},
+                },
+                "tasks": [],
+            },
+            strict=True,
+        )
+
+
+def test_load_app_config_applies_yaml_logging_format() -> None:
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {
+                "name": "yaml-logging-format",
+                "logging": {"level": "info", "format": "json"},
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+    assert app.logging_format == "json"
+
+
+def test_load_app_config_logging_format_defaults_to_none() -> None:
+    app = load_app_config(
+        {
+            "apiVersion": "onestep/v1alpha1",
+            "kind": "App",
+            "app": {
+                "name": "yaml-logging-format-default",
+                "logging": {"level": "info"},
+            },
+            "tasks": [],
+        },
+        strict=True,
+    )
+    assert app.logging_format is None
+
+
+@pytest.mark.parametrize("bad_format", ["xml", "", 123, True])
+def test_load_app_config_strict_rejects_invalid_yaml_logging_format(bad_format) -> None:
+    with pytest.raises(ValueError, match="unsupported logging format|must be a non-empty string"):
+        load_app_config(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {
+                    "name": "yaml-logging-format-invalid",
+                    "logging": {"format": bad_format},
                 },
                 "tasks": [],
             },

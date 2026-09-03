@@ -95,6 +95,20 @@ ready for Loki, ELK, or any JSON log collector without a parsing pipeline:
 onestep run your_package.tasks:app --log-format json
 ```
 
+The format can also be pinned in YAML via `app.logging.format`, so deployments
+(K8s/compose) get structured logs without changing the startup command:
+
+```yaml
+app:
+  name: billing-sync
+  logging:
+    level: INFO
+    format: json
+```
+
+An explicit `--log-format` flag overrides the YAML value; without either,
+`text` is used.
+
 Every line the CLI stdout handler emits becomes a JSON object with `ts`,
 `level`, `logger`, and `message` keys. Task lifecycle events logged by the
 built-in `StructuredEventLogger` additionally promote their structured fields
