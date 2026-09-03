@@ -86,6 +86,40 @@ the `onestep` namespace. Existing logging handlers and custom
 `StructuredEventLogger` instances are preserved; when a host has configured its
 own handler, it also retains ownership of root logger levels.
 
+#### Structured JSON logs
+
+Use `--log-format json` to emit one JSON object per line instead of text —
+ready for Loki, ELK, or any JSON log collector without a parsing pipeline:
+
+```bash
+onestep run your_package.tasks:app --log-format json
+```
+
+Every line the CLI stdout handler emits becomes a JSON object with `ts`,
+`level`, `logger`, and `message` keys. Task lifecycle events logged by the
+built-in `StructuredEventLogger` additionally promote their structured fields
+to the top level, so platforms can index them directly:
+
+```json
+{"ts": "2026-09-03T01:14:01.808690+00:00", "level": "INFO", "logger": "onestep.events", "message": "task succeeded", "event_kind": "succeeded", "app_name": "billing", "task_name": "sync", "source_name": "queue.in", "attempts": 1, "duration_s": 0.0004, "failure_kind": null, "failure_message": null}
+```
+
+Other log records keep their `extra={...}` attributes under a nested `extra`
+key. Unserializable values fall back to their `repr` so logging never raises.
+The formatter is also usable directly for embedded setups:
+
+```python
+import logging
+
+from onestep import JsonLogFormatter
+
+handler = logging.StreamHandler()
+JsonLogFormatter.attach(handler)
+logging.getLogger().addHandler(handler)
+```
+
+The default `text` behavior is unchanged.
+
 Direct `app.run()` and `app.serve()` calls do not modify host logging or install
 task event logging. Embedded applications retain full control of process logging.
 

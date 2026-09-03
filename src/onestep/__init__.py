@@ -39,6 +39,7 @@ from .identity_store import (
     build_default_state_dir,
     derive_replica_instance_id,
 )
+from .jsonlog import JsonLogFormatter
 from .metrics import CounterMetric, CustomMetricsRegistry, GaugeMetric, TaskMetrics
 from .resource_registry import (
     CATALOG_FIELD_TYPES,
@@ -151,6 +152,7 @@ _CORE_EXPORTS = [
     "InMemoryCursorStore",
     "InMemoryStateStore",
     "IntervalSource",
+    "JsonLogFormatter",
     "ByFailureKind",
     "ExponentialBackoff",
     "MaxAttempts",
