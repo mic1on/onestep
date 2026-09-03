@@ -1544,7 +1544,7 @@ provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite"
 
 [[package]]
 name = "onestep-cf-queues"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "plugins/onestep-cf-queues" }
 dependencies = [
     { name = "cloudflare" },

@@ -9,7 +9,7 @@ import pytest
 from onestep import ConnectorOperation, ConnectorOperationError, Envelope
 from onestep.resilience import ConnectorErrorKind, is_retryable_connector_error
 from onestep_cf_queues import CFQueuesConnector
-from onestep_cf_queues.connector import _decode_message_body
+from onestep_cf_queues.connector import CFQueuesDelivery, _decode_message_body
 
 
 class SDKMessage:
@@ -429,3 +429,195 @@ def test_cf_queue_worker_loop_survives_consecutive_sdk_fetch_failures():
         assert attempts == 5
 
     asyncio.run(scenario())
+
+
+class FailingAckMessages(FakeMessages):
+    """Messages API whose ack endpoint raises an SDK status error."""
+
+    def __init__(self, parent: "FakeCFClient", status: int = 503) -> None:
+        super().__init__(parent)
+        self._status = status
+        self.ack_calls = 0
+
+    async def ack(self, queue_id, *, account_id, acks=None, retries=None):
+        self.ack_calls += 1
+        raise _sdk_exception("status", self._status)
+
+
+def test_cf_queue_flush_normalizes_sdk_ack_errors():
+    """Issue #150 #1: flush-path errors must be normalized so the runtime sees
+    ConnectorOperationError diagnostics (backend/operation/kind) instead of a
+    raw APIStatusError escaping delivery.ack()."""
+
+    async def scenario():
+        client = FakeCFClient()
+        client.enqueue('{"body": 1}')
+        client.queues.messages = FailingAckMessages(client)
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        delivery = (await queue.fetch(5))[0]
+        try:
+            await delivery.ack()
+        except ConnectorOperationError as exc:
+            assert exc.operation is ConnectorOperation.ACK
+            assert exc.backend == "cf_queues"
+            assert exc.kind is ConnectorErrorKind.TRANSIENT
+            assert is_retryable_connector_error(exc)
+            # The failed entry stays staged so a later flush retries it.
+            assert queue._pending_acks == [{"lease_id": "lease-1"}]
+            return
+        raise AssertionError("expected ConnectorOperationError")
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_flush_never_loses_pending_entries_on_error():
+    """Issue #150 #2 amplification: a failing flush must keep the staged
+    entries queued (bounded retry), never silently drop or duplicate them."""
+
+    async def scenario():
+        client = FakeCFClient()
+        client.enqueue('{"body": 1}')
+        client.enqueue('{"body": 2}')
+        failing = FailingAckMessages(client)
+        client.queues.messages = failing
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        deliveries = await queue.fetch(5)
+        for delivery in deliveries:
+            try:
+                await delivery.ack()
+            except ConnectorOperationError:
+                pass
+
+        # Each ack staged above already attempted an immediate flush (interval
+        # 0), plus the explicit retries below.
+        attempts_before = failing.ack_calls
+        for _ in range(3):
+            try:
+                await queue.flush_acks()
+            except ConnectorOperationError:
+                pass
+            assert len(queue._pending_acks) == 2
+
+        assert failing.ack_calls == attempts_before + 3
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_delivery_with_missing_lease_id_is_rejected():
+    """Issue #150 #2: a message without lease_id must fail fast instead of
+    staging {"lease_id": null}, which Cloudflare rejects forever."""
+
+    async def scenario():
+        client = FakeCFClient()
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        bad_message = SDKMessage(id="id-1", body='{"body": 1}', lease_id=None)
+        try:
+            CFQueuesDelivery(queue, bad_message)
+        except ValueError as exc:
+            assert "lease_id" in str(exc)
+            return
+        raise AssertionError("expected ValueError for missing lease_id")
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_fetch_skips_messages_without_lease_id():
+    """Unusable messages are skipped at fetch time (lease expires and
+    Cloudflare redelivers) rather than poisoning the ack staging queue."""
+
+    async def scenario():
+        client = FakeCFClient()
+        client.enqueue('{"body": 1}')
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+        client.available.insert(0, SDKMessage(id="id-bad", body='{"body": 0}', lease_id=None))
+        client.enqueue('{"body": 2}')
+
+        deliveries = await queue.fetch(5)
+
+        assert [d.envelope.body for d in deliveries] == [1, 2]
+        assert queue._pending_acks == []
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_stage_methods_reject_empty_lease_id():
+    """Defense in depth: direct stage_ack/stage_retry with a bad lease_id must
+    raise ValueError before anything is staged or flushed."""
+
+    async def scenario():
+        client = FakeCFClient()
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        for bad in (None, "", 123):
+            for stage in (queue.stage_ack(bad), queue.stage_retry(bad, delay_seconds=1)):
+                try:
+                    await stage
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"expected ValueError for lease_id={bad!r}")
+
+        assert queue._pending_acks == []
+        assert queue._pending_retries == []
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_late_ack_after_close_does_not_orphan_flusher():
+    """Issue #150 #3: after close(), a late delivery.ack() must not restart an
+    unmanaged flusher task. The ack is staged and flushed on the next
+    explicit open()/close() cycle."""
+
+    async def scenario():
+        client = FakeCFClient()
+        client.enqueue('{"body": 1}')
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0.05)
+
+        delivery = (await queue.fetch(5))[0]
+        await queue.close()
+        assert queue._ack_flusher_task is None
+
+        await delivery.ack()
+
+        # No new flusher task was spawned.
+        assert queue._ack_flusher_task is None
+        # The ack is still staged and survives until the next open cycle.
+        assert queue._pending_acks == [{"lease_id": "lease-1"}]
+        assert client.acked == []
+
+        await queue.open()
+        await queue.flush_acks()
+        assert client.acked == ["lease-1"]
+        await queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_pending_entries_survive_loop_change():
+    """Issue #150 #3: _ensure_runtime_state must not drop entries staged on a
+    previous event loop; only the loop-bound flusher task is reset."""
+
+    client = FakeCFClient()
+    queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+    # Simulate entries staged on a previous (now-closed) event loop.
+    queue._pending_acks = [{"lease_id": "lease-1"}]
+    queue._pending_retries = [{"lease_id": "lease-2", "delay_seconds": 1}]
+    # Force the loop-identity mismatch that _ensure_runtime_state detects.
+    queue._loop = object()
+    queue._ack_lock = None
+
+    async def second_loop():
+        queue._ensure_runtime_state()
+        assert queue._pending_acks == [{"lease_id": "lease-1"}]
+        assert queue._pending_retries == [{"lease_id": "lease-2", "delay_seconds": 1}]
+        await queue.flush_acks()
+
+    asyncio.run(second_loop())
+
+    assert client.acked == ["lease-1"]
+    assert client.retried == [{"lease_id": "lease-2", "delay_seconds": 1}]
+    assert queue._pending_acks == []

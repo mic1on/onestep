@@ -2,6 +2,17 @@
 
 ## onestep 1.12.0a1
 
+- Fixes `onestep-cf-queues` ack/retry staging-flush correctness defects
+  (issue #150). Flush-path `messages.ack` errors are now normalized to
+  `ConnectorOperationError` (`ConnectorOperation.ACK`) so the control plane
+  sees connector diagnostics and failed batches stay staged for retry;
+  deliveries/messages with a missing or empty `lease_id` fail fast instead of
+  staging a permanently rejected `{"lease_id": null}` payload (unusable
+  messages are skipped at fetch, letting the lease expire and redeliver); a
+  late `delivery.ack()` after `close()` no longer restarts an orphaned flusher
+  task; and staged-but-unflushed entries now survive an event-loop identity
+  change instead of being silently dropped into redeliveries.
+
 - Fixes `onestep-cf-queues` error classification gaps that killed the worker
   process instead of backing off (issue #149). `APITimeoutError` is now
   operation-aware — `DISCONNECTED` (retryable) for fetch/open/ack/retry,
