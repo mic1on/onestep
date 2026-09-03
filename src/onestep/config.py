@@ -906,7 +906,7 @@ def _validate_reporter_config(raw_reporter: Any) -> None:
     validate_reporter_spec(spec, registry=reporter_registry)
 
 
-def _logging_level_from_mapping(raw_logging: Mapping[str, Any]) -> int | None:
+def _logging_level_from_mapping(raw_logging: Mapping[str, Any]) -> int:
     level = _require_string(raw_logging, "level")
     resolved = getattr(logging, level.strip().upper(), None)
     if not isinstance(resolved, int):
@@ -956,9 +956,7 @@ def _apply_app_logging(app: OneStepApp, raw_logging: Any) -> None:
     if not isinstance(raw_logging, Mapping):
         raise TypeError("'app.logging' must be a mapping")
     _validate_unknown_fields(raw_logging, _STRICT_APP_LOGGING_FIELDS, field="app.logging")
-    level = _logging_level_from_mapping(raw_logging)
-    if level is not None:
-        logging.getLogger("onestep").setLevel(level)
+    logging.getLogger("onestep").setLevel(_logging_level_from_mapping(raw_logging))
     app.logging_format = _logging_format_from_mapping(raw_logging)
 
 

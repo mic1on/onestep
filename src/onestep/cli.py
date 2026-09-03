@@ -21,6 +21,7 @@ from .diagnostics.supervisor import supervise_diagnostic
 from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
 from .init_project import init_project
+from .jsonlog import JsonLogFormatter
 from .render import render_mermaid
 
 _CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -410,8 +411,6 @@ def _configure_run_logging(
         return None
     handler = logging.StreamHandler(sys.stdout)
     if resolved_format == "json":
-        from .jsonlog import JsonLogFormatter
-
         handler.setFormatter(JsonLogFormatter())
     else:
         handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))

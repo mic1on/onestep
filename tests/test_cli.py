@@ -1581,14 +1581,14 @@ def test_load_app_config_logging_format_defaults_to_none() -> None:
 
 @pytest.mark.parametrize("bad_format", ["xml", "", 123, True])
 def test_load_app_config_strict_rejects_invalid_yaml_logging_format(bad_format) -> None:
-    with pytest.raises(ValueError, match="unsupported logging format|must be a non-empty string"):
+    with pytest.raises(ValueError, match="unsupported logging format|'format' must be"):
         load_app_config(
             {
                 "apiVersion": "onestep/v1alpha1",
                 "kind": "App",
                 "app": {
                     "name": "yaml-logging-format-invalid",
-                    "logging": {"format": bad_format},
+                    "logging": {"level": "INFO", "format": bad_format},
                 },
                 "tasks": [],
             },
