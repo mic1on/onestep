@@ -48,6 +48,10 @@ class OneStepApp:
         self.state = state or InMemoryStateStore()
         self.shutdown_timeout_s = shutdown_timeout_s
         self.failure_capture = failure_capture
+        # Process-level log output preference ("text" | "json") configured via
+        # YAML ``app.logging.format``; ``None`` means "not configured" so the
+        # CLI can fall back to its own default. Not part of app semantics.
+        self.logging_format: str | None = None
         self._failure_capture_writer = (
             FailureCaptureWriter(failure_capture)
             if failure_capture is not None

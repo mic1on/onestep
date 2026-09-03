@@ -2,6 +2,20 @@
 
 ## onestep 1.12.0a1
 
+- Adds `onestep run --log-format {text,json}` (issue #155): `json` swaps the
+  CLI stdout handler's formatter for the new stdlib-only `JsonLogFormatter`
+  (`src/onestep/jsonlog.py`, also exported as `onestep.JsonLogFormatter`),
+  emitting one JSON object per line with `ts`/`level`/`logger`/message plus
+  task lifecycle fields (`event_kind`, `app_name`, `task_name`, `attempts`,
+  `duration_s`, `failure_*`, `task_event_meta`) promoted to the top level so
+  Loki/ELK can index them without a parsing pipeline. Other records keep
+  their `extra` attributes nested under `extra`; unserializable values fall
+  back to `repr` so logging never raises. Default `text` output is unchanged.
+  The format can also be configured in YAML via `app.logging.format: json`
+  (validated by `load_app_config(strict=True)`); an explicit `--log-format`
+  flag overrides the YAML value, and the precedence is
+  CLI flag > `app.logging.format` > default `text`.
+
 - Decomposes the `OneStepApp` god-object into a thin facade plus dedicated
   runtime controllers under `src/onestep/runtime/` (`LifecycleController`,
   `TaskOperations`, `EventHub`). Public API, `describe()` output, and all

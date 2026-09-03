@@ -21,6 +21,7 @@ from .diagnostics.supervisor import supervise_diagnostic
 from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
 from .init_project import init_project
+from .jsonlog import JsonLogFormatter
 from .render import render_mermaid
 
 _CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -66,6 +67,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Expose Prometheus /metrics and /healthz on HOST:PORT "
             "(use :PORT to bind all interfaces; e.g. :9100)"
+        ),
+    )
+    run_parser.add_argument(
+        "--log-format",
+        dest="log_format",
+        choices=("text", "json"),
+        default=None,
+        help=(
+            "Log output format: text (default) or one-JSON-object-per-line for "
+            "log collectors such as Loki/ELK; overrides YAML app.logging.format"
         ),
     )
     run_parser.add_argument(
@@ -335,7 +346,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cli_logging_state: tuple[logging.Handler, int] | None = None
     try:
-        cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
+        cli_logging_state = _configure_run_logging(
+            explicit_level=args.log_level,
+            log_format=args.log_format,
+            config_format=getattr(app, "logging_format", None),
+        )
         if args.task_events:
             app.enable_structured_event_logging()
         if metrics_addr is not None:
@@ -379,7 +394,10 @@ def _parse_metrics_addr(value: str) -> tuple[str, int]:
 
 
 def _configure_run_logging(
-    *, explicit_level: str | None
+    *,
+    explicit_level: str | None,
+    log_format: str | None = None,
+    config_format: str | None = None,
 ) -> tuple[logging.Handler, int] | None:
     framework_logger = logging.getLogger("onestep")
     if explicit_level is not None:
@@ -387,11 +405,15 @@ def _configure_run_logging(
     elif framework_logger.level == logging.NOTSET:
         framework_logger.setLevel(logging.INFO)
 
+    resolved_format = log_format or config_format or "text"
     root_logger = logging.getLogger()
     if root_logger.handlers:
         return None
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))
+    if resolved_format == "json":
+        handler.setFormatter(JsonLogFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))
     previous_root_level = root_logger.level
     root_logger.setLevel(framework_logger.level)
     root_logger.addHandler(handler)
