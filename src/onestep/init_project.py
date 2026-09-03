@@ -28,7 +28,12 @@ def init_project(path: str, *, template: str = "interval", force: bool = False) 
         )
     root = Path(path).expanduser().resolve()
     project_name, package_name = _derive_names(root)
-    file_map = _TEMPLATES[template].files(project_name=project_name, package_name=package_name)
+    template_spec = _TEMPLATES[template]
+    file_map = template_spec.files(
+        project_name=project_name,
+        package_name=package_name,
+        deps=_scaffold_dependency(template_spec.pip_hint),
+    )
 
     conflicts = tuple(root / relative_path for relative_path in file_map if (root / relative_path).exists())
     if conflicts and not force:
@@ -47,7 +52,7 @@ def init_project(path: str, *, template: str = "interval", force: bool = False) 
         package_name=package_name,
         files=tuple(root / relative_path for relative_path in file_map),
         template=template,
-        pip_hint=_TEMPLATES[template].pip_hint,
+        pip_hint=template_spec.pip_hint,
     )
 
 
@@ -86,31 +91,38 @@ class _Template:
 _INTERVAL_HEADER = "apiVersion: onestep/v1alpha1\nkind: App\n"
 
 
-def _interval_files(*, project_name: str, package_name: str) -> dict[Path, str]:
-    return _common_files(project_name=project_name, package_name=package_name)
+def _scaffold_dependency(pip_hint: str) -> str:
+    """Translate the printed pip hint into the scaffold pyproject dependency so
+    `pip install -e '.[redis,yaml]'`-style quickstarts install the connector
+    plugin the generated worker.yaml needs."""
+    return pip_hint.removeprefix("pip install ").strip().strip("'\"")
 
 
-def _webhook_files(*, project_name: str, package_name: str) -> dict[Path, str]:
-    files = _common_files(project_name=project_name, package_name=package_name)
+def _interval_files(*, project_name: str, package_name: str, deps: str) -> dict[Path, str]:
+    return _common_files(project_name=project_name, package_name=package_name, deps=deps)
+
+
+def _webhook_files(*, project_name: str, package_name: str, deps: str) -> dict[Path, str]:
+    files = _common_files(project_name=project_name, package_name=package_name, deps=deps)
     files[Path("worker.yaml")] = _webhook_yaml(project_name, package_name)
     return files
 
 
-def _redis_files(*, project_name: str, package_name: str) -> dict[Path, str]:
-    files = _common_files(project_name=project_name, package_name=package_name)
+def _redis_files(*, project_name: str, package_name: str, deps: str) -> dict[Path, str]:
+    files = _common_files(project_name=project_name, package_name=package_name, deps=deps)
     files[Path("worker.yaml")] = _redis_yaml(project_name, package_name)
     return files
 
 
-def _sql_cdc_files(*, project_name: str, package_name: str) -> dict[Path, str]:
-    files = _common_files(project_name=project_name, package_name=package_name)
+def _sql_cdc_files(*, project_name: str, package_name: str, deps: str) -> dict[Path, str]:
+    files = _common_files(project_name=project_name, package_name=package_name, deps=deps)
     files[Path("worker.yaml")] = _sql_cdc_yaml(project_name, package_name)
     return files
 
 
-def _common_files(*, project_name: str, package_name: str) -> dict[Path, str]:
+def _common_files(*, project_name: str, package_name: str, deps: str) -> dict[Path, str]:
     return {
-        Path("pyproject.toml"): _pyproject_toml(project_name),
+        Path("pyproject.toml"): _pyproject_toml(project_name, deps=deps),
         Path("README.md"): _readme_md(project_name),
         Path("worker.yaml"): _interval_yaml(project_name, package_name),
         Path("src") / package_name / "__init__.py": _package_init(project_name),
@@ -145,13 +157,13 @@ _TEMPLATES: dict[str, _Template] = {
 }
 
 
-def _pyproject_toml(project_name: str) -> str:
+def _pyproject_toml(project_name: str, *, deps: str) -> str:
     return f"""[project]
 name = "{project_name}"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "onestep[yaml]",
+    "{deps}",
 ]
 """
 

@@ -934,6 +934,8 @@ def test_cli_init_webhook_template_scaffolds_strict_valid_yaml(tmp_path, monkeyp
     assert exit_code == 0
     assert "Template: webhook" in captured.out
     assert "pip install 'onestep[yaml]'" in captured.out
+    pyproject_text = (project_dir / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"onestep[yaml]"' in pyproject_text
     worker = project_dir / "worker.yaml"
     worker_text = worker.read_text(encoding="utf-8")
     assert "type: webhook" in worker_text
@@ -976,6 +978,8 @@ def test_cli_init_redis_template_scaffolds_strict_valid_yaml(tmp_path, monkeypat
     assert exit_code == 0
     assert "Template: redis" in captured.out
     assert "pip install 'onestep[redis,yaml]'" in captured.out
+    pyproject_text = (project_dir / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"onestep[redis,yaml]"' in pyproject_text
     worker = project_dir / "worker.yaml"
     worker_text = worker.read_text(encoding="utf-8")
     assert "type: redis" in worker_text
@@ -1021,6 +1025,8 @@ def test_cli_init_sql_cdc_template_scaffolds_strict_valid_yaml(tmp_path, monkeyp
     assert exit_code == 0
     assert "Template: sql-cdc" in captured.out
     assert "pip install 'onestep[mysql,yaml]'" in captured.out
+    pyproject_text = (project_dir / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"onestep[mysql,yaml]"' in pyproject_text
     worker = project_dir / "worker.yaml"
     worker_text = worker.read_text(encoding="utf-8")
     assert "type: mysql_binlog" in worker_text

@@ -45,7 +45,7 @@ Or scaffold a ready-to-run project from a scenario template:
 ```bash
 onestep init my-worker --template redis   # interval | webhook | redis | sql-cdc
 cd my-worker
-pip install -e '.[redis,yaml]'
+pip install -e .   # scaffold dependencies already pin the extras the template needs
 onestep run worker.yaml
 ```
 
