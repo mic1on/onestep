@@ -4,7 +4,10 @@ import asyncio
 import base64
 import json
 
+import pytest
+
 from onestep import ConnectorOperation, ConnectorOperationError, Envelope
+from onestep.resilience import ConnectorErrorKind, is_retryable_connector_error
 from onestep_cf_queues import CFQueuesConnector
 from onestep_cf_queues.connector import _decode_message_body
 
@@ -286,7 +289,7 @@ def test_decode_message_body_handles_structured_dict():
     assert envelope.attempts == 3
 
 
-def test_cf_queue_sdk_status_error_is_normalized():
+def test_cf_queue_sdk_transport_error_is_normalized():
     async def scenario():
         class ErrorMessages(FakeMessages):
             async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
@@ -303,5 +306,126 @@ def test_cf_queue_sdk_status_error_is_normalized():
             assert exc.backend == "cf_queues"
             return
         raise AssertionError("expected ConnectorOperationError")
+
+    asyncio.run(scenario())
+
+
+def _sdk_exception(kind: str, status: int | None = None) -> Exception:
+    """Build a real cloudflare SDK exception of the requested kind."""
+    httpx = pytest.importorskip("httpx")
+    cloudflare = pytest.importorskip("cloudflare")
+
+    request = httpx.Request("POST", "https://api.cloudflare.com")
+    if kind == "timeout":
+        return cloudflare.APITimeoutError(request=request)
+    if kind == "status":
+        response = httpx.Response(status, request=request)
+        return cloudflare.APIStatusError("api status", response=response, body=None)
+    if kind == "api_error":
+        return cloudflare.APIError("bare api error", request, body=None)
+    if kind == "response_validation":
+        return cloudflare.APIResponseValidationError(
+            httpx.Response(200, request=request), body=None
+        )
+    raise AssertionError(f"unknown sdk exception kind: {kind}")
+
+
+@pytest.mark.parametrize(
+    ("exception_kind", "http_status"),
+    [
+        ("timeout", None),
+        ("status", 429),
+        ("status", 503),
+        ("api_error", None),
+        ("response_validation", None),
+    ],
+)
+def test_cf_queue_real_sdk_fetch_errors_normalize_retryable(exception_kind, http_status):
+    """P0-1/P0-2 regression: real SDK exceptions must normalize to retryable
+    ConnectorOperationError instead of escaping raw and killing the worker."""
+
+    async def scenario():
+        sdk_exc = _sdk_exception(exception_kind, http_status)
+
+        class ErrorMessages(FakeMessages):
+            async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+                raise sdk_exc
+
+        client = FakeCFClient()
+        client.queues.messages = ErrorMessages(client)
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        try:
+            await queue.fetch(5)
+        except ConnectorOperationError as exc:
+            assert exc.operation is ConnectorOperation.FETCH
+            assert exc.kind in {
+                ConnectorErrorKind.DISCONNECTED,
+                ConnectorErrorKind.TRANSIENT,
+                ConnectorErrorKind.THROTTLED,
+            }
+            assert is_retryable_connector_error(exc)
+            assert "secret-token" not in str(exc)
+            return
+        raise AssertionError("expected ConnectorOperationError")
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_real_sdk_status_error_403_is_not_retryable():
+    async def scenario():
+        sdk_exc = _sdk_exception("status", 403)
+
+        class ErrorMessages(FakeMessages):
+            async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+                raise sdk_exc
+
+        client = FakeCFClient()
+        client.queues.messages = ErrorMessages(client)
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        try:
+            await queue.fetch(5)
+        except ConnectorOperationError as exc:
+            assert exc.kind is ConnectorErrorKind.MISCONFIGURED
+            assert not is_retryable_connector_error(exc)
+            return
+        raise AssertionError("expected ConnectorOperationError")
+
+    asyncio.run(scenario())
+
+
+def test_cf_queue_worker_loop_survives_consecutive_sdk_fetch_failures():
+    """Regression for the runner-facing contract: while the SDK keeps raising
+    real Cloudflare errors on pull, the worker loop must keep retrying with
+    backoff (retryable ConnectorOperationError) instead of a raw exception
+    propagating out and killing the process."""
+    pytest.importorskip("cloudflare")
+
+    async def scenario():
+        attempts = 0
+
+        class AlwaysFailingMessages(FakeMessages):
+            async def pull(self, queue_id, *, account_id, batch_size=5, visibility_timeout_ms=None):
+                nonlocal attempts
+                attempts += 1
+                raise _sdk_exception("api_error")
+
+        client = FakeCFClient()
+        client.queues.messages = AlwaysFailingMessages(client)
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+        queue.poll_interval_s = 0
+
+        for _ in range(5):
+            try:
+                await queue.fetch(5)
+            except ConnectorOperationError as exc:
+                # Same contract TaskRunner._resolve_fetch_task relies on:
+                # retryable -> _handle_source_fetch_error + keep looping.
+                assert is_retryable_connector_error(exc)
+            else:
+                raise AssertionError("expected ConnectorOperationError")
+
+        assert attempts == 5
 
     asyncio.run(scenario())

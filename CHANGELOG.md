@@ -2,6 +2,16 @@
 
 ## onestep 1.12.0a1
 
+- Fixes `onestep-cf-queues` error classification gaps that killed the worker
+  process instead of backing off (issue #149). `APITimeoutError` is now
+  operation-aware — `DISCONNECTED` (retryable) for fetch/open/ack/retry,
+  `UNCERTAIN` only for send — and any previously unmatched `CloudflareError`
+  subclass (bare `APIError`, `APIResponseValidationError`) falls back to
+  `TRANSIENT` instead of escaping normalization as a raw SDK exception that
+  bypassed backoff entirely. Tests now build real SDK exceptions across the
+  `cloudflare` 4.x/5.x line and assert the worker loop keeps retrying under
+  consecutive fetch failures.
+
 - Adds `onestep run --log-format {text,json}` (issue #155): `json` swaps the
   CLI stdout handler's formatter for the new stdlib-only `JsonLogFormatter`
   (`src/onestep/jsonlog.py`, also exported as `onestep.JsonLogFormatter`),
