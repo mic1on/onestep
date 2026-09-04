@@ -289,6 +289,63 @@ def test_decode_message_body_handles_structured_dict():
     assert envelope.attempts == 3
 
 
+def test_connector_repr_hides_api_token():
+    connector = _connector(FakeCFClient())
+    assert "secret-token" not in repr(connector)
+
+
+def test_decode_message_body_decodes_non_json_bytes_content_type():
+    encoded = base64.b64encode("plain text, not json".encode("utf-8")).decode("ascii")
+    envelope = _decode_message_body(encoded, "bytes")
+    assert envelope.body == "plain text, not json"
+
+
+def test_decode_message_body_keeps_binary_bytes_content_type():
+    payload = bytes([0x00, 0xFF, 0x10, 0x80])
+    encoded = base64.b64encode(payload).decode("ascii")
+    envelope = _decode_message_body(encoded, "bytes")
+    assert envelope.body == payload
+
+
+def test_decode_message_body_without_content_type_keeps_base64_fallback():
+    # Unknown content type keeps the legacy heuristic: base64 is accepted only
+    # when it decodes to JSON, otherwise the raw string stays the body.
+    encoded = base64.b64encode(b"plain text, not json").decode("ascii")
+    envelope = _decode_message_body(encoded)
+    assert envelope.body == encoded
+
+
+def test_decode_message_body_text_content_type_skips_base64():
+    raw = '{"body": {"a": 1}}'
+    envelope = _decode_message_body(raw, "text")
+    assert envelope.body == {"a": 1}
+
+
+def test_cf_queue_fetch_decodes_bytes_content_type_metadata():
+    async def scenario():
+        client = FakeCFClient()
+        encoded = base64.b64encode("raw payload".encode("utf-8")).decode("ascii")
+        client.available.append(
+            SDKMessage(
+                id="id-bytes",
+                body=encoded,
+                timestamp_ms=1689615013586,
+                attempts=1,
+                metadata={"CF-Content-Type": "bytes"},
+                lease_id="lease-bytes",
+            )
+        )
+        queue = _connector(client).queue("q1", ack_flush_interval_s=0)
+
+        deliveries = await queue.fetch(5)
+        assert len(deliveries) == 1
+        assert deliveries[0].payload == "raw payload"
+        cf_meta = deliveries[0].envelope.meta["cf_queues"]
+        assert cf_meta["metadata"] == {"CF-Content-Type": "bytes"}
+
+    asyncio.run(scenario())
+
+
 def test_cf_queue_sdk_transport_error_is_normalized():
     async def scenario():
         class ErrorMessages(FakeMessages):

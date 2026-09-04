@@ -13,28 +13,38 @@ cd "$ROOT_DIR"
 echo "==> Running core non-integration tests"
 "$PYTHON_BIN" -m pytest -q -m "not integration" tests "$@"
 
-plugin_paths=(
-  "plugins/onestep-clickhouse/tests"
-  "plugins/onestep-control-plane/tests"
-  "plugins/onestep-elasticsearch/tests"
-  "plugins/onestep-feishu-bitable/tests"
-  "plugins/onestep-mongodb/tests"
-  "plugins/onestep-mysql/tests"
-  "plugins/onestep-postgres/tests"
-  "plugins/onestep-rabbitmq/tests"
-  "plugins/onestep-redis/tests"
-  "plugins/onestep-sqs/tests"
-  "plugins/onestep-cf-queues/tests"
+# "<import name> <tests path>" per plugin
+plugin_tests=(
+  "onestep_clickhouse plugins/onestep-clickhouse/tests"
+  "onestep_control_plane plugins/onestep-control-plane/tests"
+  "onestep_elasticsearch plugins/onestep-elasticsearch/tests"
+  "onestep_feishu_bitable plugins/onestep-feishu-bitable/tests"
+  "onestep_mongodb plugins/onestep-mongodb/tests"
+  "onestep_mysql plugins/onestep-mysql/tests"
+  "onestep_postgres plugins/onestep-postgres/tests"
+  "onestep_rabbitmq plugins/onestep-rabbitmq/tests"
+  "onestep_redis plugins/onestep-redis/tests"
+  "onestep_sqs plugins/onestep-sqs/tests"
+  "onestep_cf_queues plugins/onestep-cf-queues/tests"
 )
 
 echo "==> Running plugin non-integration tests in isolated pytest processes"
-for path in "${plugin_paths[@]}"; do
-  if find "$ROOT_DIR/$path" -maxdepth 1 -type f -name 'test_*.py' | grep -q .; then
-    echo "==> $path"
-    "$PYTHON_BIN" -m pytest -q -m "not integration" "$path" "$@"
-  else
+for entry in "${plugin_tests[@]}"; do
+  package="${entry%% *}"
+  path="${entry#* }"
+  if ! find "$ROOT_DIR/$path" -maxdepth 1 -type f -name 'test_*.py' | grep -q .; then
     echo "==> $path (no tests found, skipped)"
+    continue
   fi
+  # A partially-synced .venv must not abort the whole run with collection
+  # errors; CI installs every plugin via `uv sync --all-packages` so nothing
+  # is skipped there.
+  if ! "$PYTHON_BIN" -c "import $package" >/dev/null 2>&1; then
+    echo "==> $path (skipped: $package not importable; run 'uv sync' to install plugin deps)"
+    continue
+  fi
+  echo "==> $path"
+  "$PYTHON_BIN" -m pytest -q -m "not integration" "$path" "$@"
 done
 
 if "$PYTHON_BIN" - <<'PY'
