@@ -25,7 +25,14 @@ _MAX_VISIBILITY_TIMEOUT_MS = 12 * 60 * 60 * 1000  # 12 hours
 _MAX_DELAY_SECONDS = 24 * 60 * 60  # 24 hours
 
 
-def _decode_message_body(raw: Any) -> Envelope:
+def _try_base64_decode(value: str) -> bytes | None:
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _decode_message_body(raw: Any, content_type: str | None = None) -> Envelope:
     """Decode a Cloudflare pull message ``body`` into an onestep Envelope.
 
     Pull consumers may receive the body as a structured JSON value, a plain
@@ -36,16 +43,31 @@ def _decode_message_body(raw: Any) -> Envelope:
     if isinstance(raw, (dict, list)):
         return decode_envelope(raw)
     if isinstance(raw, (bytes, bytearray)):
-        return decode_envelope(bytes(raw))
-    if isinstance(raw, str):
-        # json / bytes content types arrive base64-encoded; text arrives as a
-        # plain (possibly already-JSON) string. Try base64 first, but only
-        # accept it when the decoded bytes parse as JSON, otherwise treat the
-        # string as-is.
+        data = bytes(raw)
         try:
-            decoded = base64.b64decode(raw, validate=True)
-        except (binascii.Error, ValueError):
-            decoded = None
+            return decode_envelope(data)
+        except UnicodeDecodeError:
+            # Undecodable binary payload: keep the decoded bytes as the body.
+            return Envelope(body=data)
+    if isinstance(raw, str):
+        if content_type == "text":
+            return decode_envelope(raw)
+        if content_type in ("json", "bytes"):
+            # These content types always travel base64-encoded, so decode
+            # unconditionally instead of inferring from JSON-parsability:
+            # a non-JSON ``bytes`` payload must keep its decoded body rather
+            # than degrade to the raw base64 string.
+            decoded = _try_base64_decode(raw)
+            if decoded is None:
+                # Malformed base64: fall back to plain-string handling.
+                return decode_envelope(raw)
+            try:
+                return decode_envelope(decoded)
+            except UnicodeDecodeError:
+                return Envelope(body=decoded)
+        # Unknown content type: accept base64 only when the decoded bytes
+        # parse as JSON, otherwise treat the string as-is.
+        decoded = _try_base64_decode(raw)
         if decoded is not None:
             try:
                 json.loads(decoded.decode("utf-8"))
@@ -67,7 +89,11 @@ def _message_field(message: Any, key: str) -> Any:
 class CFQueuesDelivery(Delivery):
     def __init__(self, queue: "CFQueue", message: Any) -> None:
         body = _message_field(message, "body")
-        envelope = _decode_message_body(body)
+        metadata = _message_field(message, "metadata")
+        content_type = (
+            metadata.get("CF-Content-Type") if isinstance(metadata, dict) else None
+        )
+        envelope = _decode_message_body(body, content_type)
         existing_meta = envelope.meta.get("cf_queues")
         cf_meta = dict(existing_meta) if isinstance(existing_meta, dict) else {}
         for key in ("id", "timestamp_ms", "attempts", "metadata"):
@@ -81,14 +107,22 @@ class CFQueuesDelivery(Delivery):
         attempts = _message_field(message, "attempts")
         if attempts is not None:
             cf_meta["attempts"] = attempts
-        metadata = _message_field(message, "metadata")
         if isinstance(metadata, dict):
             cf_meta["metadata"] = dict(metadata)
         envelope.meta["cf_queues"] = cf_meta
         super().__init__(envelope)
         self._queue = queue
         self._message = message
-        self._lease_id = _message_field(message, "lease_id")
+        lease_id = _message_field(message, "lease_id")
+        # A missing lease_id would poison the ack API forever (Cloudflare
+        # permanently rejects {"lease_id": null} payloads, and the staged
+        # entry is only dropped on success). Fail fast at delivery build time.
+        if not isinstance(lease_id, str) or not lease_id:
+            raise ValueError(
+                "Cloudflare Queues message is missing a non-empty lease_id; "
+                "refusing to build a delivery that could poison the ack queue"
+            )
+        self._lease_id = lease_id
 
     async def ack(self) -> None:
         await self._queue.stage_ack(self._lease_id)
@@ -115,7 +149,9 @@ class CFQueuesDelivery(Delivery):
 @dataclass
 class CFQueuesConnector:
     account_id: str
-    api_token: str
+    # Secret-bearing: excluded from repr so logging/exception rendering of the
+    # connector can never leak the token (see _secret_tokens).
+    api_token: str = field(repr=False)
     base_url: str | None = None
     timeout_s: float = 10.0
     client: Any | None = None
@@ -220,6 +256,7 @@ class CFQueue(Source, Sink):
         self.ack_batch_size = ack_batch_size
         self.ack_flush_interval_s = ack_flush_interval_s
         self.client: Any | None = None
+        self._closed = False
         self._pending_acks: list[dict[str, str]] = []
         self._pending_retries: list[dict[str, Any]] = []
         self._ack_lock: asyncio.Lock | None = None
@@ -231,6 +268,13 @@ class CFQueue(Source, Sink):
             if self.client is None:
                 self.client = self.connector.get_client()
             self._ensure_runtime_state()
+            # A late delivery.ack() after close() routes through stage_ack ->
+            # open(). Restarting the flusher here would orphan the task: after
+            # close() cancelled it, nothing would ever cancel the new one.
+            # Stage the ack and leave it to the next explicit open()/close()
+            # cycle (the runtime's reopen path) to flush it.
+            if self._closed:
+                return
             if self._ack_flusher_task is None and self.ack_flush_interval_s > 0:
                 self._ack_flusher_task = asyncio.create_task(self._ack_flush_loop())
         except Exception as exc:
@@ -246,7 +290,12 @@ class CFQueue(Source, Sink):
             self._ack_flusher_task = None
         if self._ack_lock is not None:
             async with self._ack_lock:
-                await self._flush_locked()
+                await self._flush_locked(ConnectorOperation.ACK)
+        # Mark the queue closed so a late delivery.ack()/retry() after close
+        # cannot restart an unmanaged flusher task (an orphan nobody cancels).
+        # Runtime state (pending entries, lock) is intentionally preserved so
+        # pending acks staged before close still flush on a later reopen.
+        self._closed = True
         self.client = None
 
     async def fetch(self, limit: int) -> list[Delivery]:
@@ -260,7 +309,17 @@ class CFQueue(Source, Sink):
                 params["visibility_timeout_ms"] = self.visibility_timeout_ms
             response = await self.client.queues.messages.pull(self.queue_id, **params)
             messages = getattr(response, "messages", None) or []
-            return [CFQueuesDelivery(self, message) for message in messages]
+            deliveries: list[Delivery] = []
+            for message in messages:
+                try:
+                    deliveries.append(CFQueuesDelivery(self, message))
+                except ValueError:
+                    # Unusable message (e.g. missing lease_id): it can never be
+                    # acked or retried, so staging it would poison the ack
+                    # queue forever. Skip it; the lease simply expires and
+                    # Cloudflare redelivers.
+                    continue
+            return deliveries
         except ConnectorOperationError:
             raise
         except Exception as exc:
@@ -301,14 +360,16 @@ class CFQueue(Source, Sink):
         }
 
     async def stage_ack(self, lease_id: str) -> None:
+        self._validate_lease_id(lease_id)
         await self.open()
         lock = self._ensure_runtime_state()
         async with lock:
             self._pending_acks.append({"lease_id": lease_id})
             if self._should_flush():
-                await self._flush_locked()
+                await self._flush_locked(ConnectorOperation.ACK)
 
     async def stage_retry(self, lease_id: str, *, delay_seconds: int | None) -> None:
+        self._validate_lease_id(lease_id)
         await self.open()
         lock = self._ensure_runtime_state()
         async with lock:
@@ -317,25 +378,35 @@ class CFQueue(Source, Sink):
                 entry["delay_seconds"] = min(delay_seconds, _MAX_DELAY_SECONDS)
             self._pending_retries.append(entry)
             if self._should_flush():
-                await self._flush_locked()
+                await self._flush_locked(ConnectorOperation.ACK)
 
     async def flush_acks(self) -> None:
         await self.open()
         lock = self._ensure_runtime_state()
         async with lock:
-            await self._flush_locked()
+            await self._flush_locked(ConnectorOperation.ACK)
 
     def _should_flush(self) -> bool:
         total = len(self._pending_acks) + len(self._pending_retries)
         return total >= self.ack_batch_size or self.ack_flush_interval_s <= 0
 
+    @staticmethod
+    def _validate_lease_id(lease_id: Any) -> None:
+        # Defense in depth: the delivery constructor already rejects missing
+        # lease ids, but a direct stage_ack/stage_retry call must also fail
+        # fast instead of staging a {"lease_id": None} entry that Cloudflare
+        # would reject forever while the flusher keeps resending it.
+        if not isinstance(lease_id, str) or not lease_id:
+            raise ValueError("lease_id must be a non-empty string")
+
     def _ensure_runtime_state(self) -> asyncio.Lock:
         current_loop = asyncio.get_running_loop()
         if self._ack_lock is None or self._loop is not current_loop:
+            # Preserve entries staged on a previous loop: they still reference
+            # live leases and dropping them silently turns acks into
+            # redeliveries. The flusher task is loop-bound, so it is discarded.
             self._ack_lock = asyncio.Lock()
             self._loop = current_loop
-            self._pending_acks = []
-            self._pending_retries = []
             self._ack_flusher_task = None
         return self._ack_lock
 
@@ -348,17 +419,23 @@ class CFQueue(Source, Sink):
                 # Keep the flusher alive; the fetch/ack path surfaces errors.
                 continue
 
-    async def _flush_locked(self) -> None:
+    async def _flush_locked(self, operation: ConnectorOperation) -> None:
         while self._pending_acks or self._pending_retries:
             acks = self._pending_acks[: self.ack_batch_size]
             remaining = self.ack_batch_size - len(acks)
             retries = self._pending_retries[:remaining] if remaining > 0 else []
-            await self.client.queues.messages.ack(
-                self.queue_id,
-                account_id=self.connector.account_id,
-                acks=list(acks),
-                retries=list(retries),
-            )
+            try:
+                await self.client.queues.messages.ack(
+                    self.queue_id,
+                    account_id=self.connector.account_id,
+                    acks=list(acks),
+                    retries=list(retries),
+                )
+            except ConnectorOperationError:
+                raise
+            except Exception as exc:
+                # Entries stay staged so a later flush retries them.
+                raise self._normalize(operation, exc) from None
             self._pending_acks = self._pending_acks[len(acks) :]
             self._pending_retries = self._pending_retries[len(retries) :]
 

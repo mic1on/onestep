@@ -14,11 +14,13 @@ try:  # pragma: no cover - optional dependency
         APIConnectionError,
         APIStatusError,
         APITimeoutError,
+        CloudflareError,
     )
 except ImportError:  # pragma: no cover - optional dependency
     APIConnectionError = None
     APIStatusError = None
     APITimeoutError = None
+    CloudflareError = None
 
 _REDACTED = "<redacted>"
 _MAX_MESSAGE_LENGTH = 500
@@ -94,22 +96,41 @@ def classify_cf_status(status: int) -> ConnectorErrorKind:
     return ConnectorErrorKind.PERMANENT
 
 
-def classify_cf_error(exc: BaseException) -> ConnectorErrorKind | None:
+def classify_cf_error(
+    exc: BaseException, *, operation: ConnectorOperation | None = None
+) -> ConnectorErrorKind | None:
     """Classify an exception raised by the official ``cloudflare`` SDK.
 
     ``APIStatusError`` carries a response ``status_code`` and is mapped through
     :func:`classify_cf_status`. ``APITimeoutError`` / ``APIConnectionError`` are
     transport-level failures. Plain socket/OS errors are also treated as
     disconnects so the runtime can degrade and retry the source loop.
+
+    ``APITimeoutError`` is operation-aware: a pull/fetch timeout is safe to
+    retry (the read result is discarded), so it maps to ``DISCONNECTED``
+    everywhere except ``SEND``, where the outcome is unknown and only the
+    conservative ``UNCERTAIN`` kind applies. This mirrors the mongodb
+    connector's operation-aware handling of ``NetworkTimeout``.
+
+    Any other ``CloudflareError`` subclass (bare ``APIError``,
+    ``APIResponseValidationError``) falls back to ``TRANSIENT``: the SDK's
+    exception hierarchy does not go through ``OSError``, so without this
+    catch-all unknown SDK exceptions would escape normalization entirely and
+    kill the worker loop. Non-SDK exceptions still return ``None`` so genuinely
+    unexpected bugs fail fast.
     """
     if APITimeoutError is not None and isinstance(exc, APITimeoutError):
-        return ConnectorErrorKind.UNCERTAIN
+        if operation is ConnectorOperation.SEND:
+            return ConnectorErrorKind.UNCERTAIN
+        return ConnectorErrorKind.DISCONNECTED
     if APIStatusError is not None and isinstance(exc, APIStatusError):
         return classify_cf_status(exc.status_code)
     if APIConnectionError is not None and isinstance(exc, APIConnectionError):
         return ConnectorErrorKind.DISCONNECTED
     if isinstance(exc, (ConnectionError, OSError, TimeoutError)):
         return ConnectorErrorKind.DISCONNECTED
+    if CloudflareError is not None and isinstance(exc, CloudflareError):
+        return ConnectorErrorKind.TRANSIENT
     return None
 
 
@@ -122,7 +143,7 @@ def as_cf_connector_operation_error(
     secrets: list[str] | None = None,
     backend: str = "cf_queues",
 ) -> ConnectorOperationError | None:
-    kind = classify_cf_error(exc)
+    kind = classify_cf_error(exc, operation=operation)
     if kind is None:
         return None
     return ConnectorOperationError(

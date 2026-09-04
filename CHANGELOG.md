@@ -2,6 +2,41 @@
 
 ## onestep 1.12.0a1
 
+- Fixes `onestep-cf-queues` ack/retry staging-flush correctness defects
+  (issue #150). Flush-path `messages.ack` errors are now normalized to
+  `ConnectorOperationError` (`ConnectorOperation.ACK`) so the control plane
+  sees connector diagnostics and failed batches stay staged for retry;
+  deliveries/messages with a missing or empty `lease_id` fail fast instead of
+  staging a permanently rejected `{"lease_id": null}` payload (unusable
+  messages are skipped at fetch, letting the lease expire and redeliver); a
+  late `delivery.ack()` after `close()` no longer restarts an orphaned flusher
+  task; and staged-but-unflushed entries now survive an event-loop identity
+  change instead of being silently dropped into redeliveries.
+
+- Fixes `onestep-cf-queues` error classification gaps that killed the worker
+  process instead of backing off (issue #149). `APITimeoutError` is now
+  operation-aware — `DISCONNECTED` (retryable) for fetch/open/ack/retry,
+  `UNCERTAIN` only for send — and any previously unmatched `CloudflareError`
+  subclass (bare `APIError`, `APIResponseValidationError`) falls back to
+  `TRANSIENT` instead of escaping normalization as a raw SDK exception that
+  bypassed backoff entirely. Tests now build real SDK exceptions across the
+  `cloudflare` 4.x/5.x line and assert the worker loop keeps retrying under
+  consecutive fetch failures.
+
+- Adds `onestep run --log-format {text,json}` (issue #155): `json` swaps the
+  CLI stdout handler's formatter for the new stdlib-only `JsonLogFormatter`
+  (`src/onestep/jsonlog.py`, also exported as `onestep.JsonLogFormatter`),
+  emitting one JSON object per line with `ts`/`level`/`logger`/message plus
+  task lifecycle fields (`event_kind`, `app_name`, `task_name`, `attempts`,
+  `duration_s`, `failure_*`, `task_event_meta`) promoted to the top level so
+  Loki/ELK can index them without a parsing pipeline. Other records keep
+  their `extra` attributes nested under `extra`; unserializable values fall
+  back to `repr` so logging never raises. Default `text` output is unchanged.
+  The format can also be configured in YAML via `app.logging.format: json`
+  (validated by `load_app_config(strict=True)`); an explicit `--log-format`
+  flag overrides the YAML value, and the precedence is
+  CLI flag > `app.logging.format` > default `text`.
+
 - Expands `onestep init` with scenario templates (issue #154): the new
   `--template {interval,webhook,redis,sql-cdc}` flag (default `interval`) each
   scaffold a ready-to-run `worker.yaml` plus handler package and print the

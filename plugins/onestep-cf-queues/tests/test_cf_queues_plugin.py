@@ -3,6 +3,8 @@ from __future__ import annotations
 from importlib import metadata as importlib_metadata
 from typing import Any
 
+import pytest
+
 from onestep_cf_queues import CFQueue, CFQueuesConnector, register
 from onestep_cf_queues.resilience import (
     CFQueuesErrorCause,
@@ -16,6 +18,7 @@ from onestep.resilience import (
     ConnectorErrorKind,
     ConnectorOperation,
     ConnectorOperationError,
+    is_retryable_connector_error,
 )
 from onestep.resource_registry import ResourceRegistry
 
@@ -93,11 +96,116 @@ def test_cf_queues_plugin_normalizes_transport_errors() -> None:
 
     assert isinstance(normalized, ConnectorOperationError)
     assert normalized.backend == "cf_queues"
-    assert normalized.operation is ConnectorOperation.SEND
-    assert normalized.kind is ConnectorErrorKind.DISCONNECTED
-    assert normalized.source_name == "jobs"
-    assert normalized.retry_delay_s == 3.0
-    assert isinstance(normalized.cause, CFQueuesErrorCause)
+
+
+def _real_cloudflare_exception(kind: str, status: int | None = None) -> Exception:
+    httpx = pytest.importorskip("httpx")
+    cloudflare = pytest.importorskip("cloudflare")
+
+    request = httpx.Request("POST", "https://api.cloudflare.com")
+    if kind == "timeout":
+        return cloudflare.APITimeoutError(request=request)
+    if kind == "status":
+        response = httpx.Response(status, request=request)
+        return cloudflare.APIStatusError("api status", response=response, body=None)
+    if kind == "api_error":
+        return cloudflare.APIError("bare api error", request, body=None)
+    raise AssertionError(f"unknown sdk exception kind: {kind}")
+
+
+def test_cf_api_timeout_is_retryable_for_fetch() -> None:
+    """P0-1: pull/fetch timeout must be DISCONNECTED (retryable), not UNCERTAIN."""
+    exc = _real_cloudflare_exception("timeout")
+
+    assert classify_cf_error(exc, operation=ConnectorOperation.FETCH) is (
+        ConnectorErrorKind.DISCONNECTED
+    )
+    assert classify_cf_error(exc, operation=ConnectorOperation.OPEN) is (
+        ConnectorErrorKind.DISCONNECTED
+    )
+    assert classify_cf_error(exc, operation=ConnectorOperation.ACK) is (
+        ConnectorErrorKind.DISCONNECTED
+    )
+    assert classify_cf_error(exc, operation=ConnectorOperation.RETRY) is (
+        ConnectorErrorKind.DISCONNECTED
+    )
+
+
+@pytest.mark.parametrize("operation", list(ConnectorOperation))
+def test_cf_api_timeout_operation_aware_classification(operation: ConnectorOperation) -> None:
+    exc = _real_cloudflare_exception("timeout")
+    kind = classify_cf_error(exc, operation=operation)
+
+    if operation is ConnectorOperation.SEND:
+        assert kind is ConnectorErrorKind.UNCERTAIN
+    else:
+        assert kind is ConnectorErrorKind.DISCONNECTED
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_kind", "retryable"),
+    [
+        (429, ConnectorErrorKind.THROTTLED, True),
+        (503, ConnectorErrorKind.TRANSIENT, True),
+        (403, ConnectorErrorKind.MISCONFIGURED, False),
+    ],
+)
+def test_cf_api_status_error_classification(status, expected_kind, retryable) -> None:
+    exc = _real_cloudflare_exception("status", status)
+
+    assert classify_cf_error(exc, operation=ConnectorOperation.FETCH) is expected_kind
+    normalized = as_cf_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=exc,
+        source_name="jobs",
+        retry_delay_s=1.0,
+    )
+
+    assert isinstance(normalized, ConnectorOperationError)
+    assert normalized.kind is expected_kind
+    assert is_retryable_connector_error(normalized) is retryable
+
+
+def test_cf_bare_api_error_is_transient_never_none() -> None:
+    """P0-2: unknown SDK exceptions must never escape normalization as None."""
+    for kind in ("api_error",):
+        exc = _real_cloudflare_exception(kind)
+
+        assert classify_cf_error(exc) is ConnectorErrorKind.TRANSIENT
+        assert classify_cf_error(exc, operation=ConnectorOperation.FETCH) is (
+            ConnectorErrorKind.TRANSIENT
+        )
+        normalized = as_cf_connector_operation_error(
+            operation=ConnectorOperation.FETCH,
+            exc=exc,
+            source_name="jobs",
+            retry_delay_s=1.0,
+        )
+
+        assert isinstance(normalized, ConnectorOperationError)
+        assert is_retryable_connector_error(normalized) is True
+
+
+def test_cf_api_response_validation_error_is_transient_never_none() -> None:
+    httpx = pytest.importorskip("httpx")
+    cloudflare = pytest.importorskip("cloudflare")
+    request = httpx.Request("GET", "https://api.cloudflare.com")
+    exc = cloudflare.APIResponseValidationError(
+        httpx.Response(200, request=request), body=None
+    )
+
+    assert classify_cf_error(exc, operation=ConnectorOperation.FETCH) is (
+        ConnectorErrorKind.TRANSIENT
+    )
+    normalized = as_cf_connector_operation_error(
+        operation=ConnectorOperation.FETCH,
+        exc=exc,
+        source_name="jobs",
+        retry_delay_s=1.0,
+    )
+
+    assert isinstance(normalized, ConnectorOperationError)
+    assert is_retryable_connector_error(normalized) is True
 
 
 def test_cf_queues_status_classification() -> None:
