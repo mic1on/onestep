@@ -1004,8 +1004,10 @@ def test_cli_init_rejects_unknown_template(tmp_path, capsys) -> None:
     captured = capsys.readouterr()
     assert "invalid choice: 'kafka'" in captured.err
     # The valid-choice list must stay derived from the template registry so a
-    # new template never leaves argparse's error message stale.
-    assert "'interval', 'webhook', 'redis', 'sql-cdc'" in captured.err
+    # new template never leaves argparse's error message stale. Check names
+    # without quote styling: argparse quotes choices only on Python <= 3.11.
+    for name in ("interval", "webhook", "redis", "sql-cdc"):
+        assert name in captured.err
 
 
 def test_init_project_rejects_unknown_template_for_api_callers(tmp_path) -> None:
