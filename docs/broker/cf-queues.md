@@ -120,8 +120,9 @@ ack 与 retry 会被缓冲，达到 `ack_batch_size` 或经过 `ack_flush_interv
 ## Content type 与编码
 
 拉取消费者只能处理 `text`、`bytes`、`json` content type（默认 `json`），无法解码
-Workers 专用的 `v8`。对于 `json` 和 `bytes`，body 会以 base64 传输，连接器会自动
-base64 解码后再交给 envelope 编解码器。
+Workers 专用的 `v8`。对于 `json` 和 `bytes`，body 会以 base64 传输，连接器按消息
+`CF-Content-Type` 元数据解码后再交给 envelope 编解码器；`bytes` 负载若不是有效
+UTF-8/JSON，解码结果（字符串或原始 bytes）会原样作为 envelope body。
 
 ## 失败处理（`on_fail`）
 

@@ -25,7 +25,14 @@ _MAX_VISIBILITY_TIMEOUT_MS = 12 * 60 * 60 * 1000  # 12 hours
 _MAX_DELAY_SECONDS = 24 * 60 * 60  # 24 hours
 
 
-def _decode_message_body(raw: Any) -> Envelope:
+def _try_base64_decode(value: str) -> bytes | None:
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _decode_message_body(raw: Any, content_type: str | None = None) -> Envelope:
     """Decode a Cloudflare pull message ``body`` into an onestep Envelope.
 
     Pull consumers may receive the body as a structured JSON value, a plain
@@ -36,16 +43,31 @@ def _decode_message_body(raw: Any) -> Envelope:
     if isinstance(raw, (dict, list)):
         return decode_envelope(raw)
     if isinstance(raw, (bytes, bytearray)):
-        return decode_envelope(bytes(raw))
-    if isinstance(raw, str):
-        # json / bytes content types arrive base64-encoded; text arrives as a
-        # plain (possibly already-JSON) string. Try base64 first, but only
-        # accept it when the decoded bytes parse as JSON, otherwise treat the
-        # string as-is.
+        data = bytes(raw)
         try:
-            decoded = base64.b64decode(raw, validate=True)
-        except (binascii.Error, ValueError):
-            decoded = None
+            return decode_envelope(data)
+        except UnicodeDecodeError:
+            # Undecodable binary payload: keep the decoded bytes as the body.
+            return Envelope(body=data)
+    if isinstance(raw, str):
+        if content_type == "text":
+            return decode_envelope(raw)
+        if content_type in ("json", "bytes"):
+            # These content types always travel base64-encoded, so decode
+            # unconditionally instead of inferring from JSON-parsability:
+            # a non-JSON ``bytes`` payload must keep its decoded body rather
+            # than degrade to the raw base64 string.
+            decoded = _try_base64_decode(raw)
+            if decoded is None:
+                # Malformed base64: fall back to plain-string handling.
+                return decode_envelope(raw)
+            try:
+                return decode_envelope(decoded)
+            except UnicodeDecodeError:
+                return Envelope(body=decoded)
+        # Unknown content type: accept base64 only when the decoded bytes
+        # parse as JSON, otherwise treat the string as-is.
+        decoded = _try_base64_decode(raw)
         if decoded is not None:
             try:
                 json.loads(decoded.decode("utf-8"))
@@ -67,7 +89,11 @@ def _message_field(message: Any, key: str) -> Any:
 class CFQueuesDelivery(Delivery):
     def __init__(self, queue: "CFQueue", message: Any) -> None:
         body = _message_field(message, "body")
-        envelope = _decode_message_body(body)
+        metadata = _message_field(message, "metadata")
+        content_type = (
+            metadata.get("CF-Content-Type") if isinstance(metadata, dict) else None
+        )
+        envelope = _decode_message_body(body, content_type)
         existing_meta = envelope.meta.get("cf_queues")
         cf_meta = dict(existing_meta) if isinstance(existing_meta, dict) else {}
         for key in ("id", "timestamp_ms", "attempts", "metadata"):
@@ -81,7 +107,6 @@ class CFQueuesDelivery(Delivery):
         attempts = _message_field(message, "attempts")
         if attempts is not None:
             cf_meta["attempts"] = attempts
-        metadata = _message_field(message, "metadata")
         if isinstance(metadata, dict):
             cf_meta["metadata"] = dict(metadata)
         envelope.meta["cf_queues"] = cf_meta
@@ -124,7 +149,9 @@ class CFQueuesDelivery(Delivery):
 @dataclass
 class CFQueuesConnector:
     account_id: str
-    api_token: str
+    # Secret-bearing: excluded from repr so logging/exception rendering of the
+    # connector can never leak the token (see _secret_tokens).
+    api_token: str = field(repr=False)
     base_url: str | None = None
     timeout_s: float = 10.0
     client: Any | None = None
