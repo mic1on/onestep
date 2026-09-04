@@ -441,7 +441,7 @@ def test_task_replay_json_does_not_load_target_in_parent(
     assert "target import output" not in captured.err
 
 
-def test_task_replay_imports_target_once_and_bounds_parent_wall_time(
+def test_task_replay_imports_target_once_and_times_out(
     tmp_path,
     monkeypatch,
     capsys,
@@ -917,12 +917,27 @@ def test_cli_init_lists_template_choices_in_help(capsys) -> None:
 
 
 def test_cli_init_rejects_unknown_template(tmp_path, capsys) -> None:
-    exit_code = main(["init", str(tmp_path / "worker"), "--template", "kafka"])
+    with pytest.raises(SystemExit) as excinfo:
+        main(["init", str(tmp_path / "worker"), "--template", "kafka"])
 
+    assert excinfo.value.code == 2
     captured = capsys.readouterr()
-    assert exit_code == 2
-    assert "unknown template 'kafka'" in captured.err
-    assert "interval, webhook, redis, sql-cdc" in captured.err
+    assert "invalid choice: 'kafka'" in captured.err
+    # The valid-choice list must stay derived from the template registry so a
+    # new template never leaves argparse's error message stale.
+    assert "'interval', 'webhook', 'redis', 'sql-cdc'" in captured.err
+
+
+def test_init_project_rejects_unknown_template_for_api_callers(tmp_path) -> None:
+    from onestep.init_project import init_project, list_templates
+
+    try:
+        init_project(str(tmp_path / "worker"), template="kafka")
+    except ValueError as exc:
+        assert "unknown template 'kafka'" in str(exc)
+        assert ", ".join(list_templates()) in str(exc)
+        return
+    raise AssertionError("expected ValueError for unknown template")
 
 
 def test_cli_init_webhook_template_scaffolds_strict_valid_yaml(tmp_path, monkeypatch, capsys) -> None:
@@ -1031,6 +1046,13 @@ def test_cli_init_sql_cdc_template_scaffolds_strict_valid_yaml(tmp_path, monkeyp
     worker_text = worker.read_text(encoding="utf-8")
     assert "type: mysql_binlog" in worker_text
     assert "type: mysql_table_sink" in worker_text
+    # The sink derives columns from the handler's return value, so the demo
+    # must unwrap the binlog envelope and return the row (``values``); the
+    # raw event would produce schema/table/binlog columns that no table has.
+    assert 'return event["values"]' in (
+        project_dir / "src" / "cdc_worker" / "tasks" / "demo.py"
+    ).read_text(encoding="utf-8")
+    assert "events: [insert, update]" in worker_text
 
     monkeypatch.chdir(project_dir)
     monkeypatch.setattr(

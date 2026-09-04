@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+DEFAULT_TEMPLATE = "interval"
+
 
 @dataclass(frozen=True)
 class InitResult:
@@ -21,7 +23,9 @@ def list_templates() -> tuple[str, ...]:
     return tuple(_TEMPLATES)
 
 
-def init_project(path: str, *, template: str = "interval", force: bool = False) -> InitResult:
+def init_project(
+    path: str, *, template: str = DEFAULT_TEMPLATE, force: bool = False
+) -> InitResult:
     if template not in _TEMPLATES:
         raise ValueError(
             f"unknown template {template!r}; available templates: {', '.join(_TEMPLATES)}"
@@ -88,7 +92,7 @@ class _Template:
     files: Callable[..., dict[Path, str]]
 
 
-_INTERVAL_HEADER = "apiVersion: onestep/v1alpha1\nkind: App\n"
+_YAML_HEADER = "apiVersion: onestep/v1alpha1\nkind: App\n"
 
 
 def _scaffold_dependency(pip_hint: str) -> str:
@@ -198,7 +202,7 @@ wire those hooks explicitly in `worker.yaml`.
 
 
 def _interval_yaml(project_name: str, package_name: str) -> str:
-    return f"""{_INTERVAL_HEADER}
+    return f"""{_YAML_HEADER}
 app:
   name: {project_name}
 
@@ -219,7 +223,7 @@ tasks:
 
 
 def _webhook_yaml(project_name: str, package_name: str) -> str:
-    return f"""{_INTERVAL_HEADER}
+    return f"""{_YAML_HEADER}
 app:
   name: {project_name}
 
@@ -238,7 +242,7 @@ tasks:
 
 
 def _redis_yaml(project_name: str, package_name: str) -> str:
-    return f"""{_INTERVAL_HEADER}
+    return f"""{_YAML_HEADER}
 app:
   name: {project_name}
 
@@ -263,7 +267,7 @@ tasks:
 
 
 def _sql_cdc_yaml(project_name: str, package_name: str) -> str:
-    return f"""{_INTERVAL_HEADER}
+    return f"""{_YAML_HEADER}
 app:
   name: {project_name}
 
@@ -280,7 +284,7 @@ resources:
     server_id: 18491
     schemas: [app]
     tables: [events]
-    events: [insert, update, delete]
+    events: [insert, update]
     state: cursor
     state_key: events-cdc
   processed:
@@ -322,10 +326,17 @@ async def run_demo(ctx, payload: dict[str, Any]) -> None:
 
 
 async def run_cdc(ctx, event: dict[str, Any]) -> dict[str, Any]:
-    """Shape a binlog change event into a row for the table sink."""
-    row = normalize_payload(event, app_name=ctx.app.name)
+    """Unwrap a binlog change event into the row the table sink writes.
+
+    The sink derives columns from dict keys, so the schema/table/binlog
+    envelope must be stripped first; ``values`` holds the row itself.
+    Delete events also carry the pre-delete row in ``values`` and would be
+    upserted back — add ``delete`` to the source's ``events`` list in
+    worker.yaml only if re-inserting deleted rows is intended.
+    """
+    row = normalize_payload(event["values"], app_name=ctx.app.name)
     print(json.dumps(row, ensure_ascii=False))
-    return event
+    return event["values"]
 '''
 
 

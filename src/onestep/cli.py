@@ -20,7 +20,7 @@ from .diagnostics.models import (
 from .diagnostics.supervisor import supervise_diagnostic
 from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
-from .init_project import init_project
+from .init_project import DEFAULT_TEMPLATE, init_project, list_templates
 from .render import render_mermaid
 
 _CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -112,8 +112,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     init_parser.add_argument("path", nargs="?", default=".", help="Directory to initialize")
     init_parser.add_argument(
         "--template",
-        default="interval",
-        help="Scenario template: interval, webhook, redis, sql-cdc (default: interval)",
+        default=DEFAULT_TEMPLATE,
+        choices=list_templates(),
+        help=(
+            f"Scenario template: {', '.join(list_templates())}"
+            f" (default: {DEFAULT_TEMPLATE})"
+        ),
     )
     init_parser.add_argument(
         "--force",

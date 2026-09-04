@@ -24,7 +24,10 @@ from onestep.config import load_app_config
 
 README = Path(__file__).resolve().parents[2] / "README.md"
 
-# resource type -> providing importable module (used to detect environment gaps)
+# resource type -> providing importable module (used to detect environment
+# gaps). When adding a new connector snippet to the README, add its mapping
+# here too: an unmapped type fails (instead of skipping) in minimal installs
+# where the plugin is absent.
 _PLUGIN_MODULES: dict[str, str] = {
     "redis": "onestep_redis",
     "rabbitmq": "onestep_rabbitmq",
@@ -87,8 +90,13 @@ def _missing_plugin_modules(block: str) -> set[str]:
     return missing
 
 
+_PLACEHOLDER_TOKEN = re.compile(r"<[a-z][a-z0-9-]*>")
+
+
 def _is_placeholder_snippet(block: str) -> bool:
-    return "<" in block or "resources:" not in block
+    # Match explicit placeholder tokens like ``<source-resource>``; a bare
+    # ``<`` (comparison in a comment, URL) must not silence validation.
+    return _PLACEHOLDER_TOKEN.search(block) is not None or "resources:" not in block
 
 
 _blocks = _fenced_yaml_blocks()
