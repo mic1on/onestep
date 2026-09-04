@@ -20,7 +20,7 @@ from .diagnostics.models import (
 from .diagnostics.supervisor import supervise_diagnostic
 from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
-from .init_project import init_project
+from .init_project import DEFAULT_TEMPLATE, init_project, list_templates
 from .jsonlog import JsonLogFormatter
 from .render import render_mermaid
 
@@ -121,6 +121,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     init_parser = subparsers.add_parser("init", help="Create a minimal OneStep YAML project scaffold")
     init_parser.add_argument("path", nargs="?", default=".", help="Directory to initialize")
+    init_parser.add_argument(
+        "--template",
+        default=DEFAULT_TEMPLATE,
+        choices=list_templates(),
+        help=(
+            f"Scenario template: {', '.join(list_templates())}"
+            f" (default: {DEFAULT_TEMPLATE})"
+        ),
+    )
     init_parser.add_argument(
         "--force",
         action="store_true",
@@ -257,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_task_command(args)
     if args.command == "init":
         try:
-            result = init_project(args.path, force=args.force)
+            result = init_project(args.path, template=args.template, force=args.force)
         except Exception as exc:
             print(f"onestep: failed to initialize {args.path}: {exc}", file=sys.stderr)
             return 2
@@ -503,9 +512,12 @@ def _print_init_summary(result) -> None:
     print(f"Initialized OneStep project at {result.root}")
     print(f"Project: {result.project_name}")
     print(f"Package: {result.package_name}")
+    print(f"Template: {result.template}")
     print("Files:")
     for path in result.files:
         print(f"- {path}")
+    if result.pip_hint:
+        print(f"Install dependencies: {result.pip_hint}")
 
 
 def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:

@@ -37,6 +37,15 @@
   flag overrides the YAML value, and the precedence is
   CLI flag > `app.logging.format` > default `text`.
 
+- Expands `onestep init` with scenario templates (issue #154): the new
+  `--template {interval,webhook,redis,sql-cdc}` flag (default `interval`) each
+  scaffold a ready-to-run `worker.yaml` plus handler package and print the
+  `pip install` line they need; every generated YAML passes
+  `onestep check --strict`. The README gains a "which connector should I use"
+  decision table (scenario -> YAML type -> extra to install) and a minimal
+  YAML snippet per official connector, all validated against
+  `load_app_config(strict=True)`.
+
 - Decomposes the `OneStepApp` god-object into a thin facade plus dedicated
   runtime controllers under `src/onestep/runtime/` (`LifecycleController`,
   `TaskOperations`, `EventHub`). Public API, `describe()` output, and all
