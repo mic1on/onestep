@@ -277,3 +277,71 @@ def test_mysql_incremental_empty_tail_does_not_scan_processed_prefix_live():
             engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_incremental_prefetch_preserves_datetime_restart_and_updates_live():
+    from datetime import datetime, timedelta
+
+    from sqlalchemy.dialects.mysql import DATETIME
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"prefetch_{suffix}"
+        cursor_name = f"prefetch_cursor_{suffix}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        table = sa.Table(
+            table_name, metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("updated_at", DATETIME(fsp=6), nullable=False),
+        )
+        stamp = datetime(2026, 1, 1, 12, 0, 0, 123456)  # noqa: DTZ001 - MySQL DATETIME is naive
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        try:
+            metadata.create_all(engine)
+            with engine.begin() as conn:
+                conn.execute(table.insert(), [{"id": i, "updated_at": stamp} for i in range(1, 54)])
+            state = db.cursor_store(table=cursor_name)
+            source = db.incremental(
+                table=table_name, key="id", cursor=("updated_at",),
+                prefetch=True, batch_size=20, state=state, state_key="prefetch-test",
+            )
+            first = await source.fetch(8)
+            assert [d.payload["id"] for d in first] == list(range(1, 9))
+            assert len(source._prefetched_rows) == 12
+            assert await state.load("prefetch-test") is None
+            await asyncio.gather(*(d.ack() for d in first))
+            assert await state.load("prefetch-test") == [stamp, 8]
+            await source.close()
+            await db.close()
+            db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+            state = db.cursor_store(table=cursor_name)
+            source = db.incremental(
+                table=table_name, key="id", cursor=("updated_at",),
+                prefetch=True, batch_size=20, state=state, state_key="prefetch-test",
+            )
+            seen = []
+            while True:
+                batch = await source.fetch(8)
+                if not batch:
+                    break
+                seen.extend(d.payload["id"] for d in batch)
+                await asyncio.gather(*(d.ack() for d in batch))
+            assert seen == list(range(9, 54))
+            newer = stamp + timedelta(microseconds=1)
+            with engine.begin() as conn:
+                conn.execute(table.update().where(table.c.id == 1).values(updated_at=newer))
+            changed = await source.fetch(8)
+            assert [d.payload["id"] for d in changed] == [1]
+            await changed[0].ack()
+            assert await state.load("prefetch-test") == [newer, 1]
+            await source.close()
+        finally:
+            await db.close()
+            metadata.drop_all(engine)
+            with engine.begin() as conn:
+                conn.execute(sa.text(f"DROP TABLE IF EXISTS `{cursor_name}`"))
+            engine.dispose()
+
+    asyncio.run(scenario())

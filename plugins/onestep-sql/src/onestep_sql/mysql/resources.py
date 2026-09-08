@@ -4,9 +4,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from onestep.resource_registry import (
+    ResourceBuildContext,
     ResourceCatalogEntry,
     ResourceCatalogField,
-    ResourceBuildContext,
     ResourceRegistry,
     ResourceSpecHandler,
 )
@@ -24,7 +24,7 @@ _MYSQL_TABLE_QUEUE_FIELDS = frozenset(
     {"type", "connector", "table", "key", "where", "claim", "ack", "nack", "batch_size", "poll_interval_s"}
 )
 _MYSQL_INCREMENTAL_FIELDS = frozenset(
-    {"type", "connector", "table", "key", "cursor", "where", "batch_size", "poll_interval_s", "state", "state_key"}
+    {"type", "connector", "table", "key", "cursor", "where", "batch_size", "prefetch", "poll_interval_s", "state", "state_key"}
 )
 _MYSQL_BINLOG_FIELDS = frozenset(
     {
@@ -118,11 +118,12 @@ _MYSQL_INCREMENTAL_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("cursor", "string_list", required=True),
         ResourceCatalogField("where", "string"),
         ResourceCatalogField("batch_size", "integer", default=1000),
+        ResourceCatalogField("prefetch", "boolean", default=False),
         ResourceCatalogField("poll_interval_s", "number", default=1.0),
         ResourceCatalogField("state", "ref"),
         ResourceCatalogField("state_key", "string"),
     ),
-    topology_fields=("table", "key", "cursor", "batch_size", "poll_interval_s"),
+    topology_fields=("table", "key", "cursor", "batch_size", "prefetch", "poll_interval_s"),
 )
 _MYSQL_BINLOG_CATALOG = ResourceCatalogEntry(
     type="mysql_binlog",
@@ -286,6 +287,7 @@ def _build_mysql_incremental(ctx: ResourceBuildContext, spec: Mapping[str, Any])
         cursor=tuple(ctx.string_list(spec.get("cursor"), field=f"{ctx.field}.cursor")),
         where=spec.get("where"),
         batch_size=spec.get("batch_size", 1000),
+        prefetch=spec.get("prefetch", False),
         poll_interval_s=spec.get("poll_interval_s", 1.0),
         state=state,
         state_key=spec.get("state_key"),
