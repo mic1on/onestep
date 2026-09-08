@@ -16,7 +16,6 @@ from onestep.resilience import (
     ConnectorOperationError,
 )
 from onestep.state import CursorStore, InMemoryCursorStore
-
 from onestep_sql._shared.state_keys import _default_incremental_state_key
 from onestep_sql._shared.table_sink_policy import (
     TableSinkUpdatePolicy,
@@ -778,7 +777,24 @@ class IncrementalTableSource(Source):
         read_cursor = self._fetched_cursor or self._committed_cursor
         if read_cursor is not None:
             cursor_columns = [table.c[name] for name in self.cursor]
-            predicates.append(sa.tuple_(*cursor_columns) > tuple(read_cursor))
+            # MySQL may scan the entire ordered index for a row-constructor
+            # inequality. Expand the same lexicographic boundary so each prefix
+            # can use a range, including the automatically appended key.
+            cursor_values = [
+                sa.literal(value, type_=column.type)
+                for column, value in zip(cursor_columns, read_cursor)
+            ]
+            predicates.append(
+                sa.or_(
+                    *(
+                        sa.and_(
+                            *(cursor_columns[j] == cursor_values[j] for j in range(i)),
+                            column > cursor_values[i],
+                        )
+                        for i, column in enumerate(cursor_columns)
+                    )
+                )
+            )
         if predicates:
             stmt = stmt.where(*predicates)
         order_columns = [table.c[name] for name in self.cursor]

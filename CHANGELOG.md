@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fixes MySQL incremental composite cursor scans (issue #163) by expanding
+  lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
+  serialization, ACK/retry fencing, and PostgreSQL behaviour unchanged.
+
 ## onestep 1.12.0a1
 
 - Fixes `onestep-cf-queues` ack/retry staging-flush correctness defects

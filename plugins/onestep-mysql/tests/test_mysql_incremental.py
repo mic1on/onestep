@@ -4,11 +4,12 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import sqlalchemy as sa
 import pytest
+import sqlalchemy as sa
+from onestep_mysql import MySQLConnector
+
 from onestep.resilience import ConnectorOperationError
 from onestep.state import InMemoryCursorStore
-from onestep_mysql import MySQLConnector
 
 
 def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
@@ -637,3 +638,79 @@ def test_mysql_incremental_logs_fetch_retry_commit_without_sensitive_values(
         "8675309",
     ):
         assert secret not in serialized
+
+
+@pytest.mark.parametrize(
+    "configured_cursor", [("id",), ("updated_at",), ("updated_at", "rank")]
+)
+def test_mysql_incremental_range_matches_row_constructor(
+    tmp_path: Path, configured_cursor: tuple[str, ...]
+) -> None:
+    """Compare against the old SQL boundary, including ties, NULLs and a filter."""
+    db_url = f"sqlite:///{tmp_path / 'lexicographic.db'}"
+    engine = sa.create_engine(db_url)
+    table = sa.Table(
+        "items",
+        sa.MetaData(),
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("updated_at", sa.DateTime(), nullable=True),
+        sa.Column("rank", sa.Integer, nullable=True),
+        sa.Column("enabled", sa.Integer, nullable=False),
+    )
+    timestamp = datetime(2026, 9, 8, 12, 0, 0, 123456)  # noqa: DTZ001 - MySQL DATETIME is naive
+    rows = [
+        {"id": i + 1, "updated_at": stamp, "rank": rank, "enabled": i % 3 != 0}
+        for i, (stamp, rank) in enumerate(
+            (stamp, rank)
+            for stamp in (None, timestamp, timestamp + timedelta(microseconds=1))
+            for rank in (None, 0, 0, 1, 2)
+        )
+    ]
+    table.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(table.insert(), rows)
+    cursor = (
+        configured_cursor if "id" in configured_cursor else (*configured_cursor, "id")
+    )
+    columns = [table.c[name] for name in cursor]
+
+    async def scenario() -> None:
+        db = MySQLConnector(db_url)
+        try:
+            for boundary in rows:
+                values = [boundary[name] for name in cursor]
+                for limit in (1, 3, 100):
+                    with engine.connect() as conn:
+                        expected = (
+                            conn.execute(
+                                sa.select(table.c.id)
+                                .where(
+                                    table.c.enabled == 1,
+                                    sa.tuple_(*columns) > tuple(values),
+                                )
+                                .order_by(*columns)
+                                .limit(limit)
+                            )
+                            .scalars()
+                            .all()
+                        )
+                    state = InMemoryCursorStore()
+                    await state.save("boundary", values)
+                    source = db.incremental(
+                        table="items",
+                        key="id",
+                        cursor=configured_cursor,
+                        where="enabled = 1",
+                        state=state,
+                        state_key="boundary",
+                        batch_size=100,
+                    )
+                    actual = await source.fetch(limit)
+                    assert [item.payload["id"] for item in actual] == expected
+        finally:
+            await db.close()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        engine.dispose()
