@@ -211,3 +211,69 @@ def test_mysql_binlog_reads_insert_update_delete_live():
         engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_incremental_empty_tail_does_not_scan_processed_prefix_live():
+    """A caught-up LIMIT query must seek, not revisit every processed row."""
+
+    async def scenario():
+        table_name = f"cursor_range_{uuid.uuid4().hex[:8]}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        events = sa.Table(
+            table_name,
+            metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("updated_at", sa.Integer, nullable=False),
+            sa.Column("event_key", sa.String(100), nullable=False, unique=True),
+            sa.Column("body", sa.Text, nullable=False),
+        )
+        sa.Index(f"idx_{table_name}", events.c.updated_at, events.c.event_key)
+        db = MySQLConnector(
+            os.environ["ONESTEP_MYSQL_DSN"], pool_size=1, max_overflow=0
+        )
+        try:
+            metadata.create_all(engine)
+            with engine.begin() as conn:
+                conn.execute(
+                    events.insert(),
+                    [
+                        {
+                            "id": i,
+                            "updated_at": 10,
+                            "event_key": f"event-{i:06d}",
+                            "body": "x" * 256,
+                        }
+                        for i in range(1, 2001)
+                    ],
+                )
+            source = db.incremental(
+                table=table_name, key="event_key", cursor=("updated_at",)
+            )
+            await source.state.save(source.state_key, [10, "event-002000"])
+            await db._table(table_name)  # Exclude metadata reads from the counters.
+            async with db.engine.connect() as conn:
+                before = int(
+                    (
+                        await conn.execute(
+                            sa.text("SHOW SESSION STATUS LIKE 'Handler_read_next'")
+                        )
+                    ).one()[1]
+                )
+            assert await source.fetch(8) == []
+            async with db.engine.connect() as conn:
+                after = int(
+                    (
+                        await conn.execute(
+                            sa.text("SHOW SESSION STATUS LIKE 'Handler_read_next'")
+                        )
+                    ).one()[1]
+                )
+            assert after - before < 20, "empty cursor poll scanned the processed prefix"
+        finally:
+            await db.close()
+            metadata.drop_all(engine)
+            engine.dispose()
+
+    asyncio.run(scenario())
