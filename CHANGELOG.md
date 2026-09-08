@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## onestep-sql 0.2.1
 
 - Fixes MySQL incremental composite cursor scans (issue #163) by expanding
   lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
