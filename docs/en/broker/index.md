@@ -29,6 +29,7 @@ onestep 1.x uses `Source` for input and `Sink` for output. Many connectors imple
 | [Redis Streams](/en/broker/redis) | Yes | Yes | Redis Streams message queue, install `onestep-redis` |
 | [RabbitMQ](/en/broker/rabbitmq) | Yes | Yes | RabbitMQ queue, install `onestep-mq` |
 | [AWS SQS](/en/broker/sqs) | Yes | Yes | AWS SQS managed queue, install `onestep-sqs` |
+| [AWS SNS](/en/broker/sqs#sns-topic-sink) | No | Yes | AWS SNS topic fan-out sink, install `onestep-sqs` |
 | [Kafka](/en/broker/kafka) | Yes | Yes | Kafka topic source/sink, install `onestep-kafka` |
 | [Cloudflare Queues](/en/broker/cf-queues) | Yes | Yes | Cloudflare managed queue pull/push, install `onestep-cf-queues` |
 
