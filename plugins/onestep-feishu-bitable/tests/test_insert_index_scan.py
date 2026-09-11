@@ -6,8 +6,8 @@ from typing import Any
 import pytest
 
 from onestep.resilience import ConnectorOperationError
-from onestep_feishu_bitable.connector import _canonical_insert_key, FeishuBitablePayloadError
-from onestep_feishu_bitable import FeishuBitableConnector
+from onestep_feishu_bitable import FeishuBitableConnector, FeishuBitablePayloadError
+from onestep_feishu_bitable._shared import _canonical_insert_key
 
 
 def test_feishu_insert_index_canonicalizes_source_and_destination_keys() -> None:
