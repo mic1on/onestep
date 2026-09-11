@@ -52,7 +52,9 @@ resources:
 ```
 
 The input may contain one business key or a list. Missing related records can
-fail the send, be omitted, or be created and linked. See the
+fail the send, be omitted, or be created and linked. Set `relations.*.cache` to
+`lazy` or `eager` to cache key-to-record-ID resolution in the sink instance and
+cut the repeated `search_records` calls that cause 429 throttling. See the
 [Feishu Bitable broker documentation](https://onestep.code05.com/broker/feishu-bitable)
 for the complete behavior and concurrency limits.
 

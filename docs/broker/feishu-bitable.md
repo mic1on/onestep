@@ -192,6 +192,45 @@ relations:
 
 飞书双向关联的反向字段仍由飞书服务端根据字段配置维护，插件只写当前目标表的关联字段。
 
+### 关联字段缓存
+
+每次关联解析都要调用一次飞书 records search 接口，而该接口限流为 **20 QPS**。批量同步时同一批业务键会在批与批之间反复出现，逐次 search 很容易打满配额并触发 `429`。给关联字段配置 `cache` 可以把解析结果缓存在 Sink 实例内存中：
+
+```yaml
+relations:
+  关联企业:              # 稳定主数据，任务内高频引用 -> 启动预加载
+    from: 企业名称
+    table_id: "${ENTERPRISE_TABLE_ID}"
+    key: 企业名称
+    on_missing: create
+    cache: eager
+  责任部门:              # key 空间大，单次只触碰一小部分 -> 查过才缓存
+    from: 部门编码
+    table_id: "${DEPT_TABLE_ID}"
+    key: 部门编码
+    on_missing: error
+    cache: lazy
+```
+
+| 取值 | 语义 | 适用场景 |
+|---|---|---|
+| `none` | 默认值；每个唯一业务键每次解析都 search，行为与不配置 `cache` 完全一致 | 关联表频繁变更、对一致性敏感，或单次任务只跑几条数据 |
+| `lazy` | 查过才缓存 `{业务键: record_id}`；命中直接用，miss 回源 search 并回填 | 通用推荐；key 空间大而单次任务只触碰其中一小部分，不付启动扫描成本 |
+| `eager` | `open()` 时分页拉取关联表 `key` 字段全量到内存；命中直接用，miss 仍回源 search | 关联表是稳定主数据、记录数可控，且任务运行期间对同一批 key 高频引用 |
+
+`cache` 是**逐关联字段**配置的，同一个 Sink 里可以混用三种取值。
+
+**缓存只是加速层，飞书仍是 source of truth**：命中是乐观使用，直接采用缓存中的 `record_id`；**未命中必须回源 search 一次**，绝不会把“缓存里没有”当成“飞书里不存在”。因此即使启动后关联表新增了记录，`on_missing: create` 也会先 search 确认，不会误建重复主数据。
+
+`eager` 的启动扫描约束：
+
+- 复用 sink 级的 `insert_index_page_size`（默认 `500`）与 `insert_index_max_pages`（默认 `200`），即单个关联表最多扫描 **10 万条**记录，不引入第二套配置项。
+- 扫描只请求 `key` 字段；请求字段缺失或为空的记录跳过，重复 key 后者覆盖前者，均计入结构化日志 `feishu_relation_cache_scan`。
+- 达到页数上界而飞书仍有更多记录，或分页 token 不前进时，`open()` 直接以永久错误失败，任务不会带着截断的缓存启动。
+- `eager` 假设关联表在任务运行期间**没有会与本任务冲突的并发写入**（与 `insert_key_index` 相同的单写者前提）。新增记录不会导致数据错误，只会让该 key 暂付一次 search 成本；删除或修改 key 会造成悬垂/失真缓存。
+
+运维须知：**缓存不感知关联表中的删除与 key 修改，也不持久化、不跨进程共享**。悬垂 `record_id` 会在写入时被飞书拒绝（`RecordIdNotFound` / `LinkFieldConvFail`），此时**重启任务即可重建缓存**收敛。
+
 ## 重要参数
 
 | 参数 | 说明 |
@@ -202,6 +241,7 @@ relations:
 | `fallback_scan_page_limit` | 飞书拒绝游标排序时，本地 fallback 扫描最多读取的页数，默认 `100` |
 | `user_id_type` | 人员字段使用的 ID 类型，例如 `open_id`、`union_id`、`user_id` |
 | `relations` | 将业务键解析为关联记录 ID 的字段级 mapping |
+| `relations.*.cache` | 关联解析缓存策略：`none`（默认）/ `lazy` / `eager`，见“关联字段缓存” |
 
 `fallback_scan_page_limit` 是防护阀。只有确认表规模和调用配额允许 fallback 扫描时，才提高这个值。
 
