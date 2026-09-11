@@ -294,7 +294,7 @@ docker run --rm \
 生产环境推荐使用 `db.cursor_store(...)` 或 `db.state_store(...)`，确保游标和任务状态在进程重启后保持：
 
 ```python
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 db = MySQLConnector("mysql+pymysql://...")
 state = db.cursor_store(table="onestep_cursor")

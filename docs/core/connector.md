@@ -81,8 +81,8 @@ async def process(ctx, item):
 | `RabbitMQConnector` (`onestep-mq`) | RabbitMQ | 支持 | 支持 |
 | `RedisConnector` (`onestep-redis`) | Redis Streams | 支持 | 支持 |
 | `SQSConnector` (`onestep-sqs`) | AWS SQS | 支持 | 支持 |
-| `MySQLConnector` (`onestep-mysql`) | MySQL 表队列/增量同步/binlog CDC/表输出 | 支持 | 支持 |
-| `PostgresConnector` (`onestep-postgres`) | PostgreSQL 表队列/增量同步/表输出/跟踪长任务执行 | 支持 | 支持 |
+| `MySQLConnector` (`onestep-sql[mysql]`) | MySQL 表队列/增量同步/binlog CDC/表输出 | 支持 | 支持 |
+| `PostgresConnector` (`onestep-sql[postgres]`) | PostgreSQL 表队列/增量同步/表输出/跟踪长任务执行 | 支持 | 支持 |
 | `MongoDBConnector` (`onestep-mongodb`) | MongoDB Collection 轮询/Change Stream/表输出 | 支持 | 支持 |
 | `ElasticsearchConnector` (`onestep-elasticsearch`) | Elasticsearch / OpenSearch 异步 bulk Sink | 不支持 | 支持 |
 | `ClickHouseConnector` (`onestep-clickhouse`) | ClickHouse 异步确认表输出 Sink | 不支持 | 支持 |
@@ -99,7 +99,7 @@ async def process(ctx, item):
 from onestep import (
     CronSource, MemoryQueue, OneStepApp
 )
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("mixed-demo")

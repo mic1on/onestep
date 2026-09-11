@@ -32,7 +32,7 @@ pip install 'onestep-sql[mysql]'
 
 ```python
 from onestep import OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 app = OneStepApp("orders")
 
@@ -97,7 +97,7 @@ nack={"status": "failed"}     # 失败
 
 ```python
 from onestep import MemoryQueue, OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 app = OneStepApp("sync-users")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")

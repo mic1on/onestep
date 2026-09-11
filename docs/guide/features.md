@@ -41,7 +41,7 @@ async def my_task(ctx, item):
 
 ```python
 from onestep import CronSource
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 rmq = RabbitMQConnector("amqp://...")

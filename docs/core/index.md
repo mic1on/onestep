@@ -62,7 +62,7 @@ async def cleanup(app):
 
 ```python
 from onestep import CronSource, IntervalSource, MemoryQueue, WebhookSource
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 # 内存队列
@@ -107,7 +107,7 @@ class MySource(Source):
 
 ```python
 from onestep import MemoryQueue
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 # 内存队列
@@ -223,7 +223,7 @@ FastAPI / Gateway                  Worker
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresExecutionBackend
+from onestep_sql.postgres import PostgresExecutionBackend
 
 backend = PostgresExecutionBackend(
     dsn="postgresql+psycopg://app:secret@db/app",
@@ -244,7 +244,7 @@ async with client:
 ### Worker 消费
 
 ```python
-from onestep_postgres import PostgresExecutionSource
+from onestep_sql.postgres import PostgresExecutionSource
 
 source = PostgresExecutionSource(
     dsn="postgresql+psycopg://app:secret@db/app",

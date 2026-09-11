@@ -31,6 +31,7 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 | [AWS SQS](/broker/sqs) | 支持 | 支持 | AWS SQS 托管队列，安装 `onestep-sqs` |
 | [AWS SNS](/broker/sqs#sns-topic-sink) | 不支持 | 支持 | AWS SNS 主题扇出 Sink，安装 `onestep-sqs` |
 | [Kafka](/broker/kafka) | 支持 | 支持 | Kafka topic source/sink，安装 `onestep-kafka` |
+| [Cloudflare Queues](/broker/cf-queues) | 支持 | 支持 | Cloudflare 托管队列拉取/推送，安装 `onestep-cf-queues` |
 
 ### 数据库
 
@@ -87,7 +88,7 @@ source = sqs.queue("https://sqs...")
 ### 数据库驱动
 
 ```python
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 db = MySQLConnector("mysql+pymysql://...")
 source = db.table_queue(

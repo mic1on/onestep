@@ -27,7 +27,7 @@ pip install 'onestep-sql[postgres]'
 
 ```python
 from onestep import OneStepApp
-from onestep_postgres import PostgresConnector
+from onestep_sql.postgres import PostgresConnector
 
 app = OneStepApp("pg-sync")
 pg = PostgresConnector("postgresql+psycopg://user:pass@localhost/app")
@@ -122,7 +122,7 @@ tasks:
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresExecutionBackend, PostgresExecutionSource
+from onestep_sql.postgres import PostgresExecutionBackend, PostgresExecutionSource
 
 backend = PostgresExecutionBackend(
     dsn="postgresql+psycopg://app:secret@db/app",

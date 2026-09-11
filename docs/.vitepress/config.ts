@@ -210,6 +210,7 @@ export default defineConfig({
           { text: '快速开始', link: '/guide/' },
           { text: '入门教程', link: '/guide/tutorial' },
           { text: '日志与任务事件', link: '/guide/logging' },
+          { text: '指标与健康检查', link: '/guide/metrics' },
           { text: '功能特性', link: '/guide/features' },
           { text: '生产部署', link: '/guide/deploy' },
           { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },

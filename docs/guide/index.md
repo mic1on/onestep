@@ -75,6 +75,19 @@ pip install 'onestep[all]'
 
 `onestep[all]` 安装常用队列、数据库、Kafka、YAML 和 control-plane 依赖；Feishu Bitable 仍单独安装。
 
+## 项目脚手架
+
+不想手写 `worker.yaml` 时，可以用场景模板快速生成一个可直接运行的项目：
+
+```bash
+onestep init my-worker --template redis   # interval | webhook | redis | sql-cdc
+cd my-worker
+pip install -e .   # 脚手架依赖已固定模板所需的 extras
+onestep run worker.yaml
+```
+
+`onestep init --help` 列出全部模板；每个模板生成一个最小的 `worker.yaml` 和 handler 包，并打印它需要的 `pip install` 命令。默认模板是 `interval`。
+
 ## 第一个任务
 
 创建 `tasks.py`：
@@ -162,7 +175,7 @@ asyncio.run(main())
 
 ```python
 from onestep import OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("orders")

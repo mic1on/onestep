@@ -48,6 +48,46 @@ onestep run your_package.tasks:app --log-level WARNING
 
 DEBUG 会包含 fetched、started 和 sink-success 等细节。INFO 主要记录应用日志以及 succeeded、retried、failed、dead-lettered 和 cancelled 等任务结果。
 
+## 结构化 JSON 日志
+
+`--log-format json` 把每一行日志输出为单个 JSON 对象，方便 Loki、ELK 等日志采集器直接索引，无需解析管道：
+
+```bash
+onestep run your_package.tasks:app --log-format json
+```
+
+也可以通过在 YAML 里设置 `app.logging.format` 固定格式，让 K8s / compose 部署无需改动启动命令：
+
+```yaml
+app:
+  name: billing-sync
+  logging:
+    level: INFO
+    format: json
+```
+
+显式传入 `--log-format` 会覆盖 YAML 值；两者都不传时使用默认的 `text`。
+
+CLI stdout handler 输出的每一行都变成包含 `ts`、`level`、`logger`、`message` 的 JSON 对象。内建 `StructuredEventLogger` 记录的任务生命周期事件还会把结构化字段提升到顶层，便于平台直接索引：
+
+```json
+{"ts": "2026-09-03T01:14:01.808690+00:00", "level": "INFO", "logger": "onestep.events", "message": "task succeeded", "event_kind": "succeeded", "app_name": "billing", "task_name": "sync", "source_name": "queue.in", "attempts": 1, "duration_s": 0.0004, "failure_kind": null, "failure_message": null}
+```
+
+其他日志记录的 `extra={...}` 属性会保留在嵌套的 `extra` 键下。无法序列化的值会回退到 `repr`，因此日志永远不会抛异常。该 formatter 也可以直接用于嵌入式场景：
+
+```python
+import logging
+
+from onestep import JsonLogFormatter
+
+handler = logging.StreamHandler()
+JsonLogFormatter.attach(handler)
+logging.getLogger().addHandler(handler)
+```
+
+默认的 `text` 行为保持不变。
+
 ## 任务事件开关
 
 CLI 默认启用 `StructuredEventLogger`。不需要任务生命周期日志时可以关闭：

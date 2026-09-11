@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-09-11 - 同步 main 1.11/1.12 并补齐可观测性与脚手架文档
+
+### 变更概述
+
+把 `main` 最近的连接器与可观测性改动（#142–#168）合入 docs 分支，并补齐新增功能的文档、收尾 onestep-sql 导入示例。
+
+### 更新内容
+
+- 合入 main：cf-queues、SQS SNS sink、Prometheus 指标、JSON 日志、`onestep init` 模板、MySQL 有界预取、飞书 Bitable 拆分、应用生命周期分解（#142–#168）。
+- 新增 [指标与健康检查](/guide/metrics) 页面，覆盖 `--metrics-addr`、Prometheus `/metrics` + `/healthz`、内建指标族与自定义指标上报。
+- [日志与任务事件](/guide/logging) 新增「结构化 JSON 日志」章节（`--log-format json`、YAML `app.logging.format`、`JsonLogFormatter`）。
+- 快速开始页新增「项目脚手架」章节（`onestep init --template {interval,webhook,redis,sql-cdc}`）。
+- 连接器概览补充 [Cloudflare Queues](/broker/cf-queues) 概览行。
+- onestep-sql 导入示例收尾：指南/核心/连接器页的 `from onestep_mysql/postgres import ...` 统一改为 `from onestep_sql.mysql/postgres import ...`（迁移指南与 shim 兼容说明保留）。
+
 ## 2026-08-22 - 用户案例新增 SQS→MySQL、多连接器协调、FastAPI 调度
 
 ### 变更概述
