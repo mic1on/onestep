@@ -239,10 +239,6 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
                 raise ValueError(
                     f"'{ctx.field}.insert_key_index' requires exactly one match field"
                 )
-            if "relations" in spec:
-                raise ValueError(
-                    f"'{ctx.field}.insert_key_index' is not supported with relations"
-                )
     ctx.validate_positive_integer(spec.get("insert_index_page_size"), field=f"{ctx.field}.insert_index_page_size")
     ctx.validate_positive_integer(spec.get("insert_index_max_pages"), field=f"{ctx.field}.insert_index_max_pages")
     ctx.validate_positive_integer(spec.get("ambiguous_write_max_rounds"), field=f"{ctx.field}.ambiguous_write_max_rounds")

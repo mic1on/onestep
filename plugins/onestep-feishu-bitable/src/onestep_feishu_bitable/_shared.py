@@ -324,7 +324,6 @@ def _validate_insert_key_index_requirements(
     *,
     mode: str,
     match_fields: tuple[str, ...],
-    relations: tuple[_FeishuRelationConfig, ...],
 ) -> None:
     if mode != "insert":
         raise ValueError(
@@ -335,8 +334,6 @@ def _validate_insert_key_index_requirements(
             "insert_key_index requires exactly one match field, "
             "got {}: {!r}".format(len(match_fields), match_fields)
         )
-    if relations:
-        raise ValueError("insert_key_index is not supported with relations")
 
 
 def _normalize_user_id_type(value: str | None) -> str | None:

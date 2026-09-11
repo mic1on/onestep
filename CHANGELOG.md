@@ -1,5 +1,15 @@
 # Changelog
 
+## onestep-feishu-bitable 0.5.1
+
+- Adds `feishu_relation_cache_scan` structured logs for eager relation-cache
+  startup scans (start/page/done/error phases with page counts, totals, and
+  redacted error detail).
+- Lifts the `insert_key_index` ↔ `relations` mutual exclusion: indexed insert
+  now resolves relation fields through the relation cache before writing, so
+  `mode: insert` + `insert_key_index` + `relations` can coexist with zero
+  runtime search on both the match field and the relation key.
+
 ## onestep-feishu-bitable 0.5.0
 
 - Adds per-relation `cache` option (`none` | `lazy` | `eager`) so business-key

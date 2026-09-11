@@ -20,10 +20,12 @@ class _EagerConnector:
         pages: dict[str, list[dict[str, Any]]],
         relation_tables: tuple[str, ...] = ("companies",),
         target_table: str = "projects",
+        total: int | None = None,
     ) -> None:
         self.pages = pages
         self.relation_tables = relation_tables
         self.target_table = target_table
+        self.total = total
         self.scan_calls: list[dict[str, Any]] = []
         self.relation_search_values: list[str] = []
         self.created_values: list[str] = []
@@ -47,13 +49,20 @@ class _EagerConnector:
                 token = kwargs.get("page_token") or "page-1"
                 page = self.pages.get(table_id, [])
                 index = int(str(token).split("-")[-1]) - 1
+                result: dict[str, Any] = {}
+                if self.total is not None:
+                    result["total"] = self.total
                 if index >= len(page):
-                    return {"items": [], "has_more": False}
-                return {
-                    "items": page[index],
-                    "has_more": index + 1 < len(page),
-                    "page_token": f"page-{index + 2}",
-                }
+                    result.update({"items": [], "has_more": False})
+                    return result
+                result.update(
+                    {
+                        "items": page[index],
+                        "has_more": index + 1 < len(page),
+                        "page_token": f"page-{index + 2}",
+                    }
+                )
+                return result
             # Runtime relation lookup.
             value = body["filter"]["conditions"][0]["value"][0]
             self.relation_search_values.append(value)
@@ -392,7 +401,8 @@ def test_eager_scan_emits_structured_log_without_secrets(caplog: pytest.LogCaptu
                         {"record_id": "rec-3", "fields": {}},
                     ]
                 ]
-            }
+            },
+            total=3,
         )
         sink = _build_sink(connector, caches={"companies": _relation("eager")})
         with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
@@ -401,7 +411,9 @@ def test_eager_scan_emits_structured_log_without_secrets(caplog: pytest.LogCaptu
     asyncio.run(scenario())
     records = [r for r in caplog.records if getattr(r, "event", None) == "feishu_relation_cache_scan"]
     assert records, "expected a feishu_relation_cache_scan log record"
-    record = records[0]
+    done = [r for r in records if getattr(r, "phase", None) == "done"]
+    assert len(done) == 1, "expected exactly one phase=done record"
+    record = done[0]
     assert record.name == "onestep_feishu_bitable.connector"
     assert record.target_field == "companies"
     assert record.table_id == "companies"
@@ -412,6 +424,7 @@ def test_eager_scan_emits_structured_log_without_secrets(caplog: pytest.LogCaptu
     assert record.outcome == "success"
     assert record.page_size == 500
     assert record.max_pages == 200
+    assert record.total == 3
     assert isinstance(record.duration_s, float)
 
 
@@ -525,3 +538,180 @@ def test_cache_none_relations_are_never_scanned() -> None:
         assert sink._relation_caches == {}
 
     asyncio.run(scenario())
+
+
+def _scan_records(caplog: pytest.LogCaptureFixture) -> list[Any]:
+    return [r for r in caplog.records if getattr(r, "event", None) == "feishu_relation_cache_scan"]
+
+
+def test_eager_scan_emits_start_phase(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(pages={"companies": [[]]})
+        sink = _build_sink(connector, caches={"companies": _relation("eager")}, page_size=250, max_pages=50)
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    records = _scan_records(caplog)
+    starts = [r for r in records if getattr(r, "phase", None) == "start"]
+    assert len(starts) == 1
+    start = starts[0]
+    assert start.target_field == "companies"
+    assert start.table_id == "companies"
+    assert start.page_size == 250
+    assert start.max_pages == 50
+
+
+def test_eager_scan_multi_page_page_count_and_total(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [{"record_id": "rec-1", "fields": {"name": "A"}}],
+                    [{"record_id": "rec-2", "fields": {"name": "B"}}],
+                    [{"record_id": "rec-3", "fields": {"name": "C"}}],
+                ]
+            },
+            total=3,
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    records = _scan_records(caplog)
+    pages = [r for r in records if getattr(r, "phase", None) == "page"]
+    done = [r for r in records if getattr(r, "phase", None) == "done"]
+    # Three pages -> exactly three page logs.
+    assert len(pages) == 3
+    # page logs carry page_number, page_records, scan_keys, total, has_more.
+    assert [p.page_number for p in pages] == [1, 2, 3]
+    assert [p.page_records for p in pages] == [1, 1, 1]
+    # scan_keys accumulates monotonically.
+    assert [p.scan_keys for p in pages] == [1, 2, 3]
+    assert [p.total for p in pages] == [3, 3, 3]
+    assert [p.has_more for p in pages] == [True, True, False]
+    # done carries the same total and the final cumulative scan_keys.
+    assert len(done) == 1
+    assert done[0].total == 3
+    assert done[0].scan_keys == 3
+    assert done[0].scan_pages == 3
+
+
+def test_eager_scan_done_phase_has_total_and_cumulative(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(pages={"companies": [[]]}, total=0)
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    records = _scan_records(caplog)
+    done = [r for r in records if getattr(r, "phase", None) == "done"]
+    assert len(done) == 1
+    assert done[0].total == 0
+    assert done[0].outcome == "success"
+    assert done[0].scan_pages == 1
+
+
+def test_eager_scan_error_max_pages_exhausted(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [{"record_id": "rec-1", "fields": {"name": "A"}}],
+                    [{"record_id": "rec-2", "fields": {"name": "B"}}],
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")}, max_pages=1, page_size=1)
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            with pytest.raises(ConnectorOperationError):
+                await sink.open()
+
+    asyncio.run(scenario())
+    records = _scan_records(caplog)
+    errors = [r for r in records if getattr(r, "phase", None) == "error"]
+    assert len(errors) == 1
+    assert "exceeded" in errors[0].error
+
+
+def test_eager_scan_error_page_token_not_advancing(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        async def stuck_search(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "items": [{"record_id": "rec-1", "fields": {"name": "A"}}],
+                "has_more": True,
+                "page_token": "same-token",
+            }
+
+        bitable = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        bitable.search_records = stuck_search  # type: ignore[method-assign]
+        sink = bitable.table_sink(
+            app_token="project-app",
+            table_id="projects",
+            mode="create",
+            relations={"companies": _relation("eager")},
+        )
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            with pytest.raises(ConnectorOperationError):
+                await sink.open()
+
+    asyncio.run(scenario())
+    records = _scan_records(caplog)
+    errors = [r for r in records if getattr(r, "phase", None) == "error"]
+    assert len(errors) == 1
+    assert "did not advance" in errors[0].error
+
+
+def test_eager_scan_error_scan_exception(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        async def boom(**kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("network down record-id-abc")
+
+        bitable = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        bitable.search_records = boom  # type: ignore[method-assign]
+        sink = bitable.table_sink(
+            app_token="project-app",
+            table_id="projects",
+            mode="create",
+            relations={"companies": _relation("eager")},
+        )
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            with pytest.raises(ConnectorOperationError):
+                await sink.open()
+
+    asyncio.run(scenario())
+    records = _scan_records(caplog)
+    errors = [r for r in records if getattr(r, "phase", None) == "error"]
+    assert len(errors) == 1
+    # Error detail is redacted: type name only, never the exception text.
+    assert "RuntimeError" in errors[0].error
+    assert "network down" not in errors[0].error
+    assert "record-id-abc" not in errors[0].error
+
+
+def test_eager_scan_all_phases_redacted(caplog: pytest.LogCaptureFixture) -> None:
+    """No phase (start/page/done/error) may leak business keys, record ids, or tokens."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {"record_id": "secret-record-1", "fields": {"name": "SecretCo"}},
+                        {"record_id": "secret-record-2", "fields": {"name": "OtherCo"}},
+                    ],
+                    [{"record_id": "secret-record-3", "fields": {"name": "ThirdCo"}}],
+                ]
+            },
+            total=3,
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    joined = " ".join(str(r.__dict__) for r in caplog.records)
+    for secret in ("SecretCo", "OtherCo", "ThirdCo", "secret-record-1", "secret-record-2", "secret-record-3"):
+        assert secret not in joined
