@@ -91,3 +91,46 @@ def test_indexed_insert_skips_relation_resolution_for_existing_key() -> None:
         assert search_calls == []
 
     asyncio.run(scenario())
+
+
+def test_indexed_insert_empty_miss_skips_search() -> None:
+    """Eager-loaded relation with on_missing=empty skips search on a miss."""
+
+    async def scenario() -> None:
+        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        sink = _make_sink(connector)
+
+        # Simulate open(): insert index empty + eager cache loaded (empty) + flag set.
+        sink._insert_keys = set()
+        sink._index_loaded = True
+        sink._relation_caches["关联企业"] = {}
+        sink._relation_eager_loaded.add("关联企业")
+
+        search_calls: list[dict[str, Any]] = []
+
+        async def fake_search(**kwargs: Any) -> dict[str, Any]:
+            search_calls.append(kwargs)
+            return {"items": [], "has_more": False}
+
+        connector.search_records = fake_search  # type: ignore[assignment]
+
+        created_records: list[dict[str, Any]] = []
+
+        async def fake_batch_create(**kwargs: Any) -> dict[str, Any]:
+            records = kwargs.get("records", [])
+            created_records.extend(dict(r) for r in records)
+            return {"records": [{"record_id": f"new-{i}", "fields": dict(r)} for i, r in enumerate(records)]}
+
+        connector.batch_create_records = fake_batch_create  # type: ignore[assignment]
+
+        # "新企业" is not in the empty eager snapshot: empty policy skips search.
+        await sink.send(Envelope(body={"编号": "A-1", "企业名称": "新企业"}))
+        await sink.close()
+
+        assert search_calls == []
+        assert len(created_records) == 1
+        # Relation left unset (empty) and the source field consumed.
+        assert created_records[0]["关联企业"] == []
+        assert "企业名称" not in created_records[0]
+
+    asyncio.run(scenario())
