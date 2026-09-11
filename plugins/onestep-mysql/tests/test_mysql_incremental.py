@@ -12,7 +12,8 @@ from onestep.resilience import ConnectorOperationError
 from onestep.state import InMemoryCursorStore
 
 
-def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path, prefetch: bool) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()
@@ -39,6 +40,7 @@ def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
         db = MySQLConnector(db_url)
         state = db.cursor_store(table="onestep_cursor")
         source = db.incremental(
+            prefetch=prefetch,
             table="users",
             key="id",
             cursor=("updated_at", "id"),
@@ -62,6 +64,7 @@ def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
         restarted_db = MySQLConnector(db_url)
         restarted_state = restarted_db.cursor_store(table="onestep_cursor")
         restarted_source = restarted_db.incremental(
+            prefetch=prefetch,
             table="users",
             key="id",
             cursor=("updated_at", "id"),
@@ -89,7 +92,8 @@ def test_mysql_incremental_cursor_advances_in_order(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_mysql_incremental_restarts_from_datetime_cursor(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_mysql_incremental_restarts_from_datetime_cursor(tmp_path: Path, prefetch: bool) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental-datetime.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()
@@ -117,6 +121,7 @@ def test_mysql_incremental_restarts_from_datetime_cursor(tmp_path: Path) -> None
         db = MySQLConnector(db_url)
         state = db.cursor_store(table="onestep_cursor")
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -135,6 +140,7 @@ def test_mysql_incremental_restarts_from_datetime_cursor(tmp_path: Path) -> None
         restarted_db = MySQLConnector(db_url)
         restarted_state = restarted_db.cursor_store(table="onestep_cursor")
         restarted_source = restarted_db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -159,7 +165,8 @@ def test_mysql_incremental_restarts_from_datetime_cursor(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
-def test_mysql_incremental_does_not_refetch_pending_gap_with_out_of_order_ack(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_mysql_incremental_does_not_refetch_pending_gap_with_out_of_order_ack(tmp_path: Path, prefetch: bool) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_gap.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()
@@ -185,6 +192,7 @@ def test_mysql_incremental_does_not_refetch_pending_gap_with_out_of_order_ack(tm
     async def scenario() -> None:
         db = MySQLConnector(db_url)
         source = db.incremental(
+            prefetch=prefetch,
             table="users",
             key="id",
             cursor=("updated_at", "id"),
@@ -206,7 +214,8 @@ def test_mysql_incremental_does_not_refetch_pending_gap_with_out_of_order_ack(tm
     asyncio.run(scenario())
 
 
-def test_mysql_incremental_uses_key_as_tie_breaker_when_cursor_is_not_unique(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_mysql_incremental_uses_key_as_tie_breaker_when_cursor_is_not_unique(tmp_path: Path, prefetch: bool) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_tiebreak.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()
@@ -233,6 +242,7 @@ def test_mysql_incremental_uses_key_as_tie_breaker_when_cursor_is_not_unique(tmp
         db = MySQLConnector(db_url)
         state = db.cursor_store(table="onestep_cursor")
         source = db.incremental(
+            prefetch=prefetch,
             table="users",
             key="id",
             cursor=("updated_at",),
@@ -264,7 +274,8 @@ def test_mysql_incremental_uses_key_as_tie_breaker_when_cursor_is_not_unique(tmp
     asyncio.run(scenario())
 
 
-def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tmp_path: Path, prefetch: bool) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_where_scope.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()
@@ -292,6 +303,7 @@ def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tm
         db = MySQLConnector(db_url)
         state = db.cursor_store(table="onestep_cursor")
         active = db.incremental(
+            prefetch=prefetch,
             table="users",
             key="id",
             cursor=("updated_at",),
@@ -301,6 +313,7 @@ def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tm
             state=state,
         )
         deleted = db.incremental(
+            prefetch=prefetch,
             table="users",
             key="id",
             cursor=("updated_at",),
@@ -326,8 +339,10 @@ def test_mysql_incremental_default_state_key_separates_distinct_where_clauses(tm
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("prefetch", [False, True])
 def test_mysql_incremental_retry_redelivers_same_row_with_incremented_attempts(
     tmp_path: Path,
+    prefetch: bool,
 ) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_retry.db'}"
     engine = sa.create_engine(db_url, future=True)
@@ -347,6 +362,7 @@ def test_mysql_incremental_retry_redelivers_same_row_with_incremented_attempts(
         db = MySQLConnector(db_url)
         state = InMemoryCursorStore()
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -377,8 +393,10 @@ def test_mysql_incremental_retry_redelivers_same_row_with_incremented_attempts(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("prefetch", [False, True])
 def test_mysql_incremental_retry_delay_and_inflight_gap_pause_sql_reads(
     tmp_path: Path,
+    prefetch: bool,
 ) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_retry_gap.db'}"
     engine = sa.create_engine(db_url, future=True)
@@ -397,6 +415,7 @@ def test_mysql_incremental_retry_delay_and_inflight_gap_pause_sql_reads(
     async def scenario() -> None:
         db = MySQLConnector(db_url)
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -416,8 +435,10 @@ def test_mysql_incremental_retry_delay_and_inflight_gap_pause_sql_reads(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("prefetch", [False, True])
 def test_mysql_incremental_terminal_failure_blocks_before_failed_cursor(
     tmp_path: Path,
+    prefetch: bool,
 ) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_terminal.db'}"
     engine = sa.create_engine(db_url, future=True)
@@ -437,6 +458,7 @@ def test_mysql_incremental_terminal_failure_blocks_before_failed_cursor(
         db = MySQLConnector(db_url)
         state = InMemoryCursorStore()
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -470,7 +492,8 @@ class _CountingCursorStore(InMemoryCursorStore):
         await super().save(key, value)
 
 
-def test_mysql_incremental_coalesces_concurrent_contiguous_acks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prefetch", [False, True])
+def test_mysql_incremental_coalesces_concurrent_contiguous_acks(tmp_path: Path, prefetch: bool) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_coalesce.db'}"
     engine = sa.create_engine(db_url, future=True)
     metadata = sa.MetaData()
@@ -492,6 +515,7 @@ def test_mysql_incremental_coalesces_concurrent_contiguous_acks(tmp_path: Path) 
         db = MySQLConnector(db_url)
         state = _CountingCursorStore()
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -508,8 +532,10 @@ def test_mysql_incremental_coalesces_concurrent_contiguous_acks(tmp_path: Path) 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("prefetch", [False, True])
 def test_mysql_incremental_cursor_save_failure_preserves_retryable_prefix(
     tmp_path: Path,
+    prefetch: bool,
 ) -> None:
     db_url = f"sqlite:///{tmp_path / 'incremental_save_failure.db'}"
     engine = sa.create_engine(db_url, future=True)
@@ -530,6 +556,7 @@ def test_mysql_incremental_cursor_save_failure_preserves_retryable_prefix(
         state = _CountingCursorStore()
         state.failures_remaining = 1
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="id",
             cursor=("created_at", "id"),
@@ -551,8 +578,10 @@ def test_mysql_incremental_cursor_save_failure_preserves_retryable_prefix(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("prefetch", [False, True])
 def test_mysql_incremental_logs_fetch_retry_commit_without_sensitive_values(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    prefetch: bool,
 ) -> None:
     db_url = f"sqlite:///{tmp_path / 'mysql-dsn-secret.db'}"
     engine = sa.create_engine(db_url, future=True)
@@ -580,6 +609,7 @@ def test_mysql_incremental_logs_fetch_retry_commit_without_sensitive_values(
         db = MySQLConnector(db_url)
         state = InMemoryCursorStore()
         source = db.incremental(
+            prefetch=prefetch,
             table="rows",
             key="union_key",
             cursor=("created_at", "union_key"),
@@ -643,8 +673,10 @@ def test_mysql_incremental_logs_fetch_retry_commit_without_sensitive_values(
 @pytest.mark.parametrize(
     "configured_cursor", [("id",), ("updated_at",), ("updated_at", "rank")]
 )
+@pytest.mark.parametrize("prefetch", [False, True])
 def test_mysql_incremental_range_matches_row_constructor(
-    tmp_path: Path, configured_cursor: tuple[str, ...]
+    tmp_path: Path, configured_cursor: tuple[str, ...],
+    prefetch: bool,
 ) -> None:
     """Compare against the old SQL boundary, including ties, NULLs and a filter."""
     db_url = f"sqlite:///{tmp_path / 'lexicographic.db'}"
@@ -697,6 +729,7 @@ def test_mysql_incremental_range_matches_row_constructor(
                     state = InMemoryCursorStore()
                     await state.save("boundary", values)
                     source = db.incremental(
+            prefetch=prefetch,
                         table="items",
                         key="id",
                         cursor=configured_cursor,

@@ -137,6 +137,7 @@ class MySQLConnector:
         cursor: Sequence[str],
         where: str | None = None,
         batch_size: int = 1000,
+        prefetch: bool = False,
         poll_interval_s: float = 1.0,
         state: CursorStore | None = None,
         state_key: str | None = None,
@@ -151,6 +152,7 @@ class MySQLConnector:
             cursor=effective_cursor,
             where=where,
             batch_size=batch_size,
+            prefetch=prefetch,
             poll_interval_s=poll_interval_s,
             state=state or InMemoryCursorStore(),
             state_key=state_key or _default_incremental_state_key(
@@ -669,10 +671,17 @@ class IncrementalTableSource(Source):
         cursor: tuple[str, ...],
         where: str | None,
         batch_size: int,
+        prefetch: bool = False,
         poll_interval_s: float,
         state: CursorStore,
         state_key: str,
     ) -> None:
+        if not isinstance(prefetch, bool):
+            raise TypeError("prefetch must be a boolean")
+        if prefetch and (
+            isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1
+        ):
+            raise ValueError("batch_size must be a positive integer when prefetch is enabled")
         super().__init__(f"mysql.incremental:{table}")
         self.connector = connector
         self.table_name = table
@@ -681,6 +690,13 @@ class IncrementalTableSource(Source):
         self.cursor = cursor if key in cursor else (*cursor, key)
         self.where = where
         self.batch_size = batch_size
+        self.prefetch = prefetch
+        # Stop controls must release completed fetch results that own buffered rows.
+        self.fetch_is_cancel_safe = not prefetch
+        self._prefetched_rows: deque[dict[str, Any]] = deque()
+        self._max_delivery_limit = 0
+        self._fetch_lock: asyncio.Lock | None = None
+        self._fetch_loop: asyncio.AbstractEventLoop | None = None
         self.poll_interval_s = poll_interval_s
         self.state = state
         self.state_key = state_key
@@ -708,6 +724,11 @@ class IncrementalTableSource(Source):
             self._loaded = True
 
     async def fetch(self, limit: int) -> list[Delivery]:
+        # Serialize buffer ownership without holding the ACK/commit lock during SQL.
+        async with self._runtime_fetch_lock():
+            return await self._fetch_deliveries(limit)
+
+    async def _fetch_deliveries(self, limit: int) -> list[Delivery]:
         await self.open()
         lock = self._runtime_commit_lock()
         async with lock:
@@ -719,9 +740,17 @@ class IncrementalTableSource(Source):
             if self._retry_rows:
                 return []
         requested_limit = max(1, min(limit, self.batch_size))
+        sql_limit = requested_limit
+        if self.prefetch:
+            self._max_delivery_limit = max(self._max_delivery_limit, max(1, limit))
+            # Bound both the unissued buffer and read-ahead behind a slow ACK gap.
+            capacity = self.batch_size + self._max_delivery_limit - len(self._pending)
+            sql_limit = 0 if self._prefetched_rows else min(self.batch_size, max(0, capacity))
         started_at = time.monotonic()
+        rows: list[dict[str, Any]] = []
         try:
-            rows = await self._fetch(requested_limit)
+            if sql_limit:
+                rows = await self._fetch(sql_limit)
         except Exception as exc:
             connector_error = as_mysql_connector_operation_error(
                 operation=ConnectorOperation.FETCH,
@@ -733,8 +762,17 @@ class IncrementalTableSource(Source):
             if connector_error is None:
                 raise
             raise connector_error from exc
+        sql_row_count = len(rows)
+        if self.prefetch:
+            self._prefetched_rows.extend(rows)
         deliveries: list[Delivery] = []
         async with lock:
+            if self.prefetch:
+                if self._terminal_error is not None:
+                    raise self._terminal_error
+                # A retry can be requested while the SELECT is in progress.
+                count = 0 if self._retry_rows else min(requested_limit, len(self._prefetched_rows))
+                rows = [self._prefetched_rows.popleft() for _ in range(count)]
             for row in rows:
                 token = _CursorToken(tuple(row[column] for column in self.cursor))
                 self._pending.append(token.value)
@@ -751,6 +789,9 @@ class IncrementalTableSource(Source):
                 "fetch_count": fetch_count,
                 "requested_limit": requested_limit,
                 "row_count": len(rows),
+                "sql_limit": sql_limit,
+                "sql_row_count": sql_row_count,
+                "buffered_row_count": len(self._prefetched_rows),
                 "duration_s": round(time.monotonic() - started_at, 3),
                 "pending_cursor_rows": pending_cursor_rows,
                 "fetched_cursor_lag_rows": pending_cursor_rows,
@@ -950,10 +991,26 @@ class IncrementalTableSource(Source):
                 if self._commit_task is asyncio.current_task():
                     self._commit_task = None
 
+    async def resume_after_pause(self) -> None:
+        async with self._runtime_fetch_lock():
+            self._prefetched_rows.clear()
+
     async def close(self) -> None:
-        task = self._commit_task
-        if task is not None:
-            await asyncio.shield(task)
+        async with self._runtime_fetch_lock():
+            try:
+                task = self._commit_task
+                if task is not None:
+                    await asyncio.shield(task)
+            finally:
+                # Buffered rows have never entered the durable cursor prefix.
+                self._prefetched_rows.clear()
+
+    def _runtime_fetch_lock(self) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        if self._fetch_lock is None or self._fetch_loop is not current_loop:
+            self._fetch_lock = asyncio.Lock()
+            self._fetch_loop = current_loop
+        return self._fetch_lock
 
     def _runtime_commit_lock(self) -> asyncio.Lock:
         current_loop = asyncio.get_running_loop()

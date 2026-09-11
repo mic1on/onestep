@@ -1,5 +1,14 @@
 # Changelog
 
+## onestep-sql 0.3.0
+
+- Adds opt-in bounded prefetch to MySQL incremental sources (issue #164).
+  `prefetch=True` / YAML `prefetch: true` lets `batch_size` control SQL reads
+  while `fetch(limit)` and task concurrency still bound dispatched work.
+  Bounds read-ahead across ACK gaps, preserves retry/failure fencing, and
+  releases unstarted deliveries on stop. Defaults remain unchanged; requires
+  no core upgrade. Fetch logs now distinguish SQL rows from delivered/buffered rows.
+
 ## onestep-sql 0.2.1
 
 - Fixes MySQL incremental composite cursor scans (issue #163) by expanding
