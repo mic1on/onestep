@@ -22,6 +22,6 @@ TASK_FAILING_EVENT_KINDS = ("failed", "dead_lettered")
 # Config keys inspected (in order) to derive a human-readable source/sink label
 # from connector config dicts.
 SOURCE_LABEL_CONFIG_KEYS = ("topic", "queue", "stream", "url", "schedule", "cron")
-SINK_LABEL_CONFIG_KEYS = ("topic", "queue", "stream", "url", "table", "database")
+SINK_LABEL_CONFIG_KEYS = ("topic", "queue", "stream", "url", "arn", "table", "database")
 # Config keys inspected (in order) to derive retry attempts from retry policy.
 RETRY_ATTEMPTS_CONFIG_KEYS = ("attempts", "max_attempts", "retries")

@@ -1,6 +1,7 @@
 # onestep-sqs
 
-Amazon SQS connector plugin for `onestep`.
+Amazon SQS connector plugin for `onestep`. The package also ships an Amazon SNS
+topic sink for fan-out publishing.
 
 ```bash
 pip install onestep-sqs
@@ -11,11 +12,13 @@ entry point:
 
 - `sqs`
 - `sqs_queue`
+- `sns`
+- `sns_topic`
 
 Python usage:
 
 ```python
-from onestep_sqs import SQSConnector
+from onestep_sqs import SQSConnector, SNSConnector
 ```
 
 ## Delivery metadata
@@ -53,3 +56,51 @@ the current poll to finish instead of cancelling it. Any deliveries returned
 after fetching has stopped are released immediately with a visibility timeout
 of zero when processing has not started, making them available to SQS consumers
 again without waiting for the configured visibility timeout.
+
+## SNS topic sink
+
+SNS is publish/subscribe only, so `SNSTopic` implements `Sink` (not `Source`).
+To consume SNS messages, subscribe an SQS queue to the topic and use
+`sqs_queue` as the source.
+
+```python
+from onestep import MemoryQueue, OneStepApp
+from onestep_sqs import SNSConnector
+
+app = OneStepApp("sns-demo")
+sns = SNSConnector(region_name="us-east-1")
+notify = sns.topic(
+    "arn:aws:sns:us-east-1:123456789012:events",
+    subject="onestep-event",
+)
+
+
+@app.task(source=MemoryQueue("jobs"), emit=notify)
+async def publish_event(ctx, job):
+    return {"id": job["id"], "status": "done"}
+```
+
+The task return value is encoded with the standard OneStep envelope codec and
+sent as the SNS `Message`. Configuration options:
+
+- `subject`: optional SNS `Subject`.
+- `message_attributes`: raw SNS `MessageAttributes` mapping for subscription
+  filter policies.
+- `message_group_id` / `deduplication_id_factory`: required (group) and
+  optional (dedup) for FIFO topics whose ARN ends in `.fifo`. The factory
+  receives the `Envelope` and returns the deduplication id string.
+- `retry_delay_s`: retry backoff hint applied to normalized connector errors.
+
+YAML:
+
+```yaml
+resources:
+  sns:
+    type: sns
+    region_name: us-east-1
+  notify:
+    type: sns_topic
+    connector: sns
+    arn: arn:aws:sns:us-east-1:123456789012:events
+    subject: onestep-event
+```

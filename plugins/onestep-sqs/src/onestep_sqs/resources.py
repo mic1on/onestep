@@ -12,8 +12,23 @@ from onestep.resource_registry import (
 )
 
 from .connector import SQSConnector
+from .sns import SNSConnector
 
 _SQS_FIELDS = frozenset({"type", "region_name", "options"})
+_SNS_FIELDS = frozenset({"type", "region_name", "options"})
+_SNS_TOPIC_FIELDS = frozenset(
+    {
+        "type",
+        "name",
+        "arn",
+        "connector",
+        "subject",
+        "message_group_id",
+        "deduplication_id_factory",
+        "message_attributes",
+        "retry_delay_s",
+    }
+)
 _SQS_QUEUE_FIELDS = frozenset(
     {
         "type",
@@ -65,6 +80,32 @@ _SQS_QUEUE_CATALOG = ResourceCatalogEntry(
     ),
     topology_fields=("url", "wait_time_s", "visibility_timeout", "batch_size", "poll_interval_s"),
 )
+_SNS_CATALOG = ResourceCatalogEntry(
+    type="sns",
+    roles=("connector",),
+    label="Amazon SNS",
+    fields=(
+        ResourceCatalogField("region_name", "string"),
+        ResourceCatalogField("options", "mapping", secret=True),
+    ),
+)
+_SNS_TOPIC_CATALOG = ResourceCatalogEntry(
+    type="sns_topic",
+    roles=("sink",),
+    label="SNS Topic",
+    connector_types=("sns",),
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("arn", "string", required=True, secret=True),
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("subject", "string"),
+        ResourceCatalogField("message_group_id", "string"),
+        ResourceCatalogField("deduplication_id_factory", "ref"),
+        ResourceCatalogField("message_attributes", "mapping"),
+        ResourceCatalogField("retry_delay_s", "number", default=5.0),
+    ),
+    topology_fields=("arn",),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
@@ -82,6 +123,22 @@ def register_resources(registry: ResourceRegistry) -> None:
             catalog=_SQS_QUEUE_CATALOG,
             allowed_fields=_SQS_QUEUE_FIELDS,
             build=_build_sqs_queue,
+        )
+    )
+    registry.register_resource_type(
+        ResourceSpecHandler(
+            type="sns",
+            catalog=_SNS_CATALOG,
+            allowed_fields=_SNS_FIELDS,
+            build=_build_sns,
+        )
+    )
+    registry.register_resource_type(
+        ResourceSpecHandler(
+            type="sns_topic",
+            catalog=_SNS_TOPIC_CATALOG,
+            allowed_fields=_SNS_TOPIC_FIELDS,
+            build=_build_sns_topic,
         )
     )
 
@@ -113,4 +170,30 @@ def _build_sqs_queue(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Any:
         delete_flush_interval_s=spec.get("delete_flush_interval_s", 0.5),
         heartbeat_interval_s=spec.get("heartbeat_interval_s"),
         heartbeat_visibility_timeout=spec.get("heartbeat_visibility_timeout"),
+    )
+
+
+def _build_sns(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> SNSConnector:
+    return SNSConnector(
+        region_name=spec.get("region_name"),
+        options=ctx.mapping_value(spec.get("options"), field=f"{ctx.field}.options"),
+    )
+
+
+def _build_sns_topic(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Any:
+    connector = ctx.resolve_dependency(spec, "connector")
+    if not hasattr(connector, "topic"):
+        raise TypeError(f"resource {spec['connector']!r} cannot build sns_topic")
+    return connector.topic(
+        ctx.require_string(spec, "arn"),
+        subject=spec.get("subject"),
+        message_group_id=spec.get("message_group_id"),
+        deduplication_id_factory=ctx.optional_ref(
+            spec.get("deduplication_id_factory"),
+            field=f"{ctx.field}.deduplication_id_factory",
+        ),
+        message_attributes=ctx.mapping_value(
+            spec.get("message_attributes"), field=f"{ctx.field}.message_attributes"
+        ),
+        retry_delay_s=spec.get("retry_delay_s", 5.0),
     )

@@ -1,6 +1,97 @@
 # Changelog
 
-## Unreleased
+## onestep-sql 0.3.0
+
+- Adds opt-in bounded prefetch to MySQL incremental sources (issue #164).
+  `prefetch=True` / YAML `prefetch: true` lets `batch_size` control SQL reads
+  while `fetch(limit)` and task concurrency still bound dispatched work.
+  Bounds read-ahead across ACK gaps, preserves retry/failure fencing, and
+  releases unstarted deliveries on stop. Defaults remain unchanged; requires
+  no core upgrade. Fetch logs now distinguish SQL rows from delivered/buffered rows.
+
+## onestep-sql 0.2.1
+
+- Fixes MySQL incremental composite cursor scans (issue #163) by expanding
+  lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
+  serialization, ACK/retry fencing, and PostgreSQL behaviour unchanged.
+
+## onestep 1.12.0a1
+
+- Fixes `onestep-cf-queues` ack/retry staging-flush correctness defects
+  (issue #150). Flush-path `messages.ack` errors are now normalized to
+  `ConnectorOperationError` (`ConnectorOperation.ACK`) so the control plane
+  sees connector diagnostics and failed batches stay staged for retry;
+  deliveries/messages with a missing or empty `lease_id` fail fast instead of
+  staging a permanently rejected `{"lease_id": null}` payload (unusable
+  messages are skipped at fetch, letting the lease expire and redeliver); a
+  late `delivery.ack()` after `close()` no longer restarts an orphaned flusher
+  task; and staged-but-unflushed entries now survive an event-loop identity
+  change instead of being silently dropped into redeliveries.
+
+- Fixes `onestep-cf-queues` error classification gaps that killed the worker
+  process instead of backing off (issue #149). `APITimeoutError` is now
+  operation-aware — `DISCONNECTED` (retryable) for fetch/open/ack/retry,
+  `UNCERTAIN` only for send — and any previously unmatched `CloudflareError`
+  subclass (bare `APIError`, `APIResponseValidationError`) falls back to
+  `TRANSIENT` instead of escaping normalization as a raw SDK exception that
+  bypassed backoff entirely. Tests now build real SDK exceptions across the
+  `cloudflare` 4.x/5.x line and assert the worker loop keeps retrying under
+  consecutive fetch failures.
+
+- Adds `onestep run --log-format {text,json}` (issue #155): `json` swaps the
+  CLI stdout handler's formatter for the new stdlib-only `JsonLogFormatter`
+  (`src/onestep/jsonlog.py`, also exported as `onestep.JsonLogFormatter`),
+  emitting one JSON object per line with `ts`/`level`/`logger`/message plus
+  task lifecycle fields (`event_kind`, `app_name`, `task_name`, `attempts`,
+  `duration_s`, `failure_*`, `task_event_meta`) promoted to the top level so
+  Loki/ELK can index them without a parsing pipeline. Other records keep
+  their `extra` attributes nested under `extra`; unserializable values fall
+  back to `repr` so logging never raises. Default `text` output is unchanged.
+  The format can also be configured in YAML via `app.logging.format: json`
+  (validated by `load_app_config(strict=True)`); an explicit `--log-format`
+  flag overrides the YAML value, and the precedence is
+  CLI flag > `app.logging.format` > default `text`.
+
+- Expands `onestep init` with scenario templates (issue #154): the new
+  `--template {interval,webhook,redis,sql-cdc}` flag (default `interval`) each
+  scaffold a ready-to-run `worker.yaml` plus handler package and print the
+  `pip install` line they need; every generated YAML passes
+  `onestep check --strict`. The README gains a "which connector should I use"
+  decision table (scenario -> YAML type -> extra to install) and a minimal
+  YAML snippet per official connector, all validated against
+  `load_app_config(strict=True)`.
+
+- Decomposes the `OneStepApp` god-object into a thin facade plus dedicated
+  runtime controllers under `src/onestep/runtime/` (`LifecycleController`,
+  `TaskOperations`, `EventHub`). Public API, `describe()` output, and all
+  contract-visible state are preserved; `from onestep import OneStepApp`
+  continues to work unchanged (issue #146).
+
+- Adds built-in Prometheus observability (`onestep[metrics]`, issue #153): a
+  dependency-free `PrometheusExporter` (`src/onestep/observability.py`)
+  consumes the `TaskEvent` stream and exposes `onestep_deliveries_fetched_total`,
+  `onestep_tasks_processed_total{status}`, `onestep_task_duration_seconds`
+  (histogram), `onestep_inflight_tasks`, `onestep_tasks_retried_total`,
+  `onestep_tasks_dead_lettered_total`, `onestep_tasks_cancelled_total`,
+  `onestep_task_failures_total{failure_kind}`, `onestep_build_info`, plus
+  every custom task metric from `CustomMetricsRegistry` — read through a new
+  non-destructive `snapshot()` so counters stay monotonic across the
+  control-plane reporter's `rotate_task()` window resets. The new
+  `onestep run --metrics-addr host:port` flag (or `install_metrics(app)`)
+  serves `/metrics` and a `/healthz` probe (runtime + per-source liveness,
+  usable as a K8s liveness/readiness endpoint) from a tiny asyncio HTTP
+  server coexisting with webhook sources. A ready-made monitoring stack
+  lives in `examples/prometheus/` (onestep + Prometheus + Grafana with a
+  provisioned dashboard).
+
+- Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that
+  wraps the official `cloudflare` Python SDK to consume and publish over the
+  HTTP pull-consumer REST API (works outside Cloudflare Workers). Registers
+  YAML resource types `cf_queues` (connector) and `cf_queue` (source + sink),
+  with batched lease ack/retry, base64 body decoding for the `json`/`bytes`
+  content types, `on_fail` policy (`leave`/`retry`/`ack`), and short-polling
+  `fetch` (`fetch_is_cancel_safe`). Install via
+  `pip install 'onestep[cloudflare]'`.
 
 - Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that
   wraps the official `cloudflare` Python SDK to consume and publish over the
@@ -331,10 +422,10 @@
 - Adds `ExponentialBackoff` and `ByFailureKind` retry policies, exported from the public API and validated/built from YAML retry type schemas.
 - Adds typed env var expansion: a value that is entirely a single `${VAR}` reference is decoded as JSON to preserve the original type (int, bool, dict, list, float, etc.), while mixed strings stay plain.
 
-## onestep-mq 0.2.3a1
+## onestep-mq 0.2.3 (2026-08-18)
 
 - Uses RabbitMQ `basic.consume` push delivery with a prefetch-bounded buffer instead of per-message `basic.get` polling, while preserving batching, acknowledgement, retry, and cancellation semantics.
-- Alpha pre-release for limited-batch rollout. Start with a small number of workers or task instances and expand only after validating latency, throughput, unacked messages, requeue behavior, reconnect stability, and duplicate-delivery handling.
+- General release of the change shipped in `0.2.3a1`. The `basic.consume` source path is now the default; the previous per-message polling implementation is no longer the recommended path.
 
 ## onestep-mysql 0.3.5
 

@@ -6,6 +6,7 @@ import inspect
 import logging
 import math
 import time
+from uuid import uuid4
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -207,6 +208,23 @@ class DeliveryExecutor:
         failure: FailureInfo | None = None,
         event_meta: dict[str, Any] | None = None,
     ) -> None:
+        metadata = (
+            copy.deepcopy(event_meta)
+            if event_meta is not None
+            else copy.deepcopy(delivery.envelope.meta)
+        )
+        managed = self._managed_delivery(delivery)
+        attempt_id = str(managed.attempt_id) if managed is not None else None
+        if attempt_id is None:
+            attempt_id = getattr(delivery, "_onestep_attempt_id", None)
+            if not isinstance(attempt_id, str) or not attempt_id:
+                attempt_id = str(uuid4())
+                try:
+                    setattr(delivery, "_onestep_attempt_id", attempt_id)
+                except AttributeError:
+                    # A delivery implementation with slots cannot retain the
+                    # id; its event stream remains defensively accounted for.
+                    attempt_id = None
         event = TaskEvent(
             kind=kind,
             app=self.app.name,
@@ -215,11 +233,8 @@ class DeliveryExecutor:
             attempts=delivery.envelope.attempts,
             duration_s=duration_s,
             failure=failure,
-            meta=(
-                copy.deepcopy(event_meta)
-                if event_meta is not None
-                else copy.deepcopy(delivery.envelope.meta)
-            ),
+            meta=metadata,
+            attempt_id=attempt_id,
         )
         await self._event_emitter(event)
 

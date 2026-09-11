@@ -135,6 +135,10 @@ async def sync_user(ctx, row):
 3. 处理数据
 4. 更新 `cursor_store` 中的位置
 
+MySQL 查询将复合游标展开为上述范围条件，避免行构造器不等式在部分执行计划中
+反复扫描已处理的索引前缀。仍需为完整有效游标建立同序索引；配置未包含 `key` 时
+连接器会自动追加它。优化只改变查询形状，不改变同时间分页和连续 ACK 前缀提交。
+
 ### 游标存储
 
 ```python
@@ -374,15 +378,45 @@ CREATE INDEX idx_status ON orders(status);
 CREATE INDEX idx_cursor ON users(updated_at, id);
 ```
 
-### 2. 批量大小
+### 2. 读取批量与处理并发
+
+默认 `prefetch=False` 保留原行为：每次 SQL 的上限是
+`min(batch_size, runtime 当前空闲并发槽)`。例如 `batch_size=500`、
+`concurrency=8` 时，每次最多读 8 行，只有一个空闲槽时最多读 1 行。
+
+从 `onestep-sql 0.3.0` 起，可对 MySQL 增量源显式启用有界预取：
 
 ```python
-# 小批量：低延迟
-batch_size=10
+source = db.incremental(
+    table="users", key="id", cursor=("updated_at",),
+    batch_size=100, prefetch=True, state=cursor_store,
+)
 
-# 大批量：高吞吐
-batch_size=1000
+@app.task(source=source, concurrency=8)
+async def sync_user(ctx, row):
+    ...
 ```
+
+YAML 对应 `mysql_incremental` 的 `prefetch: true` 和 `batch_size: 100`；
+任务仍单独配置 `concurrency: 8`。SQL 一次最多读 100 行，每次只交付空闲槽所需
+的行数；剩余行在 connector 缓冲，缓冲耗尽后才补读，没有后台无限抓取任务。
+`prefetch` 必须是布尔值，启用时 `batch_size` 必须是正整数。
+
+- 未交付行缓冲最多 `batch_size` 行。未提交窗口（已交付待连续 ACK 的行 + 缓冲行）
+  最多为 `batch_size + 已观察到的最大 fetch(limit)`；通常是读取批量加任务并发。
+  最前面一条很慢时会停止继续读，而不是让已 ACK 的后续行无限堆积。
+- 预取不会提前保存持久游标。重试优先于缓冲行，失败缺口期间不继续交付新行；
+  重启从连续已提交前缀恢复，未交付或未确认行可重读。
+- 启用预取时，暂停/退出会等待正在进行的 SELECT 结束，再释放已取回但尚未启动的
+  Delivery；应为数据库连接配置合适的超时。暂停恢复和关闭时丢弃未交付缓冲，
+  不推进游标，后续从已交付边界重新查询。
+- 缓冲保存读取时的行快照，不能保证每次 handler 启动时都是源的最新内容；
+  较大的批量会增加内存与快照停留时间。它仍是至少一次的时间游标轮询，不是 CDC。
+- fetch 日志的 `row_count` 是交付行数；`sql_limit` / `sql_row_count` 是本次实际 SQL
+  的上限 / 返回行数，未查询时均为 0；`buffered_row_count` 是剩余缓冲行数。
+  预取减少源查询次数，不自动减少 handler 写库或持久游标提交次数。
+
+先用 50、100、500 条与固定处理并发做对照，观察 SQL 次数、内存和业务耗时。
 
 ### 3. 并发控制
 

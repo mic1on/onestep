@@ -83,7 +83,14 @@ resources:
 Useful types:
 
 - `mysql_table_queue`: table-backed queue with claim/ack/nack fields.
-- `mysql_incremental`: incremental polling with cursor state.
+- `mysql_incremental`: incremental polling with cursor state. With onestep-sql
+  0.3.0+, opt-in `prefetch: true` reads up to `batch_size` rows into a bounded
+  source buffer while task `concurrency` still limits handlers. Default false
+  keeps SQL reads capped by free handler slots. Prefetch does not advance the
+  durable cursor; retry gaps fence new deliveries. Stop controls wait for the
+  active SELECT and release unstarted deliveries; configure DB timeouts. Resume
+  and close discard unissued buffers so rows can be read again. Larger batches
+  use more memory and hold older snapshots; this is not CDC.
 - `mysql_binlog`: row-based change stream with binlog file/position cursor state.
 - `mysql_table_sink`: insert/upsert output table.
 - `mysql_state_store` / `mysql_cursor_store`: durable app or cursor state.
@@ -130,8 +137,8 @@ For immutable MySQL rows inserted into one Feishu table, bind a durable
 cursor, and enable the Feishu table Sink's opt-in `insert_key_index`. This
 preloads the single match field and avoids normal per-row searches. The indexed
 Sink requires one active writer, supports no relations, and stores neither
-record IDs nor a durable idempotency ledger. Source `batch_size`, Sink
-`batch_size`, and task `concurrency` are independent controls;
+record IDs nor a durable idempotency ledger. Source `batch_size` becomes independent of handler slots with MySQL
+`prefetch: true`; Sink `batch_size` is a separate output batching control;
 `tasks[].config` is handler data only.
 
 ## PostgreSQL execution source

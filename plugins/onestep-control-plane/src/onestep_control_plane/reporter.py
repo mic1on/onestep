@@ -106,6 +106,7 @@ def _read_env(*names: str) -> str | None:
 
 
 _KIND_OVERRIDES = {
+    "CFQueue": "cf_queue",
     "CronSource": "cron",
     "HttpSink": "http_sink",
     "IncrementalTableSource": "mysql_incremental",
@@ -115,6 +116,7 @@ _KIND_OVERRIDES = {
     "NoRetry": "no_retry",
     "RabbitMQQueue": "rabbitmq_queue",
     "RedisStreamQueue": "redis_stream",
+    "SNSTopic": "sns_topic",
     "SQSQueue": "sqs_queue",
     "TableQueueSource": "mysql_table_queue",
     "TableSink": "mysql_table_sink",
@@ -802,6 +804,14 @@ class ControlPlaneReporter:
                 "delete_flush_interval_s": resource.delete_flush_interval_s,
                 "heartbeat_interval_s": resource.heartbeat_interval_s,
                 "heartbeat_visibility_timeout": resource.heartbeat_visibility_timeout,
+            }
+        if class_name == "SNSTopic":
+            return {
+                "arn": resource.arn,
+                "subject": resource.subject,
+                "message_group_id": resource.message_group_id,
+                "message_attributes": resource.message_attributes,
+                "retry_delay_s": resource.retry_delay_s,
             }
         if class_name == "RedisStreamQueue":
             return {

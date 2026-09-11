@@ -27,6 +27,7 @@ from onestep_mysql.resources import register_resources as register_mysql_legacy
 from onestep_postgres.resources import register_resources as register_postgres_legacy
 from onestep_sql import mysql as mysql_pkg
 from onestep_sql import postgres as postgres_pkg
+from onestep_sql import sqlite as sqlite_pkg
 from onestep_sql import register_resources
 
 EXPECTED_TYPES = {
@@ -37,6 +38,9 @@ EXPECTED_TYPES = {
     "postgres", "postgres_state_store", "postgres_cursor_store",
     "postgres_table_queue", "postgres_incremental", "postgres_execution_source",
     "postgres_table_sink",
+    # SQLite
+    "sqlite", "sqlite_state_store", "sqlite_cursor_store", "sqlite_table_queue",
+    "sqlite_incremental", "sqlite_table_sink",
 }
 
 
@@ -62,19 +66,21 @@ def _select_entry_points(group: str):
     return [ep for ep in eps if ep.group == group]
 
 
-def test_register_resources_exposes_exactly_14_types():
+def test_register_resources_exposes_all_backend_types():
     registry = ResourceRegistry()
     register_resources(registry)
     types = {e.type for e in registry.catalog_entries()}
     assert types == EXPECTED_TYPES
-    assert len(types) == 14
+    assert len(types) == 20
 
 
 def test_catalog_matches_legacy_combined():
-    """Canonical must be byte-identical to both legacy plugins registered together."""
+    """Canonical must be byte-identical to the legacy mysql+postgres plugins plus
+    the SQLite backend (which has no legacy forwarding shim) registered together."""
     legacy = ResourceRegistry()
     register_mysql_legacy(legacy)
     register_postgres_legacy(legacy)
+    sqlite_pkg.register_resources(legacy)
 
     canonical = ResourceRegistry()
     register_resources(canonical)
@@ -105,10 +111,12 @@ def test_extras_declared():
 
 
 def test_package_imports_without_drivers_at_import_time():
-    # onestep_sql, .mysql and .postgres all import successfully here even if
-    # asyncmy / psycopg are absent; drivers are only imported lazily at runtime.
+    # onestep_sql, .mysql, .postgres and .sqlite all import successfully here
+    # even if asyncmy / psycopg / aiosqlite are absent; drivers are only imported
+    # lazily at runtime.
     assert mysql_pkg.MySQLConnector is not None
     assert postgres_pkg.PostgresConnector is not None
+    assert sqlite_pkg.SQLiteConnector is not None
 
 
 def test_backend_specific_capabilities_stay_backend_specific():
@@ -118,6 +126,9 @@ def test_backend_specific_capabilities_stay_backend_specific():
     # PostgreSQL-only tracked-execution capability must not leak into mysql.
     assert hasattr(postgres_pkg, "PostgresExecutionSource")
     assert not hasattr(mysql_pkg, "PostgresExecutionSource")
+    # SQLite has no binlog and no tracked execution; it must not expose them.
+    assert not hasattr(sqlite_pkg, "BinlogSource")
+    assert not hasattr(sqlite_pkg, "PostgresExecutionSource")
 
 
 def test_register_resources_is_idempotent_alias_on_subpackages():
@@ -128,4 +139,5 @@ def test_register_resources_is_idempotent_alias_on_subpackages():
     r2 = ResourceRegistry()
     mysql_pkg.register_resources(r2)
     postgres_pkg.register_resources(r2)
+    sqlite_pkg.register_resources(r2)
     assert _catalog(r1) == _catalog(r2)

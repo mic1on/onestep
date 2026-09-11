@@ -3,6 +3,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version as _package_version
 
 from .connector import SQSConnector, SQSDelivery, SQSQueue
+from .sns import SNSConnector, SNSTopic
 from .resources import register_resources
 from .resilience import classify_sqs_error
 
@@ -14,6 +15,8 @@ except PackageNotFoundError:  # pragma: no cover - local source tree before inst
 register = register_resources
 
 __all__ = [
+    "SNSConnector",
+    "SNSTopic",
     "SQSConnector",
     "SQSDelivery",
     "SQSQueue",

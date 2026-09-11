@@ -20,7 +20,8 @@ from .diagnostics.models import (
 from .diagnostics.supervisor import supervise_diagnostic
 from .diagnostics.targets import _ensure_local_import_paths
 from .envelope import Envelope
-from .init_project import init_project
+from .init_project import DEFAULT_TEMPLATE, init_project, list_templates
+from .jsonlog import JsonLogFormatter
 from .render import render_mermaid
 
 _CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -56,6 +57,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         default=None,
         help="Set the onestep logger level (default: target configuration or INFO)",
+    )
+    run_parser.add_argument(
+        "--metrics-addr",
+        dest="metrics_addr",
+        type=str,
+        default=None,
+        metavar="HOST:PORT",
+        help=(
+            "Expose Prometheus /metrics and /healthz on HOST:PORT "
+            "(use :PORT to bind all interfaces; e.g. :9100)"
+        ),
+    )
+    run_parser.add_argument(
+        "--log-format",
+        dest="log_format",
+        choices=("text", "json"),
+        default=None,
+        help=(
+            "Log output format: text (default) or one-JSON-object-per-line for "
+            "log collectors such as Loki/ELK; overrides YAML app.logging.format"
+        ),
     )
     run_parser.add_argument(
         "--task-events",
@@ -99,6 +121,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     init_parser = subparsers.add_parser("init", help="Create a minimal OneStep YAML project scaffold")
     init_parser.add_argument("path", nargs="?", default=".", help="Directory to initialize")
+    init_parser.add_argument(
+        "--template",
+        default=DEFAULT_TEMPLATE,
+        choices=list_templates(),
+        help=(
+            f"Scenario template: {', '.join(list_templates())}"
+            f" (default: {DEFAULT_TEMPLATE})"
+        ),
+    )
     init_parser.add_argument(
         "--force",
         action="store_true",
@@ -235,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_task_command(args)
     if args.command == "init":
         try:
-            result = init_project(args.path, force=args.force)
+            result = init_project(args.path, template=args.template, force=args.force)
         except Exception as exc:
             print(f"onestep: failed to initialize {args.path}: {exc}", file=sys.stderr)
             return 2
@@ -314,11 +345,28 @@ def main(argv: list[str] | None = None) -> int:
         print(render_mermaid(app), end="")
         return 0
 
+    metrics_addr: tuple[str, int] | None = None
+    if args.metrics_addr:
+        try:
+            metrics_addr = _parse_metrics_addr(args.metrics_addr)
+        except ValueError as exc:
+            print(f"onestep: {exc}", file=sys.stderr)
+            return 2
+
     cli_logging_state: tuple[logging.Handler, int] | None = None
     try:
-        cli_logging_state = _configure_run_logging(explicit_level=args.log_level)
+        cli_logging_state = _configure_run_logging(
+            explicit_level=args.log_level,
+            log_format=args.log_format,
+            config_format=getattr(app, "logging_format", None),
+        )
         if args.task_events:
             app.enable_structured_event_logging()
+        if metrics_addr is not None:
+            host, port = metrics_addr
+            from .observability import install_metrics
+
+            install_metrics(app, host=host, port=port)
         app.run()
     except Exception as exc:
         print(f"onestep: {args.target} failed while running: {exc}", file=sys.stderr)
@@ -333,8 +381,32 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _parse_metrics_addr(value: str) -> tuple[str, int]:
+    """Parse ``HOST:PORT`` / ``:PORT`` / ``PORT`` for ``--metrics-addr``."""
+    text = value.strip()
+    if not text:
+        raise ValueError("--metrics-addr must not be empty")
+    if text.startswith(":"):
+        host_part, port_part = "", text[1:]
+    else:
+        host_part, sep, port_part = text.rpartition(":")
+        if not sep:
+            host_part, port_part = "", text
+    try:
+        port = int(port_part)
+    except ValueError as exc:
+        raise ValueError(f"invalid --metrics-addr port in {value!r}") from exc
+    if not 0 < port < 65536:
+        raise ValueError(f"invalid --metrics-addr port in {value!r}")
+    host = host_part.strip("[]") or "127.0.0.1"
+    return host, port
+
+
 def _configure_run_logging(
-    *, explicit_level: str | None
+    *,
+    explicit_level: str | None,
+    log_format: str | None = None,
+    config_format: str | None = None,
 ) -> tuple[logging.Handler, int] | None:
     framework_logger = logging.getLogger("onestep")
     if explicit_level is not None:
@@ -342,11 +414,15 @@ def _configure_run_logging(
     elif framework_logger.level == logging.NOTSET:
         framework_logger.setLevel(logging.INFO)
 
+    resolved_format = log_format or config_format or "text"
     root_logger = logging.getLogger()
     if root_logger.handlers:
         return None
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))
+    if resolved_format == "json":
+        handler.setFormatter(JsonLogFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(_CLI_LOG_FORMAT))
     previous_root_level = root_logger.level
     root_logger.setLevel(framework_logger.level)
     root_logger.addHandler(handler)
@@ -436,9 +512,12 @@ def _print_init_summary(result) -> None:
     print(f"Initialized OneStep project at {result.root}")
     print(f"Project: {result.project_name}")
     print(f"Package: {result.package_name}")
+    print(f"Template: {result.template}")
     print("Files:")
     for path in result.files:
         print(f"- {path}")
+    if result.pip_hint:
+        print(f"Install dependencies: {result.pip_hint}")
 
 
 def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:

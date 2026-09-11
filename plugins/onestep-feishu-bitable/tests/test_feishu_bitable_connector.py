@@ -1534,7 +1534,8 @@ def test_feishu_pre_validation_allows_known_feishu_field_dicts() -> None:
 
 
 def test_normalize_relation_values_accepts_numbers() -> None:
-    from onestep_feishu_bitable.connector import _normalize_relation_values, FeishuBitablePayloadError
+    from onestep_feishu_bitable import FeishuBitablePayloadError
+    from onestep_feishu_bitable._shared import _normalize_relation_values
 
     assert _normalize_relation_values(None, field="f") == ()
     assert _normalize_relation_values("A001", field="f") == ("A001",)

@@ -29,6 +29,7 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 | [Redis Streams](/broker/redis) | 支持 | 支持 | Redis Streams 消息队列，安装 `onestep-redis` |
 | [RabbitMQ](/broker/rabbitmq) | 支持 | 支持 | RabbitMQ 队列，安装 `onestep-mq` |
 | [AWS SQS](/broker/sqs) | 支持 | 支持 | AWS SQS 托管队列，安装 `onestep-sqs` |
+| [AWS SNS](/broker/sqs#sns-topic-sink) | 不支持 | 支持 | AWS SNS 主题扇出 Sink，安装 `onestep-sqs` |
 | [Kafka](/broker/kafka) | 支持 | 支持 | Kafka topic source/sink，安装 `onestep-kafka` |
 
 ### 数据库

@@ -1,0 +1,160 @@
+{
+  "title": "onestep overview",
+  "uid": "onestep-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["onestep"],
+  "templating": {
+    "list": [
+      {
+        "name": "app",
+        "label": "App",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(onestep_tasks_processed_total, app)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Task throughput by status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (task, status) (rate(onestep_tasks_processed_total{app=~\"$app\"}[5m]))",
+          "legendFormat": "{{task}} / {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 15 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": ".* / failed" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "title": "In-flight tasks",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (task) (onestep_inflight_tasks{app=~\"$app\"})",
+          "legendFormat": "{{task}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 25 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Task duration p50 / p90 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (task, le) (rate(onestep_task_duration_seconds_bucket{app=~\"$app\"}[5m])))",
+          "legendFormat": "p50 {{task}}"
+        },
+        {
+          "expr": "histogram_quantile(0.9, sum by (task, le) (rate(onestep_task_duration_seconds_bucket{app=~\"$app\"}[5m])))",
+          "legendFormat": "p90 {{task}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (task, le) (rate(onestep_task_duration_seconds_bucket{app=~\"$app\"}[5m])))",
+          "legendFormat": "p99 {{task}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 8 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Retries & dead letters",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (task) (rate(onestep_tasks_retried_total{app=~\"$app\"}[5m]))",
+          "legendFormat": "retried {{task}}"
+        },
+        {
+          "expr": "sum by (task) (rate(onestep_tasks_dead_lettered_total{app=~\"$app\"}[5m]))",
+          "legendFormat": "dead-lettered {{task}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 15 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Failures by kind",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (task, failure_kind) (rate(onestep_task_failures_total{app=~\"$app\"}[5m]))",
+          "legendFormat": "{{task}} / {{failure_kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 15 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Source fetch throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "sum by (task) (rate(onestep_deliveries_fetched_total{app=~\"$app\"}[5m]))",
+          "legendFormat": "{{task}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 15 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Runtime build info",
+      "type": "table",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "onestep_build_info",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ]
+}

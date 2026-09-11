@@ -120,12 +120,13 @@ def as_sqs_connector_operation_error(
     source_name: str | None = None,
     retry_delay_s: float | None = None,
     secrets: list[str] | None = None,
+    backend: str = "sqs",
 ) -> ConnectorOperationError | None:
     kind = classify_sqs_error(exc)
     if kind is None:
         return None
     return ConnectorOperationError(
-        backend="sqs",
+        backend=backend,
         operation=operation,
         kind=kind,
         source_name=source_name,

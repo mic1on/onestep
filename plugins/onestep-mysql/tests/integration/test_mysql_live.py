@@ -211,3 +211,137 @@ def test_mysql_binlog_reads_insert_update_delete_live():
         engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_incremental_empty_tail_does_not_scan_processed_prefix_live():
+    """A caught-up LIMIT query must seek, not revisit every processed row."""
+
+    async def scenario():
+        table_name = f"cursor_range_{uuid.uuid4().hex[:8]}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        events = sa.Table(
+            table_name,
+            metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("updated_at", sa.Integer, nullable=False),
+            sa.Column("event_key", sa.String(100), nullable=False, unique=True),
+            sa.Column("body", sa.Text, nullable=False),
+        )
+        sa.Index(f"idx_{table_name}", events.c.updated_at, events.c.event_key)
+        db = MySQLConnector(
+            os.environ["ONESTEP_MYSQL_DSN"], pool_size=1, max_overflow=0
+        )
+        try:
+            metadata.create_all(engine)
+            with engine.begin() as conn:
+                conn.execute(
+                    events.insert(),
+                    [
+                        {
+                            "id": i,
+                            "updated_at": 10,
+                            "event_key": f"event-{i:06d}",
+                            "body": "x" * 256,
+                        }
+                        for i in range(1, 2001)
+                    ],
+                )
+            source = db.incremental(
+                table=table_name, key="event_key", cursor=("updated_at",)
+            )
+            await source.state.save(source.state_key, [10, "event-002000"])
+            await db._table(table_name)  # Exclude metadata reads from the counters.
+            async with db.engine.connect() as conn:
+                before = int(
+                    (
+                        await conn.execute(
+                            sa.text("SHOW SESSION STATUS LIKE 'Handler_read_next'")
+                        )
+                    ).one()[1]
+                )
+            assert await source.fetch(8) == []
+            async with db.engine.connect() as conn:
+                after = int(
+                    (
+                        await conn.execute(
+                            sa.text("SHOW SESSION STATUS LIKE 'Handler_read_next'")
+                        )
+                    ).one()[1]
+                )
+            assert after - before < 20, "empty cursor poll scanned the processed prefix"
+        finally:
+            await db.close()
+            metadata.drop_all(engine)
+            engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_incremental_prefetch_preserves_datetime_restart_and_updates_live():
+    from datetime import datetime, timedelta
+
+    from sqlalchemy.dialects.mysql import DATETIME
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"prefetch_{suffix}"
+        cursor_name = f"prefetch_cursor_{suffix}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        table = sa.Table(
+            table_name, metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("updated_at", DATETIME(fsp=6), nullable=False),
+        )
+        stamp = datetime(2026, 1, 1, 12, 0, 0, 123456)  # noqa: DTZ001 - MySQL DATETIME is naive
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        try:
+            metadata.create_all(engine)
+            with engine.begin() as conn:
+                conn.execute(table.insert(), [{"id": i, "updated_at": stamp} for i in range(1, 54)])
+            state = db.cursor_store(table=cursor_name)
+            source = db.incremental(
+                table=table_name, key="id", cursor=("updated_at",),
+                prefetch=True, batch_size=20, state=state, state_key="prefetch-test",
+            )
+            first = await source.fetch(8)
+            assert [d.payload["id"] for d in first] == list(range(1, 9))
+            assert len(source._prefetched_rows) == 12
+            assert await state.load("prefetch-test") is None
+            await asyncio.gather(*(d.ack() for d in first))
+            assert await state.load("prefetch-test") == [stamp, 8]
+            await source.close()
+            await db.close()
+            db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+            state = db.cursor_store(table=cursor_name)
+            source = db.incremental(
+                table=table_name, key="id", cursor=("updated_at",),
+                prefetch=True, batch_size=20, state=state, state_key="prefetch-test",
+            )
+            seen = []
+            while True:
+                batch = await source.fetch(8)
+                if not batch:
+                    break
+                seen.extend(d.payload["id"] for d in batch)
+                await asyncio.gather(*(d.ack() for d in batch))
+            assert seen == list(range(9, 54))
+            newer = stamp + timedelta(microseconds=1)
+            with engine.begin() as conn:
+                conn.execute(table.update().where(table.c.id == 1).values(updated_at=newer))
+            changed = await source.fetch(8)
+            assert [d.payload["id"] for d in changed] == [1]
+            await changed[0].ack()
+            assert await state.load("prefetch-test") == [newer, 1]
+            await source.close()
+        finally:
+            await db.close()
+            metadata.drop_all(engine)
+            with engine.begin() as conn:
+                conn.execute(sa.text(f"DROP TABLE IF EXISTS `{cursor_name}`"))
+            engine.dispose()
+
+    asyncio.run(scenario())

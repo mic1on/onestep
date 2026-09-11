@@ -35,6 +35,10 @@ class CustomMetricsRegistry:
         self._lock = Lock()
         self._values: dict[tuple[str, str, MetricKind, tuple[tuple[str, str], ...]], float] = {}
         self._known_kinds: dict[tuple[str, str, tuple[tuple[str, str], ...]], MetricKind] = {}
+        # Cumulative counter totals that survive rotate_task(). The control
+        # plane reads per-window deltas from _values (rotated), while
+        # Prometheus-style scrapers read monotonic totals from here.
+        self._cumulative: dict[tuple[str, str, MetricKind, tuple[tuple[str, str], ...]], float] = {}
 
     def for_task(self, task_name: str) -> "TaskMetrics":
         return TaskMetrics(self, task_name)
@@ -62,6 +66,7 @@ class CustomMetricsRegistry:
         )
         with self._lock:
             self._values[key] = self._values.get(key, 0.0) + normalized_amount
+            self._cumulative[key] = self._cumulative.get(key, 0.0) + normalized_amount
 
     def set_gauge(
         self,
@@ -103,6 +108,55 @@ class CustomMetricsRegistry:
                 )
         samples.sort(key=lambda sample: (sample.name, sample.kind, sorted(sample.labels.items())))
         return [sample.as_dict() for sample in samples]
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        """Non-destructive scrape snapshot with cumulative counter totals.
+
+        Unlike :meth:`rotate_task`, reading the snapshot never resets state:
+        counter values are cumulative across rotations, so Prometheus-style
+        scrapers observe monotonic counters while the control-plane reporter
+        keeps consuming per-window deltas from ``rotate_task``. Gauges report
+        their current value.
+        """
+        entries: list[dict[str, Any]] = []
+        with self._lock:
+            for key, value in self._cumulative.items():
+                series_task_name, name, kind, labels_tuple = key
+                if kind != "counter":
+                    continue
+                if value == 0:
+                    continue
+                entries.append(
+                    {
+                        "task": series_task_name,
+                        "name": name,
+                        "kind": kind,
+                        "value": _json_number(value),
+                        "labels": dict(labels_tuple),
+                    }
+                )
+            for key, value in self._values.items():
+                series_task_name, name, kind, labels_tuple = key
+                if kind != "gauge":
+                    continue
+                entries.append(
+                    {
+                        "task": series_task_name,
+                        "name": name,
+                        "kind": kind,
+                        "value": _json_number(value),
+                        "labels": dict(labels_tuple),
+                    }
+                )
+        entries.sort(
+            key=lambda entry: (
+                entry["name"],
+                entry["kind"],
+                sorted(entry["labels"].items()),
+                entry["task"],
+            )
+        )
+        return entries
 
     def _series_key(
         self,

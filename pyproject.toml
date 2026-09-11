@@ -1,6 +1,6 @@
 [project]
 name = "onestep"
-version = "1.11.0"
+version = "1.12.0a1"
 description = "Async task runtime for queue, polling, schedule, and webhook workloads."
 authors = [
     { name = "miclon", email = "jcnd@163.com" }
@@ -37,7 +37,10 @@ postgres = [
     "onestep-sql[postgres]>=0.1.0",
 ]
 sql = [
-    "onestep-sql[mysql,postgres]>=0.1.0",
+    "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
+]
+sqlite = [
+    "onestep-sql[sqlite]>=0.2.0",
 ]
 rabbitmq = [
     "onestep-mq>=0.2.1",
@@ -48,6 +51,13 @@ redis = [
 sqs = [
     "onestep-sqs>=0.2.2",
 ]
+cloudflare = [
+    "onestep-cf-queues>=0.1.0",
+]
+# Metrics/healthz exposure is dependency-free (built-in asyncio HTTP server);
+# the extra exists so `pip install 'onestep[metrics]'` is a stable opt-in path
+# for orchestrators and docs.
+metrics = []
 kafka = [
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
 ]
@@ -71,8 +81,9 @@ integration = [
     "PyYAML>=6.0",
     "onestep-mq>=0.2.1",
     "onestep-redis>=0.2.1",
-    "onestep-sql[mysql,postgres]>=0.1.0",
+    "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
     "onestep-sqs>=0.2.2",
+    "onestep-cf-queues>=0.1.0",
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
@@ -83,8 +94,9 @@ all = [
     "PyYAML>=6.0",
     "onestep-mq>=0.2.1",
     "onestep-redis>=0.2.1",
-    "onestep-sql[mysql,postgres]>=0.1.0",
+    "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
     "onestep-sqs>=0.2.2",
+    "onestep-cf-queues>=0.1.0",
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
@@ -97,8 +109,9 @@ dev = [
     "PyYAML>=6.0",
     "onestep-mq>=0.2.1",
     "onestep-redis>=0.2.1",
-    "onestep-sql[mysql,postgres]>=0.1.0",
+    "onestep-sql[mysql,postgres,sqlite]>=0.2.0",
     "onestep-sqs>=0.2.2",
+    "onestep-cf-queues>=0.1.0",
     "onestep-kafka>=0.1.3; python_version >= '3.10'",
     "onestep-elasticsearch>=0.1.0",
     "onestep-clickhouse>=0.1.0",
@@ -117,6 +130,7 @@ members = [
     "plugins/onestep-mysql",
     "plugins/onestep-postgres",
     "plugins/onestep-sqs",
+    "plugins/onestep-cf-queues",
     "plugins/onestep-elasticsearch",
     "plugins/onestep-clickhouse",
     "plugins/onestep-mongodb",
@@ -127,6 +141,7 @@ members = [
 onestep-mq = { workspace = true }
 onestep-redis = { workspace = true }
 onestep-sqs = { workspace = true }
+onestep-cf-queues = { workspace = true }
 onestep-control-plane = { workspace = true }
 onestep-kafka = { path = "plugins/onestep-kafka" }
 onestep-elasticsearch = { workspace = true }

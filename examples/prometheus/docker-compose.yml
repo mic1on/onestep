@@ -1,0 +1,61 @@
+# onestep + Prometheus + Grafana monitoring stack (issue #153 MVP)
+#
+# Usage:
+#   cd examples/prometheus
+#   docker compose up -d
+#   # Grafana:    http://localhost:3300  (anonymous admin, dashboard preloaded)
+#   # Prometheus: http://localhost:9090
+#   # onestep:    http://localhost:9100/metrics and /healthz
+#
+# The onestep service runs your worker image with --metrics-addr enabled.
+# Build one first, see docs/guide/worker-runtime-image.md, then point
+# ONESTEP_WORKER_IMAGE at it (or use the published ghcr image).
+
+services:
+  onestep:
+    image: ${ONESTEP_WORKER_IMAGE:-ghcr.io/mic1on/onestep-worker:1.11.0}
+    command:
+      [
+        "run",
+        "/app/onestep.yaml",
+        "--metrics-addr",
+        "0.0.0.0:9100",
+      ]
+    volumes:
+      - ./onestep.yaml:/app/onestep.yaml:ro
+      - ./handlers.py:/app/handlers.py:ro
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      # Demo stack: anonymous admin access, no login wall.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_BASIC_ENABLED=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/onestep.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3300:3000"
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:

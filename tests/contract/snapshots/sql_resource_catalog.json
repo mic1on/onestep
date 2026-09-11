@@ -239,6 +239,13 @@
         "type": "integer"
       },
       {
+        "default": false,
+        "name": "prefetch",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      },
+      {
         "default": 1.0,
         "name": "poll_interval_s",
         "required": false,
@@ -267,6 +274,7 @@
       "key",
       "cursor",
       "batch_size",
+      "prefetch",
       "poll_interval_s"
     ],
     "type": "mysql_incremental"

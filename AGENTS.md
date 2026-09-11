@@ -21,3 +21,12 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `tests/contract/test_official_connector_conformance.py` derives the official connector set from plugins that still declare `[project.entry-points."onestep.resources"]`; the `sql` profile owns MySQL+PostgreSQL conformance since the shims dropped their entry points.
 - Plugin test dirs share basenames (e.g. `test_state_sqlalchemy.py`), so run each plugin suite in its own pytest process — see `scripts/run-reliability-checks.sh`.
 - Migration guide: `docs/guide/migrate-to-onestep-sql.md`.
+
+## OneStepApp lifecycle decomposition (issue #146)
+
+- Design: `docs/superpowers/specs/2026-08-27-onestep-app-lifecycle-decomposition-design.md`.
+- `src/onestep/app.py` `OneStepApp` is a thin facade (~390 lines): construction, task/resource registration (`bind_resources`/`register_resource`/`task`/`set_reporter_summary`), `describe`/`load`/`run`, module-level `_describe_resource`/`_invoke_app_factory`. Everything else delegates.
+- `src/onestep/runtime/lifecycle.py` `LifecycleController(app)` owns the asyncio state: shutdown/drain/pause signals + waiters, runner registry + per-task `asyncio.Task` handles, `startup`/`shutdown`/`serve`, per-task `stop`/`start`/`restart_task_runner`, control-plane snapshots (`drain_status`/`task_pause_status`/`task_control_snapshot(s)`/`task_supported_commands`/`task_resume_status`), signal handlers, and the opened-`_resources` list. Holds module-level `_open_resource`/`_close_resource`.
+- `src/onestep/runtime/task_ops.py` `TaskOperations(app)` owns dead-letter replay/discard, one-shot manual run, capability probes (`supports_*_commands`, `_task_supports_*`), and `_SyntheticManualRunDelivery`.
+- `src/onestep/runtime/event_hub.py` `EventHub(app)` owns startup/shutdown hooks, event handlers, `emit_event`, and structured event logging.
+- Facade keeps read-only `_runners`/`_runner_tasks`/`_resources` properties and an `_install_signal_handlers()` passthrough because `tests/contract/test_runtime_contract.py` reads them directly. `serve()`/`request_drain()`/`request_task_pause()`/`request_shutdown()` and `**app.describe()` structures are byte-for-byte unchanged.

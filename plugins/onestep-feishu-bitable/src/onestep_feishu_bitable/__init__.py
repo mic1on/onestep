@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version as _package_version
 
-from .connector import (
+from ._shared import (
     FeishuBitableApiError,
-    FeishuBitableConnector,
-    FeishuBitableIncrementalSource,
     FeishuBitablePayloadError,
-    FeishuBitableTableSink,
     feishu_bitable_text,
     feishu_bitable_user,
 )
+from .connector import FeishuBitableConnector
 from .resources import register_resources
+from .sink import FeishuBitableTableSink
+from .source import FeishuBitableIncrementalSource
 
 try:
     __version__ = _package_version("onestep-feishu-bitable")
