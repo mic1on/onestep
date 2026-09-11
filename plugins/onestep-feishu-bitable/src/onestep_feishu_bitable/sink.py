@@ -161,7 +161,6 @@ class FeishuBitableTableSink(Sink):
             _validate_insert_key_index_requirements(
                 mode=self.mode,
                 match_fields=self.match_fields,
-                relations=self.relations,
             )
         # Buffer stores raw payload fields (before relation resolution & match-finding)
         self._buffer: list[dict[str, Any]] = []
@@ -589,6 +588,12 @@ class FeishuBitableTableSink(Sink):
             if self._insert_keys is not None and key in self._insert_keys:
                 self._normal_lookup_avoided_count += 1
                 return
+
+        # Resolve relation fields before buffering so the created record carries
+        # record ids (not business values). Reuses the relation cache: eager/lazy
+        # hits resolve in-memory with zero search.
+        if self.relations:
+            raw_fields = await self._resolve_relation_fields(raw_fields)
 
         # Buffer with a waiter.  The pending entry stays in the map while its
         # batch is being written so a concurrent duplicate joins the same

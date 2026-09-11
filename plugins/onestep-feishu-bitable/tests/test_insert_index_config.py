@@ -33,7 +33,6 @@ def test_feishu_insert_key_index_config_normalizes_python_api() -> None:
     [
         ({"mode": "upsert"}, r"insert_key_index.*mode.*insert"),
         ({"match_fields": ["编号", "来源"]}, r"exactly one match field"),
-        ({"relations": {"关联": {"table_id": "rel", "key": "编号"}}}, r"relations"),
         ({"insert_index_page_size": 0}, r"insert_index_page_size.*[>=1]"),
         ({"insert_index_max_pages": 0}, r"insert_index_max_pages.*[>=1]"),
         ({"ambiguous_write_max_rounds": 0}, r"ambiguous_write_max_rounds.*[>=1]"),
@@ -53,6 +52,31 @@ def test_feishu_insert_key_index_rejects_unsupported_config(
     config.update(overrides)
     with pytest.raises((TypeError, ValueError), match=message):
         connector.table_sink(**config)
+
+
+def test_feishu_insert_key_index_allows_relations() -> None:
+    """insert_key_index and relations may now coexist (indexed insert resolves
+    relations via the relation cache before writing)."""
+    connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+    sink = connector.table_sink(
+        app_token="app-token",
+        table_id="tbl",
+        mode="insert",
+        match_fields=["编号"],
+        insert_key_index=True,
+        relations={
+            "关联企业": {
+                "from": "企业名称",
+                "table_id": "enterprise",
+                "key": "企业名称",
+                "on_missing": "empty",
+                "cache": "eager",
+            }
+        },
+    )
+    assert sink.insert_key_index is True
+    assert len(sink.relations) == 1
+    assert sink.relations[0].cache == "eager"
 
 
 def test_yaml_builds_indexed_insert_sink_in_strict_mode() -> None:
