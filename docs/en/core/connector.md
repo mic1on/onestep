@@ -81,8 +81,8 @@ async def process(ctx, item):
 | `RabbitMQConnector` (`onestep-mq`) | RabbitMQ | Yes | Yes |
 | `RedisConnector` (`onestep-redis`) | Redis Streams | Yes | Yes |
 | `SQSConnector` (`onestep-sqs`) | AWS SQS | Yes | Yes |
-| `MySQLConnector` (`onestep-mysql`) | MySQL table queue/incremental sync/binlog CDC/table sink | Yes | Yes |
-| `PostgresConnector` (`onestep-postgres`) | PostgreSQL table queue/incremental sync/table sink/tracked execution | Yes | Yes |
+| `MySQLConnector` (`onestep-sql[mysql]`) | MySQL table queue/incremental sync/binlog CDC/table sink | Yes | Yes |
+| `PostgresConnector` (`onestep-sql[postgres]`) | PostgreSQL table queue/incremental sync/table sink/tracked execution | Yes | Yes |
 | `MongoDBConnector` (`onestep-mongodb`) | MongoDB collection polling/Change Stream/table sink | Yes | Yes |
 | `ElasticsearchConnector` (`onestep-elasticsearch`) | Elasticsearch / OpenSearch async bulk sink | No | Yes |
 | `ClickHouseConnector` (`onestep-clickhouse`) | ClickHouse async acknowledged table sink | No | Yes |
@@ -99,7 +99,7 @@ Different Connectors can be freely combined:
 from onestep import (
     CronSource, MemoryQueue, OneStepApp
 )
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("mixed-demo")

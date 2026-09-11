@@ -99,7 +99,7 @@ Execute once during deployment using a separate connection with DDL privileges:
 import asyncio
 import os
 
-from onestep_postgres import PostgresExecutionBackend
+from onestep_sql.postgres import PostgresExecutionBackend
 
 
 async def main() -> None:
@@ -187,7 +187,7 @@ from onestep import (
     ExecutionNotReady,
     ExecutionStatus,
 )
-from onestep_postgres import PostgresExecutionBackend
+from onestep_sql.postgres import PostgresExecutionBackend
 from pydantic import BaseModel, Field
 
 
@@ -428,7 +428,7 @@ import os
 from typing import Any
 
 from onestep import ExponentialBackoff, OneStepApp
-from onestep_postgres import PostgresExecutionSource
+from onestep_sql.postgres import PostgresExecutionSource
 
 
 app = OneStepApp("agent-worker", shutdown_timeout_s=30.0)

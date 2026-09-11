@@ -54,6 +54,7 @@ export default defineConfig({
               { text: 'Quick Start', link: '/en/guide/' },
               { text: 'Tutorial', link: '/en/guide/tutorial' },
               { text: 'Logging & Task Events', link: '/en/guide/logging' },
+              { text: 'Metrics & Health Checks', link: '/en/guide/metrics' },
               { text: 'Features', link: '/en/guide/features' },
               { text: 'Production Deploy', link: '/en/guide/deploy' },
               { text: 'Worker Runtime Image', link: '/en/guide/worker-runtime-image' },

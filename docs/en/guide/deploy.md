@@ -337,7 +337,7 @@ See [Worker Runtime Image](/en/guide/worker-runtime-image) for details.
 For production, use `db.cursor_store(...)` or `db.state_store(...)` to ensure cursor and task state persists across process restarts:
 
 ```python
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 db = MySQLConnector("mysql+pymysql://...")
 state = db.cursor_store(table="onestep_cursor")

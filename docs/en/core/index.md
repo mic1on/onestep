@@ -62,7 +62,7 @@ Data input source, responsible for fetching messages:
 
 ```python
 from onestep import CronSource, IntervalSource, MemoryQueue, WebhookSource
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 # In-memory queue
@@ -107,7 +107,7 @@ Data output target, responsible for publishing messages:
 
 ```python
 from onestep import MemoryQueue
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 # In-memory queue
@@ -223,7 +223,7 @@ FastAPI / Gateway                  Worker
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresExecutionBackend
+from onestep_sql.postgres import PostgresExecutionBackend
 
 backend = PostgresExecutionBackend(
     dsn="postgresql+psycopg://app:secret@db/app",
@@ -244,7 +244,7 @@ async with client:
 ### Worker Consumption
 
 ```python
-from onestep_postgres import PostgresExecutionSource
+from onestep_sql.postgres import PostgresExecutionSource
 
 source = PostgresExecutionSource(
     dsn="postgresql+psycopg://app:secret@db/app",

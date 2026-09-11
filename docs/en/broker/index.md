@@ -30,6 +30,7 @@ onestep 1.x uses `Source` for input and `Sink` for output. Many connectors imple
 | [RabbitMQ](/en/broker/rabbitmq) | Yes | Yes | RabbitMQ queue, install `onestep-mq` |
 | [AWS SQS](/en/broker/sqs) | Yes | Yes | AWS SQS managed queue, install `onestep-sqs` |
 | [Kafka](/en/broker/kafka) | Yes | Yes | Kafka topic source/sink, install `onestep-kafka` |
+| [Cloudflare Queues](/en/broker/cf-queues) | Yes | Yes | Cloudflare managed queue pull/push, install `onestep-cf-queues` |
 
 ### Databases
 
@@ -86,7 +87,7 @@ source = sqs.queue("https://sqs...")
 ### Database Driven
 
 ```python
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 db = MySQLConnector("mysql+pymysql://...")
 source = db.table_queue(

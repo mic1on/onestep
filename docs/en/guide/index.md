@@ -75,6 +75,19 @@ pip install 'onestep[all]'
 
 `onestep[all]` installs common queue, database, Kafka, YAML, and control-plane dependencies; Feishu Bitable is still installed separately.
 
+## Project Scaffolding
+
+When you don't want to write `worker.yaml` by hand, scaffold a ready-to-run project from a scenario template:
+
+```bash
+onestep init my-worker --template redis   # interval | webhook | redis | sql-cdc
+cd my-worker
+pip install -e .   # scaffold dependencies already pin the extras the template needs
+onestep run worker.yaml
+```
+
+`onestep init --help` lists all templates; each generates a minimal `worker.yaml` plus a handler package and prints the `pip install` line it needs. The default template is `interval`.
+
 ## Your First Task
 
 Create `tasks.py`:
@@ -162,7 +175,7 @@ In real deployments, you typically swap the input or output `MemoryQueue` for ex
 
 ```python
 from onestep import OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("orders")

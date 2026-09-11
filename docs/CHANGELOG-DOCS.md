@@ -14,6 +14,7 @@
 - 快速开始页新增「项目脚手架」章节（`onestep init --template {interval,webhook,redis,sql-cdc}`）。
 - 连接器概览补充 [Cloudflare Queues](/broker/cf-queues) 概览行。
 - onestep-sql 导入示例收尾：指南/核心/连接器页的 `from onestep_mysql/postgres import ...` 统一改为 `from onestep_sql.mysql/postgres import ...`（迁移指南与 shim 兼容说明保留）。
+- 同步英文文档 `/en/`：新增 [Metrics & Health Checks](/en/guide/metrics) 页，补齐结构化 JSON 日志、项目脚手架、Cloudflare Queues 概览行，并做同样的 onestep-sql 导入对齐。
 
 ## 2026-08-22 - 用户案例新增 SQS→MySQL、多连接器协调、FastAPI 调度
 
