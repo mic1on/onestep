@@ -13,6 +13,9 @@
   skips the fallback search, so rows whose relation key is absent from the
   relation table no longer fire a per-record search (the previous 429 source).
   `on_missing: error`/`create` still search to link post-snapshot keys.
+- Adds DEBUG-level `feishu_api_request` logs (method/path/status/code/duration)
+  with the app token redacted; enabling `logging.level: DEBUG` exposes every
+  Feishu API call for rate-limit diagnosis.
 
 ## onestep-feishu-bitable 0.5.0
 
