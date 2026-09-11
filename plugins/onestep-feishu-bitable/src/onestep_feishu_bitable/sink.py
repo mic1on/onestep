@@ -121,6 +121,14 @@ class FeishuBitableTableSink(Sink):
             match_fields=normalized_match_fields,
         )
         self._relation_create_locks: dict[tuple[str, str, str, str], _FeishuRelationCreateLock] = {}
+        # Process-wide (per-sink) relation caches: {target_field: {business_key: record_id}}.
+        # Only relations with cache != "none" get an entry; the cache is a pure
+        # acceleration layer -- Feishu stays the source of truth and every miss
+        # still falls back to a search.
+        self._relation_caches: dict[str, dict[str, str]] = {
+            relation.target_field: {} for relation in self.relations if relation.cache != "none"
+        }
+        self._relation_eager_loaded: set[str] = set()
         self._batch_size = max(1, min(batch_size, _MAX_PAGE_SIZE))
         self._flush_interval_s = float(flush_interval_s)
         # Insert key index configuration
@@ -156,9 +164,33 @@ class FeishuBitableTableSink(Sink):
         self._inflight_waiter_count = 0
 
     async def open(self) -> None:
-        """Open the sink and, if insert_key_index is enabled, preload destination keys."""
+        """Open the sink and preload any eager indexes.
+
+        ``insert_key_index`` and ``relations`` are mutually exclusive, so the
+        destination-key scan and the relation scans never run in the same sink.
+        """
         if self.insert_key_index and not self._index_loaded:
             await self._load_insert_key_index()
+        await self._load_relation_eager_caches()
+
+    def _relation_cached_id(self, relation: _FeishuRelationConfig, value: str) -> str | None:
+        """Return the cached record_id for a business key, or None when absent.
+
+        A miss is never treated as "does not exist in Feishu": callers must fall
+        back to a search so ``on_missing: create`` cannot fabricate duplicates.
+        """
+        cache = self._relation_caches.get(relation.target_field)
+        if cache is None:
+            return None
+        return cache.get(value)
+
+    def _relation_cache_store(
+        self, relation: _FeishuRelationConfig, value: str, record_id: str
+    ) -> None:
+        """Cache a confirmed unique record_id for a business key."""
+        cache = self._relation_caches.get(relation.target_field)
+        if cache is not None:
+            cache[value] = record_id
 
     async def _load_insert_key_index(self) -> None:
         """Page the configured match field into a bounded in-memory set.
@@ -272,6 +304,148 @@ class FeishuBitableTableSink(Sink):
             retry_delay_s=1.0,
             message=(
                 "feishu_bitable insert index exceeded "
+                f"insert_index_max_pages={self.insert_index_max_pages}"
+            ),
+        )
+
+    async def _load_relation_eager_caches(self) -> None:
+        """Preload every ``cache: eager`` relation's key field into memory."""
+        for relation in self.relations:
+            if relation.cache != "eager" or relation.target_field in self._relation_eager_loaded:
+                continue
+            await self._load_relation_eager_cache(relation)
+
+    async def _load_relation_eager_cache(self, relation: _FeishuRelationConfig) -> None:
+        """Page a relation table's key field into an in-memory {key: record_id} map.
+
+        Mirrors ``_load_insert_key_index``: bounded paging, token anti-repeat, and
+        fail-closed startup when the bound is exhausted. A truncated cache would
+        turn almost every key into a runtime miss, so it is refused outright.
+        """
+        page_token: str | None = None
+        seen_tokens: set[str] = set()
+        loaded: dict[str, str] = {}
+        missing_key_records = 0
+        duplicate_keys = 0
+        multi_key_records = 0
+        start_time = time.monotonic()
+
+        for page_number in range(1, self.insert_index_max_pages + 1):
+            try:
+                data = await self.connector.search_records(
+                    app_token=relation.app_token,
+                    table_id=relation.table_id,
+                    body={"field_names": [relation.key]},
+                    page_size=self.insert_index_page_size,
+                    page_token=page_token,
+                    user_id_type=self.user_id_type,
+                    operation=ConnectorOperation.OPEN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                )
+            except ConnectorOperationError:
+                raise
+            except Exception as exc:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    cause=exc,
+                    message=(
+                        "feishu_bitable relation cache scan failed for "
+                        f"relation field {relation.target_field!r}"
+                    ),
+                ) from exc
+
+            raw_items = data.get("items", [])
+            if not isinstance(raw_items, list):
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message="feishu_bitable relation cache response items must be a list",
+                )
+
+            for raw_item in raw_items:
+                if not isinstance(raw_item, Mapping):
+                    missing_key_records += 1
+                    continue
+                raw_fields = raw_item.get("fields")
+                if not isinstance(raw_fields, Mapping):
+                    missing_key_records += 1
+                    continue
+                try:
+                    keys = _normalize_relation_values(
+                        raw_fields.get(relation.key), field=relation.key
+                    )
+                except FeishuBitablePayloadError:
+                    # Tolerate one malformed cell instead of failing the whole scan.
+                    missing_key_records += 1
+                    continue
+                if not keys:
+                    missing_key_records += 1
+                    continue
+                if len(keys) > 1:
+                    multi_key_records += 1
+                record_id = _record_id(raw_item)
+                for business_key in keys:
+                    if business_key in loaded:
+                        duplicate_keys += 1
+                    loaded[business_key] = record_id
+
+            has_more = bool(data.get("has_more"))
+            next_token = data.get("page_token")
+            if not has_more:
+                self._relation_caches[relation.target_field] = loaded
+                self._relation_eager_loaded.add(relation.target_field)
+                duration = time.monotonic() - start_time
+                logger.info(
+                    "feishu relation cache scan",
+                    extra={
+                        "event": "feishu_relation_cache_scan",
+                        "target_field": relation.target_field,
+                        "table_id": relation.table_id,
+                        "scan_pages": page_number,
+                        "scan_keys": len(loaded),
+                        "missing_key_records": missing_key_records,
+                        "duplicate_keys": duplicate_keys,
+                        "multi_key_records": multi_key_records,
+                        "duration_s": round(duration, 3),
+                        "outcome": "success",
+                        "page_size": self.insert_index_page_size,
+                        "max_pages": self.insert_index_max_pages,
+                    },
+                )
+                return
+
+            if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.OPEN,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message=(
+                        "feishu_bitable relation cache pagination did not advance for "
+                        f"relation field {relation.target_field!r}"
+                    ),
+                )
+            seen_tokens.add(next_token)
+            page_token = next_token
+
+        # Exhausted max_pages while Feishu still has more: refuse the truncated cache.
+        raise ConnectorOperationError(
+            backend="feishu_bitable",
+            operation=ConnectorOperation.OPEN,
+            kind=ConnectorErrorKind.PERMANENT,
+            source_name=self.name,
+            retry_delay_s=1.0,
+            message=(
+                f"feishu_bitable relation cache for field {relation.target_field!r} exceeded "
                 f"insert_index_max_pages={self.insert_index_max_pages}"
             ),
         )
@@ -923,6 +1097,10 @@ class FeishuBitableTableSink(Sink):
         to_create: list[tuple[_FeishuRelationConfig, str]] = []
 
         async def search_one(rel: _FeishuRelationConfig, value: str) -> None:
+            cached = self._relation_cached_id(rel, value)
+            if cached is not None:
+                cache[(rel.target_field, value)] = cached
+                return
             async with sem:
                 matches = await self._find_relation_matches(rel, value)
                 if len(matches) > 1:
@@ -931,7 +1109,9 @@ class FeishuBitableTableSink(Sink):
                         f"matched {len(matches)} records in table {rel.table_id!r}"
                     )
                 if matches:
-                    cache[(rel.target_field, value)] = _record_id(matches[0])
+                    record_id = _record_id(matches[0])
+                    cache[(rel.target_field, value)] = record_id
+                    self._relation_cache_store(rel, value, record_id)
                 elif rel.on_missing == "create":
                     to_create.append((rel, value))
                 elif rel.on_missing == "error":
@@ -1017,7 +1197,9 @@ class FeishuBitableTableSink(Sink):
                 for i, rec in enumerate(raw_records):
                     if isinstance(rec, dict) and isinstance(rec.get("fields"), dict):
                         rel, value = entries[i]
-                        cache[(rel.target_field, value)] = rec["record_id"]
+                        record_id = rec["record_id"]
+                        cache[(rel.target_field, value)] = record_id
+                        self._relation_cache_store(rel, value, record_id)
 
     async def _batch_match_and_split(
         self, resolved: list[dict[str, Any]]
@@ -1123,6 +1305,10 @@ class FeishuBitableTableSink(Sink):
             values = _normalize_relation_values(original.get(relation.source_field), field=relation.source_field)
             record_ids: list[str] = []
             for value in values:
+                cached = self._relation_cached_id(relation, value)
+                if cached is not None:
+                    record_ids.append(cached)
+                    continue
                 matches = await self._find_relation_matches(relation, value)
                 if len(matches) > 1:
                     raise FeishuBitablePayloadError(
@@ -1130,7 +1316,9 @@ class FeishuBitableTableSink(Sink):
                         f"matched {len(matches)} records in table {relation.table_id!r}"
                     )
                 if matches:
-                    record_ids.append(_record_id(matches[0]))
+                    record_id = _record_id(matches[0])
+                    self._relation_cache_store(relation, value, record_id)
+                    record_ids.append(record_id)
                     continue
                 if relation.on_missing == "error":
                     raise FeishuBitablePayloadError(
@@ -1164,6 +1352,10 @@ class FeishuBitableTableSink(Sink):
             async with entry.lock:
                 if entry.record_id is not None:
                     return entry.record_id
+                cached = self._relation_cached_id(relation, value)
+                if cached is not None:
+                    entry.record_id = cached
+                    return cached
                 matches = await self._find_relation_matches(relation, value)
                 if len(matches) > 1:
                     raise FeishuBitablePayloadError(
@@ -1171,7 +1363,9 @@ class FeishuBitableTableSink(Sink):
                         f"matched {len(matches)} records in table {relation.table_id!r}"
                     )
                 if matches:
-                    return _record_id(matches[0])
+                    record_id = _record_id(matches[0])
+                    self._relation_cache_store(relation, value, record_id)
+                    return record_id
                 fields = dict(relation.create_fields)
                 fields[relation.key] = value
                 data = await self.connector.create_record(
@@ -1190,6 +1384,7 @@ class FeishuBitableTableSink(Sink):
                         "is missing record"
                     )
                 entry.record_id = _record_id(raw_record)
+                self._relation_cache_store(relation, value, entry.record_id)
                 return entry.record_id
         finally:
             entry.users -= 1
@@ -1238,6 +1433,7 @@ class FeishuBitableTableSink(Sink):
                         "table_id": relation.table_id,
                         "key": relation.key,
                         "on_missing": relation.on_missing,
+                        "cache": relation.cache,
                         "create_field_names": sorted(relation.create_fields),
                         "uses_custom_app_token": relation.app_token != self.app_token,
                     }

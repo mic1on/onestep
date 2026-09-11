@@ -35,8 +35,11 @@ _FEISHU_TABLE_SINK_FIELDS = frozenset(
      "insert_key_index", "insert_index_page_size", "insert_index_max_pages", "ambiguous_write_max_rounds"}
 )
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
-_RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
+_RELATION_FIELDS = frozenset(
+    {"from", "app_token", "table_id", "key", "on_missing", "create_fields", "cache"}
+)
 _RELATION_MISSING_POLICIES = frozenset({"error", "empty", "create"})
+_RELATION_CACHE_POLICIES = frozenset({"none", "lazy", "eager"})
 _FEISHU_BITABLE_CATALOG = ResourceCatalogEntry(
     type="feishu_bitable",
     roles=("connector",),
@@ -278,6 +281,16 @@ def _validate_feishu_relations(
             raise ValueError(
                 f"'{relation_field}.on_missing' must be one of 'error', 'empty', or 'create'"
             )
+        if "cache" in raw_config:
+            cache = (
+                ctx.string_value(raw_config.get("cache"), field=f"{relation_field}.cache")
+                .strip()
+                .lower()
+            )
+            if cache not in _RELATION_CACHE_POLICIES:
+                raise ValueError(
+                    f"'{relation_field}.cache' must be one of 'none', 'lazy', or 'eager'"
+                )
         if "create_fields" in raw_config:
             create_fields = raw_config.get("create_fields")
             if not isinstance(create_fields, Mapping):

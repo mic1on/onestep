@@ -1,5 +1,20 @@
 # Changelog
 
+## onestep-feishu-bitable 0.5.0
+
+- Adds per-relation `cache` option (`none` | `lazy` | `eager`) so business-key
+  to `record_id` resolution for link fields can be cached in-process instead of
+  re-querying Feishu `records/search` on every record. Defaults to `none`,
+  preserving existing behavior.
+- `lazy` caches keys on first resolution (hit avoids the search; miss queries
+  and backfills; `on_missing: create` backfills the created id).
+- `eager` preloads the relation table's key field in `open()` (reusing
+  `insert_index_page_size`/`insert_index_max_pages`, default bound 200×500 =
+  100k records) and still falls back to search on miss to avoid creating
+  duplicate master data.
+- Caches are in-process and not persisted; deletion is not observed — a stale
+  `record_id` surfaces as a write error and is resolved by restarting the task.
+
 ## onestep-sql 0.3.0
 
 - Adds opt-in bounded prefetch to MySQL incremental sources (issue #164).

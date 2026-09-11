@@ -1,0 +1,527 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+import pytest
+
+from onestep import Envelope
+from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
+from onestep_feishu_bitable import FeishuBitableConnector
+
+
+class _EagerConnector:
+    """Mock connector serving relation-table scan pages and target writes."""
+
+    def __init__(
+        self,
+        *,
+        pages: dict[str, list[dict[str, Any]]],
+        relation_tables: tuple[str, ...] = ("companies",),
+        target_table: str = "projects",
+    ) -> None:
+        self.pages = pages
+        self.relation_tables = relation_tables
+        self.target_table = target_table
+        self.scan_calls: list[dict[str, Any]] = []
+        self.relation_search_values: list[str] = []
+        self.created_values: list[str] = []
+        self.sink_writes: list[dict[str, Any]] = []
+
+    async def search_records(self, **kwargs: Any) -> dict[str, Any]:
+        table_id = kwargs["table_id"]
+        if table_id in self.relation_tables:
+            body = kwargs.get("body", {})
+            if "field_names" in body:
+                # Startup scan page.
+                self.scan_calls.append(
+                    {
+                        "table_id": table_id,
+                        "field_names": body["field_names"],
+                        "page_size": kwargs.get("page_size"),
+                        "page_token": kwargs.get("page_token"),
+                        "operation": kwargs.get("operation"),
+                    }
+                )
+                token = kwargs.get("page_token") or "page-1"
+                page = self.pages.get(table_id, [])
+                index = int(str(token).split("-")[-1]) - 1
+                if index >= len(page):
+                    return {"items": [], "has_more": False}
+                return {
+                    "items": page[index],
+                    "has_more": index + 1 < len(page),
+                    "page_token": f"page-{index + 2}",
+                }
+            # Runtime relation lookup.
+            value = body["filter"]["conditions"][0]["value"][0]
+            self.relation_search_values.append(value)
+            if value.startswith("known"):
+                return {"items": [{"record_id": f"found-{value}"}]}
+            return {"items": []}
+        # Target-table match lookup.
+        return {"items": [], "has_more": False}
+
+    async def create_record(self, **kwargs: Any) -> dict[str, Any]:
+        fields = kwargs["fields"]
+        if "name" in fields:
+            self.created_values.append(fields["name"])
+            return {"record": {"record_id": f"created-{str(fields['name']).lower()}"}}
+        self.sink_writes.append(kwargs)
+        return {"record": {"record_id": "project-record"}}
+
+
+def _build_sink(
+    connector: _EagerConnector,
+    *,
+    caches: dict[str, dict[str, Any]],
+    page_size: int = 500,
+    max_pages: int = 200,
+    mode: str = "create",
+):
+    bitable = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+    bitable.search_records = connector.search_records  # type: ignore[method-assign]
+    bitable.create_record = connector.create_record  # type: ignore[method-assign]
+    options: dict[str, Any] = {
+        "app_token": "project-app",
+        "table_id": "projects",
+        "mode": mode,
+        "insert_index_page_size": page_size,
+        "insert_index_max_pages": max_pages,
+        "relations": caches,
+    }
+    if mode != "create":
+        options["match_fields"] = ["project_id"]
+    return bitable.table_sink(**options)
+
+
+def _relation(cache: str, *, on_missing: str = "error", key: str = "name", table_id: str = "companies"):
+    return {
+        "from": "company_names",
+        "table_id": table_id,
+        "key": key,
+        "on_missing": on_missing,
+        "cache": cache,
+    }
+
+
+def test_eager_open_pages_key_field_and_populates_cache() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [{"record_id": "rec-1", "fields": {"name": "A"}}],
+                    [{"record_id": "rec-2", "fields": {"name": "B"}}],
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")}, page_size=2)
+        await sink.open()
+
+        assert len(connector.scan_calls) == 2
+        assert connector.scan_calls[0]["field_names"] == ["name"]
+        assert connector.scan_calls[0]["page_size"] == 2
+        assert connector.scan_calls[0]["operation"] is ConnectorOperation.OPEN
+        assert sink._relation_caches["companies"] == {"A": "rec-1", "B": "rec-2"}
+        assert "companies" in sink._relation_eager_loaded
+
+    asyncio.run(scenario())
+
+
+def test_eager_hits_need_no_runtime_search() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={"companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+        await sink.send(Envelope(body={"company_names": "A"}))
+        assert connector.relation_search_values == []
+        assert connector.sink_writes[0]["fields"]["companies"] == ["rec-1"]
+
+    asyncio.run(scenario())
+
+
+def test_eager_multiple_fields_scan_in_configuration_order() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]],
+                "depts": [[{"record_id": "rec-2", "fields": {"code": "D1"}}]],
+            },
+            relation_tables=("companies", "depts"),
+        )
+        sink = _build_sink(
+            connector,
+            caches={
+                "companies": _relation("eager"),
+                "depts": _relation("eager", key="code", table_id="depts"),
+            },
+        )
+        await sink.open()
+        assert [call["table_id"] for call in connector.scan_calls] == ["companies", "depts"]
+        assert sink._relation_caches["depts"] == {"D1": "rec-2"}
+
+    asyncio.run(scenario())
+
+
+def test_eager_missing_or_empty_key_is_skipped_and_counted() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {"record_id": "rec-1", "fields": {"name": "A"}},
+                        {"record_id": "rec-2", "fields": {}},
+                        {"record_id": "rec-3", "fields": {"name": "  "}},
+                        {"record_id": "rec-4"},
+                    ]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+        assert sink._relation_caches["companies"] == {"A": "rec-1"}
+
+    asyncio.run(scenario())
+
+
+def test_eager_duplicate_key_last_wins() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {"record_id": "rec-1", "fields": {"name": "A"}},
+                        {"record_id": "rec-2", "fields": {"name": "A"}},
+                    ]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+        assert sink._relation_caches["companies"] == {"A": "rec-2"}
+
+    asyncio.run(scenario())
+
+
+def test_eager_multi_key_cell_maps_every_key_to_record() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [{"record_id": "rec-1", "fields": {"name": ["A", "B"]}}]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+        assert sink._relation_caches["companies"] == {"A": "rec-1", "B": "rec-1"}
+
+    asyncio.run(scenario())
+
+
+def test_eager_max_pages_exhausted_fails_open() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [{"record_id": "rec-1", "fields": {"name": "A"}}],
+                    [{"record_id": "rec-2", "fields": {"name": "B"}}],
+                ]
+            }
+        )
+        sink = _build_sink(
+            connector, caches={"companies": _relation("eager")}, max_pages=1, page_size=1
+        )
+        with pytest.raises(ConnectorOperationError) as raised:
+            await sink.open()
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        assert raised.value.operation is ConnectorOperation.OPEN
+        assert "companies" not in sink._relation_eager_loaded
+
+    asyncio.run(scenario())
+
+
+def test_eager_page_token_not_advancing_fails_open() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(pages={"companies": []})
+
+        async def stuck_search(**kwargs: Any) -> dict[str, Any]:
+            return {
+                "items": [{"record_id": "rec-1", "fields": {"name": "A"}}],
+                "has_more": True,
+                "page_token": "same-token",
+            }
+
+        connector.search_records = stuck_search  # type: ignore[method-assign]
+        bitable = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+        bitable.search_records = stuck_search  # type: ignore[method-assign]
+        sink = bitable.table_sink(
+            app_token="project-app",
+            table_id="projects",
+            mode="create",
+            relations={"companies": _relation("eager")},
+        )
+        with pytest.raises(ConnectorOperationError) as raised:
+            await sink.open()
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+
+    asyncio.run(scenario())
+
+
+def test_eager_scan_failure_is_wrapped_as_permanent_open_error() -> None:
+    async def scenario() -> None:
+        bitable = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+
+        async def boom(**kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("network down")
+
+        bitable.search_records = boom  # type: ignore[method-assign]
+        sink = bitable.table_sink(
+            app_token="project-app",
+            table_id="projects",
+            mode="create",
+            relations={"companies": _relation("eager")},
+        )
+        with pytest.raises(ConnectorOperationError) as raised:
+            await sink.open()
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        assert raised.value.operation is ConnectorOperation.OPEN
+        assert isinstance(raised.value.__cause__, RuntimeError)
+
+    asyncio.run(scenario())
+
+
+def test_eager_runtime_miss_falls_back_to_search_and_backfills() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={"companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+
+        # A key added to Feishu after the scan: must fall back to search.
+        await sink.send(Envelope(body={"company_names": "known-new"}))
+        assert connector.relation_search_values == ["known-new"]
+        assert sink._relation_caches["companies"]["known-new"] == "found-known-new"
+
+        await sink.send(Envelope(body={"company_names": "known-new"}))
+        assert connector.relation_search_values == ["known-new"]
+
+    asyncio.run(scenario())
+
+
+def test_eager_miss_does_not_duplicate_create_for_existing_record() -> None:
+    """on_missing=create must re-search on a miss before creating anything."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={"companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(
+            connector, caches={"companies": _relation("eager", on_missing="create")}
+        )
+        await sink.open()
+
+        # "known-new" exists in Feishu but was not in the startup snapshot.
+        await sink.send(Envelope(body={"company_names": "known-new"}))
+        assert connector.relation_search_values == ["known-new"]
+        assert connector.created_values == []
+        assert connector.sink_writes[0]["fields"]["companies"] == ["found-known-new"]
+
+    asyncio.run(scenario())
+
+
+def test_eager_genuinely_missing_key_creates_after_search() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(pages={"companies": [[]]})
+        sink = _build_sink(
+            connector, caches={"companies": _relation("eager", on_missing="create")}
+        )
+        await sink.open()
+        await sink.send(Envelope(body={"company_names": "brand-new"}))
+        # A confirmed miss is searched before creating (never "absent because uncached").
+        assert connector.relation_search_values
+        assert set(connector.relation_search_values) == {"brand-new"}
+        assert connector.created_values == ["brand-new"]
+        assert sink._relation_caches["companies"]["brand-new"] == "created-brand-new"
+
+        # Once cached, later sends skip search and create entirely.
+        await sink.send(Envelope(body={"company_names": "brand-new"}))
+        assert set(connector.relation_search_values) == {"brand-new"}
+        assert connector.created_values == ["brand-new"]
+
+    asyncio.run(scenario())
+
+
+def test_lazy_field_is_not_scanned_on_open() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(pages={"companies": [[]]})
+        sink = _build_sink(connector, caches={"companies": _relation("lazy")})
+        await sink.open()
+        assert connector.scan_calls == []
+        assert sink._relation_caches["companies"] == {}
+
+    asyncio.run(scenario())
+
+
+def test_open_is_idempotent_for_eager_scans() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={"companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+        first_scan_count = len(connector.scan_calls)
+        await sink.open()
+        assert len(connector.scan_calls) == first_scan_count
+
+    asyncio.run(scenario())
+
+
+def test_eager_scan_emits_structured_log_without_secrets(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {"record_id": "rec-1", "fields": {"name": "A"}},
+                        {"record_id": "rec-2", "fields": {"name": "A"}},
+                        {"record_id": "rec-3", "fields": {}},
+                    ]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    records = [r for r in caplog.records if getattr(r, "event", None) == "feishu_relation_cache_scan"]
+    assert records, "expected a feishu_relation_cache_scan log record"
+    record = records[0]
+    assert record.name == "onestep_feishu_bitable.connector"
+    assert record.target_field == "companies"
+    assert record.table_id == "companies"
+    assert record.scan_pages == 1
+    assert record.scan_keys == 1
+    assert record.missing_key_records == 1
+    assert record.duplicate_keys == 1
+    assert record.outcome == "success"
+    assert record.page_size == 500
+    assert record.max_pages == 200
+    assert isinstance(record.duration_s, float)
+
+
+def test_eager_scan_does_not_log_secret_tokens(caplog: pytest.LogCaptureFixture) -> None:
+    async def scenario() -> None:
+        bitable = FeishuBitableConnector(app_id="app-id", app_secret="secret")
+
+        async def scan(**kwargs: Any) -> dict[str, Any]:
+            return {"items": [], "has_more": False}
+
+        bitable.search_records = scan  # type: ignore[method-assign]
+        sink = bitable.table_sink(
+            app_token="super-secret-app-token",
+            table_id="projects",
+            mode="create",
+            relations={
+                "companies": {
+                    "from": "company_names",
+                    "table_id": "companies",
+                    "key": "name",
+                    "app_token": "relation-secret-token",
+                    "cache": "eager",
+                }
+            },
+        )
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    joined = " ".join(str(r.__dict__) for r in caplog.records)
+    assert "super-secret-app-token" not in joined
+    assert "relation-secret-token" not in joined
+
+
+def test_eager_scan_log_does_not_leak_key_values_or_record_ids(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The scan log must report only counts/metadata, never business data."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {"record_id": "secret-record-1", "fields": {"name": "SecretCo"}},
+                        {"record_id": "secret-record-2", "fields": {"name": "AnotherCo"}},
+                    ]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        with caplog.at_level(logging.INFO, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+    asyncio.run(scenario())
+    joined = " ".join(str(r.__dict__) for r in caplog.records)
+    # Business key values and record ids must never appear in logs.
+    assert "SecretCo" not in joined
+    assert "AnotherCo" not in joined
+    assert "secret-record-1" not in joined
+    assert "secret-record-2" not in joined
+
+
+def test_stale_cached_record_write_error_is_permanent_and_cache_not_evicted() -> None:
+    """A cached record_id that Feishu rejects on write (deleted/renamed) surfaces
+    as a PERMANENT error and does NOT auto-evict the cache entry.
+
+    Per the design, cache invalidation is out of scope: the dangling record_id
+    is surfaced by the write (RecordIdNotFound / LinkFieldConvFail) and converges
+    on task restart, not by evicting the in-memory entry.
+    """
+
+    class _StaleWriteConnector(_EagerConnector):
+        async def create_record(self, **kwargs: Any) -> dict[str, Any]:
+            fields = kwargs["fields"]
+            if "name" in fields:
+                return {"record": {"record_id": f"created-{fields['name']}"}}
+            # Target-table write carrying a stale relation record_id.
+            raise ConnectorOperationError(
+                backend="feishu_bitable",
+                operation=ConnectorOperation.SEND,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name="test",
+                retry_delay_s=1.0,
+                message="LinkFieldConvFail: relation record not found",
+            )
+
+    async def scenario() -> None:
+        connector = _StaleWriteConnector(
+            pages={"companies": [[{"record_id": "rec-stale", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        await sink.open()
+        assert sink._relation_caches["companies"] == {"A": "rec-stale"}
+
+        with pytest.raises(ConnectorOperationError) as raised:
+            await sink.send(Envelope(body={"company_names": "A"}))
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        # Cache entry is NOT auto-evicted; it stays for restart-time convergence.
+        assert sink._relation_caches["companies"] == {"A": "rec-stale"}
+
+    asyncio.run(scenario())
+
+
+def test_cache_none_relations_are_never_scanned() -> None:
+    async def scenario() -> None:
+        connector = _EagerConnector(pages={"companies": [[]]})
+        sink = _build_sink(connector, caches={"companies": _relation("none")})
+        await sink.open()
+        assert connector.scan_calls == []
+        assert sink._relation_caches == {}
+
+    asyncio.run(scenario())

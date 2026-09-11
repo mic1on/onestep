@@ -30,8 +30,11 @@ _AUTOMATIC_CURSOR_FIELD_ALIASES = {
     "最后更新时间": "last_modified_time",
 }
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
-_RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
+_RELATION_FIELDS = frozenset(
+    {"from", "app_token", "table_id", "key", "on_missing", "create_fields", "cache"}
+)
 _RELATION_MISSING_POLICIES = frozenset({"error", "empty", "create"})
+_RELATION_CACHE_POLICIES = frozenset({"none", "lazy", "eager"})
 
 
 def feishu_bitable_text(value: Any) -> str | None:
@@ -103,6 +106,7 @@ class _FeishuRelationConfig:
     key: str
     on_missing: str
     create_fields: Mapping[str, Any]
+    cache: str = "none"
 
 
 def _bitable_records_path(*, app_token: str, table_id: str, suffix: str = "") -> str:
@@ -435,6 +439,13 @@ def _normalize_relations(
         if on_missing not in _RELATION_MISSING_POLICIES:
             raise ValueError(f"'{field}.on_missing' must be one of 'error', 'empty', or 'create'")
 
+        cache = _require_non_empty_string(
+            raw_config.get("cache", "none"),
+            field=f"{field}.cache",
+        ).lower()
+        if cache not in _RELATION_CACHE_POLICIES:
+            raise ValueError(f"'{field}.cache' must be one of 'none', 'lazy', or 'eager'")
+
         raw_create_fields = raw_config.get("create_fields", {})
         if not isinstance(raw_create_fields, Mapping):
             raise TypeError(f"'{field}.create_fields' must be a mapping")
@@ -460,6 +471,7 @@ def _normalize_relations(
                 key=key,
                 on_missing=on_missing,
                 create_fields=MappingProxyType(create_fields),
+                cache=cache,
             )
         )
     return tuple(normalized)
