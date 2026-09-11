@@ -322,6 +322,47 @@ def test_eager_runtime_miss_falls_back_to_search_and_backfills() -> None:
     asyncio.run(scenario())
 
 
+def test_eager_empty_miss_skips_search_and_leaves_unset() -> None:
+    """on_missing=empty treats an eager snapshot miss as absence: zero search."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={"companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(
+            connector, caches={"companies": _relation("eager", on_missing="empty")}
+        )
+        await sink.open()
+
+        # A key absent from the snapshot: empty policy leaves it unset, no search.
+        await sink.send(Envelope(body={"company_names": "brand-new"}))
+        assert connector.relation_search_values == []
+        assert connector.sink_writes[0]["fields"]["companies"] == []
+
+    asyncio.run(scenario())
+
+
+def test_eager_error_miss_still_searches() -> None:
+    """on_missing=error must still search on a miss: a post-snapshot key may
+    resolve, and only a confirmed absence raises."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={"companies": [[{"record_id": "rec-1", "fields": {"name": "A"}}]]}
+        )
+        sink = _build_sink(
+            connector, caches={"companies": _relation("eager", on_missing="error")}
+        )
+        await sink.open()
+
+        # "known-new" exists in Feishu but not the snapshot: search links it.
+        await sink.send(Envelope(body={"company_names": "known-new"}))
+        assert connector.relation_search_values == ["known-new"]
+        assert connector.sink_writes[0]["fields"]["companies"] == ["found-known-new"]
+
+    asyncio.run(scenario())
+
+
 def test_eager_miss_does_not_duplicate_create_for_existing_record() -> None:
     """on_missing=create must re-search on a miss before creating anything."""
 

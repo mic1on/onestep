@@ -9,6 +9,10 @@
   now resolves relation fields through the relation cache before writing, so
   `mode: insert` + `insert_key_index` + `relations` can coexist with zero
   runtime search on both the match field and the relation key.
+- Eager `on_missing: empty` now treats a startup-snapshot miss as absence and
+  skips the fallback search, so rows whose relation key is absent from the
+  relation table no longer fire a per-record search (the previous 429 source).
+  `on_missing: error`/`create` still search to link post-snapshot keys.
 
 ## onestep-feishu-bitable 0.5.0
 

@@ -1164,6 +1164,16 @@ class FeishuBitableTableSink(Sink):
             if cached is not None:
                 cache[(rel.target_field, value)] = cached
                 return
+            # Eager snapshot miss with on_missing="empty": absence and a
+            # post-snapshot key both resolve to "leave unset", so skip the search.
+            # error/create still search (see _resolve_relation_fields).
+            if (
+                rel.cache == "eager"
+                and rel.target_field in self._relation_eager_loaded
+                and rel.on_missing == "empty"
+            ):
+                # on_missing == "empty": just skip, cache stays empty
+                return
             async with sem:
                 matches = await self._find_relation_matches(rel, value)
                 if len(matches) > 1:
@@ -1371,6 +1381,18 @@ class FeishuBitableTableSink(Sink):
                 cached = self._relation_cached_id(relation, value)
                 if cached is not None:
                     record_ids.append(cached)
+                    continue
+                # An eagerly loaded cache is a complete startup snapshot. For
+                # on_missing="empty" a miss is indistinguishable from a genuine
+                # absence and both resolve to "leave unset", so skip the search
+                # entirely. error/create still search: error may still link a key
+                # added after the snapshot, and create must confirm absence before
+                # fabricating a duplicate.
+                if (
+                    relation.cache == "eager"
+                    and relation.target_field in self._relation_eager_loaded
+                    and relation.on_missing == "empty"
+                ):
                     continue
                 matches = await self._find_relation_matches(relation, value)
                 if len(matches) > 1:
