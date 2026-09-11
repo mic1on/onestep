@@ -49,6 +49,27 @@ logger = logging.getLogger(_LOGGER_NAME)
 if TYPE_CHECKING:
     from .connector import FeishuBitableConnector
 
+
+def _scan_total(data: Mapping[str, Any]) -> int | None:
+    """Read Feishu's response ``total``, tolerating anything unexpected.
+
+    ``total`` is metadata only: a missing or malformed value must never fail a
+    scan, so it degrades to ``None`` instead of raising.
+    """
+    total = data.get("total")
+    if isinstance(total, bool) or not isinstance(total, int):
+        return None
+    return total
+
+
+def _redacted_scan_error(exc: BaseException, target_field: str) -> str:
+    """Summarize a scan failure without leaking business data or credentials.
+
+    Only the exception type and the relation's target field are reported; the
+    exception text is withheld because it may embed record ids or tokens.
+    """
+    return f"{type(exc).__name__} while scanning relation field {target_field!r}"
+
 @dataclass
 class _FeishuRelationCreateLock:
     lock: asyncio.Lock
@@ -321,6 +342,11 @@ class FeishuBitableTableSink(Sink):
         Mirrors ``_load_insert_key_index``: bounded paging, token anti-repeat, and
         fail-closed startup when the bound is exhausted. A truncated cache would
         turn almost every key into a runtime miss, so it is refused outright.
+
+        Progress is observable through ``feishu_relation_cache_scan`` logs, one per
+        phase: ``start`` (once), ``page`` (every page), ``done`` or ``error``.
+        Every line stays redacted: only counts and table metadata, never business
+        keys, record ids, or app tokens.
         """
         page_token: str | None = None
         seen_tokens: set[str] = set()
@@ -329,6 +355,24 @@ class FeishuBitableTableSink(Sink):
         duplicate_keys = 0
         multi_key_records = 0
         start_time = time.monotonic()
+
+        def log_scan(phase: str, *, detail: str | None = None, **fields: Any) -> None:
+            extra: dict[str, Any] = {
+                "event": "feishu_relation_cache_scan",
+                "phase": phase,
+                "target_field": relation.target_field,
+                "table_id": relation.table_id,
+            }
+            if detail is not None:
+                extra["error"] = detail
+            extra.update(fields)
+            logger.info("feishu relation cache scan", extra=extra)
+
+        log_scan(
+            "start",
+            page_size=self.insert_index_page_size,
+            max_pages=self.insert_index_max_pages,
+        )
 
         for page_number in range(1, self.insert_index_max_pages + 1):
             try:
@@ -343,9 +387,11 @@ class FeishuBitableTableSink(Sink):
                     source_name=self.name,
                     retry_delay_s=1.0,
                 )
-            except ConnectorOperationError:
+            except ConnectorOperationError as exc:
+                log_scan("error", detail=_redacted_scan_error(exc, relation.target_field))
                 raise
             except Exception as exc:
+                log_scan("error", detail=_redacted_scan_error(exc, relation.target_field))
                 raise ConnectorOperationError(
                     backend="feishu_bitable",
                     operation=ConnectorOperation.OPEN,
@@ -361,13 +407,15 @@ class FeishuBitableTableSink(Sink):
 
             raw_items = data.get("items", [])
             if not isinstance(raw_items, list):
+                detail = "feishu_bitable relation cache response items must be a list"
+                log_scan("error", detail=detail)
                 raise ConnectorOperationError(
                     backend="feishu_bitable",
                     operation=ConnectorOperation.OPEN,
                     kind=ConnectorErrorKind.PERMANENT,
                     source_name=self.name,
                     retry_delay_s=1.0,
-                    message="feishu_bitable relation cache response items must be a list",
+                    message=detail,
                 )
 
             for raw_item in raw_items:
@@ -399,55 +447,65 @@ class FeishuBitableTableSink(Sink):
 
             has_more = bool(data.get("has_more"))
             next_token = data.get("page_token")
+            log_scan(
+                "page",
+                page_number=page_number,
+                page_records=len(raw_items),
+                scan_keys=len(loaded),
+                missing_key_records=missing_key_records,
+                duplicate_keys=duplicate_keys,
+                total=_scan_total(data),
+                has_more=has_more,
+            )
             if not has_more:
                 self._relation_caches[relation.target_field] = loaded
                 self._relation_eager_loaded.add(relation.target_field)
                 duration = time.monotonic() - start_time
-                logger.info(
-                    "feishu relation cache scan",
-                    extra={
-                        "event": "feishu_relation_cache_scan",
-                        "target_field": relation.target_field,
-                        "table_id": relation.table_id,
-                        "scan_pages": page_number,
-                        "scan_keys": len(loaded),
-                        "missing_key_records": missing_key_records,
-                        "duplicate_keys": duplicate_keys,
-                        "multi_key_records": multi_key_records,
-                        "duration_s": round(duration, 3),
-                        "outcome": "success",
-                        "page_size": self.insert_index_page_size,
-                        "max_pages": self.insert_index_max_pages,
-                    },
+                log_scan(
+                    "done",
+                    scan_pages=page_number,
+                    scan_keys=len(loaded),
+                    missing_key_records=missing_key_records,
+                    duplicate_keys=duplicate_keys,
+                    multi_key_records=multi_key_records,
+                    duration_s=round(duration, 3),
+                    outcome="success",
+                    total=_scan_total(data),
+                    page_size=self.insert_index_page_size,
+                    max_pages=self.insert_index_max_pages,
                 )
                 return
 
             if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                detail = (
+                    "feishu_bitable relation cache pagination did not advance for "
+                    f"relation field {relation.target_field!r}"
+                )
+                log_scan("error", detail=detail)
                 raise ConnectorOperationError(
                     backend="feishu_bitable",
                     operation=ConnectorOperation.OPEN,
                     kind=ConnectorErrorKind.PERMANENT,
                     source_name=self.name,
                     retry_delay_s=1.0,
-                    message=(
-                        "feishu_bitable relation cache pagination did not advance for "
-                        f"relation field {relation.target_field!r}"
-                    ),
+                    message=detail,
                 )
             seen_tokens.add(next_token)
             page_token = next_token
 
         # Exhausted max_pages while Feishu still has more: refuse the truncated cache.
+        detail = (
+            f"feishu_bitable relation cache for field {relation.target_field!r} exceeded "
+            f"insert_index_max_pages={self.insert_index_max_pages}"
+        )
+        log_scan("error", detail=detail)
         raise ConnectorOperationError(
             backend="feishu_bitable",
             operation=ConnectorOperation.OPEN,
             kind=ConnectorErrorKind.PERMANENT,
             source_name=self.name,
             retry_delay_s=1.0,
-            message=(
-                f"feishu_bitable relation cache for field {relation.target_field!r} exceeded "
-                f"insert_index_max_pages={self.insert_index_max_pages}"
-            ),
+            message=detail,
         )
 
     def _ensure_buffer_lock(self) -> asyncio.Lock:
