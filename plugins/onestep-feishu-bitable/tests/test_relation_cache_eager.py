@@ -138,6 +138,77 @@ def test_eager_open_pages_key_field_and_populates_cache() -> None:
     asyncio.run(scenario())
 
 
+def test_eager_rich_text_key_flattens_into_cache() -> None:
+    """A text (type=1) relation key returned as rich-text segments must build the
+    eager cache instead of being skipped as an unsupported shape (issue #175)."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {
+                            "record_id": "rec-1",
+                            "fields": {"name": [{"text": "某公司", "type": "text"}]},
+                        },
+                        {
+                            "record_id": "rec-2",
+                            "fields": {"name": [{"text": "乙公司", "type": "text"}]},
+                        },
+                    ]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")}, page_size=2)
+        await sink.open()
+
+        assert sink._relation_caches["companies"] == {
+            "某公司": "rec-1",
+            "乙公司": "rec-2",
+        }
+        assert "companies" in sink._relation_eager_loaded
+
+        # A rich-text key now resolves from the cache with zero runtime search.
+        await sink.send(Envelope(body={"company_names": [{"text": "某公司", "type": "text"}]}))
+        assert connector.relation_search_values == []
+        assert connector.sink_writes[0]["fields"]["companies"] == ["rec-1"]
+
+    asyncio.run(scenario())
+
+
+def test_eager_empty_cache_warns_when_records_were_skipped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the source table is non-empty but no key normalized, the empty
+    eager snapshot must warn instead of silently dropping every relation."""
+
+    async def scenario() -> None:
+        connector = _EagerConnector(
+            pages={
+                "companies": [
+                    [
+                        {"record_id": "rec-1"},
+                        {"record_id": "rec-2", "fields": {}},
+                        {"record_id": "rec-3", "fields": {"name": "  "}},
+                    ]
+                ]
+            }
+        )
+        sink = _build_sink(connector, caches={"companies": _relation("eager")})
+        with caplog.at_level(logging.WARNING, logger="onestep_feishu_bitable.connector"):
+            await sink.open()
+
+        assert sink._relation_caches["companies"] == {}
+        assert "companies" in sink._relation_eager_loaded
+
+    asyncio.run(scenario())
+    records = [r for r in caplog.records if getattr(r, "event", None) == "feishu_relation_cache_scan"]
+    warns = [r for r in records if getattr(r, "phase", None) == "warn_empty"]
+    assert len(warns) == 1
+    assert warns[0].target_field == "companies"
+    assert "loaded no keys" in warns[0].error
+
+
 def test_eager_hits_need_no_runtime_search() -> None:
     async def scenario() -> None:
         connector = _EagerConnector(
