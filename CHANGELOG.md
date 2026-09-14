@@ -129,7 +129,11 @@ carries a regression test.
   lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
   serialization, ACK/retry fencing, and PostgreSQL behaviour unchanged.
 
-## onestep 1.12.0a1
+## onestep 1.12.0
+
+Fixes for silent data loss, cursor stalls, and error misclassification, plus
+built-in Prometheus observability, structured JSON logging, and scenario-based
+project scaffolding.
 
 - Fixes `onestep-cf-queues` ack/retry staging-flush correctness defects
   (issue #150). Flush-path `messages.ack` errors are now normalized to
