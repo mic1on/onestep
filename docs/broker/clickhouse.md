@@ -13,7 +13,7 @@ outline: deep
 pip install onestep-clickhouse
 ```
 
-要求 Python 3.9+ 且 `onestep>=1.11.0`。
+要求 Python 3.9+ 且 `onestep>=1.7.1`。
 
 ## Python 用法
 

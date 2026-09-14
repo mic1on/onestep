@@ -114,7 +114,7 @@ sudo journalctl -u onestep-app -f
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.11.0
+  ghcr.io/mic1on/onestep-worker:1.12.0
 ```
 
 启动脚本行为：
@@ -128,7 +128,7 @@ docker run --rm \
 把代码和 YAML 固化进镜像，避免运行时挂载和联网装依赖：
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.11.0
+FROM ghcr.io/mic1on/onestep-worker:1.12.0
 
 WORKDIR /workspace
 COPY . /workspace
@@ -148,7 +148,7 @@ worker 是长驻进程，`onestep run` 把 INFO 日志和任务事件写到 stdo
 # docker-compose.yml
 services:
   worker:
-    image: ghcr.io/mic1on/onestep-worker:1.11.0
+    image: ghcr.io/mic1on/onestep-worker:1.12.0
     environment:
       ONESTEP_TARGET: /workspace/worker.yaml
     volumes:
@@ -282,7 +282,7 @@ onestep build worker.yaml --strict --out dist/worker.zip
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.11.0
+  ghcr.io/mic1on/onestep-worker:1.12.0
 ```
 
 详细说明见 [Worker Runtime Image](/guide/worker-runtime-image)。

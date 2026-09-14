@@ -13,7 +13,7 @@ outline: deep
 pip install onestep-mongodb
 ```
 
-Requires Python 3.9+, `onestep>=1.11.0`, and `pymongo>=4.13`. Uses PyMongo native `AsyncMongoClient`, not Motor.
+Requires Python 3.9+, `onestep>=1.7.1`, and `pymongo>=4.13`. Uses PyMongo native `AsyncMongoClient`, not Motor.
 
 ## Python Usage
 

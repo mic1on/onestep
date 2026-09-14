@@ -116,7 +116,7 @@ The official worker image bundles `onestep[all]` and a startup script that runs
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.11.0
+  ghcr.io/mic1on/onestep-worker:1.12.0
 ```
 
 Startup behavior:
@@ -132,7 +132,7 @@ Bake the code and YAML into the image instead of mounting and installing at
 runtime:
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.11.0
+FROM ghcr.io/mic1on/onestep-worker:1.12.0
 
 WORKDIR /workspace
 COPY . /workspace
@@ -155,7 +155,7 @@ declare it in the workspace `requirements.txt` or `pyproject.toml`.
 # docker-compose.yml
 services:
   worker:
-    image: ghcr.io/mic1on/onestep-worker:1.11.0
+    image: ghcr.io/mic1on/onestep-worker:1.12.0
     environment:
       ONESTEP_TARGET: /workspace/worker.yaml
     volumes:
@@ -325,7 +325,7 @@ Container deployment can use the official worker runtime image. The image adds t
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.11.0
+  ghcr.io/mic1on/onestep-worker:1.12.0
 ```
 
 See [Worker Runtime Image](/en/guide/worker-runtime-image) for details.

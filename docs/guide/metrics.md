@@ -58,7 +58,7 @@ async def sync_users(ctx, payload):
 {
   "status": "ok",
   "app": "billing-sync",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "uptime_s": 120.5,
   "stopping": false,
   "tasks": [
