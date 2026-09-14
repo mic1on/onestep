@@ -12,7 +12,6 @@ on:
       - "scripts/**"
       - "src/**"
       - "tests/**"
-      - "uv.lock"
   pull_request:
     paths:
       - ".github/workflows/release.yml"
@@ -24,7 +23,6 @@ on:
       - "scripts/**"
       - "src/**"
       - "tests/**"
-      - "uv.lock"
   workflow_dispatch:
 
 concurrency:

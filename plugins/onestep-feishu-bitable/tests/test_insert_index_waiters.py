@@ -42,11 +42,40 @@ async def _make_indexed_sink(
 
 
 def test_feishu_insert_index_hit_completes_without_search_or_write() -> None:
-    """Send with a key already in the index returns immediately."""
+    """An opt-in snapshot hit returns immediately, with no search or write."""
     async def scenario() -> None:
-        sink, _ = await _make_indexed_sink(insert_keys={"K-1"})
+        sink, _ = await _make_indexed_sink(
+            insert_keys={"K-1"}, insert_index_skip_verification=True
+        )
         await sink.send(Envelope(body={"编号": "K-1"}))
         # No error, no search, no write
+
+    asyncio.run(scenario())
+
+
+def test_feishu_insert_index_hit_is_verified_before_skipping() -> None:
+    """By default an index hit is confirmed by a lookup before it is skipped."""
+    async def scenario() -> None:
+        sink, connector = await _make_indexed_sink(insert_keys={"K-1"})
+        searches: list[dict[str, Any]] = []
+        writes = 0
+
+        async def fake_search(**kwargs: Any) -> dict[str, Any]:
+            searches.append(kwargs)
+            # The row still exists upstream, so the record is skipped.
+            return {"items": [{"record_id": "rec-1"}], "has_more": False}
+
+        async def fake_batch_create(**kwargs: Any) -> dict[str, Any]:
+            nonlocal writes
+            writes += 1
+            return {"records": [{"fields": dict(r)} for r in kwargs["records"]]}
+
+        connector.search_records = fake_search  # type: ignore[assignment]
+        connector.batch_create_records = fake_batch_create  # type: ignore[assignment]
+
+        await sink.send(Envelope(body={"编号": "K-1"}))
+        assert len(searches) == 1
+        assert writes == 0
 
     asyncio.run(scenario())
 

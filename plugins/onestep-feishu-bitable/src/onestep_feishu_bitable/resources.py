@@ -32,11 +32,15 @@ _FEISHU_INCREMENTAL_FIELDS = frozenset(
 )
 _FEISHU_TABLE_SINK_FIELDS = frozenset(
     {"type", "connector", "app_token", "table_id", "mode", "match_fields", "user_id_type", "relations", "batch_size", "flush_interval_s",
-     "insert_key_index", "insert_index_page_size", "insert_index_max_pages", "ambiguous_write_max_rounds"}
+     "insert_key_index", "insert_index_page_size", "insert_index_max_pages", "ambiguous_write_max_rounds",
+     "insert_index_skip_verification", "close_drain_max_rounds"}
 )
 _USER_ID_TYPES = frozenset({"open_id", "union_id", "user_id"})
-_RELATION_FIELDS = frozenset({"from", "app_token", "table_id", "key", "on_missing", "create_fields"})
+_RELATION_FIELDS = frozenset(
+    {"from", "app_token", "table_id", "key", "on_missing", "create_fields", "cache"}
+)
 _RELATION_MISSING_POLICIES = frozenset({"error", "empty", "create"})
+_RELATION_CACHE_POLICIES = frozenset({"none", "lazy", "eager"})
 _FEISHU_BITABLE_CATALOG = ResourceCatalogEntry(
     type="feishu_bitable",
     roles=("connector",),
@@ -86,6 +90,8 @@ _FEISHU_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("insert_index_page_size", "integer", default=500),
         ResourceCatalogField("insert_index_max_pages", "integer", default=200),
         ResourceCatalogField("ambiguous_write_max_rounds", "integer", default=3),
+        ResourceCatalogField("insert_index_skip_verification", "boolean", default=False),
+        ResourceCatalogField("close_drain_max_rounds", "integer", default=1000),
     ),
     topology_fields=("app_token", "table_id", "mode", "match_fields", "batch_size"),
 )
@@ -171,6 +177,8 @@ def _build_feishu_bitable_table_sink(ctx: ResourceBuildContext, spec: Mapping[st
         insert_index_page_size=spec.get("insert_index_page_size", 500),
         insert_index_max_pages=spec.get("insert_index_max_pages", 200),
         ambiguous_write_max_rounds=spec.get("ambiguous_write_max_rounds", 3),
+        insert_index_skip_verification=spec.get("insert_index_skip_verification", False),
+        close_drain_max_rounds=spec.get("close_drain_max_rounds", 1000),
     )
 
 
@@ -236,13 +244,19 @@ def _validate_feishu_bitable_table_sink(ctx: ResourceValidationContext, spec: Ma
                 raise ValueError(
                     f"'{ctx.field}.insert_key_index' requires exactly one match field"
                 )
-            if "relations" in spec:
-                raise ValueError(
-                    f"'{ctx.field}.insert_key_index' is not supported with relations"
-                )
     ctx.validate_positive_integer(spec.get("insert_index_page_size"), field=f"{ctx.field}.insert_index_page_size")
     ctx.validate_positive_integer(spec.get("insert_index_max_pages"), field=f"{ctx.field}.insert_index_max_pages")
     ctx.validate_positive_integer(spec.get("ambiguous_write_max_rounds"), field=f"{ctx.field}.ambiguous_write_max_rounds")
+    if "insert_index_skip_verification" in spec:
+        raw_skip_verification = spec["insert_index_skip_verification"]
+        if not isinstance(raw_skip_verification, bool):
+            raise TypeError(f"'{ctx.field}.insert_index_skip_verification' must be a boolean")
+        if raw_skip_verification and "insert_key_index" in spec and not spec["insert_key_index"]:
+            raise ValueError(
+                f"'{ctx.field}.insert_index_skip_verification' requires "
+                f"'{ctx.field}.insert_key_index' to be true"
+            )
+    ctx.validate_positive_integer(spec.get("close_drain_max_rounds"), field=f"{ctx.field}.close_drain_max_rounds")
 
 
 def _validate_feishu_relations(
@@ -278,6 +292,16 @@ def _validate_feishu_relations(
             raise ValueError(
                 f"'{relation_field}.on_missing' must be one of 'error', 'empty', or 'create'"
             )
+        if "cache" in raw_config:
+            cache = (
+                ctx.string_value(raw_config.get("cache"), field=f"{relation_field}.cache")
+                .strip()
+                .lower()
+            )
+            if cache not in _RELATION_CACHE_POLICIES:
+                raise ValueError(
+                    f"'{relation_field}.cache' must be one of 'none', 'lazy', or 'eager'"
+                )
         if "create_fields" in raw_config:
             create_fields = raw_config.get("create_fields")
             if not isinstance(create_fields, Mapping):

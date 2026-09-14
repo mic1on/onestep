@@ -113,10 +113,19 @@ def test_indexed_insert_real_executor_holds_cursor_until_batch_confirmation(
 
 
 def test_indexed_insert_100k_request_count_benchmark() -> None:
+    """Request counts for the indexed-insert path, in both skip modes.
+
+    ``existing_count`` keys already exist in the destination at ``open()`` and
+    the same keys are re-sent, then ``incoming_count - existing_count`` new keys
+    are appended.  The default (verified) mode pays one exact lookup per
+    pre-existing key so a row deleted upstream is re-created instead of silently
+    dropped; ``insert_index_skip_verification`` restores the original
+    zero-lookup behaviour for append-only destinations.
+    """
     existing_count = 50_000
     incoming_count = 100_000
 
-    async def scenario() -> None:
+    async def scenario(*, skip_verification: bool) -> tuple[int, int, int, list[int]]:
         scan_requests = 0
         exact_search_requests = 0
         create_requests = 0
@@ -139,7 +148,11 @@ def test_indexed_insert_100k_request_count_benchmark() -> None:
                     "page_token": str(page + 1) if stop < existing_count else None,
                 }
             exact_search_requests += 1
-            return {"items": [], "has_more": False}
+            # Every verified key still exists, so it is skipped, not re-created.
+            return {
+                "items": [{"record_id": "existing"}],
+                "has_more": False,
+            }
 
         async def batch_create(**kwargs: Any) -> dict[str, Any]:
             nonlocal create_requests
@@ -164,6 +177,7 @@ def test_indexed_insert_100k_request_count_benchmark() -> None:
             insert_key_index=True,
             insert_index_page_size=500,
             insert_index_max_pages=200,
+            insert_index_skip_verification=skip_verification,
         )
         await sink.open()
         for offset in range(0, incoming_count, 100):
@@ -176,12 +190,26 @@ def test_indexed_insert_100k_request_count_benchmark() -> None:
                 )
             )
         await sink.close()
-        assert scan_requests == 100
-        assert exact_search_requests == 0
-        assert create_requests == 500
-        assert scan_requests + create_requests == 600
-        assert create_batch_sizes == [100] * 500
         assert sink.inflight_waiter_count == 0
         assert not hasattr(sink, "record_ids")
+        return scan_requests, exact_search_requests, create_requests, create_batch_sizes
 
-    asyncio.run(scenario())
+    # Safe default: the 50k re-sent pre-existing keys are each confirmed once,
+    # and only the 50k genuinely new keys are written.
+    scan_requests, exact_search_requests, create_requests, create_batch_sizes = asyncio.run(
+        scenario(skip_verification=False)
+    )
+    assert scan_requests == 100
+    assert exact_search_requests == existing_count
+    assert create_requests == 500
+    assert create_batch_sizes == [100] * 500
+
+    # Opt-in fast path: trusting the snapshot costs zero lookups.
+    scan_requests, exact_search_requests, create_requests, create_batch_sizes = asyncio.run(
+        scenario(skip_verification=True)
+    )
+    assert scan_requests == 100
+    assert exact_search_requests == 0
+    assert create_requests == 500
+    assert scan_requests + create_requests == 600
+    assert create_batch_sizes == [100] * 500

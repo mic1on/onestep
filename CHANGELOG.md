@@ -1,5 +1,119 @@
 # Changelog
 
+## onestep-feishu-bitable 0.6.1
+
+- **Table sink: `cache: eager` relations keyed on a text field silently dropped
+  the relation.** `search_records` returns text fields (type=1) as rich-text
+  segments (`[{"text": "某公司", "type": "text"}]`), which the relation-key
+  normalizer could not flatten, so the eager scan skipped every record and built
+  an empty cache. Combined with eager `on_missing: empty` (which treats a
+  snapshot miss as absence and skips the search), every value then resolved to
+  an unset relation with no error. The normalizer now flattens rich-text dicts
+  through `feishu_bitable_text`, and an eager scan that ends with an empty cache
+  while skipping records emits a `warn_empty` WARNING log instead of failing
+  silently.
+
+## onestep-feishu-bitable 0.6.0
+
+Reliability fixes for silent data loss, cursor stalls, and error misclassification.
+An independent multi-track audit (dynamic probes, static review, official-API
+cross-check, and data-safety analysis) reproduced every defect below; each fix
+carries a regression test.
+
+- **Incremental source: `release_unstarted()`, `retry()`, and `fail()` were
+  no-ops.** Pausing/stopping/draining a task dropped the fetched batch but left
+  its tokens at the head of the pending deque, so the prefix commit never
+  advanced again and the durable cursor froze permanently — a pause followed by
+  a restart replayed the whole range. `retry()` additionally left retried rows
+  unreachable until restart. All three now release their token without
+  committing it; `retry()` also rewinds the read cursor so the record is
+  genuinely re-delivered on the next poll. `fail()` deliberately drops the
+  abandoned token so a single poison row cannot freeze the cursor forever.
+
+- **Incremental source: unbounded pagination.** The `fallback_scan_page_limit`
+  guard only applied to the unsorted fallback path. The sorted main path could
+  page indefinitely when every returned row was already behind the read cursor
+  (a lagging cursor over a large table), hammering the API until `has_more`
+  turned false. The bound now applies to both paths. A `has_more: true`
+  response without a `page_token` no longer silently truncates — which let the
+  caller advance the cursor past unread pages — and a repeated `page_token`
+  aborts instead of re-reading the same page forever.
+
+- **Table sink: `close()` race raised a bare `AssertionError` and hung
+  callers.** Entries that had been sealed for writing still appeared in the
+  pending map but had left the drain queue, so the drain loop could exit while
+  writes were in flight and the bare `assert` fired; outstanding waiters were
+  never resolved, hanging application code awaiting `send()`. The root cause was
+  deeper than the drain condition: `close()` cancelled the flush timer, which
+  *was* the in-flight writer once it had entered its flush, abandoning an
+  already-sealed batch. `close()` now cancels only an idle timer, awaits a
+  running one, drains both collections, detects no-progress explicitly, is
+  idempotent, and reports failure through `ConnectorOperationError` instead of
+  an assertion. `send()` after `close()` now raises instead of silently
+  buffering records that would never be flushed.
+
+- **Table sink: `insert_key_index` hits silently dropped rows.** A hit in the
+  startup snapshot returned immediately, so a row deleted upstream after
+  `open()` was skipped while the runtime still acknowledged it and advanced the
+  cursor — permanent, unreported loss. Hits are now confirmed by one exact
+  lookup before skipping. Keys this sink created itself are trusted with zero
+  lookups, so the steady-state fast path is unchanged. Because the Feishu search
+  filter is AND-only, hit verification cannot be batched; set the new
+  `insert_index_skip_verification: true` to restore the original zero-lookup
+  behaviour for strictly append-only destinations (default `false`).
+
+- **Error classification now keys off the Feishu business `code`.** Many Bitable
+  errors arrive in an HTTP 200 body, and classification previously relied on
+  status plus `msg` substring matching. Officially retryable codes
+  (`1254290`, `1254291`, `1254607`, `1254002`) were misjudged permanent and
+  abandoned, while substring matching on `"limit"` turned permanent quota
+  errors such as `1254104` into throttling and produced a stable retry loop.
+  Transport status remains authoritative for `429`/`5xx`; otherwise the numeric
+  code table decides, with bilingual message heuristics as a last resort. The
+  bare `"limit"` token is gone.
+
+- Adds `close_drain_max_rounds` (default `1000`) bounding the shutdown drain so
+  a stuck pending key surfaces as an error rather than an unbounded spin.
+
+- `src/onestep/resilience.py` is intentionally unchanged: `UNCERTAIN` marks a
+  partial commit that cannot be rolled back, and auto-retrying it framework-wide
+  would risk duplicate writes across every connector.
+
+## onestep-feishu-bitable 0.5.2
+
+- Eager `on_missing: empty` now treats a startup-snapshot miss as absence and
+  skips the fallback search, so rows whose relation key is absent from the
+  relation table no longer fire a per-record search (the previous 429 source).
+  `on_missing: error`/`create` still search to link post-snapshot keys.
+- Adds DEBUG-level `feishu_api_request` logs (method/path/status/code/duration)
+  with the app token redacted; enabling `logging.level: DEBUG` exposes every
+  Feishu API call for rate-limit diagnosis.
+
+## onestep-feishu-bitable 0.5.1
+
+- Adds `feishu_relation_cache_scan` structured logs for eager relation-cache
+  startup scans (start/page/done/error phases with page counts, totals, and
+  redacted error detail).
+- Lifts the `insert_key_index` ↔ `relations` mutual exclusion: indexed insert
+  now resolves relation fields through the relation cache before writing, so
+  `mode: insert` + `insert_key_index` + `relations` can coexist with zero
+  runtime search on both the match field and the relation key.
+
+## onestep-feishu-bitable 0.5.0
+
+- Adds per-relation `cache` option (`none` | `lazy` | `eager`) so business-key
+  to `record_id` resolution for link fields can be cached in-process instead of
+  re-querying Feishu `records/search` on every record. Defaults to `none`,
+  preserving existing behavior.
+- `lazy` caches keys on first resolution (hit avoids the search; miss queries
+  and backfills; `on_missing: create` backfills the created id).
+- `eager` preloads the relation table's key field in `open()` (reusing
+  `insert_index_page_size`/`insert_index_max_pages`, default bound 200×500 =
+  100k records) and still falls back to search on miss to avoid creating
+  duplicate master data.
+- Caches are in-process and not persisted; deletion is not observed — a stale
+  `record_id` surfaces as a write error and is resolved by restarting the task.
+
 ## onestep-sql 0.3.0
 
 - Adds opt-in bounded prefetch to MySQL incremental sources (issue #164).
@@ -15,7 +129,11 @@
   lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
   serialization, ACK/retry fencing, and PostgreSQL behaviour unchanged.
 
-## onestep 1.12.0a1
+## onestep 1.12.0
+
+Fixes for silent data loss, cursor stalls, and error misclassification, plus
+built-in Prometheus observability, structured JSON logging, and scenario-based
+project scaffolding.
 
 - Fixes `onestep-cf-queues` ack/retry staging-flush correctness defects
   (issue #150). Flush-path `messages.ack` errors are now normalized to

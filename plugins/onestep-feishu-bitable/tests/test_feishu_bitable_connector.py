@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from importlib import metadata as importlib_metadata
 from typing import Any
 
@@ -127,6 +128,43 @@ def test_feishu_connector_fetches_and_reuses_tenant_token_for_create_sink() -> N
         assert len(create_requests) == 2
         assert create_requests[0]["headers"]["authorization"] == "Bearer tenant-token"
         assert create_requests[0]["body"] == {"fields": {"order_no": "A001"}}
+
+    asyncio.run(scenario())
+
+
+def test_feishu_request_debug_log_redacts_app_token(caplog: pytest.LogCaptureFixture) -> None:
+    """DEBUG logs one redacted line per API request (method/path/status/code)."""
+
+    async def scenario() -> None:
+        def handler(request: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            if request["target"].endswith("tenant_access_token/internal"):
+                return 200, {"code": 0, "tenant_access_token": "tenant-token", "expire": 7200}
+            if request["target"].endswith("/records"):
+                return 200, {"code": 0, "data": {"record": {"record_id": "rec1"}}}
+            return 403, {"code": 999, "msg": "forbidden"}
+
+        server, requests, base_url = await _start_json_server(handler)
+        try:
+            connector = FeishuBitableConnector(app_id="app-id", app_secret="secret", base_url=base_url)
+            sink = connector.table_sink(app_token="app-token", table_id="tbl", mode="create")
+            with caplog.at_level(logging.DEBUG, logger="onestep_feishu_bitable.connector"):
+                await sink.send(Envelope(body={"order_no": "A001"}))
+        finally:
+            await _close_server(server)
+
+        request_logs = [r for r in caplog.records if getattr(r, "event", None) == "feishu_api_request"]
+        create_logs = [r for r in request_logs if "/records" in r.path]
+        assert create_logs, "expected a feishu_api_request debug log for the create call"
+        log = create_logs[0]
+        assert log.method == "POST"
+        assert log.status == 200
+        assert log.code == 0
+        assert log.operation == "send"
+        assert log.duration_ms is not None
+        # app token is redacted; table id and endpoint survive for diagnosis.
+        assert "app-token" not in log.path
+        assert "<redacted>" in log.path
+        assert "/tables/tbl/records" in log.path
 
     asyncio.run(scenario())
 
@@ -1549,9 +1587,29 @@ def test_normalize_relation_values_accepts_numbers() -> None:
     assert _normalize_relation_values("  ", field="f") == ()
     # Duplicates are deduplicated
     assert _normalize_relation_values(["A", "A"], field="f") == ("A",)
-    # Dict still rejected
+    # Non-string leaf values are still rejected
     with pytest.raises(FeishuBitablePayloadError):
-        _normalize_relation_values({"key": "val"}, field="f")
+        _normalize_relation_values(["A", {"x"}], field="f")
+
+
+def test_normalize_relation_values_flattens_rich_text_dicts() -> None:
+    from onestep_feishu_bitable._shared import _normalize_relation_values
+
+    # Feishu text fields (type=1) come back as rich-text segments.
+    assert _normalize_relation_values(
+        [{"text": "某公司", "type": "text"}], field="f"
+    ) == ("某公司",)
+    # Multiple segments concatenate (feishu_bitable_text semantics).
+    assert _normalize_relation_values(
+        [{"text": "甲"}, {"text": "乙"}], field="f"
+    ) == ("甲乙",)
+    # A single mapping also flattens via its text-like key.
+    assert _normalize_relation_values({"name": "Alice"}, field="f") == ("Alice",)
+    assert _normalize_relation_values({"text": "  公司A  "}, field="f") == ("公司A",)
+    # A list containing any mapping is one rich-text cell: flattened as a whole.
+    assert _normalize_relation_values(
+        ["A", {"text": "B", "type": "text"}], field="f"
+    ) == ("AB",)
 
 
 def test_feishu_batch_create_sends_records_in_one_request() -> None:

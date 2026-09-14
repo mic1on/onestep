@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
@@ -17,9 +18,12 @@ from ._shared import (
     _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
     _DEFAULT_BASE_URL,
     _DEFAULT_BATCH_SIZE,
+    _DEFAULT_CLOSE_DRAIN_MAX_ROUNDS,
     _DEFAULT_INSERT_INDEX_MAX_PAGES,
     _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+    _DEFAULT_INSERT_INDEX_SKIP_VERIFICATION,
     _DEFAULT_TIMEOUT_S,
+    _LOGGER_NAME,
     _TOKEN_REFRESH_MARGIN_S,
     _bitable_records_path,
     _check_field_values_before_send,
@@ -33,12 +37,28 @@ from ._shared import (
     _normalize_user_id_type,
     _optional_int,
     _quote_path,
+    _redact_token,
     _require_non_empty_string,
     _user_id_type_query,
     _with_field_context,
 )
 from .sink import FeishuBitableTableSink
 from .source import FeishuBitableIncrementalSource
+
+logger = logging.getLogger(_LOGGER_NAME)
+
+
+def _redact_request_path(path: str) -> str:
+    """Redact the app token inside a records path for request logs.
+
+    Keeps ``table_id`` and the ``records`` suffix so request logs still show
+    which table and endpoint a call hit, without leaking the app token.
+    """
+    parts = path.split("/")
+    # /bitable/v1/apps/{app_token}/tables/{table_id}/records{suffix}
+    if len(parts) > 4 and parts[1] == "bitable" and parts[3] == "apps":
+        parts[4] = _redact_token(parts[4])
+    return "/".join(parts)
 
 class FeishuBitableConnector:
     def __init__(
@@ -106,6 +126,8 @@ class FeishuBitableConnector:
         insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
         insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
         ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
+        insert_index_skip_verification: bool = _DEFAULT_INSERT_INDEX_SKIP_VERIFICATION,
+        close_drain_max_rounds: int = _DEFAULT_CLOSE_DRAIN_MAX_ROUNDS,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
             connector=self,
@@ -121,6 +143,8 @@ class FeishuBitableConnector:
             insert_index_page_size=insert_index_page_size,
             insert_index_max_pages=insert_index_max_pages,
             ambiguous_write_max_rounds=ambiguous_write_max_rounds,
+            insert_index_skip_verification=insert_index_skip_verification,
+            close_drain_max_rounds=close_drain_max_rounds,
         )
 
     async def search_records(
@@ -361,6 +385,7 @@ class FeishuBitableConnector:
             headers=headers,
             method=method.upper(),
         )
+        start_time = time.monotonic()
         try:
             status, reason, raw_body = await asyncio.to_thread(self._send_request, request)
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
@@ -414,6 +439,19 @@ class FeishuBitableConnector:
             ) from error
 
         code = _optional_int(payload.get("code"))
+        logger.debug(
+            "feishu api request",
+            extra={
+                "event": "feishu_api_request",
+                "method": method.upper(),
+                "path": _redact_request_path(path),
+                "operation": operation.value,
+                "source_name": source_name,
+                "status": status,
+                "code": code,
+                "duration_ms": round((time.monotonic() - start_time) * 1000, 1),
+            },
+        )
         if status < 200 or status >= 300 or (code is not None and code != 0):
             message = str(payload.get("msg") or payload.get("message") or reason or "request failed")
             error = FeishuBitableApiError(
