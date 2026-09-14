@@ -131,8 +131,10 @@ the envelope.
 
 A pull consumer can only handle the `text`, `bytes`, and `json` content types
 (default `json`); it cannot decode the Workers-only `v8` type. For `json` and
-`bytes`, the body is transmitted base64-encoded, and the connector decodes
-base64 automatically before handing it to the envelope codec.
+`bytes`, the body is transmitted base64-encoded, and the connector decodes it
+by matching the message's `CF-Content-Type` metadata before passing it to the
+envelope codec; if a `bytes` payload is not valid UTF-8/JSON, the decoded
+result (string or raw bytes) is passed through as the envelope body.
 
 ## Failure handling (`on_fail`)
 

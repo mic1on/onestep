@@ -380,15 +380,35 @@ CREATE INDEX idx_status ON orders(status);
 CREATE INDEX idx_cursor ON users(updated_at, id);
 ```
 
-### 2. Batch Size
+### 2. Read Batch and Processing Concurrency
+
+By default (`prefetch=False`) the behavior is preserved: each SQL hit fetches at most
+`min(batch_size, runtime current free concurrency slots)`. For example with `batch_size=500` and `concurrency=8`, at most 8 rows are read per query, and with one free slot at most 1 row.
+
+Starting with `onestep-sql 0.3.0`, you can explicitly enable bounded prefetch on MySQL incremental sources:
 
 ```python
-# Small batch: low latency
-batch_size=10
+source = db.incremental(
+    table="users", key="id", cursor=("updated_at",),
+    batch_size=100, prefetch=True, state=cursor_store,
+)
 
-# Large batch: high throughput
-batch_size=1000
+@app.task(source=source, concurrency=8)
+async def sync_user(ctx, row):
+    ...
 ```
+
+In YAML, set `mysql_incremental`'s `prefetch: true` and `batch_size: 100`; the task still configures its own `concurrency: 8`. SQL reads at most 100 rows per query, delivering only as many rows as needed by the free slots; the rest are buffered in the connector, and a new fetch fires only after the buffer is consumed — no background infinite fetching.
+`prefetch` must be a boolean; when enabled, `batch_size` must be a positive integer.
+
+- The undelivered buffer caps at `batch_size` rows. The uncommitted window (delivered-but-not-contiguously-acked rows + buffer) is at most `batch_size + the largest observed fetch(limit)`; typically the read batch plus task concurrency. If the leading row is very slow, fetching stops rather than letting already-ACKed downstream rows pile up indefinitely.
+- Prefetch does not persist the cursor early. Retries take priority over buffered rows; new rows are not delivered during a failure gap. Restart recovers from the last contiguous committed prefix; undelivered or unacknowledged rows are re-read.
+- When prefetch is enabled, pause/exit waits for any in-flight SELECT to finish before releasing fetched-but-unstarted Deliveries; configure a reasonable timeout on the database connection. Pause-resume and close discard the undelivered buffer without advancing the cursor; subsequent runs re-query from the last delivered boundary.
+- The buffer holds row snapshots from read time; there is no guarantee that a handler always sees the latest source content.
+  Larger batches increase memory and snapshot staleness. This is still at-least-once time-based cursor polling, not CDC.
+- The fetch log `row_count` is delivered rows; `sql_limit` / `sql_row_count` are the actual query limit and returned rows (both 0 when no query was made); `buffered_row_count` is remaining buffer size. Prefetch reduces query count but does not automatically reduce handler database writes or persistent cursor commits.
+
+Start with 50, 100, or 500 rows against a fixed processing concurrency, then compare SQL query counts, memory, and business latency.
 
 ### 3. Concurrency Control
 

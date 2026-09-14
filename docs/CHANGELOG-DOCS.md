@@ -10,7 +10,8 @@
 
 - 合入 main：feishu-bitable 关联字段缓存（lazy/eager）、eager empty miss 零 search、`insert_index_skip_verification`、`close_drain_max_rounds`；MySQL 有界预取 0.3.0；cf-queues CT 解码修复；release 1.12.0 stable。
 - 同步 superpowers 设计文档：`docs/superpowers/plans/2026-09-11-feishu-bitable-relation-cache.md`、`docs/superpowers/specs/2026-09-11-feishu-bitable-relation-cache-design.md`。
-- 全量英文文档 `/en/` 保持完好（双语 VitePress i18n 未中断）。
+- 版本号口径更新为 1.12.0（快速开始、worker 镜像标签、/healthz 示例）；连接器最低版本修正为 `>=1.7.1`（对齐 pyproject.toml）。
+- 补齐英文文档 `/en/` 落后内容：Feishu Bitable 关联字段缓存（Relation Field Cache 文档节 + 参数表）、MySQL 有界预取（Read Batch and Processing Concurrency 节）、cf-queues 按 `CF-Content-Type` 元数据解码详情。
 
 ## 2026-09-11 - 同步 main 1.11/1.12 并补齐可观测性与脚手架文档
 

@@ -192,6 +192,47 @@ relations:
 
 Feishu bidirectional relation reverse fields are maintained by the Feishu server based on field configuration; the plugin only writes the current target table's relation field.
 
+### Relation Field Cache
+
+Every relation resolution calls the Feishu records search API, which is rate-limited to **20 QPS**. During batch sync the same business keys recur batch after batch, so repeated searches can easily exhaust the quota and trigger `429`. Configuring `cache` on a relation field caches resolution results in the Sink instance's memory:
+
+```yaml
+relations:
+  related_enterprise:   # stable master data, hot keys within a task -> preload at startup
+    from: enterprise_name
+    table_id: "${ENTERPRISE_TABLE_ID}"
+    key: enterprise_name
+    on_missing: create
+    cache: eager
+  responsible_dept:     # large key space, only a small slice touched per run -> cache on read
+    from: dept_code
+    table_id: "${DEPT_TABLE_ID}"
+    key: dept_code
+    on_missing: error
+    cache: lazy
+```
+
+| Value | Semantics | Use case |
+|---|---|---|
+| `none` | Default; every unique business key searches on every resolution, identical to omitting `cache` | Related table changes frequently, consistency-sensitive, or a single run touches only a few records |
+| `lazy` | Cache `{business key: record_id}` after a successful search; hits are used directly, misses search the source and backfill | General recommendation; large key space where a single run touches only a small slice, avoiding startup scan cost |
+| `eager` | Page through the related table's `key` field into memory at `open()`; hits are used directly, misses follow `on_missing` (`empty` treats as absent and skips search, `error`/`create` still search the source) | Related table is stable master data with a bounded record count, and the same keys are referenced frequently during the run |
+
+`cache` is configured **per relation field**; the three values can be mixed within a single Sink.
+
+**The cache is only an acceleration layer; Feishu remains the source of truth**: cache hits are used optimistically, adopting the cached `record_id`; **a miss must search the source once**, and is never mistaken for "does not exist in Feishu". So even if the related table gains records after startup, `on_missing: create` still searches first to confirm and never creates duplicate master data. The sole exception is `eager` + `on_missing: empty`: a startup-snapshot miss is treated as genuinely absent, skipping the search, with neither an error nor a backfill.
+
+`eager` startup-scan constraints:
+
+- Reuses the sink-level `insert_index_page_size` (default `500`) and `insert_index_max_pages` (default `200`), i.e. a single related table scans at most **100K** records, without introducing a second set of config keys.
+- The scan requests only the `key` field; records with a missing or empty requested field are skipped, and duplicate keys have later values overwrite earlier ones — all recorded in the structured log `feishu_relation_cache_scan`.
+- `key` can be a text field (type=1): the rich-text segments Feishu returns (e.g. `[{"text": "某公司", "type": "text"}]`) are automatically flattened to plain text before entering the cache, matching the rich-text business value on the `from` side. Other composite field types (person, attachment, location, etc.) are not guaranteed to flatten correctly; prefer fields that return plain values (number/formula/single-select, etc.).
+- If the scan ends with an empty cache while the source table did have skipped records (`scan_keys == 0` and `missing_key_records > 0`), an extra WARNING log `warn_empty` is emitted to flag that the key field may be unparseable, preventing silent relation failure.
+- On reaching the page limit while Feishu still has more records, or when the pagination token stops advancing, `open()` fails with a permanent error rather than starting with a truncated cache.
+- `eager` assumes the related table has **no concurrent writes that conflict with this task** during the run (the same single-writer premise as `insert_key_index`). New records do not cause data errors, only an extra one-time search cost for that key; deleting or modifying a key causes a dangling/stale cache entry.
+
+Operations note: **the cache is unaware of deletions and key modifications in the related table, is not persisted, and is not shared across processes**. A dangling `record_id` is rejected by Feishu on write (`RecordIdNotFound` / `LinkFieldConvFail`); **restarting the task rebuilds the cache** and converges.
+
 ## Important Parameters
 
 | Parameter | Description |
@@ -202,6 +243,7 @@ Feishu bidirectional relation reverse fields are maintained by the Feishu server
 | `fallback_scan_page_limit` | Max pages for local fallback scan when Feishu rejects cursor sorting; default `100` |
 | `user_id_type` | ID type for person fields, e.g., `open_id`, `union_id`, `user_id` |
 | `relations` | Field-level mapping from business keys to relation record IDs |
+| `relations.*.cache` | Relation resolution cache strategy: `none` (default) / `lazy` / `eager`, see "Relation Field Cache" |
 
 `fallback_scan_page_limit` is a guard threshold. Only increase this value when table size and API call quotas allow fallback scanning.
 
@@ -235,6 +277,13 @@ created in the batch, so upstream Delivery is not prematurely acknowledged while
 remains in a private buffer. Timeouts, disconnections, or incomplete responses first
 precisely query the affected batch, then only create explicitly missing keys; a failed
 query is never treated as "does not exist".
+
+The startup index is only an in-memory snapshot at `open()` time, so a key that hits the snapshot is first re-queried precisely to confirm the record still exists before being skipped. Otherwise, if the target row is deleted after startup, the record would be silently dropped while the upstream still acknowledges and advances the cursor, causing permanent data loss. The cost is: **one extra query per re-sent existing key**; keys written successfully by this instance need no query.
+
+If the target table is append-only for the whole run (rows are never deleted or moved), set
+`insert_index_skip_verification: true` to restore the "zero-query" fast path. This is the highest-throughput mode, and it also accepts the risk of "silently skipping existing keys whose rows have disappeared".
+
+`close_drain_max_rounds` (default `1000`) caps the drain during close, throwing `ConnectorOperationError` instead of looping forever; calling `send()` after `close()` immediately raises a permanent `ConnectorOperationError` rather than silently writing to a buffer that will never flush again.
 
 The in-memory index requires only one active write instance for the same
 `(app_token, table_id)`. Manual additions or a second worker will cause startup races.
