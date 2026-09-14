@@ -1,5 +1,17 @@
 # 文档更新日志
 
+## 2026-09-11 - 第二次同步 main（飞书关联字段缓存、1.12.0 稳定版）
+
+### 变更概述
+
+将 #169/#174/#176（飞书关联字段缓存与修复）以及 1.12.0 稳定版发布合入 docs 分支。
+
+### 更新内容
+
+- 合入 main：feishu-bitable 关联字段缓存（lazy/eager）、eager empty miss 零 search、`insert_index_skip_verification`、`close_drain_max_rounds`；MySQL 有界预取 0.3.0；cf-queues CT 解码修复；release 1.12.0 stable。
+- 同步 superpowers 设计文档：`docs/superpowers/plans/2026-09-11-feishu-bitable-relation-cache.md`、`docs/superpowers/specs/2026-09-11-feishu-bitable-relation-cache-design.md`。
+- 全量英文文档 `/en/` 保持完好（双语 VitePress i18n 未中断）。
+
 ## 2026-09-11 - 同步 main 1.11/1.12 并补齐可观测性与脚手架文档
 
 ### 变更概述
