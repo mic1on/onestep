@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Table sink: `cache: eager` relations keyed on a text field silently dropped
+  the relation.** `search_records` returns text fields (type=1) as rich-text
+  segments (`[{"text": "某公司", "type": "text"}]`), which the relation-key
+  normalizer could not flatten, so the eager scan skipped every record and built
+  an empty cache. Combined with eager `on_missing: empty` (which treats a
+  snapshot miss as absence and skips the search), every value then resolved to
+  an unset relation with no error. The normalizer now flattens rich-text dicts
+  through `feishu_bitable_text`, and an eager scan that ends with an empty cache
+  while skipping records emits a `warn_empty` WARNING log instead of failing
+  silently.
+
 ## onestep-feishu-bitable 0.6.0
 
 Reliability fixes for silent data loss, cursor stalls, and error misclassification.

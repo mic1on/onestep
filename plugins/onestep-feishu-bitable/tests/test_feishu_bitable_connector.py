@@ -1587,9 +1587,29 @@ def test_normalize_relation_values_accepts_numbers() -> None:
     assert _normalize_relation_values("  ", field="f") == ()
     # Duplicates are deduplicated
     assert _normalize_relation_values(["A", "A"], field="f") == ("A",)
-    # Dict still rejected
+    # Non-string leaf values are still rejected
     with pytest.raises(FeishuBitablePayloadError):
-        _normalize_relation_values({"key": "val"}, field="f")
+        _normalize_relation_values(["A", {"x"}], field="f")
+
+
+def test_normalize_relation_values_flattens_rich_text_dicts() -> None:
+    from onestep_feishu_bitable._shared import _normalize_relation_values
+
+    # Feishu text fields (type=1) come back as rich-text segments.
+    assert _normalize_relation_values(
+        [{"text": "某公司", "type": "text"}], field="f"
+    ) == ("某公司",)
+    # Multiple segments concatenate (feishu_bitable_text semantics).
+    assert _normalize_relation_values(
+        [{"text": "甲"}, {"text": "乙"}], field="f"
+    ) == ("甲乙",)
+    # A single mapping also flattens via its text-like key.
+    assert _normalize_relation_values({"name": "Alice"}, field="f") == ("Alice",)
+    assert _normalize_relation_values({"text": "  公司A  "}, field="f") == ("公司A",)
+    # A list containing any mapping is one rich-text cell: flattened as a whole.
+    assert _normalize_relation_values(
+        ["A", {"text": "B", "type": "text"}], field="f"
+    ) == ("AB",)
 
 
 def test_feishu_batch_create_sends_records_in_one_request() -> None:

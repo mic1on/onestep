@@ -610,10 +610,23 @@ def _normalize_relation_values(value: Any, *, field: str) -> tuple[str, ...]:
     elif isinstance(value, (int, float, bool)):
         raw_values = (str(value),)
     elif isinstance(value, (list, tuple)):
-        raw_values = tuple(value)
+        # A list containing mappings is a rich-text cell: Feishu text fields
+        # (type=1) come back from search_records as segments such as
+        # [{"text": "某公司", "type": "text"}]. Flatten the whole cell to one
+        # key via feishu_bitable_text instead of treating each segment as a
+        # separate value. Plain string/number lists (e.g. multi-select) remain
+        # multi-valued.
+        if any(isinstance(item, Mapping) for item in value):
+            raw_values = (value,)
+        else:
+            raw_values = tuple(value)
+    elif isinstance(value, Mapping):
+        # A dict-shaped cell (e.g. {"name": "Alice"} or a single rich-text
+        # segment) flattens to its textual key.
+        raw_values = (value,)
     else:
         raise FeishuBitablePayloadError(
-            f"relation source field {field!r} must be a string, number, list, tuple, or None"
+            f"relation source field {field!r} must be a string, number, list, tuple, mapping, or None"
         )
     normalized: list[str] = []
     seen: set[str] = set()
@@ -622,6 +635,11 @@ def _normalize_relation_values(value: Any, *, field: str) -> tuple[str, ...]:
             continue
         if isinstance(item, (int, float, bool)):
             item = str(item)
+        elif isinstance(item, Mapping):
+            item = feishu_bitable_text(item)
+        elif isinstance(item, (list, tuple)):
+            # A nested list is a rich-text cell: flatten it as a whole.
+            item = feishu_bitable_text(item)
         if not isinstance(item, str):
             raise FeishuBitablePayloadError(
                 f"relation source field {field!r} values must be strings, numbers, or None"

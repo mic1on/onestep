@@ -380,7 +380,13 @@ class FeishuBitableTableSink(Sink):
         multi_key_records = 0
         start_time = time.monotonic()
 
-        def log_scan(phase: str, *, detail: str | None = None, **fields: Any) -> None:
+        def log_scan(
+            phase: str,
+            *,
+            detail: str | None = None,
+            level: int = logging.INFO,
+            **fields: Any,
+        ) -> None:
             extra: dict[str, Any] = {
                 "event": "feishu_relation_cache_scan",
                 "phase": phase,
@@ -390,7 +396,7 @@ class FeishuBitableTableSink(Sink):
             if detail is not None:
                 extra["error"] = detail
             extra.update(fields)
-            logger.info("feishu relation cache scan", extra=extra)
+            logger.log(level, "feishu relation cache scan", extra=extra)
 
         log_scan(
             "start",
@@ -485,6 +491,7 @@ class FeishuBitableTableSink(Sink):
                 self._relation_caches[relation.target_field] = loaded
                 self._relation_eager_loaded.add(relation.target_field)
                 duration = time.monotonic() - start_time
+                total = _scan_total(data)
                 log_scan(
                     "done",
                     scan_pages=page_number,
@@ -494,10 +501,28 @@ class FeishuBitableTableSink(Sink):
                     multi_key_records=multi_key_records,
                     duration_s=round(duration, 3),
                     outcome="success",
-                    total=_scan_total(data),
+                    total=total,
                     page_size=self.insert_index_page_size,
                     max_pages=self.insert_index_max_pages,
                 )
+                # The source table is non-empty (records were returned) yet no
+                # key could be normalized, so the eager snapshot ended up empty.
+                # For on_missing="empty" this makes every value resolve to an
+                # unset relation with no search and no error -- a silent drop.
+                # Surface it loudly: the key field is likely missing, empty, or
+                # returns a shape the normalizer cannot flatten (person,
+                # attachment, location…).
+                if len(loaded) == 0 and missing_key_records > 0:
+                    log_scan(
+                        "warn_empty",
+                        level=logging.WARNING,
+                        detail=(
+                            f"eager relation cache for field {relation.target_field!r} loaded "
+                            f"no keys but skipped {missing_key_records} record(s); the key "
+                            f"field {relation.key!r} may return an unsupported shape and "
+                            "relations may silently resolve to empty"
+                        ),
+                    )
                 return
 
             if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
