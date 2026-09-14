@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## onestep-feishu-bitable 0.6.1
 
 - **Table sink: `cache: eager` relations keyed on a text field silently dropped
   the relation.** `search_records` returns text fields (type=1) as rich-text
