@@ -24,6 +24,16 @@ _REDACTED = "<redacted>"
 _DEFAULT_INSERT_INDEX_PAGE_SIZE = 500
 _DEFAULT_INSERT_INDEX_MAX_PAGES = 200
 _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS = 3
+# Bounded safety valve for the indexed-insert drain loop in ``close()``.  Each
+# round settles at least one sealed-in-flight group, so the default is far above
+# any realistic backlog; exhausting it means the drain is not making progress.
+_DEFAULT_CLOSE_DRAIN_MAX_ROUNDS = 1000
+# Indexed-insert "key is already present" skips are verified against Feishu by
+# default: the startup snapshot can be stale (rows deleted upstream after
+# ``open()``), and blindly trusting it silently drops records.  Set the opt-in
+# config field to true to restore the zero-search fast path on append-only
+# destinations.  See ``_normalize_insert_index_skip_verification``.
+_DEFAULT_INSERT_INDEX_SKIP_VERIFICATION = False
 _AUTOMATIC_CURSOR_FIELD_ALIASES = {
     "创建时间": "created_time",
     "最后修改时间": "last_modified_time",
@@ -35,6 +45,96 @@ _RELATION_FIELDS = frozenset(
 )
 _RELATION_MISSING_POLICIES = frozenset({"error", "empty", "create"})
 _RELATION_CACHE_POLICIES = frozenset({"none", "lazy", "eager"})
+
+# Authoritative Feishu business-code -> ConnectorErrorKind table.
+#
+# Feishu returns most *business* failures inside an **HTTP 200** body, so the
+# numeric ``code`` field -- not the HTTP status and not the ``msg`` wording --
+# is the reliable signal.  This table therefore takes precedence over every
+# status/message heuristic in ``_classify_api_error``.
+#
+# Source (fetched 2026-09-14; the doc site is a JS SPA, so the portal's content
+# endpoint is used -- ``fullPath`` must NOT repeat the ``/document`` segment):
+#   https://open.feishu.cn/document_portal/v1/document/get_detail?fullPath=/docs/bitable-v1/app-table-record/search
+#   -> human URL: https://open.feishu.cn/document/docs/bitable-v1/app-table-record/search
+# The Bitable error-code table is shared across the app/table/record endpoints;
+# codes below are quoted from that table's ``code / msg / 排查建议`` rows.
+_RETRYABLE_FEISHU_ERROR_CODES: Mapping[int, ConnectorErrorKind] = MappingProxyType(
+    {
+        # 1254290 TooManyRequest "请求过快，稍后重试" -- rate limited, retry.
+        # 1254291 Write conflict "并发调用了读写接口或请求过快...也可在报错中增加重试逻辑".
+        # 1254607 Data not ready, please try again later "建议等待一段时间后重试".
+        # 1254002 Fail "如果该报错偶尔发生，可能是服务器超时或不稳定，请重试解决".
+        # 1255040 Request timed out, please try again later "请求超时，进行重试".
+        1254290: ConnectorErrorKind.THROTTLED,
+        1254291: ConnectorErrorKind.THROTTLED,
+        1254607: ConnectorErrorKind.TRANSIENT,
+        1254002: ConnectorErrorKind.TRANSIENT,
+        1255040: ConnectorErrorKind.TRANSIENT,
+        # Server-side internal errors; documented as "内部错误" and transient in
+        # nature even though they arrive with HTTP 200.
+        1255001: ConnectorErrorKind.TRANSIENT,  # InternalError
+        1255002: ConnectorErrorKind.TRANSIENT,  # RpcError
+        1255003: ConnectorErrorKind.TRANSIENT,  # MarshalError
+        1255004: ConnectorErrorKind.TRANSIENT,  # UmMarshalError
+        1255005: ConnectorErrorKind.TRANSIENT,  # ConvError
+    }
+)
+
+# Permanent quota/parameter codes.  Several contain the word "Limit"; matching
+# on that substring (as the previous implementation did) wrongly reclassified
+# them as THROTTLED and produced an unbounded retry loop.  Retrying never helps
+# here: the documented remedy is to send fewer records / shorter filters.
+_PERMANENT_FEISHU_ERROR_CODES: frozenset[int] = frozenset(
+    {
+        1254100,  # TableExceedLimit 数据表或仪表盘数量超限
+        1254101,  # ViewExceedLimit 视图数量超限
+        1254102,  # FileExceedLimit 文件数量超限
+        1254103,  # RecordExceedLimit 记录数量超限
+        1254104,  # RecordAddOnceExceedLimit 单次添加记录数量超限（最多 1,000 条）
+        1254107,  # FilterLengthExceedLimit Filter 长度超限
+        1254108,  # SortLengthExceedLimit Sort 长度超限
+        1254109,  # FormulaTableSizeExceedLimit 公式表大小超限
+        1254130,  # TooLargeCell 格子内容过大
+        1254030,  # TooLargeResponse 响应体过大
+    }
+)
+
+# Misconfiguration codes (bad credentials / wrong app_token / missing scope).
+# These are fast failures: retrying the same request cannot succeed.
+_MISCONFIGURED_FEISHU_ERROR_CODES: frozenset[int] = frozenset(
+    {
+        99991661,  # missing access token
+        99991663,  # invalid access token for authorization
+        99991664,  # invalid app token
+        99991665,  # invalid tenant code
+        99991668,  # tenant_access_token expired / invalid
+        1254036,  # Bitable is copying; the base itself is unusable right now
+    }
+)
+
+# Legacy OpenAPI frequency control reports HTTP 400 + code 99991400.
+_THROTTLED_FEISHU_ERROR_CODES: frozenset[int] = frozenset({99991400})
+
+# English and Chinese rate-limit wording, used only as a LAST-resort fallback
+# when the business ``code`` is absent or unknown.
+_RATE_LIMIT_MESSAGE_TOKENS = (
+    "rate limit",
+    "ratelimit",
+    "too many request",
+    "too many requests",
+    "too frequent",
+    "throttl",
+    "qps",
+    "frequency limit",
+    "request trigger frequency limit",
+    "请求过快",
+    "频率限制",
+    "触发频率",
+    "限流",
+    "稍后重试",
+    "请求过于频繁",
+)
 
 
 def feishu_bitable_text(value: Any) -> str | None:
@@ -317,6 +417,34 @@ def _normalize_ambiguous_write_max_rounds(value: int) -> int:
         raise TypeError("'ambiguous_write_max_rounds' must be an integer")
     if value < 1:
         raise ValueError("'ambiguous_write_max_rounds' must be >= 1")
+    return value
+
+
+def _normalize_close_drain_max_rounds(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("'close_drain_max_rounds' must be an integer")
+    if value < 1:
+        raise ValueError("'close_drain_max_rounds' must be >= 1")
+    return value
+
+
+def _normalize_insert_index_skip_verification(value: bool) -> bool:
+    """Normalize the ``insert_index_skip_verification`` opt-in.
+
+    ``False`` (the default) keeps the safe behaviour: a key that the startup
+    snapshot reports as already present is only skipped after an exact lookup
+    confirms the destination row still exists, so a row deleted upstream after
+    ``open()`` is re-created instead of being silently dropped.
+
+    ``True`` is the explicitly unsafe high-throughput mode.  It restores the
+    zero-search fast path and therefore accepts that any pre-existing key whose
+    destination row was deleted or changed upstream is silently skipped.  It is
+    only sound when the destination table is append-only for the whole process
+    lifetime, which is exactly the documented single-writer premise of
+    ``insert_key_index``.
+    """
+    if not isinstance(value, bool):
+        raise TypeError("'insert_index_skip_verification' must be a boolean")
     return value
 
 
@@ -623,21 +751,52 @@ def _classify_status(status: int) -> ConnectorErrorKind:
 
 
 def _classify_api_error(*, status: int, code: int | None, message: str) -> ConnectorErrorKind:
+    """Map a Feishu API failure to a ``ConnectorErrorKind``.
+
+    The transport status is checked first for the two unambiguous cases -- HTTP
+    429 (rate limited) and 5xx (server-side) -- because those describe the
+    response itself regardless of any body.
+
+    Otherwise the numeric business ``code`` is authoritative: Feishu reports
+    most business errors inside an HTTP 200 body, so neither the HTTP status nor
+    the ``msg`` wording carries the real signal.  Message heuristics are only a
+    fallback for an absent/unknown code.
+    """
+    # 1. Unambiguous transport-level outcomes.
     if status == 429:
         return ConnectorErrorKind.THROTTLED
     if status >= 500:
         return ConnectorErrorKind.TRANSIENT
+
+    # 2. Known business code wins over every heuristic (including HTTP 200).
+    if code is not None:
+        known = _RETRYABLE_FEISHU_ERROR_CODES.get(code)
+        if known is not None:
+            return known
+        if code in _THROTTLED_FEISHU_ERROR_CODES:
+            return ConnectorErrorKind.THROTTLED
+        if code in _PERMANENT_FEISHU_ERROR_CODES:
+            return ConnectorErrorKind.PERMANENT
+        if code in _MISCONFIGURED_FEISHU_ERROR_CODES:
+            return ConnectorErrorKind.MISCONFIGURED
+
+    # 3. Last resort: wording, covering both English and Chinese rate-limit
+    #    messages.  Deliberately narrow -- a bare "limit" token must NOT match
+    #    here, or permanent "*ExceedLimit" quota errors become retryable.
     lowered = message.lower()
-    if any(token in lowered for token in ("rate", "too many", "too frequent", "qps", "limit")):
+    if any(token in lowered for token in _RATE_LIMIT_MESSAGE_TOKENS):
         return ConnectorErrorKind.THROTTLED
+
+    if code is not None:
+        # Unknown code on a non-5xx: treat as a deterministic request rejection.
+        return _classify_status(status)
+
     if any(token in lowered for token in ("auth", "token", "permission", "forbidden", "scope", "tenant")):
         return ConnectorErrorKind.MISCONFIGURED
     if any(token in lowered for token in ("not found", "app", "table")) and status in {400, 401, 403, 404}:
         return ConnectorErrorKind.MISCONFIGURED
     if any(token in lowered for token in ("field", "filter", "invalid", "bad request")):
         return ConnectorErrorKind.PERMANENT
-    if code in {99991663, 99991664, 99991665}:
-        return ConnectorErrorKind.THROTTLED
     return _classify_status(status)
 
 

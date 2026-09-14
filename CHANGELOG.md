@@ -1,5 +1,71 @@
 # Changelog
 
+## onestep-feishu-bitable 0.6.0
+
+Reliability fixes for silent data loss, cursor stalls, and error misclassification.
+An independent multi-track audit (dynamic probes, static review, official-API
+cross-check, and data-safety analysis) reproduced every defect below; each fix
+carries a regression test.
+
+- **Incremental source: `release_unstarted()`, `retry()`, and `fail()` were
+  no-ops.** Pausing/stopping/draining a task dropped the fetched batch but left
+  its tokens at the head of the pending deque, so the prefix commit never
+  advanced again and the durable cursor froze permanently — a pause followed by
+  a restart replayed the whole range. `retry()` additionally left retried rows
+  unreachable until restart. All three now release their token without
+  committing it; `retry()` also rewinds the read cursor so the record is
+  genuinely re-delivered on the next poll. `fail()` deliberately drops the
+  abandoned token so a single poison row cannot freeze the cursor forever.
+
+- **Incremental source: unbounded pagination.** The `fallback_scan_page_limit`
+  guard only applied to the unsorted fallback path. The sorted main path could
+  page indefinitely when every returned row was already behind the read cursor
+  (a lagging cursor over a large table), hammering the API until `has_more`
+  turned false. The bound now applies to both paths. A `has_more: true`
+  response without a `page_token` no longer silently truncates — which let the
+  caller advance the cursor past unread pages — and a repeated `page_token`
+  aborts instead of re-reading the same page forever.
+
+- **Table sink: `close()` race raised a bare `AssertionError` and hung
+  callers.** Entries that had been sealed for writing still appeared in the
+  pending map but had left the drain queue, so the drain loop could exit while
+  writes were in flight and the bare `assert` fired; outstanding waiters were
+  never resolved, hanging application code awaiting `send()`. The root cause was
+  deeper than the drain condition: `close()` cancelled the flush timer, which
+  *was* the in-flight writer once it had entered its flush, abandoning an
+  already-sealed batch. `close()` now cancels only an idle timer, awaits a
+  running one, drains both collections, detects no-progress explicitly, is
+  idempotent, and reports failure through `ConnectorOperationError` instead of
+  an assertion. `send()` after `close()` now raises instead of silently
+  buffering records that would never be flushed.
+
+- **Table sink: `insert_key_index` hits silently dropped rows.** A hit in the
+  startup snapshot returned immediately, so a row deleted upstream after
+  `open()` was skipped while the runtime still acknowledged it and advanced the
+  cursor — permanent, unreported loss. Hits are now confirmed by one exact
+  lookup before skipping. Keys this sink created itself are trusted with zero
+  lookups, so the steady-state fast path is unchanged. Because the Feishu search
+  filter is AND-only, hit verification cannot be batched; set the new
+  `insert_index_skip_verification: true` to restore the original zero-lookup
+  behaviour for strictly append-only destinations (default `false`).
+
+- **Error classification now keys off the Feishu business `code`.** Many Bitable
+  errors arrive in an HTTP 200 body, and classification previously relied on
+  status plus `msg` substring matching. Officially retryable codes
+  (`1254290`, `1254291`, `1254607`, `1254002`) were misjudged permanent and
+  abandoned, while substring matching on `"limit"` turned permanent quota
+  errors such as `1254104` into throttling and produced a stable retry loop.
+  Transport status remains authoritative for `429`/`5xx`; otherwise the numeric
+  code table decides, with bilingual message heuristics as a last resort. The
+  bare `"limit"` token is gone.
+
+- Adds `close_drain_max_rounds` (default `1000`) bounding the shutdown drain so
+  a stuck pending key surfaces as an error rather than an unbounded spin.
+
+- `src/onestep/resilience.py` is intentionally unchanged: `UNCERTAIN` marks a
+  partial commit that cannot be rolled back, and auto-retrying it framework-wide
+  would risk duplicate writes across every connector.
+
 ## onestep-feishu-bitable 0.5.2
 
 - Eager `on_missing: empty` now treats a startup-snapshot miss as absence and
