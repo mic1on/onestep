@@ -18,8 +18,10 @@ from ._shared import (
     _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
     _DEFAULT_BASE_URL,
     _DEFAULT_BATCH_SIZE,
+    _DEFAULT_CLOSE_DRAIN_MAX_ROUNDS,
     _DEFAULT_INSERT_INDEX_MAX_PAGES,
     _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+    _DEFAULT_INSERT_INDEX_SKIP_VERIFICATION,
     _DEFAULT_TIMEOUT_S,
     _LOGGER_NAME,
     _TOKEN_REFRESH_MARGIN_S,
@@ -124,6 +126,8 @@ class FeishuBitableConnector:
         insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
         insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
         ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
+        insert_index_skip_verification: bool = _DEFAULT_INSERT_INDEX_SKIP_VERIFICATION,
+        close_drain_max_rounds: int = _DEFAULT_CLOSE_DRAIN_MAX_ROUNDS,
     ) -> "FeishuBitableTableSink":
         return FeishuBitableTableSink(
             connector=self,
@@ -139,6 +143,8 @@ class FeishuBitableConnector:
             insert_index_page_size=insert_index_page_size,
             insert_index_max_pages=insert_index_max_pages,
             ambiguous_write_max_rounds=ambiguous_write_max_rounds,
+            insert_index_skip_verification=insert_index_skip_verification,
+            close_drain_max_rounds=close_drain_max_rounds,
         )
 
     async def search_records(

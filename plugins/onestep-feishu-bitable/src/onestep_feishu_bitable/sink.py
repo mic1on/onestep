@@ -16,8 +16,10 @@ from onestep.resilience import ConnectorErrorKind, ConnectorOperation, Connector
 from ._shared import (
     FeishuBitablePayloadError,
     _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
+    _DEFAULT_CLOSE_DRAIN_MAX_ROUNDS,
     _DEFAULT_INSERT_INDEX_MAX_PAGES,
     _DEFAULT_INSERT_INDEX_PAGE_SIZE,
+    _DEFAULT_INSERT_INDEX_SKIP_VERIFICATION,
     _FeishuRelationConfig,
     _LOGGER_NAME,
     _MAX_PAGE_SIZE,
@@ -28,8 +30,10 @@ from ._shared import (
     _match_search_body,
     _match_values,
     _normalize_ambiguous_write_max_rounds,
+    _normalize_close_drain_max_rounds,
     _normalize_insert_index_max_pages,
     _normalize_insert_index_page_size,
+    _normalize_insert_index_skip_verification,
     _normalize_insert_key_index,
     _normalize_match_fields,
     _normalize_mode,
@@ -122,6 +126,8 @@ class FeishuBitableTableSink(Sink):
         insert_index_page_size: int = _DEFAULT_INSERT_INDEX_PAGE_SIZE,
         insert_index_max_pages: int = _DEFAULT_INSERT_INDEX_MAX_PAGES,
         ambiguous_write_max_rounds: int = _DEFAULT_AMBIGUOUS_WRITE_MAX_ROUNDS,
+        insert_index_skip_verification: bool = _DEFAULT_INSERT_INDEX_SKIP_VERIFICATION,
+        close_drain_max_rounds: int = _DEFAULT_CLOSE_DRAIN_MAX_ROUNDS,
     ) -> None:
         super().__init__(f"feishu_bitable.table_sink:{table_id}")
         normalized_mode = _normalize_mode(mode)
@@ -157,6 +163,13 @@ class FeishuBitableTableSink(Sink):
         self.insert_index_page_size = _normalize_insert_index_page_size(insert_index_page_size)
         self.insert_index_max_pages = _normalize_insert_index_max_pages(insert_index_max_pages)
         self.ambiguous_write_max_rounds = _normalize_ambiguous_write_max_rounds(ambiguous_write_max_rounds)
+        # Safe default: verify an index hit against Feishu before skipping the
+        # row.  Set True to restore the zero-search fast path and accept silent
+        # row loss when a pre-existing row was deleted upstream after open().
+        self.insert_index_skip_verification = _normalize_insert_index_skip_verification(
+            insert_index_skip_verification
+        )
+        self.close_drain_max_rounds = _normalize_close_drain_max_rounds(close_drain_max_rounds)
         if self.insert_key_index:
             _validate_insert_key_index_requirements(
                 mode=self.mode,
@@ -182,6 +195,18 @@ class FeishuBitableTableSink(Sink):
         self._recovery_lookup_count = 0
         self._insert_retry_count = 0
         self._inflight_waiter_count = 0
+        # Number of indexed batches currently inside _write_indexed_batch.  A
+        # sealed entry whose write is in flight has already left _pending_order,
+        # so close() uses this counter (not _pending_order, and not _flush_task,
+        # which is the timer task close() itself cancels) to tell "still writing"
+        # apart from "nothing left to do".
+        self._indexed_write_inflight = 0
+        # Keys whose existence this process established directly (its own
+        # confirmed batch write, or an exact lookup made after open()).  Such a
+        # key needs no re-verification: it was observed after the snapshot.  Keys
+        # absent from this set but present in _insert_keys come from the startup
+        # scan and are exactly the ones that may have been deleted upstream.
+        self._verified_insert_keys: set[str] = set()
 
     async def open(self) -> None:
         """Open the sink and preload any eager indexes.
@@ -515,6 +540,8 @@ class FeishuBitableTableSink(Sink):
     async def send(self, envelope: Envelope) -> None:
         """Buffer raw fields for batch processing."""
         try:
+            if self._closed:
+                raise self._closed_send_error()
             raw_fields = _payload_fields(envelope.body)
             # Indexed insert path
             if self.insert_key_index and self._index_loaded:
@@ -533,6 +560,25 @@ class FeishuBitableTableSink(Sink):
                 cause=exc,
                 message=f"feishu_bitable send failed (permanent) for {self.name!r}: {exc}",
             ) from exc
+
+    def _closed_send_error(self) -> ConnectorOperationError:
+        """Build the permanent error raised by any ``send()`` after ``close()``.
+
+        Silently accepting data into a buffer that will never be flushed would
+        let a caller believe a record was delivered when it was not, so a
+        post-close send always fails loudly.
+        """
+        return ConnectorOperationError(
+            backend="feishu_bitable",
+            operation=ConnectorOperation.SEND,
+            kind=ConnectorErrorKind.PERMANENT,
+            source_name=self.name,
+            retry_delay_s=1.0,
+            message=(
+                f"feishu_bitable sink {self.name!r} is closed: records sent after "
+                "close() would never be flushed. Deliver them to a re-opened sink instead."
+            ),
+        )
 
     async def _buffer_record(self, raw_fields: dict[str, Any]) -> None:
         """Preserve the existing buffered behavior for non-indexed sinks."""
@@ -555,19 +601,14 @@ class FeishuBitableTableSink(Sink):
     async def _send_indexed_insert(self, raw_fields: dict[str, Any]) -> None:
         """Send one record through the indexed insert path with per-key waiter.
 
-        If the key is already in the startup index, return immediately.
-        Otherwise buffer the record, join any existing waiter for the same key,
-        and await the batch outcome.
+        A key that the startup index reports as already present is only skipped
+        after an exact lookup confirms it still exists (and always skipped when
+        ``insert_index_skip_verification`` opts into the unsafe fast path).
+        Otherwise the record is buffered, joins any existing waiter for the same
+        key, and awaits the batch outcome.
         """
         if self._closed:
-            raise ConnectorOperationError(
-                backend="feishu_bitable",
-                operation=ConnectorOperation.SEND,
-                kind=ConnectorErrorKind.PERMANENT,
-                source_name=self.name,
-                retry_delay_s=1.0,
-                message="feishu_bitable sink is closed",
-            )
+            raise self._closed_send_error()
 
         # Parse and canonicalize the match key
         match_value = raw_fields.get(self.match_fields[0])
@@ -577,9 +618,9 @@ class FeishuBitableTableSink(Sink):
             )
         key = _canonical_insert_key(match_value)
 
-        # Key is in the startup index: confirmed pre-existing
-        if self._insert_keys is not None and key in self._insert_keys:
-            self._normal_lookup_avoided_count += 1
+        # Key is in the startup index: a pre-existing record, but the index is
+        # only a snapshot taken at open(). Confirm it before skipping.
+        if await self._index_hit_is_still_present(key):
             return
 
         # Key is uncertain from a previous ambiguous write: reconcile first
@@ -634,6 +675,58 @@ class FeishuBitableTableSink(Sink):
             # remain until its batch is confirmed or failed.  Close and the
             # elected flusher therefore still settle the group.
             raise
+
+    async def _index_hit_is_still_present(self, key: str) -> bool:
+        """Return whether an index hit may be skipped as "already exists".
+
+        The index is an in-memory snapshot from ``open()``.  If the destination
+        row was deleted or changed upstream since then, skipping the record
+        silently drops it while the runtime still acknowledges it and advances
+        the cursor, so the loss is permanent.  Skipping therefore requires a
+        positive confirmation from Feishu (one exact single-key lookup, the same
+        primitive recovery already uses) instead of blind trust in the snapshot.
+
+        The trade-off is explicit and bounded by the record's own key frequency:
+        verification costs one search per *pre-existing* key occurrence, while
+        keys created during this process are never looked up at all (they are
+        added to the index only after their write is confirmed).  A destination
+        whose rows are never deleted can therefore skip the cost entirely by
+        opting into ``insert_index_skip_verification``, which restores the
+        original zero-search behaviour and accepts the silent-skip risk.
+        """
+        if self._insert_keys is None or key not in self._insert_keys:
+            return False
+        if key in self._verified_insert_keys or self.insert_index_skip_verification:
+            # Either this process witnessed the row itself, or the operator
+            # explicitly opted into trusting the snapshot.
+            self._normal_lookup_avoided_count += 1
+            return True
+
+        try:
+            matches = await self._find_matches({self.match_fields[0]: key})
+        except ConnectorOperationError:
+            # A failed lookup never proves absence: leaving the key in the index
+            # would silently drop the row, so fail the send instead.
+            self._normal_lookup_avoided_count += 1
+            self._recovery_lookup_count += 1
+            self._log_insert_lookup(outcome="error")
+            raise
+        self._recovery_lookup_count += 1
+        self._log_insert_lookup(outcome="success")
+        if len(matches) > 1:
+            raise FeishuBitablePayloadError(
+                f"insert match field resolved to multiple destination records for {self.name!r}"
+            )
+        if matches:
+            self._normal_lookup_avoided_count += 1
+            return True
+
+        # The snapshot is stale: the row no longer exists upstream. Re-create it.
+        # The key stays out of _verified_insert_keys, so if it is re-created here
+        # its own confirmed write (not this lookup) will trust it afterwards.
+        self._insert_keys.discard(key)
+        self._verified_insert_keys.discard(key)
+        return False
 
     def _seal_indexed_batch(self, batch_size: int) -> list[_PendingInsert]:
         """Seal a batch from _pending_order at most batch_size unique keys."""
@@ -922,6 +1015,8 @@ class FeishuBitableTableSink(Sink):
         for pending in batch:
             if self._insert_keys is not None:
                 self._insert_keys.add(pending.key)
+            # Established after open(): this key needs no future verification.
+            self._verified_insert_keys.add(pending.key)
             self._uncertain_keys.discard(pending.key)
         self._complete_pending(batch)
 
@@ -930,6 +1025,8 @@ class FeishuBitableTableSink(Sink):
         for pending in batch:
             if self._insert_keys is not None:
                 self._insert_keys.add(pending.key)
+            # An exact lookup proved presence just now.
+            self._verified_insert_keys.add(pending.key)
             self._uncertain_keys.discard(pending.key)
         self._complete_pending(batch)
 
@@ -976,6 +1073,8 @@ class FeishuBitableTableSink(Sink):
         if matches:
             if self._insert_keys is not None:
                 self._insert_keys.add(key)
+            # Proven present by this lookup, not by the startup snapshot.
+            self._verified_insert_keys.add(key)
         # A successful exact search establishes either found or missing.
         self._uncertain_keys.discard(key)
 
@@ -1018,7 +1117,31 @@ class FeishuBitableTableSink(Sink):
                     "flush_reason": reason,
                 },
             )
-            await self._write_indexed_batch(batch, reason=reason)
+            self._indexed_write_inflight += 1
+            try:
+                await self._write_indexed_batch(batch, reason=reason)
+            finally:
+                self._indexed_write_inflight -= 1
+
+    def _indexed_write_is_inflight(self) -> bool:
+        """Return whether an indexed batch write is currently executing."""
+        return self._indexed_write_inflight > 0
+
+    async def _await_inflight_indexed_write(self) -> None:
+        """Wait for any write currently holding the flush lane.
+
+        A sealed entry has already left ``_pending_order`` while its write is
+        still awaiting the network, so ``close()`` cannot observe it through the
+        queue.  Acquiring the flush lock observes real completion: whoever holds
+        it is inside ``_write_indexed_batch``, so waiting here keeps ``close()``
+        bounded by the in-flight request rather than by the drain-loop bound.
+        """
+        if not self._indexed_write_is_inflight():
+            return
+        async with self._ensure_flush_lock():
+            # The writer released the lane; its outcome is now recorded in
+            # _pending_by_key, which the caller re-checks.
+            return
 
     async def _send_single(self, raw_fields: dict[str, Any]) -> None:
         """Send a single record immediately (batch_size=1 path)."""
@@ -1329,33 +1452,111 @@ class FeishuBitableTableSink(Sink):
         return creates, updates
 
     async def close(self) -> None:
-        """Flush remaining buffered records before closing."""
+        """Flush remaining buffered records before closing.
+
+        Idempotent: a second ``close()`` is a no-op instead of re-draining an
+        already drained sink (which would spin in the bounded drain loop).
+        """
+        if self._closed:
+            return
         self._closed = True
         lock = self._ensure_buffer_lock()
         timer_task: asyncio.Task[None] | None = None
         async with lock:
             if self._flush_task is not None:
                 timer_task = self._flush_task
-                timer_task.cancel()
+                # Only cancel an idle timer.  Once the timer has entered its
+                # flush it IS the in-flight writer: cancelling it would abandon
+                # an already-sealed batch whose waiters would never settle, so it
+                # is awaited instead (below).
+                if not self._indexed_write_is_inflight():
+                    timer_task.cancel()
                 self._flush_task = None
         if timer_task is not None:
             await asyncio.gather(timer_task, return_exceptions=True)
 
         # Indexed insert close: drain all pending keys
         if self.insert_key_index and self._index_loaded:
-            while True:
+            # Drain until both the seal queue (_pending_order) AND the pending
+            # map (_pending_by_key) are empty: a sealed entry whose write is
+            # still in flight has already left _pending_order, so checking the
+            # queue alone could exit while its waiters were still unresolved.
+            # Each round first awaits any in-flight writer, then flushes what is
+            # still buffered.  A round that neither seals nor settles anything
+            # cannot make progress by repeating, so close reports that state
+            # instead of spinning to the bound.  The bound remains a safety valve
+            # for a pathological loop, not the normal exit path.
+            drain_error: ConnectorOperationError | None = None
+            for _ in range(self.close_drain_max_rounds):
+                await self._await_inflight_indexed_write()
+                async with lock:
+                    before_pending = len(self._pending_by_key)
                 await self._flush_indexed_insert(reason="close")
                 async with lock:
-                    has_buffered = bool(self._pending_order)
-                if not has_buffered:
+                    has_pending = bool(self._pending_order) or bool(self._pending_by_key)
+                    made_no_progress = (
+                        has_pending
+                        and not self._indexed_write_is_inflight()
+                        and len(self._pending_by_key) >= before_pending
+                        and not self._pending_order
+                    )
+                if not has_pending:
                     break
+                if made_no_progress:
+                    # Pending keys exist but nothing is buffered to seal and no
+                    # writer is running: the drain cannot advance on its own.
+                    drain_error = ConnectorOperationError(
+                        backend="feishu_bitable",
+                        operation=ConnectorOperation.CLOSE,
+                        kind=ConnectorErrorKind.UNCERTAIN,
+                        source_name=self.name,
+                        retry_delay_s=1.0,
+                        message=(
+                            f"feishu_bitable close could not drain {len(self._pending_by_key)} "
+                            f"pending insert key(s) for {self.name!r}: no in-flight write and "
+                            "nothing left to flush"
+                        ),
+                    )
+                    break
+            else:
+                # Bound exhausted with work left: report rather than spin.
+                drain_error = ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.CLOSE,
+                    kind=ConnectorErrorKind.UNCERTAIN,
+                    source_name=self.name,
+                    retry_delay_s=1.0,
+                    message=(
+                        f"feishu_bitable close could not drain {len(self._pending_by_key)} "
+                        f"pending insert key(s) for {self.name!r} within "
+                        f"close_drain_max_rounds={self.close_drain_max_rounds}; "
+                        "writes may still be in flight"
+                    ),
+                )
             # Surface any error stored from timer flush
-            if self._flush_error is not None:
-                err = self._flush_error
-                self._flush_error = None
-                raise err
-            # No remaining pending keys should exist
-            assert not self._pending_by_key, "close left pending entries"
+            flush_error = self._flush_error
+            self._flush_error = None
+            if flush_error is None:
+                flush_error = drain_error
+            if flush_error is not None:
+                self._resolve_outstanding_waiters(flush_error)
+                raise flush_error
+            # The loop exited with both collections empty, so no waiter can be
+            # outstanding; settle any stray group instead of asserting on it.
+            if self._pending_by_key:
+                self._resolve_outstanding_waiters(
+                    ConnectorOperationError(
+                        backend="feishu_bitable",
+                        operation=ConnectorOperation.CLOSE,
+                        kind=ConnectorErrorKind.UNCERTAIN,
+                        source_name=self.name,
+                        retry_delay_s=1.0,
+                        message=(
+                            "feishu_bitable close finished with unsettled insert "
+                            f"entries for {self.name!r}"
+                        ),
+                    )
+                )
             self._log_insert_lookup(outcome="success")
             return
 
@@ -1367,6 +1568,23 @@ class FeishuBitableTableSink(Sink):
                 err = self._flush_error
                 self._flush_error = None
                 raise err
+
+    def _resolve_outstanding_waiters(self, exc: BaseException) -> None:
+        """Fail every pending insert key so no caller is left awaiting forever.
+
+        ``close()`` owns the shutdown path: whatever it cannot flush must be
+        reported to the callers blocked in ``send()`` instead of leaving their
+        futures pending (which would hang application code and event-loop
+        shutdown).  Waiters already resolved by a concurrent flush keep their
+        own outcome.
+        """
+        if not self._pending_by_key:
+            return
+        self._pending_order.clear()
+        leftover = list(self._pending_by_key.values())
+        for pending in leftover:
+            pending.state = _InsertState.RECOVERING
+        self._fail_pending(leftover, exc)
 
     async def _resolve_relation_fields(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         if not self.relations:

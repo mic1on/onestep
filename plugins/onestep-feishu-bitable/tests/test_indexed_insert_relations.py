@@ -66,7 +66,11 @@ def test_indexed_insert_resolves_relations_before_write() -> None:
 
 
 def test_indexed_insert_skips_relation_resolution_for_existing_key() -> None:
-    """A key already in the insert index returns without resolving relations."""
+    """A confirmed existing key returns without resolving relations.
+
+    The hit is verified first (see ``insert_index_skip_verification``); once the
+    lookup confirms the row, no relation resolution and no write happens.
+    """
 
     async def scenario() -> None:
         connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
@@ -80,15 +84,26 @@ def test_indexed_insert_skips_relation_resolution_for_existing_key() -> None:
 
         async def fake_search(**kwargs: Any) -> dict[str, Any]:
             search_calls.append(kwargs)
-            return {"items": [], "has_more": False}
+            # The row exists upstream, so the record is skipped.
+            return {"items": [{"record_id": "rec-1"}], "has_more": False}
 
         connector.search_records = fake_search  # type: ignore[assignment]
 
-        # Existing key: returns before any relation resolution.
+        writes: list[dict[str, Any]] = []
+
+        async def fake_batch_create(**kwargs: Any) -> dict[str, Any]:
+            writes.append(kwargs)
+            return {"records": [{"fields": dict(r)} for r in kwargs["records"]]}
+
+        connector.batch_create_records = fake_batch_create  # type: ignore[assignment]
+
         await sink.send(Envelope(body={"编号": "A-1", "企业名称": "企业A"}))
         await sink.close()
 
-        assert search_calls == []
+        # Exactly one lookup (the hit confirmation) and no write at all.
+        assert len(search_calls) == 1
+        assert search_calls[0]["body"]["filter"]["conditions"][0]["field_name"] == "编号"
+        assert writes == []
 
     asyncio.run(scenario())
 

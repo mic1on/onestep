@@ -51,12 +51,31 @@ class FeishuBitableIncrementalDelivery(Delivery):
     async def ack(self) -> None:
         await self._source.ack_token(self._token)
 
+    async def release_unstarted(self) -> None:
+        # The runtime dropped this batch before it started processing; the token must
+        # not sit at the head of the pending deque because that would block every
+        # later prefix commit forever. do not commit it: the records were never
+        # delivered, so the durable cursor must not advance past them.
+        await self._source.discard_token(self._token)
+
     async def retry(self, *, delay_s: float | None = None) -> None:
         if delay_s:
             await asyncio.sleep(delay_s)
+        # A retry must actually be re-read, so this cannot simply drop the token:
+        # ``fetch()`` had already advanced ``_fetched_cursor`` to the batch tail, and
+        # the read cursor is what the next poll searches from. Dropping alone would
+        # leave the record invisible until the process restarts. Rewind the read
+        # cursor to just before this token and drop it from the pending deque so the
+        # prefix commit is not wedged. The token is never committed here.
+        await self._source.requeue_token(self._token)
 
     async def fail(self, exc: Exception | None = None) -> None:
-        return None
+        # The record is permanently abandoned. Drop the token so the prefix commit can
+        # advance past it and the durable cursor does not freeze forever; this is a
+        # deliberate data-loss trade-off chosen over a permanent cursor stall. The
+        # cursor is not written here: ack_token() still only moves it over a contiguous
+        # run of acked prefixes.
+        await self._source.discard_token(self._token)
 
 
 class FeishuBitableIncrementalSource(Source):
@@ -167,6 +186,73 @@ class FeishuBitableIncrementalSource(Source):
                     self._fetched_cursor = advanced
                 await self.state.save(self.state_key, [advanced[0], advanced[1]])
 
+    async def discard_token(self, token: _FeishuCursorToken) -> None:
+        """Drop ``token`` from the pending deque without committing it.
+
+        Used by the delivery's release/retry/fail paths so that an abandoned token can
+        never wedge the prefix commit. Idempotent and safe when the token is unknown.
+        """
+        lock = self._commit_lock
+        if lock is None:
+            lock = asyncio.Lock()
+            self._commit_lock = lock
+        async with lock:
+            value = token.value
+            try:
+                self._pending.remove(value)
+            except ValueError:
+                return
+            self._acked.discard(value)
+            # Removing a head token can expose a run of already-acked successors.
+            # Drain it through the normal prefix-commit path so the durable cursor
+            # moves as far as the acks allow instead of waiting for a later ack.
+            advanced: tuple[Any, str] | None = None
+            while self._pending and self._pending[0] in self._acked:
+                advanced = self._pending.popleft()
+                self._acked.remove(advanced)
+            if advanced is not None:
+                self._committed_cursor = advanced
+                if not self._pending:
+                    self._fetched_cursor = advanced
+                await self.state.save(self.state_key, [advanced[0], advanced[1]])
+
+    async def requeue_token(self, token: _FeishuCursorToken) -> None:
+        """Drop ``token`` without committing it and rewind the read cursor onto it.
+
+        ``fetch()`` advances ``_fetched_cursor`` to the tail of the batch it returned,
+        and reads start from ``_fetched_cursor or _committed_cursor``. A retried record
+        must therefore be visible again on the next poll: rewinding the read cursor to
+        the token immediately *before* this one makes the next search re-include it
+        (``_cursor_after`` keeps strictly-greater records, so pointing at the token
+        itself would skip it).
+
+        The durable cursor is never moved onto ``token``; only an already-acked
+        contiguous prefix may commit. Idempotent and safe when the token is unknown.
+        """
+        await self.discard_token(token)
+        lock = self._commit_lock
+        if lock is None:
+            lock = asyncio.Lock()
+            self._commit_lock = lock
+        async with lock:
+            value = token.value
+            # Never rewind behind the durable cursor: those rows were already committed
+            # and re-reading them would replay the whole range.
+            if self._committed_cursor is not None and not _cursor_after(value, self._committed_cursor):
+                return
+            if self._fetched_cursor is None or not _cursor_after(self._fetched_cursor, value):
+                return
+            # Newest already-pending token strictly below the retried one; the search
+            # is exclusive, so pointing here re-includes the retried record.
+            predecessor: tuple[Any, str] | None = self._committed_cursor
+            for pending in self._pending:
+                if _cursor_after(value, pending) and (
+                    predecessor is None or _cursor_after(pending, predecessor)
+                ):
+                    predecessor = pending
+            if predecessor is not None:
+                self._fetched_cursor = predecessor
+
     def control_plane_descriptor(self) -> dict[str, Any]:
         return {
             "kind": "feishu_bitable_incremental",
@@ -211,7 +297,28 @@ class FeishuBitableIncrementalSource(Source):
         page_token: str | None = None
         records: list[dict[str, Any]] = []
         pages_scanned = 0
+        seen_page_tokens: set[str] = set()
+        # One shared page bound for both the sorted main path and the unsorted fallback.
+        # Without it the main path could page forever: it only stops early once it has
+        # collected ``limit`` records, so when every returned row is already behind the
+        # read cursor (a lagging cursor over a large table) it never fills and never
+        # stops, hammering the API until ``has_more`` happens to go false.
+        max_pages = self.fallback_scan_page_limit
         while True:
+            if pages_scanned >= max_pages:
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.FETCH,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    retry_delay_s=self.poll_interval_s,
+                    message=(
+                        "feishu_bitable incremental scan exceeded "
+                        f"fallback_scan_page_limit={self.fallback_scan_page_limit} pages "
+                        f"for cursor field {self.cursor_field!r}; "
+                        "make the cursor field sortable or increase fallback_scan_page_limit"
+                    ),
+                )
             data = await self.connector.search_records(
                 app_token=self.app_token,
                 table_id=self.table_id,
@@ -250,21 +357,37 @@ class FeishuBitableIncrementalSource(Source):
             has_more = bool(data.get("has_more"))
             next_page_token = data.get("page_token")
             page_token = next_page_token if isinstance(next_page_token, str) and next_page_token else None
-            if scan_all_pages and has_more and page_token and pages_scanned >= self.fallback_scan_page_limit:
+            if not has_more:
+                break
+            if not page_token:
+                # Truncating here would let the caller advance the durable cursor past
+                # pages it never read, silently losing those rows. Fail loudly instead.
                 raise ConnectorOperationError(
                     backend="feishu_bitable",
                     operation=ConnectorOperation.FETCH,
-                    kind=ConnectorErrorKind.PERMANENT,
+                    kind=ConnectorErrorKind.TRANSIENT,
                     source_name=self.name,
                     retry_delay_s=self.poll_interval_s,
                     message=(
-                        "feishu_bitable incremental fallback scan exceeded "
-                        f"fallback_scan_page_limit={self.fallback_scan_page_limit}; "
-                        "make the cursor field sortable or increase fallback_scan_page_limit"
+                        "feishu_bitable search reported has_more=true without a page_token; "
+                        "refusing to advance the cursor past unread pages"
                     ),
                 )
-            if not has_more or not page_token:
-                break
+            if page_token in seen_page_tokens:
+                # A repeated token means the server is not advancing; looping would
+                # re-read the same page forever.
+                raise ConnectorOperationError(
+                    backend="feishu_bitable",
+                    operation=ConnectorOperation.FETCH,
+                    kind=ConnectorErrorKind.TRANSIENT,
+                    source_name=self.name,
+                    retry_delay_s=self.poll_interval_s,
+                    message=(
+                        "feishu_bitable search returned a repeated page_token; "
+                        "aborting to avoid re-reading the same page"
+                    ),
+                )
+            seen_page_tokens.add(page_token)
             if not scan_all_pages and len(records) >= limit:
                 break
         records.sort(key=lambda item: _cursor_sort_key((_record_cursor_value(item, self.cursor_field), _record_id(item))))

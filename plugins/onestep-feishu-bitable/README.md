@@ -64,3 +64,20 @@ single-writer only, cannot be combined with `relations`, retains no record IDs,
 and waits for each batch member's confirmed outcome before returning from
 `send()`. Ambiguous writes are searched by affected key before confirmed misses
 are recreated. See `example/mysql_feishu_insert.yaml`.
+
+Because the preloaded index is only a snapshot taken at `open()`, a key that is
+reported as already present is **confirmed with one exact lookup before it is
+skipped** — otherwise a row deleted upstream after startup would be dropped
+while the runtime still acknowledged it, losing data permanently. This costs one
+extra search per *pre-existing* key that is re-sent; keys this sink writes
+itself are trusted without a lookup.
+
+Set `insert_index_skip_verification: true` to restore the original zero-lookup
+behaviour. Do this only when the destination table is append-only for the whole
+run (no row is ever deleted or moved): it is the highest-throughput mode, and it
+accepts that a pre-existing key whose row disappeared is silently skipped.
+
+`close_drain_max_rounds` (default `1000`) bounds the shutdown drain; exceeding it
+reports a `ConnectorOperationError` rather than looping. Sending after `close()`
+raises a permanent `ConnectorOperationError` instead of silently buffering into a
+sink that will never flush again.

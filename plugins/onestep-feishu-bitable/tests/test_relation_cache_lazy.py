@@ -125,10 +125,18 @@ def test_lazy_batch_path_reuses_cache_across_flushes() -> None:
     async def scenario() -> None:
         connector = _CountingConnector()
         sink = _build_sink(connector, cache="lazy", batch_size=2, mode="upsert")
-        await sink.send(Envelope(body={"project_id": "P-1", "company_names": "A"}))
+        # Two batches, each flushed by the batch_size threshold (a sink cannot
+        # send after close(), so close() is not usable as a flush barrier).
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-1", "company_names": "A"})),
+            sink.send(Envelope(body={"project_id": "P-2", "company_names": "A"})),
+        )
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-3", "company_names": "A"})),
+            sink.send(Envelope(body={"project_id": "P-4", "company_names": "A"})),
+        )
         await sink.close()
-        await sink.send(Envelope(body={"project_id": "P-2", "company_names": "A"}))
-        await sink.close()
+        # The lazy cache survives the flush: "A" is searched once in total.
         assert connector.searched_values == ["A"]
 
     asyncio.run(scenario())
@@ -211,10 +219,18 @@ def test_cache_none_batch_path_searches_every_flush() -> None:
     async def scenario() -> None:
         connector = _CountingConnector()
         sink = _build_sink(connector, cache=None, batch_size=2, mode="upsert")
-        await sink.send(Envelope(body={"project_id": "P-1", "company_names": "A"}))
+        # Two threshold-flushed batches (close() cannot be a flush barrier: a
+        # sink rejects sends after close()).
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-1", "company_names": "A"})),
+            sink.send(Envelope(body={"project_id": "P-2", "company_names": "A"})),
+        )
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-3", "company_names": "A"})),
+            sink.send(Envelope(body={"project_id": "P-4", "company_names": "A"})),
+        )
         await sink.close()
-        await sink.send(Envelope(body={"project_id": "P-2", "company_names": "A"}))
-        await sink.close()
+        # cache: none means every flush re-searches the same business key.
         assert connector.searched_values == ["A", "A"]
 
     asyncio.run(scenario())
@@ -224,10 +240,16 @@ def test_lazy_batch_create_backfills_instance_cache() -> None:
     async def scenario() -> None:
         connector = _CountingConnector(search_results={"A": []})
         sink = _build_sink(connector, cache="lazy", on_missing="create", batch_size=2, mode="upsert")
-        await sink.send(Envelope(body={"project_id": "P-1", "company_names": "A"}))
-        await sink.close()
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-1", "company_names": "A"})),
+            sink.send(Envelope(body={"project_id": "P-2", "company_names": "A"})),
+        )
+        # The create-on-missing result is backfilled into the instance cache.
         assert sink._relation_caches["companies"] == {"A": "created-a"}
-        await sink.send(Envelope(body={"project_id": "P-2", "company_names": "A"}))
+        await asyncio.gather(
+            sink.send(Envelope(body={"project_id": "P-3", "company_names": "A"})),
+            sink.send(Envelope(body={"project_id": "P-4", "company_names": "A"})),
+        )
         await sink.close()
         # Second batch is a cache hit: no relation search, no relation create.
         assert connector.searched_values == ["A"]
