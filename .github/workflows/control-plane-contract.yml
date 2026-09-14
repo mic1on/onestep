@@ -12,7 +12,6 @@ on:
       - "plugins/onestep-control-plane/**"
       - "pyproject.toml"
       - "src/**"
-      - "uv.lock"
   push:
     branches:
       - main
@@ -26,7 +25,6 @@ on:
       - "plugins/onestep-control-plane/**"
       - "pyproject.toml"
       - "src/**"
-      - "uv.lock"
 
 permissions:
   contents: read
