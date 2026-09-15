@@ -276,6 +276,12 @@ MySQL 等价物是 `GET_LOCK()`（会话级命名锁，实测可正确串行化�
 
 现有 `_POSTGRES_IDENTIFIER_MAX_LENGTH = 63` 与 `_postgres_object_name()` 的截断逻辑对 MySQL 同样安全（更保守），可复用；但函数命名与常量要按 backend 语义重命名或参数化，避免把 “postgres” 写进 MySQL 路径。
 
+该 helper 在抽取时必须满足以下能力要求（这些是实施中的硬约束，不是可选优化）：
+
+1. **上限参数化**：上限必须是参数（PostgreSQL 传 63、MySQL 传 64），不能把常量硬编码成后端专属名称；helper 本身也不能在命名上写死某个 backend。
+2. **超长输入 hash 截断**：超出上限时必须截断并附加 hash 后缀以保证唯一性（沿用现有 `_postgres_object_name()` 的“前缀 + hash”策略）。截断后仍须稳定：同一输入必须产生同一名字。
+3. **可用于外键场景**：必须能作为 `sa.ForeignKey(..., name=...)` 的命名来源，而不只是 `Index` / `UniqueConstraint` / `CheckConstraint`。§6.11 正依赖这一点。
+
 ### 6.10 隔离级别
 
 MySQL 默认 `REPEATABLE-READ`。claim 在**空匹配区间**上取 `FOR UPDATE SKIP LOCKED` 时会产生 gap lock，实测阻塞并发 INSERT：
@@ -288,6 +294,26 @@ MySQL 默认 `REPEATABLE-READ`。claim 在**空匹配区间**上取 `FOR UPDATE 
 同时 RR 的语句级快照会在长事务中放大过期清理与回收的可见性问题。
 
 **处置：MySQL engine 必须显式使用 `READ COMMITTED`**（`create_async_engine(..., isolation_level="READ COMMITTED")`，实测对连接池内所有连接稳定生效）。这是可用性要求（避免提交路径被 claim 阻塞）而非已证实的正确性缺陷——在 RR 下顺序与并发 parity 也全部通过——但显式设定是防止未来长事务把该风险放大的必要防线。
+
+### 6.11 外键/约束标识符：MySQL 隐式名会突破 64 上限
+
+§6.9 覆盖了表名、索引名与 `GET_LOCK` 名，但遗漏了**外键（FK）约束名**。这是一个独立的方言差异，且是本设计里少数“默认配置全绿、用户一自定义长表名才炸”的隐蔽故障。
+
+实测（真 MySQL 8.4.11，按 §8 结构建 attempts 表，FK 未显式命名；PG 侧为同结构对照）：
+
+| attempts 表名长度 | MySQL | PostgreSQL |
+| --- | --- | --- |
+| 57 | 建表 **OK**（隐式名 `<table>_ibfk_1`，57 + 7 = 64，正好等于上限） | OK |
+| 58 | **FAIL** `(1059, "Identifier name '<table>_ibfk_1' is too long")`（58 + 7 = 65 > 64） | 建表 **OK**（静默截断到 63） |
+| 58 + 显式命名 FK | 建表 **OK** | OK |
+
+三个后果：
+
+1. **名字长度不可控。** MySQL 自动生成 `<table>_ibfk_N`，后缀字符数由引擎决定，调用方无法预知；而 `attempts_table` 是用户可通过 `attempts_table=` 配置的（见 §8 与 §10.1）——默认表名下一切正常，只有用户给 attempts 表起长名时才触发。这类缺陷在默认路径的测试里**完全不可见**。
+2. **必须非对称处置。** MySQL 侧**必须显式命名**该 FK，名字用 §6.9 的 helper 按表名派生；PostgreSQL 侧**保持原样**——不要为了“两端写法一致”去改 PG 的 FK 声明：那会改变 PG 已发布的 DDL 与约束名，威胁 §11.1 的“PostgreSQL 全套测试零修改通过”红线，而 PG 本来就静默截断、并不受影响。
+3. **FK 名与 CHECK 名同样是 schema 级全局唯一**（§6.6）。因此 FK 名**必须按 attempts 表名派生**，不能用固定常量，否则“共享 executions 表 + 多个 attempts 表”的用法会因 FK 名冲突而第二组建不出来——即便 §6.6 已把 CHECK 名按表派生，FK 仍会撞。
+
+这三条与 §6.6 属同一类问题（约束名作用域 + 名字长度不可控），实施时应一并处理与测试；对应用例见 §11.2。
 
 ## 7. 架构与模块归属
 
@@ -565,6 +591,7 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 - MySQL schema builder：类型映射、`DATETIME(6)`、JSON 表达式默认值、CHECK 名按表派生、无 `WHERE` 索引。
 - 方言接缝：`transaction_now` 对 MySQL 返回 `None`；`normalize_datetime` 把 +08:00 归一为 UTC。
 - `MySQLConnector.execution_backend()` 参数校验与默认值。
+- **MySQL 专属 engine 选项必须按 dialect 守卫**（新增强制要求）。`isolation_level="READ COMMITTED"`（§6.10）与 connect 事件的 `SET time_zone = '+00:00'`（§6.4）都是 MySQL 专属；无条件施加会立刻炸掉 sqlite 路径——已实测两种失败形态：`ArgumentError: Invalid value 'READ COMMITTED' for isolation_level. Valid isolation levels for 'sqlite' are READ UNCOMMITTED, SERIALIZABLE, AUTOCOMMIT`，以及 `sqlite3.OperationalError: near "SET": syntax error`。现有 `plugins/onestep-mysql/tests/` 下有 **7 处** `MySQLConnector("sqlite://...")` 构造（`test_mysql_plugin.py` 5 处、`test_mysql_binlog.py` 2 处），且该插件 118 个用例整体跑在 sqlite 上（实测 `118 passed, 1 skipped`）。因此这两个选项必须以 `dialect.name` 守卫，并**保留 sqlite 路径回归**。仓库既有先例：`plugins/onestep-sql/src/onestep_sql/postgres/execution_backend.py` 在抽取前以 `if conn.dialect.name == "postgresql"`（约 line 242）与 `if engine.dialect.name == "postgresql"`（约 line 312）区分，MySQL 实现照此办理。
 - `mysql_execution_source` strict YAML catalog 快照（type、role、allowed fields、defaults、connector type）。
 - **回归红线**：抽取 `_shared.execution` 后，现有 PostgreSQL 全套单测（`test_postgres_execution_backend.py`、`test_postgres_execution_source.py`、`test_execution_schema.py`，当前 **59** 个用例，多数跑在 `sqlite:///` 上）必须**零修改通过**。这是抽取不改变语义的主要证据。
 - `tests/contract/test_onestep_sql_canonical.py` 的 type 集合断言更新为 21 个 type，并新增断言：`mysql_execution_source` 只接受 MySQL connector、`postgres_execution_source` 只接受 PostgreSQL connector。
@@ -584,12 +611,46 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 - **MySQL 专属**：非 UTC `expires_at` 归一（§6.3 回归）。
 - **MySQL 专属**：`DATETIME(6)` 保精度，claim 不被进位延迟（§6.2 回归）。
 - **MySQL 专属**：隔离级别为 `READ COMMITTED` 的断言。
+- **MySQL 专属**：长 `attempts_table` 表名（≥ 58 字符）建表成功，证明 FK 已显式命名且受 §6.9 helper 约束（§6.11 回归）。该用例必须显式配置长表名——默认表名下这个缺陷不可见。
 
 ### 11.3 基础设施
 
-- `docker-compose.integration.yml` 已有 `mysql:8.4` 服务（含 binlog ROW 配置）与 `postgres:16-alpine`；execution 测试复用现有 MySQL 服务即可，不需要新服务。注意 MySQL 8.4 与 8.0 的差异需要在 CI 中至少覆盖一个 8.0 版本，因为 8.4 已移除部分旧默认行为。
+- `docker-compose.integration.yml` 已有 `mysql:8.4` 服务（含 binlog ROW 配置）与 `postgres:16-alpine`；execution 测试复用现有 MySQL 服务即可，不需要新服务。注意 MySQL 8.4 与 8.0 的差异需要在 CI 中至少覆盖一个 8.0 版本，因为 8.4 已移除部分旧默认行为（该点的实测结论与处置见 §15.3）。
 - `scripts/run-integration-tests.sh` 加入 MySQL execution live 目录。
 - `.github/workflows/plugin-sql.yml` 增加 MySQL live job，并把 `tests/contract/test_onestep_sql_canonical.py` / `test_onestep_sql_shared.py` 之外的 MySQL execution 套件纳入。
+
+#### 11.3.1 `cryptography` 依赖缺口（**超出 Phase 4 清单的附加改动**）
+
+以下是一项**附加改动**，不属于 §13 Phase 0–4 原有清单。之所以必须做，是因为它修复的是用户侧真实缺口，并消除 CI 对时序侥幸的隐性依赖。此处如实记录其证据与理由，不将其伪装为原设计已要求的内容。
+
+**事实：**
+
+- `cryptography` 在 `uv.lock` 中 `name` 计数为 **0**（lock 里完全没有该包）；三个相关 pyproject（根、`plugins/onestep-sql`、`plugins/onestep-mysql`）**均未声明**它。
+- 实测 `uv sync --frozen --all-packages --extra integration --dry-run` 会**卸载** `cryptography==50.0.1`（连带 `cffi`、`pycparser`，共 3 个包）。即当前 venv 里能 import `cryptography` 纯属巧合，`--frozen` 同步后即消失。
+- 它也不是 `asyncmy` / `pymysql` 的传递依赖：`asyncmy` 的 `Requires-Dist` 为 `None`；`pymysql` 只在 `rsa` / `ed25519` extra 下才要求 `cryptography`，而这些 extra 并未被启用。
+
+**用户侧真实缺口（已实测复现）：** 同一容器、同一时刻，healthcheck 正常运行时：
+
+- 被 healthcheck 反复预热的 `root@%`（`mysqladmin ping -proot`，每 5s 一次）→ **CONNECTED**；
+- 冷缓存的**新建用户** `appuser@%`（`caching_sha2_password`，经明文 TCP 首次认证）→ **FAILED** `RuntimeError: 'cryptography' package is required for sha256_password or caching_sha2_password auth methods`。
+
+即默认 MySQL 8.x + 明文 TCP 下，**首次认证的新用户直接撞错误**，而长期存在的账号因缓存被预热而幸免。已实测 `FLUSH PRIVILEGES` 会使运行中系统的预热缓存失效（root 从 CONNECTED 变 FAILED），因此不能靠“缓存一直热着”。
+
+**修复方式：** 把 `cryptography>=41.0.0` 加入 `onestep-sql` 的 `mysql` **与** `all` 两个 extra（`all` 重复列了 `asyncmy` / `mysql-replication`，若只加 `mysql` 会导致两个 extra 语义不一致），并刷新 `uv.lock`。
+
+#### 11.3.2 认证可用性的证据标准（重要）
+
+**不得用「CI job 红 / 绿」判定认证可用性。** 原因：
+
+- healthcheck（`mysqladmin ping -proot`）每 **5s** 持续预热 `root` 的认证缓存；
+- `scripts/setup-integration-env.sh` 的 `wait_for_mysql()` 有 **60 × 2s = 120s** 的重试窗口，会一直重试直到某个连接成功。
+
+两者叠加会掩盖 `cryptography` 缺失，造成**静默假绿**：CI 全绿，但用户侧照样失败。
+
+应改用以下两类证据：
+
+1. **`uv sync --frozen` 之后 `import cryptography` 成功**（直接证明依赖已被声明，而非依赖 venv 残留）；
+2. **冷缓存路径上的真实认证成功**——停掉 healthcheck 预热，或使用新建用户（`caching_sha2_password`）完成一次真实认证，而不是复用已被预热的 root。
 
 ### 11.4 不能只依赖 SQLite
 
@@ -680,6 +741,6 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 
 1. **默认表名是否复用。** 复用 `onestep_executions` 可降低认知成本，但同库同时使用两个 backend 时会更难分辨。倾向复用（两个 backend 本就不应在同一张表上混用），实施时可再确认。
 2. **`_shared.execution` 的抽取粒度。** 建议先抽 `execution_backend` 的状态机（收益最大、方言差异最集中），`execution_source` 的抽取视 Phase 1 的实测重复度决定。
-3. **MySQL 8.4 / 9.x 的默认行为差异。** `docker-compose.integration.yml` 当前是 `mysql:8.4`，本设计的实证在 8.0.46。实施时需在 CI 中至少固定一个 8.0 版本，并确认 8.4 上 §6 各项结论仍成立（尤其默认隔离级别与 JSON 默认值）。
+3. ~~**MySQL 8.4 / 9.x 的默认行为差异。**~~ **已结论，可关闭。** 本设计的实证原在 8.0.46，而 `docker-compose.integration.yml` 目前是 `mysql:8.4`。现已在 **MySQL 8.0.46 与 8.4.11 两台实例上逐条复核 §6 全部条款**，结论**一致**：§6.1 JSON 表达式默认值（两版均建出 `json DEFAULT (json_object())`）、§6.2 `DATETIME` fsp 精度、§6.6 CHECK 名 schema 级全局唯一（两版均报 3822）、§6.7 部分索引、§6.8 `GET_LOCK` 名 64 上限（两版均 64 可获取、65 报 4163）、§6.10 默认隔离级别（两版均为 `REPEATABLE-READ`）。因此 8.4 与 8.0 在 §6 范围内**无默认行为差异**，CI 可同时覆盖两版；`wait_for_mysql()` 与 §11.3.2 的证据标准不受版本影响。§11.3 中“至少覆盖一个 8.0 版本”的要求保留（用于锁定跨版本一致性），但不再带有“需确认 8.4 是否仍成立”的不确定性。
 4. **`_postgres_object_name` 的命名。** 该 helper 在 MySQL 路径复用时要重命名或参数化，避免 “postgres” 出现在 MySQL 代码里；改动会触及已发布模块的私有符号，需确认不违反兼容窗口（私有符号不在 §5.2 的兼容清单内，预期安全）。
 5. **是否需要在 `docs/broker/index.md` 增加 MySQL tracked execution 条目**，还是只在 `docs/broker/sql.md` 扩章（`docs` 分支）／在 `docs/broker/mysql.md` 扩章（`main` 分支）。倾向新建独立页面以对齐 `postgres-execution.md` 的信息架构。
