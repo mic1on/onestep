@@ -307,11 +307,20 @@ MySQL 默认 `REPEATABLE-READ`。claim 在**空匹配区间**上取 `FOR UPDATE 
 | 58 | **FAIL** `(1059, "Identifier name '<table>_ibfk_1' is too long")`（58 + 7 = 65 > 64） | 建表 **OK**（静默截断到 63） |
 | 58 + 显式命名 FK | 建表 **OK** | OK |
 
+**两个缺陷、一处修复（端到端已验证）。** 未显式命名 FK 时共有两类独立故障；按 attempts 表名派生的显式命名**同时**消除两者：
+
+| 场景 | 未修（隐式/固定名） | 修复后（按 attempts 表名派生） |
+| --- | --- | --- |
+| `attempts_table` = 58 字符 | **FAIL** `(1059, ...Identifier name ... is too long)` | **CREATED OK** |
+| 共享 executions 表 + 两个 attempts 表（两个表用同一固定 FK 名） | **FAIL** `(1826, "Duplicate foreign key constraint name 'fk_fixed_name'")` | **CREATED OK**（派生名互不相同，如 `fk_<attempts_table>_execution`） |
+
+该修复的**双重收益**因此是明确的：既修长度溢出（1059），又修全局重名（1826）。只修其中一项都不够——仅显式命名一个固定名会从 1059 变成 1826；仅按表名派生而不显式命名则仍会撞 1059。
+
 三个后果：
 
 1. **名字长度不可控。** MySQL 自动生成 `<table>_ibfk_N`，后缀字符数由引擎决定，调用方无法预知；而 `attempts_table` 是用户可通过 `attempts_table=` 配置的（见 §8 与 §10.1）——默认表名下一切正常，只有用户给 attempts 表起长名时才触发。这类缺陷在默认路径的测试里**完全不可见**。
 2. **必须非对称处置。** MySQL 侧**必须显式命名**该 FK，名字用 §6.9 的 helper 按表名派生；PostgreSQL 侧**保持原样**——不要为了“两端写法一致”去改 PG 的 FK 声明：那会改变 PG 已发布的 DDL 与约束名，威胁 §11.1 的“PostgreSQL 全套测试零修改通过”红线，而 PG 本来就静默截断、并不受影响。
-3. **FK 名与 CHECK 名同样是 schema 级全局唯一**（§6.6）。因此 FK 名**必须按 attempts 表名派生**，不能用固定常量，否则“共享 executions 表 + 多个 attempts 表”的用法会因 FK 名冲突而第二组建不出来——即便 §6.6 已把 CHECK 名按表派生，FK 仍会撞。
+3. **FK 名与 CHECK 名同样是 schema 级全局唯一**（§6.6）：同名 FK 建在两张不同表上会报 `(1826, "Duplicate foreign key constraint name ...")`（已实测）。因此 FK 命名必须与 §6.6 的 CHECK 命名策略**保持一致——按 attempts 表名派生**，不能用固定常量；否则“共享 executions 表 + 多个 attempts 表”的用法会以 1826 失败——即便 §6.6 已把 CHECK 名按表派生，FK 仍会撞。
 
 这三条与 §6.6 属同一类问题（约束名作用域 + 名字长度不可控），实施时应一并处理与测试；对应用例见 §11.2。
 
@@ -607,11 +616,11 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 - 并发幂等 submit 只生成一条记录。
 - **MySQL 专属**：并发 `auto_create`（多 engine）不报 1050。
 - **MySQL 专属**：同库两组 execution 表可共存（§6.6 回归）。
-- **MySQL 专属**：共享 executions 表 + 两个 attempts 表可共存（PG live 已有同款用例）。
+- **MySQL 专属**：共享 executions 表 + 两个 attempts 表可共存（PG live 已有同款用例）；该用例同时锁定 FK 全局重名缺陷（**1826**），见 §6.11。
 - **MySQL 专属**：非 UTC `expires_at` 归一（§6.3 回归）。
 - **MySQL 专属**：`DATETIME(6)` 保精度，claim 不被进位延迟（§6.2 回归）。
 - **MySQL 专属**：隔离级别为 `READ COMMITTED` 的断言。
-- **MySQL 专属**：长 `attempts_table` 表名（≥ 58 字符）建表成功，证明 FK 已显式命名且受 §6.9 helper 约束（§6.11 回归）。该用例必须显式配置长表名——默认表名下这个缺陷不可见。
+- **MySQL 专属**：长 `attempts_table` 表名（≥ 58 字符）建表成功，证明 FK 已显式命名且受 §6.9 helper 约束（§6.11 回归）。该用例必须显式配置长表名——默认表名下这个缺陷不可见。**该用例锁定 1059（长度溢出）**，与上一条锁定 1826（全局重名）合起来覆盖 §6.11 的两类缺陷；两者必须都存在，因为只修一类会从一种故障变成另一种。
 
 ### 11.3 基础设施
 
