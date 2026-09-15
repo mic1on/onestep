@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+# The ``ExecutionTables`` container is the shared seam's return type, so it is
+# defined once in ``_shared.execution.dialect`` (Phase 1 of the MySQL tracked
+# execution backend, design §7.3) and re-exported here to keep
+# ``onestep_sql.postgres.execution_schema.ExecutionTables`` importable. Only the
+# DDL below is PostgreSQL-specific (design §7.2).
+from .._shared.execution.dialect import ExecutionTables
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -13,13 +19,6 @@ _POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 _POSTGRES_NAME_HASH_LENGTH = 12
 _EXECUTION_STATUSES = ("queued", "retrying")
 _LEASE_STATUSES = ("running", "cancel_requested")
-
-
-@dataclass(frozen=True)
-class ExecutionTables:
-    metadata: sa.MetaData
-    executions: sa.Table
-    attempts: sa.Table
 
 
 def _validate_identifier(value: str, field: str) -> str:
