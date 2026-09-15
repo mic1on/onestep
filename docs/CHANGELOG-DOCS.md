@@ -114,7 +114,7 @@
 
 - 版本号从 `1.9.0` 更新为 `1.11.0`：快速开始页、Docker 镜像标签（ghcr.io/mic1on/onestep-worker:1.11.0）、连接器插件最低版本要求。
 - PostgreSQL 跟踪执行安装示例从固定 `==1.9.0` 改为 `>=1.9.0`。
-- [MySQL](/en/broker/mysql) en 页面补齐缺失内容：Update Mode（`mode="update"`）、Per-Column Write Policies（`skip_null`/`backfill`/`overwrite`）、Update Control 节更新为覆盖 upsert 和 update 两种模式。
+- [SQL（MySQL）](/en/broker/sql) en 页面补齐缺失内容：Update Mode（`mode="update"`）、Per-Column Write Policies（`skip_null`/`backfill`/`overwrite`）、Update Control 节更新为覆盖 upsert 和 update 两种模式。
 - 修复 en 实战篇锚点链接：`#field-mapping` → `#field-conversion`，`#reliable-persistent-cursor-and-retry` → `#reliable-persistent-cursor-with-retry`。
 - 新增 en 缺失页面 [Tags](/en/tags)。
 - VitePress 构建验证通过（0 错误）。
@@ -144,7 +144,7 @@
 - 新增 [用户案例 / 实战篇](/guide/cases/) 与
   [MySQL 订单流水同步到飞书多维表格](/guide/cases/mysql-feishu-order-sync)，覆盖完整
   strict YAML、handler 契约、单写者限制、批量参数、观测事件和安全恢复流程。
-- [MySQL](/broker/mysql) 文档说明 `0.5.1` 对 `DATETIME` 复合游标的兼容行为：
+- [SQL（MySQL）](/broker/sql) 文档说明 `0.5.1` 对 `DATETIME` 复合游标的兼容行为：
   保留微秒恢复、无需迁移游标表，且提交失败时不应手工推进游标。
 - [Feishu Bitable](/broker/feishu-bitable) 文档链接高吞吐 Insert 键索引的完整实战。
 - `example/mysql_feishu_insert.yaml` 和连接器示例统一为匿名订单流水命名。
@@ -216,7 +216,7 @@
 - 快速开始页版本号更新为 `1.6.0`，补充 PostgreSQL、Kafka、control-plane 和 `onestep build`。
 - 连接器导航新增 PostgreSQL 与 Kafka，并补充 MySQL binlog CDC 描述。
 - 部署与 Worker Runtime Image 页面同步到 `ghcr.io/mic1on/onestep-worker:1.6.0`。
-- 新增 [PostgreSQL](/broker/postgres) 与 [Kafka](/broker/kafka) 连接器页面。
+- 新增 [SQL（PostgreSQL）](/broker/sql) 与 [Kafka](/broker/kafka) 连接器页面。
 - 导航新增 [核心可靠性](/core-reliability)，指向 at-least-once、ack/retry 和插件兼容契约。
 
 ## 2026-03-17 - 全面迁移到 1.0.0 API
