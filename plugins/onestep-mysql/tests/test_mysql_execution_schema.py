@@ -132,8 +132,10 @@ def test_check_constraint_names_are_derived_per_table() -> None:
 
     # The two "shared" builds use the same executions table name, so they must
     # derive the *same* CHECK names — it is one physical table, and the second
-    # backend's create_all skips the existing one.
-    assert _check_names(shared_other.executions) == _check_names(shared.executions)
+    # backend's create_all skips the existing one. Compare sorted: the
+    # constraint container is a set, so its iteration order is not stable
+    # across independently built tables.
+    assert sorted(_check_names(shared_other.executions)) == sorted(_check_names(shared.executions))
 
     # Deterministic: rebuilding the same pair derives the same names.
     repeat = build_execution_tables(
