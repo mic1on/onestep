@@ -12,6 +12,7 @@ from onestep.resource_registry import (
 )
 
 from .connector import MySQLConnector
+from .execution_source import MySQLExecutionSource, _validate_execution_source_options
 
 _MYSQL_FIELDS = frozenset({"type", "dsn", "engine_options"})
 _MYSQL_STATE_STORE_FIELDS = frozenset(
@@ -43,6 +44,26 @@ _MYSQL_BINLOG_FIELDS = frozenset(
 )
 _MYSQL_TABLE_SINK_FIELDS = frozenset(
     {"type", "connector", "table", "mode", "keys", "update_columns", "update_expr", "serialize_json"}
+)
+_MYSQL_EXECUTION_SOURCE_FIELDS = frozenset(
+    {
+        "type",
+        "connector",
+        "namespace",
+        "task_names",
+        "table",
+        "attempts_table",
+        "batch_size",
+        "poll_interval_s",
+        "lease_duration_s",
+        "heartbeat_interval_s",
+        "worker_id",
+        "auto_create",
+        "max_payload_bytes",
+        "max_metadata_bytes",
+        "max_result_bytes",
+        "reclaim_batch_size",
+    }
 )
 _MYSQL_CATALOG = ResourceCatalogEntry(
     type="mysql",
@@ -160,6 +181,30 @@ _MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
     ),
     topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json"),
 )
+_MYSQL_EXECUTION_SOURCE_CATALOG = ResourceCatalogEntry(
+    type="mysql_execution_source",
+    roles=("source",),
+    label="MySQL Execution Source",
+    connector_types=("mysql",),
+    fields=(
+        ResourceCatalogField("connector", "ref", required=True),
+        ResourceCatalogField("namespace", "string", required=True),
+        ResourceCatalogField("task_names", "string_list", required=True),
+        ResourceCatalogField("table", "string", default="onestep_executions"),
+        ResourceCatalogField("attempts_table", "string", default="onestep_execution_attempts"),
+        ResourceCatalogField("batch_size", "integer", default=100),
+        ResourceCatalogField("poll_interval_s", "number", default=1.0),
+        ResourceCatalogField("lease_duration_s", "number", default=90.0),
+        ResourceCatalogField("heartbeat_interval_s", "number", default=30.0),
+        ResourceCatalogField("worker_id", "string", default="onestep-worker"),
+        ResourceCatalogField("auto_create", "boolean", default=True),
+        ResourceCatalogField("max_payload_bytes", "integer", default=1024 * 1024),
+        ResourceCatalogField("max_metadata_bytes", "integer", default=64 * 1024),
+        ResourceCatalogField("max_result_bytes", "integer", default=1024 * 1024),
+        ResourceCatalogField("reclaim_batch_size", "integer", default=100),
+    ),
+    topology_fields=("namespace", "task_names", "batch_size", "poll_interval_s"),
+)
 
 
 def register_resources(registry: ResourceRegistry) -> None:
@@ -217,6 +262,15 @@ def register_resources(registry: ResourceRegistry) -> None:
             catalog=_MYSQL_TABLE_SINK_CATALOG,
             allowed_fields=_MYSQL_TABLE_SINK_FIELDS,
             build=_build_mysql_table_sink,
+        )
+    )
+    registry.register_resource_type(
+        ResourceSpecHandler(
+            type="mysql_execution_source",
+            catalog=_MYSQL_EXECUTION_SOURCE_CATALOG,
+            allowed_fields=_MYSQL_EXECUTION_SOURCE_FIELDS,
+            build=_build_mysql_execution_source,
+            validate=_validate_mysql_execution_source,
         )
     )
 
@@ -351,4 +405,75 @@ def _build_mysql_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) 
         if update_expr is not None
         else None,
         serialize_json=spec.get("serialize_json", "auto"),
+    )
+
+
+def _build_mysql_execution_source(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> Any:
+    connector = ctx.resolve_dependency(spec, "connector")
+    if not isinstance(connector, MySQLConnector):
+        raise TypeError(f"resource {spec['connector']!r} must be a MySQLConnector")
+    backend = connector.execution_backend(
+        table=spec.get("table", "onestep_executions"),
+        attempts_table=spec.get("attempts_table", "onestep_execution_attempts"),
+        auto_create=spec.get("auto_create", True),
+        max_payload_bytes=spec.get("max_payload_bytes", 1024 * 1024),
+        max_metadata_bytes=spec.get("max_metadata_bytes", 64 * 1024),
+        max_result_bytes=spec.get("max_result_bytes", 1024 * 1024),
+        reclaim_batch_size=spec.get("reclaim_batch_size", 100),
+    )
+    # ``MySQLExecutionBackend.source()`` still raises NotImplementedError (the
+    # Phase 2 ``_make_source`` seam is outside this task's scope), so the
+    # backend-named source is constructed directly. This is the exact object
+    # ``backend.source(...)`` will return once that seam is filled: the
+    # backend already wraps this connector.
+    return MySQLExecutionSource(
+        backend=backend,
+        namespace=ctx.require_string(spec, "namespace"),
+        task_names=tuple(
+            ctx.string_list(spec.get("task_names"), field=f"{ctx.field}.task_names")
+        ),
+        batch_size=spec.get("batch_size", 100),
+        poll_interval_s=spec.get("poll_interval_s", 1.0),
+        lease_duration_s=spec.get("lease_duration_s", 90.0),
+        heartbeat_interval_s=spec.get("heartbeat_interval_s", 30.0),
+        worker_id=spec.get("worker_id", "onestep-worker"),
+    )
+
+
+def _validate_mysql_execution_source(
+    ctx: Any,
+    spec: Mapping[str, Any],
+) -> None:
+    namespace = ctx.require_string(spec, "namespace")
+    task_names = ctx.require_non_empty_string_list(
+        spec, "task_names", field=f"{ctx.field}.task_names"
+    )
+    for key in ("table", "attempts_table", "worker_id"):
+        if spec.get(key) is not None:
+            ctx.string_value(spec[key], field=f"{ctx.field}.{key}")
+    batch_size = spec.get("batch_size", 100)
+    poll_interval_s = spec.get("poll_interval_s", 1.0)
+    lease_duration_s = spec.get("lease_duration_s", 90.0)
+    heartbeat_interval_s = spec.get("heartbeat_interval_s", 30.0)
+    for key, default in (
+        ("max_payload_bytes", 1024 * 1024),
+        ("max_metadata_bytes", 64 * 1024),
+        ("max_result_bytes", 1024 * 1024),
+    ):
+        ctx.validate_positive_integer(spec.get(key, default), field=f"{ctx.field}.{key}")
+    ctx.validate_positive_integer(
+        spec.get("reclaim_batch_size", 100),
+        field=f"{ctx.field}.reclaim_batch_size",
+    )
+    if "auto_create" in spec and not isinstance(spec["auto_create"], bool):
+        raise TypeError(f"{ctx.field}.auto_create must be a boolean")
+    _validate_execution_source_options(
+        namespace=namespace,
+        task_names=task_names,
+        batch_size=batch_size,
+        poll_interval_s=poll_interval_s,
+        lease_duration_s=lease_duration_s,
+        heartbeat_interval_s=heartbeat_interval_s,
+        worker_id=spec.get("worker_id", "onestep-worker"),
+        field_prefix=ctx.field,
     )

@@ -12,6 +12,13 @@ from .connector import (
     TableQueueSource,
     TableSink,
 )
+from .execution_backend import (
+    ExecutionLease,
+    HeartbeatResult,
+    MySQLExecutionBackend,
+    StaleExecutionLease,
+)
+from .execution_source import MySQLExecutionDelivery, MySQLExecutionSource
 from .resources import register_resources
 from .resilience import classify_sqlalchemy_error
 from .state_sqlalchemy import SQLAlchemyCursorStore, SQLAlchemyStateStore
@@ -26,11 +33,17 @@ register = register_resources
 __all__ = [
     "BinlogDelivery",
     "BinlogSource",
+    "ExecutionLease",
+    "HeartbeatResult",
     "IncrementalDelivery",
     "IncrementalTableSource",
     "MySQLConnector",
+    "MySQLExecutionBackend",
+    "MySQLExecutionDelivery",
+    "MySQLExecutionSource",
     "SQLAlchemyCursorStore",
     "SQLAlchemyStateStore",
+    "StaleExecutionLease",
     "TableQueueDelivery",
     "TableQueueSource",
     "TableSink",

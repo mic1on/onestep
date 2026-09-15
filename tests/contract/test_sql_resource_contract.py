@@ -6,7 +6,8 @@ These tests pin the *current* public contract of ``onestep-mysql`` and
 ``docs/superpowers/specs/2026-08-20-onestep-sql-consolidation-design.md``)
 cannot silently change:
 
-* the 14 YAML resource type names (7 MySQL + 7 PostgreSQL),
+* the 15 YAML resource type names (8 MySQL + 7 PostgreSQL; MySQL grew the
+  backend-locked ``mysql_execution_source`` in the tracked-execution design),
 * their catalog roles, fields, defaults, options and connector boundaries,
 * the public Python API surface exported from each package, and
 * the historical submodule import paths that compatibility forwarding must keep.
@@ -33,7 +34,7 @@ SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "sql_resource_catalog.json
 
 EXPECTED_TYPES = frozenset(
     {
-        # MySQL (7)
+        # MySQL (8)
         "mysql",
         "mysql_state_store",
         "mysql_cursor_store",
@@ -41,6 +42,7 @@ EXPECTED_TYPES = frozenset(
         "mysql_incremental",
         "mysql_binlog",
         "mysql_table_sink",
+        "mysql_execution_source",
         # PostgreSQL (7)
         "postgres",
         "postgres_state_store",
@@ -64,6 +66,14 @@ MYSQL_REQUIRED_PUBLIC = {
     "IncrementalDelivery",
     "TableQueueDelivery",
     "BinlogDelivery",
+    # Tracked execution (Phase 2 + Phase 3 of the MySQL tracked execution
+    # design) — aligned with the PostgreSQL public surface above.
+    "MySQLExecutionBackend",
+    "MySQLExecutionSource",
+    "MySQLExecutionDelivery",
+    "ExecutionLease",
+    "HeartbeatResult",
+    "StaleExecutionLease",
     "classify_sqlalchemy_error",
     "register",
     "register_resources",
@@ -90,7 +100,15 @@ POSTGRES_REQUIRED_PUBLIC = {
 }
 
 # Historical submodule import paths that must keep resolving (P0.2).
-MYSQL_SUBMODULES = ["connector", "resources", "resilience", "state_sqlalchemy"]
+MYSQL_SUBMODULES = [
+    "connector",
+    "resources",
+    "resilience",
+    "state_sqlalchemy",
+    "execution_backend",
+    "execution_schema",
+    "execution_source",
+]
 POSTGRES_SUBMODULES = [
     "connector",
     "resources",
@@ -117,13 +135,13 @@ def _catalog(registry: ResourceRegistry) -> dict[str, dict]:
     return _normalize({entry.type: entry.as_dict() for entry in registry.catalog_entries()})
 
 
-def test_fourteen_types_registered_once() -> None:
+def test_fifteen_types_registered_once() -> None:
     registry = ResourceRegistry()
     register_mysql(registry)
     register_postgres(registry)
     types = set(registry.handlers().keys())
     assert types == EXPECTED_TYPES
-    assert len(types) == 14
+    assert len(types) == 15
 
 
 def test_catalog_matches_baseline_snapshot() -> None:
@@ -144,7 +162,7 @@ def test_idempotent_reregistration_does_not_duplicate() -> None:
     register_mysql(registry)
     register_postgres(registry)
     assert set(registry.handlers().keys()) == EXPECTED_TYPES
-    assert len(registry.handlers()) == 14
+    assert len(registry.handlers()) == 15
 
 
 def test_mysql_public_api_surface() -> None:
