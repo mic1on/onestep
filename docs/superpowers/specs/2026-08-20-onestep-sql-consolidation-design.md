@@ -8,7 +8,7 @@
 
 `onestep-mysql`（当前 `0.6.1`）和 `onestep-postgres`（当前 `0.5.0`）是两个独立 workspace 插件。两者均依赖 `onestep`、`SQLAlchemy[asyncio]` 和 `aiosqlite`；前者额外依赖 `asyncmy` 与 `mysql-replication`，后者额外依赖 `psycopg[binary]`。二者已经有大量刻意平行的实现：SQLAlchemy state/cursor store、table-sink update-policy helper 和 incremental state-key。仓库的 `scripts/check_plugin_drift.py` 逐 AST 比较这三组代码，并明确记录过 MySQL datetime cursor 修复比 PostgreSQL 早三天发布的漂移事故（issue #125）。
 
-本设计将两个发行包收敛为一个规范发行包 `onestep-sql`，使共用 SQL 行为有一个实现和一套测试，同时保留每个数据库的语义、Python 导入和 YAML 配置。合并**不是**把 MySQL 与 PostgreSQL 当作可互换后端：MySQL binlog CDC 与 PostgreSQL tracked execution 继续是各自后端专属能力。
+本设计将两个发行包收敛为一个规范发行包 `onestep-sql`，使共用 SQL 行为有一个实现和一套测试，同时保留每个数据库的语义、Python 导入和 YAML 配置。合并**不是**把 MySQL 与 PostgreSQL 当作可互换后端：MySQL binlog CDC 继续是 MySQL 专属能力，tracked execution 由两个 backend 各自实现、不跨 backend 混用。
 
 ### 目标
 
@@ -76,7 +76,7 @@ plugins/onestep-sql/
 | --- | --- | --- |
 | `onestep_sql._shared` | SQLAlchemy state/cursor store serialization；table queue 与 incremental delivery sequencing/state-key；table sink `insert`/`upsert`/`update` 的 column-write policy；共同的 payload validation、redaction contract 和测试 fixtures。 | 当前 drift check 的 `state_sqlalchemy.py`、table-sink policy 和 `_default_incremental_state_key` 已证明这些是刻意并行的同一行为。 |
 | `onestep_sql.mysql` | MySQL DSN normalization/dialect、`asyncmy` execution、MySQL error classification、MySQL SQL dialect details，以及同步 `mysql-replication` thread boundary。 | 驱动、SQL 方言和 binlog replication API 都是 MySQL 特有。 |
-| `onestep_sql.postgres` | PostgreSQL DSN/dialect、`psycopg` execution、PostgreSQL error classification、execution schema/backend/source、lease/heartbeat/reclaim/cancellation behavior。 | tracked execution 依赖各 backend 自己的 transaction/locking schema 与 lease semantics，因此不能抽取成共享的、可由另一后端声明的 feature（MySQL 侧由 `onestep_sql.mysql` 另行实现）。 |
+| `onestep_sql.postgres` | PostgreSQL DSN/dialect、`psycopg` execution、PostgreSQL error classification、execution schema/backend/source、lease/heartbeat/reclaim/cancellation behavior。 | tracked execution 的 schema/feature 声明不能由另一后端共享——schema 与方言差异见 `docs/superpowers/specs/2026-09-15-mysql-tracked-execution-backend-design.md` §6；实现该 schema 的状态机（含 lease/heartbeat/reclaim/cancellation）经 `onestep_sql._shared.execution` 复用于两个 backend，各 backend 只提供自己的 `ExecutionDialect` 与 schema builder。 |
 | `onestep_sql.resources` | 组合两端 resource catalog 和 builder，且只在 build 时延迟导入需特定驱动的后端。 | 安装单一 backend extra 时 plugin discovery 必须仍可安全完成，且必须只注册一次。 |
 
 提取共用代码前必须逐项对照 `scripts/check_plugin_drift.py` 的三对比较对象。该脚本的唯一已允许差异 `_async_dsn`（`mysql+asyncmy` 与 `postgresql+psycopg`）仍属于 backend adapter；不要把驱动映射塞入 shared store。只有经双后端 contract tests 证明相同行为的逻辑可进入 `_shared`。
