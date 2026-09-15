@@ -47,8 +47,17 @@ from onestep.execution import (  # noqa: F401
 )
 
 
-class PostgresExecutionDelivery(ExecutionDeliveryBase):
+class PostgresExecutionDelivery(ExecutionDeliveryBase["PostgresExecutionSource"]):
     """PostgreSQL managed-execution delivery (name and signature frozen)."""
+
+    def __init__(
+        self,
+        *,
+        source: PostgresExecutionSource,
+        lease: ExecutionLease,
+        envelope: Envelope,
+    ) -> None:
+        super().__init__(source=source, lease=lease, envelope=envelope)
 
 
 class PostgresExecutionSource(ExecutionSourceBase):

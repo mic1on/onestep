@@ -26,7 +26,7 @@ import copy
 import math
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Callable, ClassVar
+from typing import Any, Callable, ClassVar, Generic, TypeVar
 
 from onestep.connectors.base import Delivery, Source
 from onestep.envelope import Envelope
@@ -43,6 +43,11 @@ from onestep.resilience import (
     ConnectorOperationError,
     is_retryable_connector_error,
 )
+
+#: A backend's concrete source class. Concrete deliveries bind it to their own
+#: source type so the ``source`` parameter keeps the precise annotation the
+#: pre-extraction classes had, instead of degrading to ``Any``.
+TSource = TypeVar("TSource", bound="ExecutionSourceBase")
 
 
 def _connector_secret_tokens(connector: Any) -> list[str]:
@@ -300,7 +305,7 @@ class ExecutionSourceBase(Source):
             await closer()
 
 
-class ExecutionDeliveryBase(Delivery):
+class ExecutionDeliveryBase(Delivery, Generic[TSource]):
     """Shared ``Delivery`` implementation: heartbeat, cancel, completion.
 
     The lifecycle logic is shared because the at-least-once contract and the
@@ -311,7 +316,7 @@ class ExecutionDeliveryBase(Delivery):
     def __init__(
         self,
         *,
-        source: Any,
+        source: "TSource",
         lease: ExecutionLease,
         envelope: Envelope,
     ) -> None:
