@@ -600,7 +600,7 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 - MySQL schema builder：类型映射、`DATETIME(6)`、JSON 表达式默认值、CHECK 名按表派生、无 `WHERE` 索引。
 - 方言接缝：`transaction_now` 对 MySQL 返回 `None`；`normalize_datetime` 把 +08:00 归一为 UTC。
 - `MySQLConnector.execution_backend()` 参数校验与默认值。
-- **MySQL 专属 engine 选项必须按 dialect 守卫**（新增强制要求）。`isolation_level="READ COMMITTED"`（§6.10）与 connect 事件的 `SET time_zone = '+00:00'`（§6.4）都是 MySQL 专属；无条件施加会立刻炸掉 sqlite 路径——已实测两种失败形态：`ArgumentError: Invalid value 'READ COMMITTED' for isolation_level. Valid isolation levels for 'sqlite' are READ UNCOMMITTED, SERIALIZABLE, AUTOCOMMIT`，以及 `sqlite3.OperationalError: near "SET": syntax error`。现有 `plugins/onestep-mysql/tests/` 下有 **7 处** `MySQLConnector("sqlite://...")` 构造（`test_mysql_plugin.py` 5 处、`test_mysql_binlog.py` 2 处），且该插件 118 个用例整体跑在 sqlite 上（实测 `118 passed, 1 skipped`）。因此这两个选项必须以 `dialect.name` 守卫，并**保留 sqlite 路径回归**。仓库既有先例：`plugins/onestep-sql/src/onestep_sql/postgres/execution_backend.py` 在抽取前以 `if conn.dialect.name == "postgresql"`（约 line 242）与 `if engine.dialect.name == "postgresql"`（约 line 312）区分，MySQL 实现照此办理。
+- **MySQL 专属 engine 选项必须按 dialect 守卫**（新增强制要求）。`isolation_level="READ COMMITTED"`（§6.10）与 connect 事件的 `SET time_zone = '+00:00'`（§6.4）都是 MySQL 专属；无条件施加会立刻炸掉 sqlite 路径——已实测两种失败形态：`ArgumentError: Invalid value 'READ COMMITTED' for isolation_level. Valid isolation levels for 'sqlite' are READ UNCOMMITTED, SERIALIZABLE, AUTOCOMMIT`，以及 `sqlite3.OperationalError: near "SET": syntax error`。现有 `plugins/onestep-mysql/tests/` 下有 **8 处** `MySQLConnector("sqlite://...")` 构造（`test_mysql_plugin.py` 6 处，含 line 439 的跨行调用；`test_mysql_binlog.py` 2 处）——统计必须用 AST，同行 grep 会漏掉跨行写法（`connector = MySQLConnector(\n    "sqlite://",\n    ...)`）。该插件 118 个用例**不依赖真实 MySQL 连接**（仅 1 个用 MySQL DSN 做惰性 engine/driver 断言，见 `test_mysql_plugin.py:463`，其 engine 只在断言 `driver == "asyncmy"` 时构造、并不建连；实测未设 `ONESTEP_MYSQL_DSN` 时 `118 passed, 1 skipped`，其中 1 skipped 是 `integration/test_mysql_live.py` 的模块级 skip）。因此这两个选项必须以 `dialect.name` 守卫，并**保留 sqlite 路径回归**。仓库既有先例：`plugins/onestep-sql/src/onestep_sql/postgres/execution_backend.py` 在抽取前以 `if conn.dialect.name == "postgresql"`（约 line 242）与 `if engine.dialect.name == "postgresql"`（约 line 312）区分，MySQL 实现照此办理。
 - `mysql_execution_source` strict YAML catalog 快照（type、role、allowed fields、defaults、connector type）。
 - **回归红线**：抽取 `_shared.execution` 后，现有 PostgreSQL 全套单测（`test_postgres_execution_backend.py`、`test_postgres_execution_source.py`、`test_execution_schema.py`，当前 **59** 个用例，多数跑在 `sqlite:///` 上）必须**零修改通过**。这是抽取不改变语义的主要证据。
 - `tests/contract/test_onestep_sql_canonical.py` 的 type 集合断言更新为 21 个 type，并新增断言：`mysql_execution_source` 只接受 MySQL connector、`postgres_execution_source` 只接受 PostgreSQL connector。
@@ -655,6 +655,10 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 - `scripts/setup-integration-env.sh` 的 `wait_for_mysql()` 有 **60 × 2s = 120s** 的重试窗口，会一直重试直到某个连接成功。
 
 两者叠加会掩盖 `cryptography` 缺失，造成**静默假绿**：CI 全绿，但用户侧照样失败。
+
+**注意 `mysqladmin ping` 的退出码不反映认证结果**（已实测）：不存在的用户、错误密码、正确凭据三种输入的退出码**均为 0**。因此判定依据必须是「**是否携带正确凭据完成过一次真实认证**」，不能用 ping 的成功/失败作判据。已实测只有**认证成功**的 ping 才预热缓存：`FLUSH PRIVILEGES` 冷却后，用错误密码发 ping（退出码同样为 0）再连接仍 FAILED，用正确凭据发 ping 再连接即 CONNECTED。
+
+同样地，`wait_for_mysql()` 的 120s 重试窗口**不能自我预热**——它每次都以同样方式失败并重试。已实测：冷却后连续重试前 3 次全部 FAILED，直到**外部 prober**（模拟 healthcheck 的 5s 周期）完成一次成功认证后，第 4 次才 CONNECTED；没有外部 prober 时连续 6 次重试全部 FAILED。因此 CI 绿灯的充分条件是**存在周期 ≤ 5s 的外部 TCP prober**（即 compose healthcheck），而不是那个重试窗口本身在兜底。
 
 应改用以下两类证据：
 
