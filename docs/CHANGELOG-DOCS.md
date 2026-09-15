@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-09-15 - 修正 PostgreSQL Tracked Execution 页的版本口径
+
+### 变更概述
+
+`onestep 1.9.0` 与 `onestep-sql 0.1.0` 早已发布（当前 `onestep-sql` 为 0.3.0），但 [PostgreSQL Tracked Execution](/broker/postgres-execution) 页仍以「两个包即将发布」的将来时叙述，并把版本写成精确 pin。本次改为已发布的版本区间口径，并修正回滚章节的一处事实错误。
+
+### 更新内容
+
+- 简介、版本对照表、安装示例、上线清单、回滚章节统一改为 `onestep>=1.9.0` / `onestep-sql[postgres]>=0.1.0`，不再使用 `==1.9.0` / `==0.1.0` 精确 pin。
+- 「发布顺序必须是」（先发 1.9.0、再发 0.1.0）改为上线顺序（确认版本组合可解析、锁定依赖、先 worker 后 API），删除「如果 plugin 尚未发布」的过期提示。
+- 第 2 节标题 `发布和安装` → `安装和上线`（EN: `Release and Installation` → `Installation and Rollout`）。
+- 修正回滚章节事实错误：`onestep-postgres==0.1.3` 是合并前的独立实现，并非转发 shim（shim 从 0.6.0 起）；并说明回滚后仅保留 table queue、incremental、state、sink 能力。
+- 数据库初始化章节的「PR 提供的是…」改为「`auto_create` 提供的是…」。
+- 同步英文页 `/en/broker/postgres-execution` 的全部对应改动。
+
 ## 2026-09-11 - 合并 MySQL/PostgreSQL 连接器页为统一 SQL 页
 
 ### 变更概述
