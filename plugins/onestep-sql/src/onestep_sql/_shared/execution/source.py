@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import math
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Callable, ClassVar, Generic, TypeVar
@@ -44,6 +43,11 @@ from onestep.resilience import (
     is_retryable_connector_error,
 )
 
+# The option validator is backend-agnostic and lives in its own dependency-light
+# module so that the YAML resource-catalog validator can import it without
+# pulling in this module's source-layer imports (design §12.3).
+from .source_options import _validate_execution_source_options
+
 #: A backend's concrete source class. Concrete deliveries bind it to their own
 #: source type so the ``source`` parameter keeps the precise annotation the
 #: pre-extraction classes had, instead of degrading to ``Any``.
@@ -56,67 +60,6 @@ def _connector_secret_tokens(connector: Any) -> list[str]:
         return public()
     private = getattr(connector, "_secret_tokens", None)
     return private() if callable(private) else []
-
-
-def _validate_execution_source_options(
-    *,
-    namespace: str,
-    task_names: Sequence[str],
-    batch_size: int,
-    poll_interval_s: float,
-    lease_duration_s: float,
-    heartbeat_interval_s: float,
-    worker_id: str,
-    field_prefix: str = "",
-) -> tuple[str, ...]:
-    prefix = f"{field_prefix}." if field_prefix else ""
-    if not isinstance(namespace, str) or not namespace.strip() or len(namespace.strip()) > 255:
-        raise ValueError(f"{prefix}namespace must be non-empty and <= 255 characters")
-    if not isinstance(task_names, Sequence) or isinstance(task_names, (str, bytes)):
-        raise TypeError(f"{prefix}task_names must be a sequence of strings")
-    normalized_tasks = tuple(
-        task.strip() if isinstance(task, str) else task for task in task_names
-    )
-    if not normalized_tasks or any(
-        not isinstance(task, str) or not task or len(task) > 255
-        for task in normalized_tasks
-    ):
-        raise ValueError(f"{prefix}task_names must be non-empty strings <= 255 characters")
-    if len(normalized_tasks) != 1:
-        raise ValueError(f"{prefix}task_names must contain exactly one task name")
-    if len(set(normalized_tasks)) != len(normalized_tasks):
-        raise ValueError(f"{prefix}task_names must be unique")
-    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
-        raise ValueError(f"{prefix}batch_size must be >= 1")
-    for name, value in (
-        ("poll_interval_s", poll_interval_s),
-        ("lease_duration_s", lease_duration_s),
-        ("heartbeat_interval_s", heartbeat_interval_s),
-    ):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-        ):
-            raise ValueError(f"{prefix}{name} must be a finite number")
-    if poll_interval_s <= 0:
-        raise ValueError(f"{prefix}poll_interval_s must be > 0")
-    if lease_duration_s <= 0:
-        raise ValueError(f"{prefix}lease_duration_s must be > 0")
-    if (
-        heartbeat_interval_s <= 0
-        or (
-            heartbeat_interval_s > lease_duration_s / 3
-            and not math.isclose(heartbeat_interval_s, lease_duration_s / 3)
-        )
-    ):
-        raise ValueError(
-            f"{prefix}heartbeat_interval_s must be > 0 and <= "
-            f"{prefix}lease_duration_s / 3"
-        )
-    if not isinstance(worker_id, str) or not worker_id.strip() or len(worker_id.strip()) > 255:
-        raise ValueError(f"{prefix}worker_id must be non-empty and <= 255 characters")
-    return normalized_tasks
 
 
 class ExecutionSourceBase(Source):

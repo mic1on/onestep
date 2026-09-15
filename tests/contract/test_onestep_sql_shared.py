@@ -711,7 +711,7 @@ def test_shared_package_exports_only_the_shared_modules() -> None:
             importlib.import_module("onestep_sql._shared.execution").__path__
         )
     }
-    assert execution_names == {"machine", "dialect", "source"}
+    assert execution_names == {"machine", "dialect", "source", "source_options"}
 
 
 def _shared_python_files() -> list[Path]:
@@ -914,6 +914,165 @@ def test_shared_execution_source_layer_is_the_single_implementation() -> None:
         postgres_resources._validate_execution_source_options
         is shared_source._validate_execution_source_options
     )
+
+
+def test_execution_source_option_validator_is_shared_and_backend_agnostic() -> None:
+    """The option validator is one object every backend can reach directly.
+
+    Its home is ``_shared/execution/source_options.py`` rather than
+    ``.../source.py`` so it carries none of the source layer's heavier imports;
+    ``onestep_sql.postgres.resources`` re-exports it through the published
+    ``postgres.execution_source`` path. Phase 3's MySQL source must consume this
+    same object instead of importing anything under ``onestep_sql.postgres``
+    (design §12.3, "no cross-backend dependency").
+    """
+    from onestep_sql._shared.execution import source_options as shared_options
+    from onestep_sql.postgres import execution_source as postgres_source
+    from onestep_sql.postgres import resources as postgres_resources
+
+    # Every resolution path yields the same object.
+    assert (
+        shared_options._validate_execution_source_options
+        is postgres_source._validate_execution_source_options
+        is postgres_resources._validate_execution_source_options
+    )
+    assert (
+        shared_options._validate_execution_source_options.__module__
+        == "onestep_sql._shared.execution.source_options"
+    )
+
+    # It is dependency-light: no concrete backend, and none of the source
+    # layer's runtime imports, may leak into it.
+    tree = ast.parse(
+        (
+            Path(__file__).resolve().parents[2]
+            / "plugins/onestep-sql/src/onestep_sql/_shared/execution/source_options.py"
+        ).read_text(encoding="utf-8")
+    )
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(("." * node.level) + (node.module or ""))
+    assert not [
+        name
+        for name in imported
+        if "onestep_sql" in name or "postgres" in name or "mysql" in name
+    ], f"source_options must not import a backend: {imported}"
+
+    # Behaviour is unchanged from the pre-extraction implementation: the
+    # documented boundaries and the message/`field_prefix` contract still hold.
+    validate = shared_options._validate_execution_source_options
+    assert validate(
+        namespace="agent-api",
+        task_names=("run_agent",),
+        batch_size=1,
+        poll_interval_s=0.5,
+        lease_duration_s=90.0,
+        heartbeat_interval_s=30.0,
+        worker_id="w",
+    ) == ("run_agent",)
+    # Single task name is enforced.
+    with pytest.raises(ValueError, match="exactly one task name"):
+        validate(
+            namespace="ns",
+            task_names=("a", "b"),
+            batch_size=1,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0,
+            worker_id="w",
+        )
+    # The heartbeat tolerance branch accepts exactly lease/3 (math.isclose).
+    validate(
+        namespace="ns",
+        task_names=("t",),
+        batch_size=1,
+        poll_interval_s=1.0,
+        lease_duration_s=90.0,
+        heartbeat_interval_s=30.0,
+        worker_id="w",
+    )
+    with pytest.raises(ValueError, match="lease_duration_s / 3"):
+        validate(
+            namespace="ns",
+            task_names=("t",),
+            batch_size=1,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0001,
+            worker_id="w",
+        )
+    # bool is not an acceptable batch_size.
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        validate(
+            namespace="ns",
+            task_names=("t",),
+            batch_size=True,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0,
+            worker_id="w",
+        )
+    # field_prefix is preserved in every message.
+    with pytest.raises(ValueError, match=r"jobs\.namespace"):
+        validate(
+            namespace="",
+            task_names=("t",),
+            batch_size=1,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0,
+            worker_id="w",
+            field_prefix="jobs",
+        )
+
+
+def test_no_backend_subpackage_imports_another_backend() -> None:
+    """``mysql`` must never import ``onestep_sql.postgres`` (design §12.3).
+
+    Phase 3's MySQL source reuses the shared machine and the shared option
+    validator, so any new import edge from a backend into another backend is a
+    regression, not a convenience.
+    """
+    dist = Path(__file__).resolve().parents[2] / "plugins/onestep-sql/src/onestep_sql"
+    for package, forbidden in (
+        ("mysql", ("postgres", "sqlite")),
+        ("postgres", ("mysql", "sqlite")),
+        ("sqlite", ("mysql", "postgres")),
+    ):
+        for path in sorted((dist / package).rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                names: list[str] = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    names = [node.module]
+                for name in names:
+                    for other in forbidden:
+                        assert not name.startswith(f"onestep_sql.{other}"), (
+                            f"{path.name} imports onestep_sql.{other} ({name!r})"
+                        )
+    # The shared execution package must not depend on any concrete backend.
+    for path in sorted((dist / "_shared" / "execution").rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            for name in names:
+                for other in ("mysql", "postgres", "sqlite"):
+                    assert not name.startswith(f"onestep_sql.{other}"), (
+                        f"_shared/execution/{path.name} imports onestep_sql.{other}"
+                    )
 
 
 def test_postgres_execution_modules_keep_their_published_surface() -> None:
