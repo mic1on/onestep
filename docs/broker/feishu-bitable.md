@@ -298,5 +298,5 @@ CDC 或多写者 exactly-once 保证。
 ## 下一步
 
 - [YAML 任务定义](/yaml-task-definition) - 查看插件资源注册和严格校验
-- [MySQL](/broker/mysql) - 从数据库增量同步到多维表格
+- [SQL（MySQL / PostgreSQL）](/broker/sql) - 从数据库增量同步到多维表格
 - [HTTP Sink](/broker/http) - 对接普通 HTTP API

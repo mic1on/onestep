@@ -199,6 +199,6 @@ Do not output DSN, `app_secret`, or `app_token` in logs or case configuration.
 
 ## Related Documentation
 
-- [MySQL: Reliable Persistent Cursor & Retry](/en/broker/mysql#reliable-persistent-cursor-with-retry)
+- [SQL: Reliable Persistent Cursor & Retry](/en/broker/sql#reliable-persistent-cursor-with-retry)
 - [Feishu Bitable: High-Throughput Insert Incremental Sync](/en/broker/feishu-bitable#high-throughput-insert-incremental-sync)
 - [YAML Task Definition](/en/yaml-task-definition)

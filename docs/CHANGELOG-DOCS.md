@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-09-11 - 合并 MySQL/PostgreSQL 连接器页为统一 SQL 页
+
+### 变更概述
+
+把「即将下线」标记的 `MySQL` 与 `PostgreSQL` 两个连接器页合并为单个 SQL 连接器页，用标签页（`MySQL` / `PostgreSQL`）展示差异，移除误导性的「即将下线」徽章。
+
+### 更新内容
+
+- 新增 [SQL（MySQL / PostgreSQL）](/broker/sql) 连接器页（中英双语），用 `code-group` 标签页区分两个后端的连接类、DSN、YAML 资源类型，共享表队列/增量同步/表输出/状态存储/最佳实践内容，并补充 MySQL binlog CDC 章节（基于 `db.binlog()` 实际签名）。
+- 删除 `docs/broker/{mysql,postgres}.md` 与 `docs/en/broker/{mysql,postgres}.md` 四个旧页。
+- 侧边栏移除「即将下线」徽章，改为单个 `SQL` 项（带 `MySQL` / `PostgreSQL` 标签）。
+- 概览表与 connector 表：MySQL/PostgreSQL 两行合并为一行。
+- 全站交叉引用 `/broker/mysql`、`/broker/postgres` 重定向为 `/broker/sql`（含锚点）。
+- 保留 [PostgreSQL Tracked Execution](/broker/postgres-execution) 独立页。
+
 ## 2026-09-11 - 第二次同步 main（飞书关联字段缓存、1.12.0 稳定版）
 
 ### 变更概述

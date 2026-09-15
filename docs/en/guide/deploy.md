@@ -362,8 +362,7 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 
 - [RabbitMQ](/en/broker/rabbitmq) - distributed message queue
 - [Redis Streams](/en/broker/redis) - lightweight message queue
-- [MySQL](/en/broker/mysql) - database integration
-- [PostgreSQL](/en/broker/postgres) - PostgreSQL integration
+- [SQL (MySQL / PostgreSQL)](/en/broker/sql) - Database integration
 - [Kafka](/en/broker/kafka) - Kafka topic source/sink
 - [Cloudflare Queues](/en/broker/cf-queues) - HTTP pull consumer
 - [Worker Runtime Image](/en/guide/worker-runtime-image) - containerized YAML workers

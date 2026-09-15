@@ -319,8 +319,7 @@ app = OneStepApp("my-app", shutdown_timeout_s=30.0)
 
 - [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
 - [Redis Streams](/broker/redis) - 轻量级消息队列
-- [MySQL](/broker/mysql) - 数据库集成
-- [PostgreSQL](/broker/postgres) - PostgreSQL 集成
+- [SQL（MySQL / PostgreSQL）](/broker/sql) - 数据库集成
 - [Kafka](/broker/kafka) - Kafka topic source/sink
 - [Cloudflare Queues](/broker/cf-queues) - HTTP 拉取消费者
 - [Worker Runtime Image](/guide/worker-runtime-image) - 容器化运行 YAML worker

@@ -199,6 +199,6 @@ Do not log DSNs, AWS credentials, or sensitive fields from messages.
 ## Related
 
 - [AWS SQS Connector](/en/broker/sqs)
-- [MySQL: Table Sink and Conflict Policy](/en/broker/mysql#table-sink)
+- [SQL: Table Sink and Conflict Policy](/en/broker/sql#table-sink)
 - [Retry & Dead Letter](/en/core/retry)
 - [YAML Task Definition](/en/yaml-task-definition)

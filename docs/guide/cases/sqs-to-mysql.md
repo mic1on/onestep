@@ -185,6 +185,6 @@ heartbeat_interval_s 明显小于 heartbeat_visibility_timeout
 ## 相关文档
 
 - [AWS SQS 连接器](/broker/sqs)
-- [MySQL：表输出与冲突策略](/broker/mysql#表输出-table-sink)
+- [SQL：表输出与冲突策略](/broker/sql#表输出-table-sink)
 - [重试与死信](/core/retry)
 - [YAML 任务定义](/yaml-task-definition)

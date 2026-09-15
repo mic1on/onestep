@@ -126,7 +126,6 @@ dependencies through `onestep-sql`; no changes to worker YAML or mounted
 ## References
 
 - [Design document](../../superpowers/specs/2026-08-20-onestep-sql-consolidation-design.md)
-- [MySQL connector](/en/broker/mysql)
-- [PostgreSQL connector](/en/broker/postgres)
+- [SQL connector](/en/broker/sql)
 - [PostgreSQL Tracked Execution](/en/broker/postgres-execution)
 - [CHANGELOG](https://github.com/mic1on/onestep/blob/main/CHANGELOG.md)

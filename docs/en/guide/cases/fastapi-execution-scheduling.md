@@ -323,6 +323,6 @@ executions are unaffected.
 ## Related
 
 - [PostgreSQL Tracked Execution](/en/broker/postgres-execution) (full API, state machine, schema)
-- [PostgreSQL Connector](/en/broker/postgres)
+- [SQL (MySQL / PostgreSQL)](/en/broker/sql) - Table queue and incremental sync
 - [Retry & Dead Letter](/en/core/retry)
 - [Core Reliability](/en/core-reliability)

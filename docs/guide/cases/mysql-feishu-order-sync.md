@@ -221,6 +221,6 @@ TypeError: Object of type datetime is not JSON serializable
 
 ## 相关文档
 
-- [MySQL：可靠持久游标与重试](/broker/mysql#可靠持久游标与重试)
+- [SQL：可靠持久游标与重试](/broker/sql#可靠持久游标与重试)
 - [Feishu Bitable：高吞吐 Insert 增量同步](/broker/feishu-bitable#高吞吐-insert-增量同步)
 - [YAML 任务定义](/yaml-task-definition)

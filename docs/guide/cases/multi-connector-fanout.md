@@ -224,7 +224,7 @@ def to_notify_body(ctx, payload, result):
 ## 相关文档
 
 - [Redis Streams 连接器](/broker/redis)
-- [MySQL：表输出与冲突策略](/broker/mysql#表输出-table-sink)
+- [SQL：表输出与冲突策略](/broker/sql#表输出-table-sink)
 - [HTTP Sink](/broker/http)
 - [条件 Sink 路由与 Per-Sink Transform](/yaml-task-definition#第-4-阶段：添加条件-sink-路由)
 - [重试与死信](/core/retry)

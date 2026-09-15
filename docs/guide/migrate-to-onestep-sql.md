@@ -111,7 +111,6 @@ resources:
 ## 参考
 
 - [设计文档](../superpowers/specs/2026-08-20-onestep-sql-consolidation-design.md)
-- [MySQL 连接器](/broker/mysql)
-- [PostgreSQL 连接器](/broker/postgres)
+- [SQL 连接器](/broker/sql)
 - [PostgreSQL Tracked Execution](/broker/postgres-execution)
 - [CHANGELOG](https://github.com/mic1on/onestep/blob/main/CHANGELOG.md)

@@ -236,5 +236,5 @@ onestep run worker.yaml
 
 - [功能特性](/guide/features) - 了解所有支持的特性
 - [RabbitMQ](/broker/rabbitmq) - 分布式消息队列
-- [MySQL](/broker/mysql) - 数据库表队列和增量同步
+- [SQL（MySQL / PostgreSQL）](/broker/sql) - 数据库表队列和增量同步
 - [CLI 部署](/guide/deploy) - 生产环境部署指南

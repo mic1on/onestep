@@ -296,5 +296,5 @@ For combining this mode with MySQL composite cursors, retries, and safe recovery
 ## Next Steps
 
 - [YAML Task Definition](/en/yaml-task-definition) - View plugin resource registration and strict validation
-- [MySQL](/en/broker/mysql) - Incremental sync from database to Bitable
+- [SQL (MySQL / PostgreSQL)](/en/broker/sql) - Incremental sync from database to Bitable
 - [HTTP Sink](/en/broker/http) - Connect to standard HTTP APIs

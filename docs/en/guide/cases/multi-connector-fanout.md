@@ -235,7 +235,7 @@ Do not log DSNs, Redis URLs, or tokens in HTTP targets.
 ## Related
 
 - [Redis Streams Connector](/en/broker/redis)
-- [MySQL: Table Sink and Conflict Policy](/en/broker/mysql#table-sink)
+- [SQL: Table Sink and Conflict Policy](/en/broker/sql#table-sink)
 - [HTTP Sink](/en/broker/http)
 - [Conditional Sink Routing and Per-Sink Transform](/en/yaml-task-definition)
 - [Retry & Dead Letter](/en/core/retry)

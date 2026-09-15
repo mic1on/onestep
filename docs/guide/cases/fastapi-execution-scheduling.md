@@ -305,6 +305,6 @@ worker 领取任务后持有租约，靠心跳续期。心跳停止（进程卡�
 ## 相关文档
 
 - [PostgreSQL Tracked Execution](/broker/postgres-execution)（完整 API、状态机、schema）
-- [PostgreSQL 连接器](/broker/postgres)
+- [SQL（MySQL / PostgreSQL）](/broker/sql) - 表队列与增量同步
 - [重试与死信](/core/retry)
 - [核心可靠性](/core-reliability)
