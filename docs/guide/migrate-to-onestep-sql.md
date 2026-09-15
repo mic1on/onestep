@@ -87,10 +87,13 @@ resources:
 合并不是把 MySQL 与 PostgreSQL 当作可互换后端：
 
 - `mysql_binlog` 始终是 MySQL 专属（依赖同步 `mysql-replication`）。
-- `postgres_execution_source` / tracked execution 始终是 PostgreSQL 专属
-  （依赖 PostgreSQL 事务/锁/lease 语义）。
+- `postgres_execution_source` 始终是 PostgreSQL 专属；`mysql_execution_source`
+  始终是 MySQL 专属。tracked execution 由两个 backend 各自实现（各自依赖本
+  backend 的事务/锁/lease 语义），一个 execution 表只属于一个 backend，不跨
+  backend 混用。
 
-这两项不会出现在另一后端的 namespace 中。
+这两项能力不会出现在另一后端的 namespace 中：每个 backend 的 execution source
+只接受该 backend 的 connector。
 
 ## Worker 镜像
 

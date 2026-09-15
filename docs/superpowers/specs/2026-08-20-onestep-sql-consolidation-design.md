@@ -76,7 +76,7 @@ plugins/onestep-sql/
 | --- | --- | --- |
 | `onestep_sql._shared` | SQLAlchemy state/cursor store serialization；table queue 与 incremental delivery sequencing/state-key；table sink `insert`/`upsert`/`update` 的 column-write policy；共同的 payload validation、redaction contract 和测试 fixtures。 | 当前 drift check 的 `state_sqlalchemy.py`、table-sink policy 和 `_default_incremental_state_key` 已证明这些是刻意并行的同一行为。 |
 | `onestep_sql.mysql` | MySQL DSN normalization/dialect、`asyncmy` execution、MySQL error classification、MySQL SQL dialect details，以及同步 `mysql-replication` thread boundary。 | 驱动、SQL 方言和 binlog replication API 都是 MySQL 特有。 |
-| `onestep_sql.postgres` | PostgreSQL DSN/dialect、`psycopg` execution、PostgreSQL error classification、execution schema/backend/source、lease/heartbeat/reclaim/cancellation behavior。 | tracked execution 依赖 PostgreSQL transaction/locking schema 与 lease semantics，不能抽象成另一后端可声明的 feature。 |
+| `onestep_sql.postgres` | PostgreSQL DSN/dialect、`psycopg` execution、PostgreSQL error classification、execution schema/backend/source、lease/heartbeat/reclaim/cancellation behavior。 | tracked execution 依赖各 backend 自己的 transaction/locking schema 与 lease semantics，因此不能抽取成共享的、可由另一后端声明的 feature（MySQL 侧由 `onestep_sql.mysql` 另行实现）。 |
 | `onestep_sql.resources` | 组合两端 resource catalog 和 builder，且只在 build 时延迟导入需特定驱动的后端。 | 安装单一 backend extra 时 plugin discovery 必须仍可安全完成，且必须只注册一次。 |
 
 提取共用代码前必须逐项对照 `scripts/check_plugin_drift.py` 的三对比较对象。该脚本的唯一已允许差异 `_async_dsn`（`mysql+asyncmy` 与 `postgresql+psycopg`）仍属于 backend adapter；不要把驱动映射塞入 shared store。只有经双后端 contract tests 证明相同行为的逻辑可进入 `_shared`。
@@ -259,7 +259,7 @@ Canonical initial release 必须先通过完整 SQL workflow、两种 live backe
 - `onestep-sql` 是 MySQL 与 PostgreSQL 的唯一 canonical distribution 和唯一自动 resource registration path；
 - `onestep_sql.mysql` 与 `onestep_sql.postgres` 为新代码的 public API，legacy import paths 在所承诺窗口内保持对象 identity 兼容；
 - 14 个现有 YAML type 名、其 strict catalog/validation、defaults 和 connector boundaries 全部保留；
-- `mysql_binlog` 始终是 MySQL 特有；`postgres_execution_source` 和 tracked execution 始终是 PostgreSQL 特有；
+- `mysql_binlog` 始终是 MySQL 特有；`postgres_execution_source` 始终是 PostgreSQL 特有，`mysql_execution_source` 始终是 MySQL 特有；tracked execution 由两个 backend 各自实现，不跨 backend 混用（一个 execution 表只属于一个 backend）；
 - `onestep-mysql`、`onestep-postgres` 作为无独立 resource entry point 的 forwarding distributions 至少保留“六个月或两个 feature releases，以较晚者为准”；
 - canonical/legacy 任意支持安装组合不会重复注册 resource handlers；
 - canonical extras、core extras、workspace/lockfile、worker image、CI/release and live tests、documentation 都完成迁移；

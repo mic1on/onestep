@@ -51,6 +51,8 @@ from onestep_sql.postgres import PostgresConnector, PostgresExecutionSource
 
 * The 14 YAML type names (`mysql_*`, `postgres_*`) and their catalog roles,
   fields, defaults, and connector boundaries are unchanged.
-* `mysql_binlog` stays MySQL-only; `postgres_execution_source` / tracked
-  execution stays PostgreSQL-only.
+* `mysql_binlog` stays MySQL-only; `postgres_execution_source` stays
+  PostgreSQL-only, and `mysql_execution_source` stays MySQL-only. Tracked
+  execution is implemented once per backend and never shared across them: each
+  backend's execution source only accepts that backend's connector.
 * See the design doc for the full non-goals and the phased rollout plan.
