@@ -652,13 +652,22 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 **不得用「CI job 红 / 绿」判定认证可用性。** 原因：
 
 - healthcheck（`mysqladmin ping -proot`）每 **5s** 持续预热 `root` 的认证缓存；
-- `scripts/setup-integration-env.sh` 的 `wait_for_mysql()` 有 **60 × 2s = 120s** 的重试窗口，会一直重试直到某个连接成功。
+- `scripts/setup-integration-env.sh` 的 `wait_for_mysql()` 有 **60 × 2s = 120s** 的重试窗口；该窗口**并不构成对 `cryptography` 缺失的独立兜底**（证伪实验见下），它只是在被动等待外部 prober 完成预热。
 
-两者叠加会掩盖 `cryptography` 缺失，造成**静默假绿**：CI 全绿，但用户侧照样失败。
+healthcheck 的持续预热掩盖了 `cryptography` 缺失，造成**静默假绿**：CI 全绿，但用户侧照样失败。
 
 **注意 `mysqladmin ping` 的退出码不反映认证结果**（已实测）：不存在的用户、错误密码、正确凭据三种输入的退出码**均为 0**。因此判定依据必须是「**是否携带正确凭据完成过一次真实认证**」，不能用 ping 的成功/失败作判据。已实测只有**认证成功**的 ping 才预热缓存：`FLUSH PRIVILEGES` 冷却后，用错误密码发 ping（退出码同样为 0）再连接仍 FAILED，用正确凭据发 ping 再连接即 CONNECTED。
 
-同样地，`wait_for_mysql()` 的 120s 重试窗口**不能自我预热**——它每次都以同样方式失败并重试。已实测：冷却后连续重试前 3 次全部 FAILED，直到**外部 prober**（模拟 healthcheck 的 5s 周期）完成一次成功认证后，第 4 次才 CONNECTED；没有外部 prober 时连续 6 次重试全部 FAILED。因此 CI 绿灯的充分条件是**存在周期 ≤ 5s 的外部 TCP prober**（即 compose healthcheck），而不是那个重试窗口本身在兜底。
+同样地，`wait_for_mysql()` 的 120s 重试窗口**不能自我预热**——它每次都以同样方式失败并重试，**不构成对 `cryptography` 缺失的兜底**。用一对可复现、可证伪的对照实验直接证伪「重试窗口是独立保险」这一读法（两次实验的 `cryptography` 导入均被屏蔽，模拟 `uv sync --frozen` 之后的真实状态；均先 `FLUSH PRIVILEGES` 冷却认证缓存）：
+
+| 实验 | 条件 | 结果 |
+| --- | --- | --- |
+| **TEST 1** | 冷缓存 + **无** healthcheck | **`TIMEOUT after ~120s`**——跑满全部 60 次尝试全部失败，`last = RuntimeError: 'cryptography' package is required for sha256_password or caching_sha2_password auth methods`，exit=1。**冷缓存下它无法自救**（两次独立测量分别为 120.3s / 120.4s，差异为计时抖动）。 |
+| **TEST 2** | 冷缓存 + 存在 **5s** TCP healthcheck | **`SUCCESS after 4.0s`**，exit=0。 |
+
+结论（实测事实）：**真正起作用的只有 healthcheck 预热这一项**，`wait_for_mysql` 的重试窗口只是在等它——它是**被动等待**，不是**主动兜底**。因此 CI 绿灯的充分条件是**存在周期 ≤ 5s 的外部 TCP prober**（即 compose healthcheck）。
+
+补充：在只有重试窗口而没有外部 prober 时，实测连续 6 次重试全部 FAILED；而在启动 5s 周期外部 prober 后，前 3 次重试 FAILED、prober 于 ~5s 完成一次成功认证后第 4 次即 CONNECTED——与上表 TEST 1 / TEST 2 的结论一致。
 
 应改用以下两类证据：
 
