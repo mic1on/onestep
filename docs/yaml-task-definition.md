@@ -41,6 +41,19 @@ strict 模式用于尽早暴露配置漂移：
 - YAML 开启框架日志控制时非法的 `app.logging.level` 取值
 - 非法的条件 `emit` 路由和 per-Sink 绑定形状
 
+## 环境变量与 .env
+
+YAML 中所有字符串值都会做 `${VAR}` 展开，支持 `${VAR}`、`${VAR:-default}` 和 `${VAR:default}` 三种写法；整个字符串只有一个引用时会按 JSON 字面量保留类型（`"30"` → 整数 `30`）。变量来源与优先级：
+
+1. 进程环境（systemd `EnvironmentFile`、容器 `environment`、shell `export`）
+2. `--env-file` 命令行参数
+3. YAML 中的 `app.env_file`
+4. 与 YAML 同目录的 `.env`（自动探测）
+
+`.env` 使用 `setdefault` 语义：已存在的进程环境变量优先。缺少变量默认展开为空字符串；用 `--strict-env` 或 `app.strict_env: true` 让 `check`、`run`、`render`、`build` 在缺变量时直接失败。
+
+完整语法与全部变量清单见 [环境变量](/guide/environment-variables)。
+
 ## 可视化拓扑
 
 `onestep render` 把 YAML 目标渲染为 Mermaid 流程图，可在 CI 中与 strict 校验搭配，或直接粘贴到支持 Mermaid 的文档平台：

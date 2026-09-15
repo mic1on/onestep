@@ -43,6 +43,19 @@ Strict mode is intended to catch configuration drift early:
 - invalid `app.logging.level` values when YAML opts into framework log control
 - invalid conditional `emit` route and per-Sink binding shapes
 
+## Environment Variables and .env
+
+Every string value in the YAML goes through `${VAR}` expansion, supporting `${VAR}`, `${VAR:-default}`, and `${VAR:default}`; when the whole string is a single reference the result keeps its JSON literal type (`"30"` → the integer `30`). Sources, in priority order:
+
+1. Process environment (systemd `EnvironmentFile`, container `environment`, shell `export`)
+2. The `--env-file` CLI flag
+3. `app.env_file` in the YAML
+4. A `.env` file next to the YAML (auto-detected)
+
+`.env` loading uses `setdefault` semantics: an existing process environment variable wins. Missing variables expand to an empty string by default; use `--strict-env` or `app.strict_env: true` to make `check`, `run`, `render`, and `build` fail on a missing variable.
+
+Full syntax and the complete variable reference are in [Environment Variables](/en/guide/environment-variables).
+
 ## Visualizing the Topology
 
 `onestep render` renders a YAML target as a Mermaid flowchart — pair it with strict checks in CI, or paste the output into any Mermaid-capable documentation platform:

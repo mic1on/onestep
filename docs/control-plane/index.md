@@ -112,7 +112,7 @@ reporter:
 `reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` 是服务级元数据，
 和 `tasks[].description` 这种任务级描述相互独立。
 
-更多配置项请参考 `ControlPlaneReporterConfig` 的 `from_env` 方法。
+更多配置项请参考 `ControlPlaneReporterConfig` 的 `from_env` 方法，完整变量清单见 [环境变量](/guide/environment-variables)。
 
 ## 部署控制面
 

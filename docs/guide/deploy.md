@@ -233,6 +233,8 @@ def lambda_handler(event, context=None):
 
 systemd 部署模板会自动将 `APP_CWD` 添加到 `PYTHONPATH`；worker 镜像会自动将 `WORKSPACE_DIR` 及其 `src/` 添加到 `PYTHONPATH`，确保仓库内的模块可以正确导入。
 
+完整变量清单（含 Control Plane、Worker Agent、连接器凭据与集成测试变量）见 [环境变量](/guide/environment-variables)。
+
 ## YAML 配置
 
 支持 YAML 应用定义，`handler.ref` 指向 Python 可调用对象：

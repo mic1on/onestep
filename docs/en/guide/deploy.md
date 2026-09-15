@@ -276,6 +276,10 @@ The systemd template automatically adds `APP_CWD` to `PYTHONPATH`; the worker
 image automatically adds `WORKSPACE_DIR` and its `src/` to `PYTHONPATH`, so
 in-repo modules import reliably.
 
+For the complete variable reference — including Control Plane, Worker Agent,
+connector credentials, and integration test variables — see
+[Environment Variables](/en/guide/environment-variables).
+
 ## YAML Configuration
 
 Supports YAML application definitions with `handler.ref` pointing to Python callables:

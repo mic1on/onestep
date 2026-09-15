@@ -14,6 +14,8 @@ onestep provides an official worker runtime image, suitable for running workers 
 | `ONESTEP_TARGET` | YAML file path or Python import target |
 | `WORKSPACE_DIR` | Workspace path, defaults to `/workspace` |
 
+The full set of variables read by the image entrypoint is in [Environment Variables](/en/guide/environment-variables#worker-runtime-image).
+
 ## Mounting the Workspace
 
 ```bash

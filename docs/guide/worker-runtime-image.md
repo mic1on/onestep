@@ -14,6 +14,8 @@ onestep 提供官方 worker runtime image，适合以 YAML 为入口运行 worke
 | `ONESTEP_TARGET` | YAML 文件路径或 Python import target |
 | `WORKSPACE_DIR` | 工作区路径，默认 `/workspace` |
 
+镜像入口脚本读取的全部变量见 [环境变量](/guide/environment-variables#worker-runtime-image)。
+
 ## 挂载工作区
 
 ```bash

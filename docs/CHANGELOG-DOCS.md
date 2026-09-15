@@ -1,5 +1,18 @@
 # 文档更新日志
 
+## 2026-09-15 - 新增环境变量参考页
+
+### 变更概述
+
+新增独立的环境变量参考页 [环境变量](/guide/environment-variables)，把分散在部署、Worker 镜像、Control Plane、Worker Agent 与集成测试脚本中的变量汇总到一页，作为部署和排障时的单一参考；同时把 YAML 的变量展开契约从 [YAML 任务定义](/yaml-task-definition) 中单独成节。
+
+### 更新内容
+
+- 新增 [环境变量](/guide/environment-variables) 页（中英双语）：变量来源与优先级、`${VAR}` 展开语法与 JSON 类型保留规则、`--strict-env` / `app.strict_env` 严格模式，以及分组变量表（核心运行时、systemd 模板、Worker 镜像、Control Plane Reporter、实例身份、`ONESTEP_CP_*` 服务端全量参数、Worker Agent、连接器与 AWS 凭据、本地开发与集成测试、系统注入变量），共 115 个 `ONESTEP_*` 变量。
+- [YAML 任务定义](/yaml-task-definition) 新增「环境变量与 .env」章节：`--env-file` / `app.env_file` / YAML 同目录 `.env` 的解析顺序，以及 `strict_env` 只校验无默认值引用的行为。
+- 侧边栏「指南」新增「环境变量」项（EN: `Environment Variables`），位于「生产部署」与「Worker Runtime Image」之间。
+- 交叉引用：[生产部署](/guide/deploy)、[Worker Runtime Image](/guide/worker-runtime-image)、[Control Plane](/control-plane/) 增加指向新页的链接。
+
 ## 2026-09-15 - 修正 PostgreSQL Tracked Execution 页的版本口径
 
 ### 变更概述

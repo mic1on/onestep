@@ -112,7 +112,7 @@ Environment variable configuration:
 `reporter.service_description` / `ONESTEP_SERVICE_DESCRIPTION` is service-level metadata,
 independent of task-level descriptions like `tasks[].description`.
 
-See `ControlPlaneReporterConfig.from_env` for more configuration options.
+See `ControlPlaneReporterConfig.from_env` for more configuration options; the complete variable reference is in [Environment Variables](/en/guide/environment-variables).
 
 ## Deploying the Control Plane
 
