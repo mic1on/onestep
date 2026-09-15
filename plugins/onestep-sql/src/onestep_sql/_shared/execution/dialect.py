@@ -26,16 +26,34 @@ The schema *layer* never moves into ``_shared`` (design §7.2): that is exactly
 where the two backends differ. Each backend keeps its own
 ``execution_schema.py`` and returns the shared :class:`ExecutionTables`
 container from :meth:`ExecutionDialect.build_tables`.
+
+Identifier *naming*, by contrast, is dialect-independent mechanism (design §6.9):
+:func:`validate_sql_identifier` and :func:`derive_object_name` are pure
+string/parameter logic shared by both schema builders — PostgreSQL derives
+names against its 63-character limit, MySQL against 64, and MySQL additionally
+uses it to name the FK constraint that InnoDB would otherwise derive past the
+limit (§6.11).
 """
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 import sqlalchemy as sa
+
+
+#: A bare, unquoted SQL identifier: ASCII letter/underscore start, then
+#: letters/digits/underscores. Shared by every backend's schema builder.
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+#: Default number of hex digest characters appended when a derived name has to
+#: be truncated. Kept at the historical value so derived names are unchanged.
+_DEFAULT_NAME_HASH_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -49,6 +67,47 @@ class ExecutionTables:
     metadata: sa.MetaData
     executions: sa.Table
     attempts: sa.Table
+
+
+def validate_sql_identifier(value: str, field: str, *, max_length: int) -> str:
+    """Return ``value`` if it is a usable identifier, else raise ``ValueError``.
+
+    ``max_length`` is a parameter because the two backends differ (PostgreSQL
+    63, MySQL 64 — design §6.9); the message text is intentionally identical
+    across backends so the extract-start behaviour of both stays in step.
+    """
+    if not isinstance(value, str) or not value or not _IDENTIFIER.fullmatch(value):
+        raise ValueError(f"{field} must be a non-empty SQL identifier")
+    if len(value) > max_length:
+        raise ValueError(f"{field} must be at most {max_length} characters")
+    return value
+
+
+def derive_object_name(
+    *,
+    table_name: str,
+    prefix: str,
+    suffix: str,
+    max_length: int,
+    hash_length: int = _DEFAULT_NAME_HASH_LENGTH,
+) -> str:
+    """Derive a deterministic index/constraint/FK name from a table name.
+
+    Returns ``{prefix}{table_name}_{suffix}`` when that fits in ``max_length``;
+    otherwise truncates the stem and appends a stable hash so the result is
+    unique, deterministic, and within the limit. The truncation is what keeps
+    long user-supplied table names from producing over-long identifiers —
+    including the FK name InnoDB would otherwise derive from the table name
+    (design §6.9, §6.11). The result is a plain string, so it is equally usable
+    as an ``sa.Index`` / ``sa.UniqueConstraint`` / ``sa.CheckConstraint`` name
+    and as the ``name=`` argument of ``sa.ForeignKey``.
+    """
+    base = f"{prefix}{table_name}_{suffix}"
+    if len(base) <= max_length:
+        return base
+    digest = hashlib.sha256(base.encode("ascii")).hexdigest()[:hash_length]
+    stem_length = max_length - len(digest) - 1
+    return f"{base[:stem_length]}_{digest}"
 
 
 @runtime_checkable

@@ -816,6 +816,127 @@ def test_shared_execution_schema_stays_in_each_backend() -> None:
     )
 
 
+def test_execution_identifier_naming_is_shared_but_stays_parameterized() -> None:
+    """Identifier naming is shared mechanism; the length limit stays per backend.
+
+    Design §6.9: the helper must be parameterized (PostgreSQL 63 / MySQL 64),
+    must not carry a backend name, and must be usable as a
+    ``sa.ForeignKey(..., name=...)`` source for §6.11's InnoDB FK fix. The
+    PostgreSQL schema module keeps thin delegations so its derived names, error
+    messages and DDL are unchanged.
+    """
+    import inspect
+
+    from onestep_sql._shared.execution import dialect as shared_dialect
+    from onestep_sql.postgres import execution_schema as postgres_schema
+
+    # Neutral naming: no backend appears in either helper's name.
+    for name in ("derive_object_name", "validate_sql_identifier"):
+        assert hasattr(shared_dialect, name)
+        assert "postgres" not in name and "mysql" not in name
+
+    # Parameterized rather than hard-coded: max_length and hash_length are both
+    # accepted, and the historical hash length is still the default.
+    params = inspect.signature(shared_dialect.derive_object_name).parameters
+    assert "max_length" in params and "hash_length" in params
+    assert params["hash_length"].default == 12
+
+    # PostgreSQL delegates rather than keeping a parallel copy, so the two
+    # paths cannot drift; the PostgreSQL limit itself stays in its own module.
+    assert postgres_schema._postgres_object_name.__module__ == (
+        "onestep_sql.postgres.execution_schema"
+    )
+    derived_pg = postgres_schema._postgres_object_name(
+        table_name="a" * 62 + "1", prefix="uq_", suffix="execution_attempt"
+    )
+    derived_shared = shared_dialect.derive_object_name(
+        table_name="a" * 62 + "1",
+        prefix="uq_",
+        suffix="execution_attempt",
+        max_length=63,
+    )
+    assert derived_pg == derived_shared
+    assert len(derived_pg) <= 63
+
+    # The truncation branch is deterministic and collision-free for two
+    # same-prefix long names, which is what makes a derived FK name safe.
+    other = shared_dialect.derive_object_name(
+        table_name="a" * 62 + "2",
+        prefix="uq_",
+        suffix="execution_attempt",
+        max_length=63,
+    )
+    assert derived_pg != other
+    assert (
+        derived_pg
+        == shared_dialect.derive_object_name(
+            table_name="a" * 62 + "1",
+            prefix="uq_",
+            suffix="execution_attempt",
+            max_length=63,
+        )
+    )
+
+    # MySQL's wider limit uses the same implementation and stays within 64.
+    derived_mysql = shared_dialect.derive_object_name(
+        table_name="a" * 64, prefix="uq_", suffix="idempotency", max_length=64
+    )
+    assert len(derived_mysql) <= 64
+
+    # 63 and 64 are genuinely different limits on the same input.
+    long_table = "a" * 61
+    assert len(
+        shared_dialect.derive_object_name(
+            table_name=long_table, prefix="ix_", suffix="", max_length=63
+        )
+    ) == 63
+    assert len(
+        shared_dialect.derive_object_name(
+            table_name=long_table, prefix="ix_", suffix="", max_length=64
+        )
+    ) == 64
+
+    # Usable as a foreign-key constraint name (§6.11) -- not merely an index or
+    # check name -- and the derived name is what reaches the DDL.
+    fk_name = shared_dialect.derive_object_name(
+        table_name="a" * 58, prefix="fk_", suffix="execution", max_length=64
+    )
+    assert len(fk_name) <= 64
+    metadata = sa.MetaData()
+    parent = sa.Table(
+        "onestep_executions", metadata, sa.Column("id", sa.Uuid, primary_key=True)
+    )
+    child = sa.Table(
+        "a" * 58,
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column(
+            "execution_id",
+            sa.Uuid,
+            sa.ForeignKey(f"{parent.name}.id", name=fk_name, ondelete="CASCADE"),
+            nullable=False,
+        ),
+    )
+    from sqlalchemy.dialects import mysql as mysql_dialect
+
+    fk_ddl = str(
+        sa.schema.CreateTable(child).compile(dialect=mysql_dialect.dialect())
+    )
+    assert fk_name in fk_ddl
+
+    # The shared validator honours the caller's limit and keeps the exact
+    # messages the PostgreSQL module produced before extraction.
+    assert shared_dialect.validate_sql_identifier("ok_name", "t", max_length=63) == "ok_name"
+    with pytest.raises(ValueError, match="must be a non-empty SQL identifier"):
+        shared_dialect.validate_sql_identifier("a-b", "attempts_table", max_length=63)
+    with pytest.raises(ValueError, match="must be at most 63 characters"):
+        shared_dialect.validate_sql_identifier("a" * 64, "attempts_table", max_length=63)
+    assert (
+        shared_dialect.validate_sql_identifier("a" * 64, "attempts_table", max_length=64)
+        == "a" * 64
+    )
+
+
 def test_shared_execution_machine_is_the_single_implementation() -> None:
     from onestep_sql._shared.execution import machine as shared_machine
     from onestep_sql.postgres import execution_backend as postgres_execution
