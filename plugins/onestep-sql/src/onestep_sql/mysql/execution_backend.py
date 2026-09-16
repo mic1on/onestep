@@ -211,9 +211,11 @@ class MySQLExecutionBackend(ExecutionStateMachine):
     Engine sessions of this backend run under ``READ COMMITTED`` in UTC
     (§6.4, §6.10) regardless of the connector's engine options, including for
     connector-provided engines — build a separate :class:`MySQLConnector` for
-    workloads that need different session settings. The MySQL execution source
-    (``backend.source(...)``) arrives with Phase 3 of the design; until then
-    the source factory raises ``NotImplementedError``.
+    workloads that need different session settings. The public worker entry
+    point ``backend.source(...)`` (design §10.1) returns the backend-named
+    :class:`~onestep_sql.mysql.execution_source.MySQLExecutionSource`, whose
+    options are validated by the same shared validator as the PostgreSQL
+    source.
     """
 
     _dialect_cls = MySQLExecutionDialect
@@ -244,11 +246,9 @@ class MySQLExecutionBackend(ExecutionStateMachine):
         return connector
 
     def _make_source(self, **kwargs: Any) -> Any:
-        raise NotImplementedError(
-            "MySQLExecutionSource is delivered in Phase 3 of the tracked "
-            "execution design (source/delivery/YAML); the state machine and "
-            "schema are ready already"
-        )
+        from .execution_source import MySQLExecutionSource
+
+        return MySQLExecutionSource(**kwargs)
 
 
 __all__ = [

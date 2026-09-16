@@ -137,6 +137,37 @@ def test_python_source_uses_shared_validation(field, value, tmp_path) -> None:
         MySQLExecutionSource(dsn=f"sqlite:///{tmp_path / 'python-validation.db'}", **options)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("batch_size", 0),
+        ("poll_interval_s", float("nan")),
+        ("lease_duration_s", float("inf")),
+        ("heartbeat_interval_s", 31),
+    ],
+)
+def test_backend_source_entry_uses_shared_validation(field, value, tmp_path) -> None:
+    # The spec §10.1 public entry point: MySQLExecutionBackend.source(...) must
+    # reach MySQLExecutionSource (through the backend's _make_source seam, the
+    # PostgreSQL mirror is test_python_execution_source_uses_shared_validation
+    # in onestep-postgres's plugin suite) and apply the same shared option
+    # validation. Before the seam was wired this entry raised
+    # NotImplementedError instead of the field-qualified validation error.
+    connector = MySQLConnector(f"sqlite:///{tmp_path / 'backend-source-validation.db'}")
+    backend = connector.execution_backend()
+    options = {
+        "namespace": "agent-api",
+        "task_names": ("run_agent",),
+        "worker_id": "worker-1",
+    }
+    options[field] = value
+    if field == "heartbeat_interval_s":
+        options["lease_duration_s"] = 90
+
+    with pytest.raises((TypeError, ValueError), match=field):
+        backend.source(**options)
+
+
 def test_direct_dsn_source_lazily_owns_backend_lifecycle(tmp_path: Path) -> None:
     async def scenario() -> None:
         source = MySQLExecutionSource(
