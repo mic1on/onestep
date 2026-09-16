@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from onestep import (
     ExecutionClient,
@@ -40,14 +42,27 @@ def _names(prefix: str) -> tuple[str, str]:
     return f"{prefix}_executions_{suffix}", f"{prefix}_attempts_{suffix}"
 
 
+def _async_engine() -> AsyncEngine:
+    """An async engine over the live MySQL, whatever driver the DSN names.
+
+    Cleanup/verification probes run under ``asyncio``, and SQLAlchemy's asyncio
+    extension only accepts an async driver. ``asyncmy`` is a hard dependency of
+    onestep-sql's ``mysql`` extra, so the DSN is rewritten to ``mysql+asyncmy``
+    for these DDL-only housekeeping statements; the backend under test keeps
+    using the exact DSN it was pointed at.
+    """
+    url = make_url(_dsn()).set(drivername="mysql+asyncmy")
+    return create_async_engine(url)
+
+
 async def _close_and_drop(connectors: list[MySQLConnector], tables: tuple[str, ...]) -> None:
-    engine = sa.create_engine(_dsn(), future=True)
+    engine = _async_engine()
     try:
-        with engine.begin() as conn:
+        async with engine.begin() as conn:
             for table in reversed(tables):
-                conn.execute(sa.text(f"DROP TABLE IF EXISTS `{table}`"))
+                await conn.execute(sa.text(f"DROP TABLE IF EXISTS `{table}`"))
     finally:
-        engine.dispose()
+        await engine.dispose()
     await asyncio.gather(*(connector.close() for connector in connectors))
 
 
@@ -134,19 +149,21 @@ def test_overlapping_table_pairs_open_concurrently_live():
             )
             await asyncio.gather(first.open(), second.open())
 
-            engine = sa.create_engine(_dsn(), future=True)
+            engine = _async_engine()
             try:
-                with engine.begin() as conn:
-                    rows = conn.execute(
-                        sa.text(
-                            "SELECT table_name, COUNT(*) FROM information_schema.tables "
-                            "WHERE table_schema = DATABASE() "
-                            "AND table_name IN (:e, :a1, :a2) GROUP BY table_name"
-                        ),
-                        {"e": execution_table, "a1": first_attempts, "a2": second_attempts},
+                async with engine.begin() as conn:
+                    rows = (
+                        await conn.execute(
+                            sa.text(
+                                "SELECT table_name, COUNT(*) FROM information_schema.tables "
+                                "WHERE table_schema = DATABASE() "
+                                "AND table_name IN (:e, :a1, :a2) GROUP BY table_name"
+                            ),
+                            {"e": execution_table, "a1": first_attempts, "a2": second_attempts},
+                        )
                     ).all()
             finally:
-                engine.dispose()
+                await engine.dispose()
             counts = {row[0]: row[1] for row in rows}
             # Each physical table exists exactly once — no duplicate CREATE
             # slipped past the serialization.
@@ -256,15 +273,15 @@ def test_long_attempts_table_creates_with_explicit_fk_live():
             [lease] = await backend.claim("agent-api", ("run_agent",), 1, 30, "worker-a")
             assert lease.execution.id == submitted.id
 
-            engine = sa.create_engine(_dsn(), future=True)
+            engine = _async_engine()
             try:
-                with engine.begin() as conn:
+                async with engine.begin() as conn:
                     # SHOW CREATE TABLE yields (table_name, create_statement).
-                    ddl = conn.execute(
-                        sa.text(f"SHOW CREATE TABLE `{attempts_table}`")
+                    ddl = (
+                        await conn.execute(sa.text(f"SHOW CREATE TABLE `{attempts_table}`"))
                     ).one()[1]
             finally:
-                engine.dispose()
+                await engine.dispose()
             # The FK constraint is present, explicitly named (fk_ prefix from
             # the derived name), and not an InnoDB-auto-generated _ibfk_N.
             assert "CONSTRAINT `fk_" in ddl

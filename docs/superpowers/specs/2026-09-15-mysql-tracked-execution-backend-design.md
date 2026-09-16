@@ -626,7 +626,7 @@ core 的 `ExecutionClient` / `Execution` / `ExecutionStatus` / 异常类型对�
 
 - `docker-compose.integration.yml` 已有 `mysql:8.4` 服务（含 binlog ROW 配置）与 `postgres:16-alpine`；execution 测试复用现有 MySQL 服务即可，不需要新服务。注意 MySQL 8.4 与 8.0 的差异需要在 CI 中至少覆盖一个 8.0 版本，因为 8.4 已移除部分旧默认行为（该点的实测结论与处置见 §15.3）。
 - `scripts/run-integration-tests.sh` 加入 MySQL execution live 目录。
-- `.github/workflows/plugin-sql.yml` 增加 MySQL live job，并把 `tests/contract/test_onestep_sql_canonical.py` / `test_onestep_sql_shared.py` 之外的 MySQL execution 套件纳入。
+- `.github/workflows/plugin-sql.yml` 增加 MySQL live job（matrix = `mysql-version` × `driver`，`asyncmy` 与 `pymysql` 都跑，锁定 connect 事件会话钉在 async-first 路径上同样成立），并把 `tests/contract/test_onestep_sql_canonical.py` / `test_onestep_sql_shared.py` 之外的 MySQL execution 套件纳入。live 套件的清理/校验助手必须对驱动免疫：`sa.create_engine` 在 `asyncmy` DSN 下会 `MissingGreenlet`，而 `create_async_engine` 只接受异步驱动；助手因此用 `make_url(_dsn()).set(drivername="mysql+asyncmy")` 归一为异步引擎（`asyncmy` 是 `mysql` extra 的硬依赖，恒可用），`ONESTEP_MYSQL_DSN` 指向任一驱动都能跑。
 
 #### 11.3.1 `cryptography` 依赖缺口（**超出 Phase 4 清单的附加改动**）
 

@@ -189,7 +189,7 @@ jobs:
           echo "Publish plugin: $SHOULD_PUBLISH"
 
   live-compatibility:
-    name: Live MySQL ${{ matrix.mysql-version }} execution
+    name: Live MySQL ${{ matrix.mysql-version }} (${{ matrix.driver }}) execution
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -198,6 +198,11 @@ jobs:
         # dialect stays proven against both release lines (8.4 removed some
         # legacy defaults; §6 behaviour was verified identical on both).
         mysql-version: ["8.0", "8.4"]
+        # Both drivers ship in onestep-sql's mysql extra and business code can
+        # point ONESTEP_MYSQL_DSN at either; the live suite must prove the
+        # tracked-execution backend (including the connect-event session
+        # pinning) on the async-first asyncmy path, not only pymysql.
+        driver: ["asyncmy", "pymysql"]
     services:
       mysql:
         image: mysql:${{ matrix.mysql-version }}
@@ -214,7 +219,7 @@ jobs:
           --health-retries 30
 
     env:
-      ONESTEP_MYSQL_DSN: mysql+pymysql://root:root@127.0.0.1:3306/onestep
+      ONESTEP_MYSQL_DSN: mysql+${{ matrix.driver }}://root:root@127.0.0.1:3306/onestep
 
     steps:
       - name: Checkout

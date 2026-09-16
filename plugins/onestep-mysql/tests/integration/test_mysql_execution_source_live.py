@@ -25,6 +25,8 @@ from uuid import UUID
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from onestep import (
     ExecutionClient,
@@ -55,14 +57,27 @@ def _names(prefix: str) -> tuple[str, str]:
     return f"{prefix}_executions_{suffix}", f"{prefix}_attempts_{suffix}"
 
 
+def _async_engine() -> AsyncEngine:
+    """An async engine over the live MySQL, whatever driver the DSN names.
+
+    Cleanup/verification probes run under ``asyncio``, and SQLAlchemy's asyncio
+    extension only accepts an async driver. ``asyncmy`` is a hard dependency of
+    onestep-sql's ``mysql`` extra, so the DSN is rewritten to ``mysql+asyncmy``
+    for these DDL-only housekeeping statements; the backend under test keeps
+    using the exact DSN it was pointed at.
+    """
+    url = make_url(_dsn()).set(drivername="mysql+asyncmy")
+    return create_async_engine(url)
+
+
 async def _close_and_drop(connectors: list[MySQLConnector], tables: tuple[str, ...]) -> None:
-    engine = sa.create_engine(_dsn(), future=True)
+    engine = _async_engine()
     try:
-        with engine.begin() as conn:
+        async with engine.begin() as conn:
             for table in reversed(tables):
-                conn.execute(sa.text(f"DROP TABLE IF EXISTS `{table}`"))
+                await conn.execute(sa.text(f"DROP TABLE IF EXISTS `{table}`"))
     finally:
-        engine.dispose()
+        await engine.dispose()
     await asyncio.gather(*(connector.close() for connector in connectors))
 
 
