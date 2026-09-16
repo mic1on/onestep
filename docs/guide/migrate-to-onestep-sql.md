@@ -19,7 +19,8 @@ namespace（`onestep_sql`）和一套共用 SQL 行为实现。
 
 - `pip install onestep-mysql` 仍可安装，并自动拉取 `onestep-sql[mysql,sqlite]`。
 - `from onestep_mysql import MySQLConnector` 等导入路径保持对象 identity 兼容。
-- 所有 14 个 YAML 资源类型名（`mysql_*`、`postgres_*`）不变。
+- 既有 YAML 资源类型名（`mysql_*`、`postgres_*`）全部不变，并新增
+  `mysql_execution_source`（MySQL 专用），集合共 15 个类型。
 - 旧 shim 不再声明自己的 `onestep.resources` entry point；资源注册由
   `onestep-sql` 的单一 `sql` entry point 统一完成，因此新旧同装不会重复注册。
 
@@ -61,8 +62,8 @@ from onestep_postgres import PostgresConnector, PostgresExecutionSource
 
 ## YAML 配置
 
-**无需改动。** 所有 YAML 资源类型名、字段、默认值、catalog role 和 connector
-boundary 全部不变。`onestep-sql` 通过单一 `sql` entry point 注册全部 14 个类型，
+**无需改动。** 所有既有 YAML 资源类型名、字段、默认值、catalog role 和 connector
+boundary 全部不变。`onestep-sql` 通过单一 `sql` entry point 注册全部 15 个类型，
 YAML loader 自动发现。
 
 ```yaml

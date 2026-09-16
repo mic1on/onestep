@@ -571,7 +571,8 @@ pip install 'onestep[all]'
 > `onestep[postgres]`). The legacy `onestep-mysql` / `onestep-postgres` packages
 > remain available as thin forwarding shims — existing `pip install
 > onestep-mysql` and `from onestep_mysql import ...` imports keep working
-> unchanged. All 14 YAML resource type names are unchanged. See
+> unchanged. All existing YAML resource type names are unchanged; the new
+> MySQL-only `mysql_execution_source` grows the set to 15. See
 > [the migration guide](docs/guide/migrate-to-onestep-sql.md) for details.
 
 ## Configuration styles
