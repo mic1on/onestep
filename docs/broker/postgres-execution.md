@@ -7,6 +7,8 @@ outline: deep
 
 本文说明如何把 PostgreSQL 用作长任务的提交、状态、结果、取消和租约存储。该能力由 core 的 `onestep>=1.9.0` 与 `onestep-sql[postgres]>=0.1.0` 提供，两者均已发布在 PyPI。
 
+> 先看 [长程任务如何工作](/broker/execution-overview)，了解三个角色的分工与一次任务的完整流程；本文专注 PostgreSQL 后端的部署细节。
+
 适用场景：HTTP 请求提交一个可能运行数秒、数分钟甚至更久的任务，API 需要返回任务 ID，业务端再查询状态或结果。典型例子包括 Agent、报表生成、文件处理、异步导入和批量同步。MySQL 后端提供同一套能力，部署细节见 [MySQL Tracked Execution](/broker/mysql-execution)。
 
 这个功能是可选的。普通 `MemoryQueue`、RabbitMQ、Redis、SQS、定时任务和现有 PostgreSQL 表队列的接入方式不需要改动。

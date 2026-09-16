@@ -16,6 +16,7 @@
 - 快速开始补 Cloudflare Queues 安装页签；`onestep[all]` 说明与 Worker Runtime Image 内置插件清单同步实际内容（Cloudflare Queues、MongoDB、Elasticsearch/OpenSearch、ClickHouse）。
 - `docs/pnpm-workspace.yaml` 改为不入库并加入 `.gitignore`：CI 的 pnpm 9 将其视为 workspace 清单，缺 `packages` 字段导致 `pnpm install --frozen-lockfile` 报 "packages field missing or empty"（run 35072197625/35072345429）；该文件是本地 pnpm 10 的构建脚本审批配置，保持未跟踪。
 - 侧边栏将 MySQL / PostgreSQL 两个 Tracked Execution 页从「连接器」移入新分组「长程任务」（EN: Tracked Execution），与它们「长任务部署方案」而非「连接器选型」的内容定位一致；页面路径与 URL 不变，全部交叉链接零破坏。
+- 新增总览页「长程任务如何工作」（`/broker/execution-overview`，中英镜像）：从应用者视角画三张 Mermaid 图——三角色架构图（标出“你写”与“框架提供”的边界）、一次任务的生命周期时序图、接入准备清单思维导图；docs 引入 `mermaid` + `vitepress-plugin-mermaid`（图表即代码，随 Markdown 入库），「长程任务」组两个部署页顶部加引导链接。
 
 ## 2026-09-15 - 新增环境变量参考页
 

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid(defineConfig({
   vite: {
     configFile: false,
   },
@@ -105,6 +106,7 @@ export default defineConfig({
           {
             text: 'Tracked Execution',
             items: [
+              { text: 'How Tracked Execution Works', link: '/en/broker/execution-overview' },
               { text: 'MySQL Tracked Execution', link: '/en/broker/mysql-execution' },
               { text: 'PostgreSQL Tracked Execution', link: '/en/broker/postgres-execution' },
             ],
@@ -268,6 +270,7 @@ export default defineConfig({
       {
         text: '长程任务',
         items: [
+          { text: '长程任务如何工作', link: '/broker/execution-overview' },
           { text: 'MySQL Tracked Execution', link: '/broker/mysql-execution' },
           { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
         ],
@@ -309,4 +312,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

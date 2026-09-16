@@ -7,6 +7,8 @@ outline: deep
 
 This document explains how to use MySQL as a submission, state, result, cancellation, and lease store for long-running tasks. The capability is provided by core `onestep>=1.9.0` plus `onestep-sql[mysql]>=0.4.0`; both are published on PyPI. It mirrors [PostgreSQL Tracked Execution](/en/broker/postgres-execution) point for point: the same `ExecutionClient` API, the same state machine, and the same YAML field semantics — only the database and driver layers are replaced.
 
+> Start with [How Tracked Execution Works](/en/broker/execution-overview) for the roles and the end-to-end flow of one task; this page focuses on MySQL deployment details.
+
 Use cases: An HTTP request submits a task that may run for seconds, minutes, or longer. The API returns a task ID, and the business side polls for status or results. Typical examples include Agents, report generation, file processing, async imports, and batch syncs.
 
 This feature is optional. Plain `MemoryQueue`, RabbitMQ, Redis, SQS, scheduled tasks, and existing MySQL table queue integrations require no changes.
