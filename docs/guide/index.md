@@ -7,7 +7,7 @@ outline: deep
 
 onestep 是一个轻量级 Python 异步任务运行时。它围绕 `OneStepApp`、`Source`、`Sink` 和任务处理函数组织代码，适合队列消费、定时同步、Webhook 接入和多阶段数据处理。
 
-当前包版本为 `1.9.0`。文档站使用仓库锁定的 VitePress `1.6.4`。
+当前包版本为 `1.12.0`。文档站使用仓库锁定的 VitePress `1.6.4`。
 
 ## 安装
 
@@ -36,11 +36,11 @@ pip install 'onestep[yaml]'
 ```
 
 ```bash [MySQL]
-pip install onestep-mysql
+pip install 'onestep-sql[mysql]'
 ```
 
 ```bash [PostgreSQL]
-pip install onestep-postgres
+pip install 'onestep-sql[postgres]'
 ```
 
 ```bash [RabbitMQ]
@@ -53,6 +53,10 @@ pip install onestep-redis
 
 ```bash [AWS SQS]
 pip install onestep-sqs
+```
+
+```bash [Cloudflare Queues]
+pip install onestep-cf-queues
 ```
 
 ```bash [Kafka]
@@ -73,7 +77,7 @@ pip install 'onestep[all]'
 
 :::
 
-`onestep[all]` 安装常用队列、数据库、Kafka、YAML 和 control-plane 依赖；Feishu Bitable 仍单独安装。
+`onestep[all]` 安装常用队列、数据库、Kafka、Cloudflare Queues、MongoDB、Elasticsearch/OpenSearch、ClickHouse、YAML 和 control-plane 依赖；Feishu Bitable 仍单独安装。
 
 ## 第一个任务
 
@@ -156,13 +160,13 @@ async def main():
 asyncio.run(main())
 ```
 
-真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL、PostgreSQL、Kafka、Feishu Bitable，或把结果发送到 HTTP Sink。
+真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、Cloudflare Queues、MySQL、PostgreSQL、Kafka、MongoDB、Feishu Bitable，或把结果发送到 HTTP Sink。
 
 ## 使用外部连接器
 
 ```python
 from onestep import OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("orders")
@@ -236,7 +240,7 @@ tasks:
 ## 下一步
 
 - [入门教程](/guide/tutorial) 通过几个完整例子串起核心概念。
-- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS、MySQL、PostgreSQL 或 Kafka。
+- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS、Cloudflare Queues、MySQL、PostgreSQL、Kafka、MongoDB 或 Feishu Bitable。
 - [YAML 任务定义](/yaml-task-definition) 说明完整配置字段和严格校验。
 - [生产部署](/guide/deploy) 介绍 CLI、systemd 和持久化状态。
 - [Worker Runtime Image](/guide/worker-runtime-image) 介绍容器化运行 YAML worker。

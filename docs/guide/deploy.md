@@ -138,7 +138,7 @@ onestep build worker.yaml --strict --out dist/worker.zip
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.9.0
+  ghcr.io/mic1on/onestep-worker:1.12.0
 ```
 
 详细说明见 [Worker Runtime Image](/guide/worker-runtime-image)。
@@ -150,7 +150,7 @@ docker run --rm \
 生产环境推荐使用 `db.cursor_store(...)` 或 `db.state_store(...)`，确保游标和任务状态在进程重启后保持：
 
 ```python
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 db = MySQLConnector("mysql+pymysql://...")
 state = db.cursor_store(table="onestep_cursor")

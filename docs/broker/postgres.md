@@ -5,7 +5,7 @@ outline: deep
 
 # PostgreSQL
 
-`onestep-postgres` 提供 PostgreSQL 版的表队列、增量轮询、表输出，以及 SQLAlchemy-backed 状态/游标存储。第一版不包含 logical replication 或 CDC。
+`onestep-sql[postgres]` 提供 PostgreSQL 版的表队列、增量轮询、表输出，以及 SQLAlchemy-backed 状态/游标存储。第一版不包含 logical replication 或 CDC。
 
 长任务的完整业务接入流程见 [PostgreSQL Tracked Execution](/broker/postgres-execution)。
 
@@ -23,7 +23,7 @@ pip install 'onestep-sql[postgres]'
 
 ```python
 from onestep import OneStepApp
-from onestep_postgres import PostgresConnector
+from onestep_sql.postgres import PostgresConnector
 
 app = OneStepApp("pg-sync")
 pg = PostgresConnector("postgresql+psycopg://user:pass@localhost/app")
@@ -112,13 +112,13 @@ tasks:
 
 ## 跟踪长任务执行
 
-`onestep-postgres` 也可以把 PostgreSQL 作为任务状态、结果和租约的单一
+`onestep-sql[postgres]` 也可以把 PostgreSQL 作为任务状态、结果和租约的单一
 事实源。FastAPI 使用 core 的 `ExecutionClient`，worker 直接使用
 `PostgresExecutionSource`：
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresExecutionBackend, PostgresExecutionSource
+from onestep_sql.postgres import PostgresExecutionBackend, PostgresExecutionSource
 
 backend = PostgresExecutionBackend(
     dsn="postgresql+psycopg://app:secret@db/app",

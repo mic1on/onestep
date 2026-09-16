@@ -1,5 +1,20 @@
 # 文档更新日志
 
+## 2026-09-16 - 同步 1.12.0、MySQL tracked execution 与 onestep-sql 规范安装
+
+### 变更概述
+
+将文档站同步到 `main` 的 1.12.0 代码状态，合入 MySQL tracked execution（spec 2026-09-15）的交叉引用，并把指南与示例迁移到 `onestep-sql` 规范发行包（issue #133 Phase 4 docs adoption）。
+
+### 更新内容
+
+- 快速开始页版本号更新为 `1.12.0`，部署与 Worker Runtime Image 示例同步到 `ghcr.io/mic1on/onestep-worker:1.12.0`。
+- 快速开始与各示例的安装/导入从旧 shim `onestep-mysql` / `onestep-postgres` 迁移到规范包 `pip install 'onestep-sql[mysql]'` / `'onestep-sql[postgres]'`，导入统一为 `from onestep_sql.mysql import ...` / `from onestep_sql.postgres import ...`。
+- [连接器概览](/broker/)、[功能特性](/guide/features)、core 连接器表、快速开始页签、首页 features 与 YAML 资源类型清单补充 Cloudflare Queues（`onestep-cf-queues`，`cf_queues`/`cf_queue`）及 MongoDB、Elasticsearch/OpenSearch、ClickHouse 等缺失连接器行。
+- MySQL / PostgreSQL 连接器行补充 [跟踪长任务执行](/broker/mysql-execution) 入口；[PostgreSQL Tracked Execution](/broker/postgres-execution) 版本锁定从 `onestep-sql[postgres]==0.1.0` 更新为 `0.4.0`，并交叉引用 MySQL 版页面。
+- Worker Runtime Image 内置插件清单同步为实际镜像内容（新增 Cloudflare Queues、MongoDB、Elasticsearch/OpenSearch、ClickHouse）。
+- [Feishu Bitable](/broker/feishu-bitable) 新增“错误分类与重试”章节：按飞书业务 `code` 判定可重试性，以及暂停/重试/失败不再冻结持久游标的可靠性说明。
+
 ## 2026-08-14 - 同步 Feishu Bitable 关联解析器
 
 ### 变更概述

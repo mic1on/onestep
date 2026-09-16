@@ -62,7 +62,7 @@ async def cleanup(app):
 
 ```python
 from onestep import CronSource, IntervalSource, MemoryQueue, WebhookSource
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 # 内存队列
@@ -84,7 +84,7 @@ source = RabbitMQConnector("amqp://...").queue("jobs")
 source = MySQLConnector("mysql://...").table_queue("tasks")
 ```
 
-RabbitMQ、MySQL、Redis Streams、AWS SQS 和 Feishu Bitable 由插件包提供，安装后从对应插件模块导入 Python API。
+RabbitMQ、MySQL、Redis Streams、AWS SQS、Cloudflare Queues 和 Feishu Bitable 由插件包提供，安装后从对应插件模块导入 Python API。
 
 ### 自定义 Source
 
@@ -107,7 +107,7 @@ class MySource(Source):
 
 ```python
 from onestep import MemoryQueue
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 # 内存队列
@@ -205,7 +205,7 @@ async def final(ctx, item):
 
 ## Managed Execution
 
-onestep 1.9 新增了受管执行（Managed Execution）模式，把任务状态、结果和租约持久化到数据库（当前仅 PostgreSQL），适合长时间运行的任务（如 AI Agent 调用）。
+onestep 1.9 新增了受管执行（Managed Execution）模式，把任务状态、结果和租约持久化到数据库（PostgreSQL 与 MySQL），适合长时间运行的任务（如 AI Agent 调用）。PostgreSQL 部署见 [PostgreSQL Tracked Execution](/broker/postgres-execution)，MySQL 部署见 [MySQL Tracked Execution](/broker/mysql-execution)。
 
 ### 架构
 
@@ -223,7 +223,7 @@ FastAPI / Gateway                  Worker
 
 ```python
 from onestep import ExecutionClient
-from onestep_postgres import PostgresExecutionBackend
+from onestep_sql.postgres import PostgresExecutionBackend
 
 backend = PostgresExecutionBackend(
     dsn="postgresql+psycopg://app:secret@db/app",
@@ -244,7 +244,7 @@ async with client:
 ### Worker 消费
 
 ```python
-from onestep_postgres import PostgresExecutionSource
+from onestep_sql.postgres import PostgresExecutionSource
 
 source = PostgresExecutionSource(
     dsn="postgresql+psycopg://app:secret@db/app",

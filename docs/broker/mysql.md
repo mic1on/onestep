@@ -5,10 +5,11 @@ outline: deep
 
 # MySQL
 
-MySQL Connector 提供三种模式：
+MySQL Connector 提供四种模式：
 - **表队列**: 将数据库表作为任务队列
 - **增量同步**: 基于 `(updated_at, id)` 的 Logstash 风格同步
 - **表输出**: 将结果写入数据库表
+- **跟踪长任务执行**: 把 MySQL 用作长任务的提交、状态、结果、取消和租约存储，见 [MySQL Tracked Execution](/broker/mysql-execution)
 
 ## 安装
 
@@ -28,7 +29,7 @@ pip install 'onestep-sql[mysql]'
 
 ```python
 from onestep import OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 app = OneStepApp("orders")
 
@@ -93,7 +94,7 @@ nack={"status": "failed"}     # 失败
 
 ```python
 from onestep import MemoryQueue, OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 
 app = OneStepApp("sync-users")
 db = MySQLConnector("mysql+pymysql://root:root@localhost:3306/app")

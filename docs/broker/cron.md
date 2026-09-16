@@ -186,7 +186,7 @@ async def scheduled_task(ctx, _):
 
 ```python
 from onestep import CronSource, OneStepApp
-from onestep_mysql import MySQLConnector
+from onestep_sql.mysql import MySQLConnector
 from onestep_rabbitmq import RabbitMQConnector
 
 app = OneStepApp("data-sync")
