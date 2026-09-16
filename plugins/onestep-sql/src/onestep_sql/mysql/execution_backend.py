@@ -59,6 +59,7 @@ from onestep.execution import ExecutionLease, HeartbeatResult
 
 from .._shared.execution.machine import ExecutionStateMachine, StaleExecutionLease
 from .execution_schema import (
+    _MYSQL_EXECUTION_DDL_GLOBAL_LOCK,
     ExecutionTables,
     build_execution_tables,
     mysql_ddl_lock_name,
@@ -236,17 +237,31 @@ class MySQLExecutionDialect:
             attempts_table=tables[1].name,
         )
         async with engine.begin() as conn:
-            acquired = (
-                await conn.execute(
-                    sa.select(sa.func.get_lock(lock_name, _MYSQL_DDL_LOCK_TIMEOUT_S))
-                )
-            ).scalar()
-            if acquired != 1:
-                raise RuntimeError(
-                    f"could not acquire MySQL DDL lock {lock_name!r} within "
-                    f"{_MYSQL_DDL_LOCK_TIMEOUT_S}s"
-                )
+            # §6.8 + §15.6-(a): the table-pair lock serializes *non-overlapping*
+            # pairs, but overlapping pairs (a shared executions table with
+            # different attempts tables) derive different pair names and would
+            # still race on the shared CREATE TABLE (10/10: 8×1050 + 2×1213).
+            # Every execution DDL therefore additionally takes the fixed global
+            # lock FIRST, then the pair lock — a strict global→pair order (a
+            # session must hold the global lock before it can hold any pair
+            # lock, so the wait-for graph stays a cycle-free star; MySQL
+            # ≥5.7.5 lets a session hold several named locks). The finally
+            # releases in reverse order (pair → global). The pair lock and the
+            # 10s timeout are unchanged from §6.8.
+            held: list[str] = []
             try:
+                for name in (_MYSQL_EXECUTION_DDL_GLOBAL_LOCK, lock_name):
+                    acquired = (
+                        await conn.execute(
+                            sa.select(sa.func.get_lock(name, _MYSQL_DDL_LOCK_TIMEOUT_S))
+                        )
+                    ).scalar()
+                    if acquired != 1:
+                        raise RuntimeError(
+                            f"could not acquire MySQL DDL lock {name!r} within "
+                            f"{_MYSQL_DDL_LOCK_TIMEOUT_S}s"
+                        )
+                    held.append(name)
                 await conn.run_sync(
                     lambda sync_conn: metadata.create_all(
                         sync_conn,
@@ -259,7 +274,9 @@ class MySQLExecutionDialect:
                 # DDL implicitly commits — so the release must happen here; a
                 # transaction rollback on the context manager cannot do it and
                 # the pooled connection would keep the lock forever (§6.8).
-                await conn.execute(sa.select(sa.func.release_lock(lock_name)))
+                # Released in reverse acquisition order (pair → global, §15.6-(a)).
+                for name in reversed(held):
+                    await conn.execute(sa.select(sa.func.release_lock(name)))
 
 
 class MySQLExecutionBackend(ExecutionStateMachine):

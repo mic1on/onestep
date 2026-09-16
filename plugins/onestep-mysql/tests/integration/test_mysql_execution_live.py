@@ -112,6 +112,64 @@ def test_concurrent_auto_create_is_serialized_live():
     asyncio.run(scenario())
 
 
+def test_overlapping_table_pairs_open_concurrently_live():
+    async def scenario() -> None:
+        # §15.6-(a): overlapping pairs (shared executions table, different
+        # attempts tables) derive *different* pair DDL locks, so concurrent
+        # open() used to race on the shared CREATE TABLE (10/10: 8×1050 +
+        # 2×1213). The fixed global DDL lock taken before the pair lock
+        # serializes every execution DDL; both opens must now succeed with the
+        # shared table created exactly once (structure mirrors the sequential
+        # shared-schema case above).
+        execution_table, first_attempts = _names("overlap")
+        second_attempts = f"{first_attempts}_other"
+        first_connector = MySQLConnector(_dsn())
+        second_connector = MySQLConnector(_dsn())
+        try:
+            first = first_connector.execution_backend(
+                table=execution_table, attempts_table=first_attempts
+            )
+            second = second_connector.execution_backend(
+                table=execution_table, attempts_table=second_attempts
+            )
+            await asyncio.gather(first.open(), second.open())
+
+            engine = sa.create_engine(_dsn(), future=True)
+            try:
+                with engine.begin() as conn:
+                    rows = conn.execute(
+                        sa.text(
+                            "SELECT table_name, COUNT(*) FROM information_schema.tables "
+                            "WHERE table_schema = DATABASE() "
+                            "AND table_name IN (:e, :a1, :a2) GROUP BY table_name"
+                        ),
+                        {"e": execution_table, "a1": first_attempts, "a2": second_attempts},
+                    ).all()
+            finally:
+                engine.dispose()
+            counts = {row[0]: row[1] for row in rows}
+            # Each physical table exists exactly once — no duplicate CREATE
+            # slipped past the serialization.
+            assert counts.get(execution_table) == 1
+            assert counts.get(first_attempts) == 1
+            assert counts.get(second_attempts) == 1
+
+            # Both backends are functional against the shared schema.
+            for backend, worker in ((first, "worker-a"), (second, "worker-b")):
+                submitted = await backend.submit(
+                    ExecutionRequest(namespace="agent-api", task_name="run_agent", payload={"v": 1})
+                )
+                [lease] = await backend.claim("agent-api", ("run_agent",), 1, 30, worker)
+                assert lease.execution.id == submitted.id
+        finally:
+            await _close_and_drop(
+                [first_connector, second_connector],
+                (execution_table, first_attempts, second_attempts),
+            )
+
+    asyncio.run(scenario())
+
+
 def test_two_execution_table_groups_coexist_live():
     async def scenario() -> None:
         # §6.6: CHECK names are schema-global in MySQL; derived names must let

@@ -7,6 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 from onestep_mysql.execution_schema import (
+    _MYSQL_EXECUTION_DDL_GLOBAL_LOCK,
     build_execution_tables,
     mysql_ddl_lock_name,
 )
@@ -259,3 +260,12 @@ def test_ddl_lock_name_fits_the_get_lock_limit_and_is_stable() -> None:
         attempts_table="a" * 64,
     ) == long
     assert long != default
+
+
+def test_global_ddl_lock_name_is_fixed_and_within_limit() -> None:
+    # §15.6-(a): the fixed global DDL lock serializes overlapping table pairs
+    # (shared executions table, different attempts tables), which derive
+    # different pair lock names. It must respect the §6.8 64-character
+    # GET_LOCK ceiling and stay a fixed name so every pair contends on it.
+    assert _MYSQL_EXECUTION_DDL_GLOBAL_LOCK == "lock_onestep_execution_ddl"
+    assert len(_MYSQL_EXECUTION_DDL_GLOBAL_LOCK) <= 64

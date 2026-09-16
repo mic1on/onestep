@@ -110,6 +110,14 @@ def _check_name(table_name: str, suffix: str) -> str:
     return _mysql_object_name(table_name=table_name, prefix="ck_", suffix=suffix)
 
 
+#: Fixed global DDL lock name (design §15.6, scheme (a)): overlapping table
+#: pairs — a shared executions table with different attempts tables — derive
+#: *different* pair lock names and would still race on the shared CREATE
+#: TABLE, so every execution DDL additionally serializes on this one fixed
+#: name. 26 characters, within the §6.8 64-character ``GET_LOCK`` ceiling.
+_MYSQL_EXECUTION_DDL_GLOBAL_LOCK = "lock_onestep_execution_ddl"
+
+
 def mysql_ddl_lock_name(*, executions_table: str, attempts_table: str) -> str:
     """Derive the ``GET_LOCK`` name that serializes concurrent ``auto_create``.
 
@@ -117,7 +125,9 @@ def mysql_ddl_lock_name(*, executions_table: str, attempts_table: str) -> str:
     shares MySQL's 64-character ceiling (design §6.8) and therefore reuses the
     same hash-truncation policy as every other derived name (§6.9). The name is
     derived from *both* table names so two different table pairs never wait on
-    each other's DDL lock.
+    each other's DDL lock. Since §15.6-(a) this pair lock is taken *after* the
+    fixed :data:`_MYSQL_EXECUTION_DDL_GLOBAL_LOCK`, which serializes overlapping
+    pairs too.
     """
     return derive_object_name(
         table_name=executions_table,
