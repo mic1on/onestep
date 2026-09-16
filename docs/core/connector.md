@@ -81,14 +81,15 @@ async def process(ctx, item):
 | `RabbitMQConnector` (`onestep-mq`) | RabbitMQ | 支持 | 支持 |
 | `RedisConnector` (`onestep-redis`) | Redis Streams | 支持 | 支持 |
 | `SQSConnector` (`onestep-sqs`) | AWS SQS | 支持 | 支持 |
-| `MySQLConnector` / `PostgresConnector` (`onestep-sql[mysql]` / `[postgres]`) | MySQL / PostgreSQL 表队列/增量同步/binlog CDC/表输出 | 支持 | 支持 |
+| `CFQueuesConnector` (`onestep-cf-queues`) | Cloudflare Queues HTTP 拉取消费者 | 支持 | 支持 |
+| `MySQLConnector` / `PostgresConnector` (`onestep-sql[mysql]` / `[postgres]`) | MySQL / PostgreSQL 表队列/增量同步/binlog CDC/表输出/[跟踪长任务执行](/broker/mysql-execution) | 支持 | 支持 |
 | `MongoDBConnector` (`onestep-mongodb`) | MongoDB Collection 轮询/Change Stream/表输出 | 支持 | 支持 |
 | `ElasticsearchConnector` (`onestep-elasticsearch`) | Elasticsearch / OpenSearch 异步 bulk Sink | 不支持 | 支持 |
 | `ClickHouseConnector` (`onestep-clickhouse`) | ClickHouse 异步确认表输出 Sink | 不支持 | 支持 |
 | `KafkaConnector` (`onestep-kafka`) | Kafka topic 消费与生产 | 支持 | 支持 |
 | `FeishuBitableConnector` (`onestep-feishu-bitable`) | 飞书多维表格增量同步/表输出 | 支持 | 支持 |
 
-`onestep` 核心包内置内存、定时器、Webhook 和 HTTP Sink。RabbitMQ、Redis Streams、AWS SQS、SQL（MySQL / PostgreSQL）、MongoDB、Elasticsearch/OpenSearch、ClickHouse、Kafka 和 Feishu Bitable 需要安装对应插件包，并从插件模块导入 Python API。
+`onestep` 核心包内置内存、定时器、Webhook 和 HTTP Sink。RabbitMQ、Redis Streams、AWS SQS、Cloudflare Queues、SQL（MySQL / PostgreSQL）、MongoDB、Elasticsearch/OpenSearch、ClickHouse、Kafka 和 Feishu Bitable 需要安装对应插件包，并从插件模块导入 Python API。
 
 ## 混合使用
 

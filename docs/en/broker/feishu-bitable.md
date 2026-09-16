@@ -293,6 +293,16 @@ updates, deletes, CDC, or multi-writer exactly-once guarantees.
 For combining this mode with MySQL composite cursors, retries, and safe recovery, see
 [User Case: MySQL to Feishu Bitable Order Sync](/en/guide/cases/mysql-feishu-order-sync).
 
+## Error Classification and Retry
+
+Most Bitable errors arrive in an HTTP 200 response body. The plugin determines retryability in the following order:
+
+1. The HTTP status remains authoritative for `429` / `5xx` and is treated as retryable directly.
+2. Otherwise the Feishu business `code` in the body decides: officially retryable rate-limit/transient codes (such as `1254290`, `1254291`, `1254607`, `1254002`) are retried normally, while permanent quota errors (such as `1254104`) fail fast as permanent instead of being misclassified as throttling by the word "limit" and stuck in a stable retry loop.
+3. Only when no known `code` is present does the plugin fall back to bilingual message heuristics.
+
+Cursor and batch reliability: pausing, stopping, or draining a task releases unacknowledged batches as a whole instead of freezing the durable cursor; `retry()` genuinely redelivers the same row; `fail()` discards the poison-row token so a single bad row cannot freeze the cursor forever. After a restart the run resumes from the persisted cursor and uncommitted rows are replayed.
+
 ## Next Steps
 
 - [YAML Task Definition](/en/yaml-task-definition) - View plugin resource registration and strict validation

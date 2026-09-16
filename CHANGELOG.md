@@ -114,6 +114,30 @@ carries a regression test.
 - Caches are in-process and not persisted; deletion is not observed — a stale
   `record_id` surfaces as a write error and is resolved by restarting the task.
 
+## onestep-sql 0.4.0
+
+- Adds MySQL tracked execution: `MySQLConnector.execution_backend()`,
+  `MySQLExecutionBackend`, `MySQLExecutionSource`, `MySQLExecutionDelivery`,
+  and the new `mysql_execution_source` YAML resource type (MySQL-only; grows
+  the MySQL + PostgreSQL type family to 15). The `ExecutionClient` API, state
+  machine, statuses, and lease semantics are identical to the PostgreSQL
+  backend — business code switches backends by changing only the line that
+  constructs the backend. Requires MySQL 8.0.16+; sessions are pinned to UTC
+  and `READ COMMITTED`, timezone-aware datetimes are normalized to UTC at the
+  write boundary (MySQL would otherwise discard offsets on `DATETIME` binds),
+  and concurrent `auto_create` is serialized with `GET_LOCK`. Like the
+  PostgreSQL backend it provides at-least-once semantics and cooperative
+  cancellation only; external side effects must stay idempotent on
+  `execution_id`, and `result()` neither polls nor waits. Deployment guide:
+  `docs/broker/mysql-execution.md`.
+- Declares `cryptography>=41.0.0` in the `mysql` and `all` extras. MySQL 8.x
+  defaults to `caching_sha2_password`, which needs `cryptography` for the
+  first plaintext-TCP authentication of a cold user; it was previously absent
+  from the lockfile, so a fresh install could fail to connect until some other
+  connection happened to warm the server's auth cache.
+- The MySQL execution live suites now run in CI (`plugin-sql.yml`) against
+  both MySQL 8.0 and 8.4, and the unit suites join the plugin's test job.
+
 ## onestep-sql 0.3.0
 
 - Adds opt-in bounded prefetch to MySQL incremental sources (issue #164).

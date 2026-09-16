@@ -1,38 +1,38 @@
 ---
-title: PostgreSQL Tracked Execution
+title: MySQL Tracked Execution
 outline: deep
 ---
 
-# PostgreSQL Tracked Execution
+# MySQL Tracked Execution
 
-本文说明如何把 PostgreSQL 用作长任务的提交、状态、结果、取消和租约存储。该能力由 core 的 `onestep>=1.9.0` 与 `onestep-sql[postgres]>=0.1.0` 提供，两者均已发布在 PyPI。
+本文说明如何把 MySQL 用作长任务的提交、状态、结果、取消和租约存储。该能力由 core 的 `onestep>=1.9.0` 与 `onestep-sql[mysql]>=0.4.0` 提供，两者均已发布在 PyPI。能力与 [PostgreSQL Tracked Execution](/broker/postgres-execution) 逐条同构：同一套 `ExecutionClient` API、同一套状态机、同一组 YAML 字段语义，只替换数据库与驱动层。
 
-适用场景：HTTP 请求提交一个可能运行数秒、数分钟甚至更久的任务，API 需要返回任务 ID，业务端再查询状态或结果。典型例子包括 Agent、报表生成、文件处理、异步导入和批量同步。MySQL 后端提供同一套能力，部署细节见 [MySQL Tracked Execution](/broker/mysql-execution)。
+适用场景：HTTP 请求提交一个可能运行数秒、数分钟甚至更久的任务，API 需要返回任务 ID，业务端再查询状态或结果。典型例子包括 Agent、报表生成、文件处理、异步导入和批量同步。
 
-这个功能是可选的。普通 `MemoryQueue`、RabbitMQ、Redis、SQS、定时任务和现有 PostgreSQL 表队列的接入方式不需要改动。
+这个功能是可选的。普通 `MemoryQueue`、RabbitMQ、Redis、SQS、定时任务和现有 MySQL 表队列的接入方式不需要改动。
 
 ## 0. 先确认版本要求
 
 | 业务场景 | 需要的版本 | 是否需要改业务代码 |
 | --- | --- | --- |
 | 继续使用普通 queue、schedule、webhook | `onestep>=1.9.0` | 不需要 |
-| 继续使用旧 PostgreSQL table queue、incremental、state 或 sink | `onestep>=1.9.0` + 兼容的 PostgreSQL plugin | 通常不需要 |
-| 使用本页的提交、查询、结果和取消能力 | `onestep>=1.9.0` + `onestep-sql[postgres]>=0.1.0` | 需要按本文部署 API 和 worker |
+| 继续使用旧 MySQL table queue、incremental、binlog、state 或 sink | `onestep>=1.9.0` + 兼容的 MySQL plugin | 通常不需要 |
+| 使用本页的提交、查询、结果和取消能力 | `onestep>=1.9.0` + `onestep-sql[mysql]>=0.4.0` | 需要按本文部署 API 和 worker |
 
-`onestep-sql[postgres]>=0.1.0` 依赖 `onestep>=1.9.0`，不能与 `onestep==1.8.1` 组合。反过来，只安装 `onestep>=1.9.0` 不会自动启用 tracked execution；没有安装 PostgreSQL plugin 的普通 worker 可以照常运行。
+`onestep-sql[mysql]>=0.4.0` 依赖 `onestep>=1.9.0`，不能与 `onestep==1.8.1` 组合。反过来，只安装 `onestep>=1.9.0` 不会自动启用 tracked execution；没有安装 SQL plugin 的普通 worker 可以照常运行。
 
 ## 1. 运行架构
 
-API 进程负责提交、查询和取消，OneStep worker 进程负责领取和执行。两个进程通过同一个 PostgreSQL 数据库协作，不要在 FastAPI 或 Django 进程中启动 OneStep worker。
+API 进程负责提交、查询和取消，OneStep worker 进程负责领取和执行。两个进程通过同一个 MySQL 数据库协作，不要在 FastAPI 或 Django 进程中启动 OneStep worker。
 
 ```text
 Business API                         OneStep worker
-POST /executions                     PostgresExecutionSource
+POST /executions                     MySQLExecutionSource
 GET  /executions/{id}                OneStepApp + handler
 POST /executions/{id}/cancel         heartbeat + lease completion
         |                                      |
-        +--------- PostgreSQL -----------------+
-                  executions + attempts
+        +------------- MySQL ------------------+
+                 executions + attempts
 ```
 
 核心对象的职责如下：
@@ -40,44 +40,37 @@ POST /executions/{id}/cancel         heartbeat + lease completion
 | 对象 | 进程 | 用途 |
 | --- | --- | --- |
 | `ExecutionClient` | API | 提交、查询、分页查询、取消、读取结果 |
-| `PostgresExecutionBackend` | API、高级共享连接池场景 | 连接同一组 execution 表 |
-| `PostgresExecutionSource` | worker | 按 namespace 和 task name 领取任务 |
+| `MySQLExecutionBackend` | API、高级共享连接池场景 | 连接同一组 execution 表 |
+| `MySQLExecutionSource` | worker | 按 namespace 和 task name 领取任务 |
 | `OneStepApp` | worker | 调度 handler、重试、取消和关闭流程 |
 
-一个 `PostgresExecutionSource` 只能绑定一个 task name。需要执行多个任务时，为每个 task 创建独立 source。
+一个 `MySQLExecutionSource` 只能绑定一个 task name。需要执行多个任务时，为每个 task 创建独立 source。
 
 ## 2. 安装和上线
 
-参与同一条 execution 链路的 API 和 worker 必须使用同一组锁定版本：
+参与同一条 execution 链路的 API 和 worker 使用同一组锁定版本：
 
 ```bash
-pip install "onestep>=1.9.0" "onestep-sql[postgres]>=0.1.0"
-```
-
-也可以使用 core 的 extra。注意 extra 声明的是 `onestep-sql[postgres]>=0.1.0`；生产环境仍建议通过 lockfile 固定最终解析版本：
-
-```bash
-pip install "onestep[postgres]>=1.9.0"
+pip install "onestep>=1.9.0" "onestep-sql[mysql]>=0.4.0"
 ```
 
 项目使用 uv 时：
 
 ```bash
-uv add "onestep>=1.9.0" "onestep-sql[postgres]>=0.1.0"
-uv run python -c "import onestep, onestep_sql.postgres; print(onestep.__version__, onestep_sql.postgres.__version__)"
+uv add "onestep>=1.9.0" "onestep-sql[mysql]>=0.4.0"
+uv run python -c "import onestep, onestep_sql.mysql; print(onestep.__version__, onestep_sql.mysql.__version__)"
 uv run pip check
 ```
 
-> `onestep-sql` 是 MySQL 与 PostgreSQL 的规范发行包（issue #133）。旧的 `onestep-postgres` 仍可用作转发 shim，但新部署建议使用 `onestep-sql[postgres]`。Python 导入路径 `from onestep_postgres import ...` 保持兼容。
+> `onestep-sql` 是 MySQL 与 PostgreSQL 的规范发行包（issue #133）。旧的 `onestep-mysql` 仍可用作转发 shim，但新部署建议使用 `onestep-sql[mysql]`。Python 导入路径 `from onestep_mysql import ...` 保持兼容。
 
-上线顺序必须是：
+### 2.1 驱动与认证
 
-1. 确认目标版本组合（`onestep>=1.9.0` 与 `onestep-sql[postgres]>=0.1.0`）可从 PyPI 安装，例如用 `pip index versions` 或先在隔离环境试装。
-2. 锁定依赖，完成数据库初始化。
-3. 先部署 worker 并确认能连接数据库，再开放 API 提交入口。
-4. 避免同一业务链路长期运行混合版本。
+DSN 使用 SQLAlchemy MySQL URL（`mysql+pymysql://...` 或 `mysql+asyncmy://...` 均可），引擎内部统一映射到 asyncio 驱动 `asyncmy`。
 
-`onestep[postgres]>=1.9.0` 通过 extra 解析到 `onestep-sql[postgres]`（`onestep[all]>=1.9.0` 则解析到 `onestep-sql[mysql,postgres,sqlite]`）。普通 `onestep>=1.9.0` 不依赖 PostgreSQL plugin，可以独立安装。
+MySQL 8.x 默认认证插件是 `caching_sha2_password`，在明文 TCP 上的**首次**认证需要 `cryptography` 包。`onestep-sql[mysql]`（以及 `[all]`）已显式声明 `cryptography>=41.0.0`，`pip install` / `uv sync` 后即可直接连接，无需额外配置；也不要依赖"认证缓存已被其他连接预热"这类偶然条件——冷缓存的新建用户必须能直接认证成功。
+
+版本要求：**MySQL 8.0.16 及以上**（execution 表使用 CHECK 约束）。8.0 与 8.4 两个版本线都经过全部方言条款实测，行为一致。
 
 ## 3. 数据库初始化
 
@@ -86,7 +79,15 @@ execution backend 使用两张表：
 - `onestep_executions`：任务主记录、状态、payload、result、error 和当前 lease。
 - `onestep_execution_attempts`：每次领取产生一条 attempt，记录 worker、心跳和终态。
 
-生产环境建议由 migration 角色创建表，运行时使用 `auto_create=False`。`auto_create` 提供的是 SQLAlchemy create-only 初始化，不会对已经存在的同名表执行安全的列变更或版本迁移。
+生产环境建议由 migration 角色创建表，运行时使用 `auto_create=False`。提供的是 SQLAlchemy create-only 初始化，不会对已经存在的同名表执行安全的列变更或版本迁移。
+
+MySQL 实现的要点：
+
+- 表使用 `InnoDB` + `utf8mb4`，时间列为 `DATETIME(6)`（微秒精度，`available_at` 不会被进位）。
+- payload / metadata / result 为 `JSON` 列，默认值使用表达式默认值。
+- 并发 `auto_create` 通过 `GET_LOCK` 把同一表对的建表 DDL 串行化，多 worker 同时启动不会撞 1050（table already exists）。
+- CHECK / 外键 / 索引名按表名派生且在 schema 内全局唯一。因此**同一数据库内可以共存多组 execution 表**（使用不同的表名组合即可），但 `attempts_table` 不要取太长的名字（约 58 字符以内），否则派生的约束名会突破 MySQL 64 字符标识符上限。
+- 引擎会话被固定为 UTC 时区 + `READ COMMITTED`。这是 execution backend 的引擎级设置，与 connector 上配置的会话参数无关；需要不同会话设置的负载请为它们创建独立的 `MySQLConnector`。
 
 ### 3.1 一次性初始化脚本
 
@@ -97,15 +98,15 @@ execution backend 使用两张表：
 import asyncio
 import os
 
-from onestep_sql.postgres import PostgresExecutionBackend
+from onestep_sql.mysql import MySQLExecutionBackend
 
 
 async def main() -> None:
-    backend = PostgresExecutionBackend(
-        dsn=os.environ["POSTGRES_EXECUTION_MIGRATION_DSN"],
-        table=os.getenv("POSTGRES_EXECUTIONS_TABLE", "onestep_executions"),
+    backend = MySQLExecutionBackend(
+        dsn=os.environ["MYSQL_EXECUTION_MIGRATION_DSN"],
+        table=os.getenv("MYSQL_EXECUTIONS_TABLE", "onestep_executions"),
         attempts_table=os.getenv(
-            "POSTGRES_EXECUTION_ATTEMPTS_TABLE",
+            "MYSQL_EXECUTION_ATTEMPTS_TABLE",
             "onestep_execution_attempts",
         ),
         auto_create=True,
@@ -119,44 +120,46 @@ asyncio.run(main())
 
 执行成功后，API 和 worker 都使用 `auto_create=False`。如果自定义了表名，初始化脚本、API 和 worker 必须完全一致。
 
-`table` 和 `attempts_table` 只接受不带 schema 的 SQL identifier，例如 `onestep_executions`，不接受 `app.onestep_executions`。如果使用非 `public` schema，请为 migration 和 runtime 连接配置一致的 PostgreSQL `search_path`，再继续使用不带 schema 的表名。
+`table` 和 `attempts_table` 只接受不带 schema 限定的 SQL identifier，例如 `onestep_executions`，不接受 `app.onestep_executions`。跨库（多租户分库）部署时，让每个库各自运行同一套初始化脚本。
+
+注意：多组 execution 表**共享同一张 `executions` 表、使用不同 `attempts` 表**的组合不要并发执行 `open()`（先初始化好其中一组再开下一组即可）；同一表对并发建表是安全的，任意表对顺序初始化也是安全的。
 
 ### 3.2 运行时数据库权限
 
-运行身份不应拥有 DDL 权限。execution-only 场景至少需要对两张表有查询、插入和更新权限，并拥有目标 schema 的 `USAGE` 权限。项目如果同时使用 PostgreSQL table queue、state store 或 sink，还需要为这些资源授予对应权限。
+运行身份不应拥有 DDL 权限。execution-only 场景至少需要对两张表有查询、插入和更新权限：
 
 ```sql
-GRANT USAGE ON SCHEMA public TO onestep_runtime;
 GRANT SELECT, INSERT, UPDATE
-ON TABLE public.onestep_executions, public.onestep_execution_attempts
-TO onestep_runtime;
+ON onestep_executions TO 'onestep_runtime'@'%';
+GRANT SELECT, INSERT, UPDATE
+ON onestep_execution_attempts TO 'onestep_runtime'@'%';
 ```
 
 上线前检查：
 
 ```sql
-SELECT to_regclass('public.onestep_executions');
-SELECT to_regclass('public.onestep_execution_attempts');
+SHOW CREATE TABLE onestep_executions;
+SHOW CREATE TABLE onestep_execution_attempts;
 ```
 
-如果表已存在但结构来自其他版本，不要直接设置 `auto_create=False` 继续运行。先用独立 migration 角色核对字段、约束和索引。
+如果表已存在但结构来自其他版本，不要直接设置 `auto_create=False` 继续运行。先用 migration 角色核对字段、约束和索引。
 
 ## 4. 共享配置
 
 API 和 worker 至少共享以下配置：
 
 ```bash
-POSTGRES_EXECUTION_DSN=postgresql+psycopg://app_runtime:***@db.example.com/app
-POSTGRES_EXECUTION_NAMESPACE=agent-api
-POSTGRES_EXECUTIONS_TABLE=onestep_executions
-POSTGRES_EXECUTION_ATTEMPTS_TABLE=onestep_execution_attempts
+MYSQL_EXECUTION_DSN=mysql+pymysql://app_runtime:***@db.example.com:3306/app
+MYSQL_EXECUTION_NAMESPACE=agent-api
+MYSQL_EXECUTIONS_TABLE=onestep_executions
+MYSQL_EXECUTION_ATTEMPTS_TABLE=onestep_execution_attempts
 ```
 
-不要把 DSN、密码或 token 写入代码、YAML 明文或日志。`PostgresConnector` 会提供脱敏 token 给 connector error，但业务日志仍不应主动打印 DSN。
+不要把 DSN、密码或 token 写入代码、YAML 明文或日志。`MySQLConnector` 会提供脱敏 token 给 connector error，但业务日志仍不应主动打印 DSN。
 
 namespace 是业务隔离边界。API 和 worker 必须使用相同 namespace，其他业务可以使用不同 namespace 共享同一个数据库。task name 是路由键，提交时的 task name 必须和 worker source 的 task name 完全一致。
 
-namespace 是逻辑路由和查询边界，不是数据库权限边界。需要强隔离的租户应使用独立数据库、schema/role，或在业务 API 层实施鉴权，不能只依赖 namespace 字符串。
+namespace 是逻辑路由和查询边界，不是数据库权限边界。需要强隔离的租户应使用独立数据库、账号或业务 API 层鉴权，不能只依赖 namespace 字符串。
 
 ## 5. API 进程
 
@@ -185,22 +188,22 @@ from onestep import (
     ExecutionNotReady,
     ExecutionStatus,
 )
-from onestep_sql.postgres import PostgresExecutionBackend
+from onestep_sql.mysql import MySQLExecutionBackend
 from pydantic import BaseModel, Field
 
 
-backend = PostgresExecutionBackend(
-    dsn=os.environ["POSTGRES_EXECUTION_DSN"],
-    table=os.getenv("POSTGRES_EXECUTIONS_TABLE", "onestep_executions"),
+backend = MySQLExecutionBackend(
+    dsn=os.environ["MYSQL_EXECUTION_DSN"],
+    table=os.getenv("MYSQL_EXECUTIONS_TABLE", "onestep_executions"),
     attempts_table=os.getenv(
-        "POSTGRES_EXECUTION_ATTEMPTS_TABLE",
+        "MYSQL_EXECUTION_ATTEMPTS_TABLE",
         "onestep_execution_attempts",
     ),
     auto_create=False,
 )
 executions = ExecutionClient(
     backend,
-    namespace=os.getenv("POSTGRES_EXECUTION_NAMESPACE", "agent-api"),
+    namespace=os.getenv("MYSQL_EXECUTION_NAMESPACE", "agent-api"),
 )
 
 
@@ -356,43 +359,28 @@ async def get_execution_result(execution_id: UUID) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 ```
 
-### 5.1 提交请求
+`ExecutionClient` 对两个 backend 完全相同：把 `PostgresExecutionBackend` 换成 `MySQLExecutionBackend` 只需要改构造 backend 的那一行。
 
-```http
-POST /v1/executions
-Content-Type: application/json
-Idempotency-Key: req-20260810-0001
-
-{
-  "task_name": "run_agent",
-  "payload": {
-    "prompt": "summarize this document",
-    "document_id": "doc-123"
-  },
-  "metadata": {
-    "tenant_id": "tenant-a",
-    "requested_by": "user-42"
-  }
-}
-```
+### 5.1 提交请求与幂等
 
 业务 API 应使用稳定的业务请求号作为 `idempotency_key`。同一个 namespace、task name 和幂等键再次提交相同内容时，会返回原 execution；如果 payload、metadata 或其他提交参数不同，会得到 `ExecutionConflict`，通常映射为 HTTP 409。
 
-上面的业务 API 强制要求 `Idempotency-Key` 请求头；底层 `ExecutionClient` 允许不传，但面向网络请求时不建议省略。对外部调用者不要开放任意 task name，应该像示例一样使用 allowlist，或直接在每个 endpoint 中固定 task name。`tenant_id`、`requested_by` 等鉴权信息应由服务端注入，不应直接信任请求体。
+面向网络的请求不要省略 `Idempotency-Key`；对外部调用者不要开放任意 task name，应使用 allowlist（如上例）。`tenant_id`、`requested_by` 等鉴权信息应由服务端注入。
 
-`Execution` 是不可变快照。`submit()` 返回的是提交时快照，`get()` 返回的是查询时快照，不会因为访问属性而自动刷新。
+### 5.2 时间语义（MySQL 专属）
 
-分页查询使用 keyset cursor：把响应的 `next_cursor` 原样传给下一次 `GET /v1/executions?cursor=...`。cursor 是不透明值，业务端不要解析或修改。
+- **`expires_at` 必须带时区**，naive datetime 会被拒绝（提交端 422，backend 层 `ValueError`）。
+- MySQL 的 `DATETIME` 绑定参数会**丢弃 offset 而不是换算时区**：直接绑定 `12:00+08:00` 会存成 `12:00`，回读为 UTC 时相差 8 小时，已过期的任务会被误判为可领取。backend 在写入边界把所有 aware datetime **归一为 UTC** 再存储，业务侧无需自行换算，但不要依赖"存进去的值等于本地墙钟时间"。
+- `DATETIME(6)` 保留微秒精度：提交 `delay_s=0` 的任务立即可领取，`available_at` 不被进位。
+- 租约到期判断使用 backend 注入的时钟（进程 UTC 时钟），不使用 MySQL 的 `NOW()`——MySQL 的事务内时间不稳定，不能作为统一 `now`。
 
-### 5.2 数据类型和大小限制
+### 5.3 数据类型和大小限制
 
 默认限制按编码后的 JSON 大小计算：payload 1 MiB、metadata 64 KiB、result 1 MiB。大文件、模型上下文和二进制产物应先放对象存储，只把 URI、校验和和必要元数据提交给 execution。
 
-HTTP 业务通常只提交标准 JSON。Python 客户端还支持有限的 tagged 类型，例如 timezone-aware `datetime`、`UUID`、`Decimal`、`bytes`、tuple、set 和可重放的 Enum；不支持任意 Python 对象，dict key 必须是字符串，float 不能是 NaN 或 Infinity。编码失败或超过限制会抛 `ExecutionEncodingError`。
+metadata 键 `onestep.execution` 由 runtime 保留，业务提交时不能使用。handler 返回值必须满足同样的可编码约束；上线前应对最大结果样本做测试。
 
-metadata 键 `onestep.execution` 由 runtime 保留，业务提交时不能使用。handler 返回值也必须满足同样的可编码约束；上线前应对最大结果样本做测试。
-
-### 5.3 业务调用流程
+### 5.4 业务调用流程
 
 提交成功后保存响应中的 execution ID。业务端不应保持数据库事务或 HTTP 长连接等待 handler，而是轮询状态、接收自己实现的通知，或稍后读取结果。
 
@@ -418,6 +406,8 @@ curl -X POST \
 
 建议轮询时使用退避，例如 1、2、4、8 秒后固定在 10 至 30 秒，并给客户端设置总等待上限。`queued`、`running`、`retrying`、`cancel_requested` 都是可继续等待的非终态；只有 `succeeded`、`failed`、`cancelled`、`expired` 是终态。
 
+**`result()` 不轮询、不等待**：任务还没有终态时它立即抛 `ExecutionNotReady`（对应 HTTP 409/202），由调用方决定何时再问。等待逻辑永远在业务端。
+
 ## 6. Worker 进程
 
 ```python
@@ -426,20 +416,20 @@ import os
 from typing import Any
 
 from onestep import ExponentialBackoff, OneStepApp
-from onestep_sql.postgres import PostgresExecutionSource
+from onestep_sql.mysql import MySQLExecutionSource
 
 
 app = OneStepApp("agent-worker", shutdown_timeout_s=30.0)
-jobs = PostgresExecutionSource(
-    dsn=os.environ["POSTGRES_EXECUTION_DSN"],
-    table=os.getenv("POSTGRES_EXECUTIONS_TABLE", "onestep_executions"),
+jobs = MySQLExecutionSource(
+    dsn=os.environ["MYSQL_EXECUTION_DSN"],
+    table=os.getenv("MYSQL_EXECUTIONS_TABLE", "onestep_executions"),
     attempts_table=os.getenv(
-        "POSTGRES_EXECUTION_ATTEMPTS_TABLE",
+        "MYSQL_EXECUTION_ATTEMPTS_TABLE",
         "onestep_execution_attempts",
     ),
     auto_create=False,
     reclaim_batch_size=100,
-    namespace=os.getenv("POSTGRES_EXECUTION_NAMESPACE", "agent-api"),
+    namespace=os.getenv("MYSQL_EXECUTION_NAMESPACE", "agent-api"),
     task_names=("run_agent",),
     batch_size=4,
     poll_interval_s=1.0,
@@ -480,8 +470,6 @@ async def run_agent_model(
 ) -> Any:
     # Replace this with business logic. Do not call delivery.ack() manually.
     return {"document_id": payload["document_id"], "summary": "..."}
-
-
 ```
 
 启动和检查：
@@ -493,12 +481,7 @@ onestep run app.worker:app
 
 handler 返回值会由 managed runtime 写入 execution 的 `result`。业务 handler 不需要也不应该手动调用 `ack()`、`retry()` 或 `fail()`。
 
-Python worker 的 `OneStepApp` 会打开和关闭 source。直接传入 DSN 的
-`PostgresExecutionSource` 会在当前 worker 进程内惰性创建并关闭自己的连接池。
-需要把 `PostgresConnector` 同时用于 table queue、sink 或 state store 时，可以使用
-`PostgresExecutionSource.from_connector(pg, ...)` 或先创建
-`PostgresExecutionBackend.from_connector(pg, ...)`；这种共享 connector 仍由调用方关闭，
-YAML resource 的生命周期由 app resource 管理器处理。
+`MySQLExecutionSource` 的构造参数集与 `PostgresExecutionSource` 逐参数对齐；`backend.source(...)` 与 `MySQLExecutionSource(...)` 两种写法等价。需要把 `MySQLConnector` 同时用于 table queue、sink 或 state store 时，可以使用 `MySQLExecutionSource.from_connector(mysql, ...)` 或先创建 `MySQLExecutionBackend.from_connector(mysql, ...)`；这种共享 connector 仍由调用方关闭。注意 execution 引擎的会话设置（UTC + `READ COMMITTED`）覆盖整个引擎，**复用的 connector 上建 backend 之前已建立的业务连接不会被追溯调整**；推荐为 execution 单独创建 connector。
 
 如果 handler 是同步阻塞函数，使用 `asyncio.to_thread()` 或其他线程池方式隔离，确保 heartbeat task 能够持续运行。`heartbeat_interval_s` 必须满足：
 
@@ -507,13 +490,6 @@ YAML resource 的生命周期由 app resource 管理器处理。
 ```
 
 多个 worker 副本可以使用同一 source 配置，但 `worker_id` 应使用 pod name、hostname 或其他实例唯一标识，便于诊断 lease 和 attempt。
-
-多进程或 pre-fork 部署时，推荐每个进程使用
-`PostgresExecutionSource(dsn=...)` 或 `PostgresExecutionBackend(dsn=...)`。
-DSN 方式是惰性的，即使对象在 fork 前创建，连接池也会在子进程中独立创建。
-不要把 `PostgresConnector` 或 `from_connector()` 创建的外部连接池跨进程复用；应在每个
-子进程内创建 connector。数据库最大连接数需要按 API/worker 进程数和每个进程的池配置
-统一核算。
 
 ## 7. YAML Worker 配置
 
@@ -527,13 +503,13 @@ app:
   name: agent-worker
 
 resources:
-  pg:
-    type: postgres
-    dsn: "${POSTGRES_EXECUTION_DSN}"
+  db:
+    type: mysql
+    dsn: "${MYSQL_EXECUTION_DSN}"
 
   agent_jobs:
-    type: postgres_execution_source
-    connector: pg
+    type: mysql_execution_source
+    connector: db
     namespace: agent-api
     task_names: [run_agent]
     table: onestep_executions
@@ -568,6 +544,8 @@ onestep check --strict worker.yaml
 onestep run worker.yaml
 ```
 
+`mysql_execution_source` 的 strict validation 与 `postgres_execution_source` 同构：namespace 非空且 ≤255；`task_names` 恰好一个；`batch_size ≥ 1`；`heartbeat_interval_s ≤ lease_duration_s / 3`。**connector 必须是 MySQL connector**——把 PostgreSQL connector 传给 `mysql_execution_source`（或反过来）会在加载时报错；tracked execution 按后端各实现一份，从不跨 backend 共享。
+
 ## 8. 状态和业务语义
 
 | 状态 | 含义 | 业务端处理 |
@@ -581,7 +559,7 @@ onestep run worker.yaml
 | `cancelled` | 任务已取消 | 不再读取 result |
 | `expired` | 在被领取前超过业务 expires_at | 重新提交或人工处理 |
 
-`expires_at` 是“最晚开始处理时间”，不是运行时 deadline：健康 worker 已经领取的任务可以越过该时间继续执行。限制单次 handler 运行时长应使用 task 的 `timeout_s`。
+`expires_at` 是"最晚开始处理时间"，不是运行时 deadline：健康 worker 已经领取的任务可以越过该时间继续执行。限制单次 handler 运行时长应使用 task 的 `timeout_s`。
 
 `result()` 的异常建议映射为：
 
@@ -593,7 +571,7 @@ onestep run worker.yaml
 | `ExecutionCancelled` | 终态为 cancelled | 409 |
 | `ExecutionExpired` | 终态为 expired | 410 |
 
-取消是协作式的：
+取消是**协作式**的：
 
 1. queued/retrying 状态的取消会直接变成 `cancelled`。
 2. running 状态先变成 `cancel_requested`。
@@ -604,21 +582,21 @@ onestep run worker.yaml
 
 ## 9. 重试、租约和重复执行
 
-系统是 at-least-once，不是 exactly-once。下面这些情况都可能让 handler 或外部副作用再次执行：
+系统是 **at-least-once**，不是 exactly-once。下面这些情况都可能让 handler 或外部副作用再次执行：
 
 - worker 在外部写入后、完成 execution 前崩溃；
-- lease 过期后由其他 worker 接管；
+- lease 过期后由其他 worker 接管（旧 token 被 fence，心跳报 `StaleExecutionLease`）；
 - 数据库连接在提交结果时断开，业务端无法判断提交是否成功；
 - handler 按 retry policy 进入下一次 attempt。
 
-下游写入必须使用 execution ID 或业务幂等键去重。例如：
+**外部副作用仍需以 `execution_id`（或业务幂等键）作为幂等键去重**，例如：
 
 ```sql
 CREATE UNIQUE INDEX uq_business_result_request
 ON business_results (request_id);
 ```
 
-不要把“查不到 result”当作“任务一定没有执行”。如果 API 在提交后连接中断，应使用同一个 `idempotency_key` 重试提交，而不是生成新的请求号。
+不要把"查不到 result"当作"任务一定没有执行"。如果 API 在提交后连接中断，应使用同一个 `idempotency_key` 重试提交，而不是生成新的请求号。
 
 lease 相关参数建议：
 
@@ -630,9 +608,9 @@ lease 相关参数建议：
 | `batch_size` | 100 | 通常不应大于 worker 并发很多倍 |
 | `poll_interval_s` | 1 | 影响空闲时的领取延迟 |
 
-过期 execution 和停滞 lease 由下一次 `claim()` 驱动恢复，没有独立 reaper。所有 worker 都停止时，不会有新的 reclaim；恢复 worker 后会按 `reclaim_batch_size` 分批处理积压。
+两个 worker 并发领取不会取得同一有效 lease token（claim 用 `FOR UPDATE SKIP LOCKED` 风格的原子领取 + 租约 CAS）；lease 过期后另一 worker 可接管。claim 空区间不会以 `REPEATABLE-READ` 的 gap lock 阻塞并发提交——execution 引擎固定 `READ COMMITTED`，空领取不阻塞并发提交。
 
-lease deadline 和过期判断由 PostgreSQL 当前事务时间计算，不依赖 worker 进程时钟；source 的 heartbeat 重试也通过数据库时间计算剩余 lease。SQLite 测试和兼容路径使用注入的 `clock`。
+过期 execution 和停滞 lease 由下一次 `claim()` 驱动恢复，没有独立 reaper。所有 worker 都停止时，不会有新的 reclaim；恢复 worker 后会按 `reclaim_batch_size` 分批处理积压。
 
 ## 10. 观测和排查
 
@@ -690,16 +668,16 @@ ORDER BY attempt_no;
 
 上线前按顺序确认：
 
-- [ ] PyPI 中 `onestep>=1.9.0` 与 `onestep-sql>=0.1.0`（含 PostgreSQL 后端）均已发布，且目标版本组合可以解析安装。
+- [ ] PyPI 中 `onestep>=1.9.0` 与 `onestep-sql>=0.4.0`（含 MySQL 后端）均已发布，且目标版本组合可以解析安装。
 - [ ] API 和 worker 的 `pip check` 通过，两个进程使用相同版本组合。
-- [ ] API 和 worker 都打印并核对过 `onestep`、`onestep_sql.postgres` 的实际版本。
-- [ ] 以 migration 身份完成 execution 两张表的初始化。
-- [ ] API 和 worker 都使用 `auto_create=False`。
+- [ ] MySQL 版本 ≥ 8.0.16（CHECK 约束）；8.0 与 8.4 均在支持范围。
+- [ ] 运行账号使用 `caching_sha2_password` 时，安装环境已带上 `onestep-sql[mysql]` 声明的 `cryptography`（`uv sync` / `pip install` 后 `python -c "import cryptography"` 成功）。
+- [ ] 以 migration 身份完成 execution 两张表的初始化（或确认 worker 启动时的 `auto_create` 并发安全）。
+- [ ] API 和 worker 都使用 `auto_create=False`（生产建议）。
 - [ ] API 和 worker 的 DSN、namespace、表名一致。
-- [ ] 如果使用非 `public` schema，migration 和 runtime 连接的 `search_path` 一致。
-- [ ] 每个 task 使用独立 `PostgresExecutionSource`，task name 完全一致。
-- [ ] 每个 worker 实例有唯一 `worker_id`，主机时钟已同步。
-- [ ] handler 的数据库写入、消息发送和文件写入具备幂等保护。
+- [ ] 每个任务使用独立 `MySQLExecutionSource`，task name 完全一致。
+- [ ] 每个 worker 实例有唯一 `worker_id`。
+- [ ] handler 的数据库写入、消息发送和文件写入具备幂等保护（以 `execution_id` 或业务幂等键去重）。
 - [ ] 已验证成功、失败重试、取消、重复提交和 worker 重启恢复。
 - [ ] 已配置 queued/running/retrying/cancel_requested 的告警。
 
@@ -711,7 +689,6 @@ ORDER BY attempt_no;
 4. 提交一个可取消长任务，确认最终状态为 `cancelled`。
 5. 在任务运行期间重启 worker，确认后续 worker 能重新领取并产生新 attempt。
 6. 分页查询两页数据，确认 `next_cursor` 不重复、不漏项。
-7. 提交超限或不可编码结果，确认监控能够发现且不会误报成功。
 
 ## 12. 回滚
 
@@ -719,8 +696,8 @@ ORDER BY attempt_no;
 
 1. 先停止 API 继续提交新的 tracked execution。
 2. 等待或人工处理当前 `running`、`cancel_requested` 和 `retrying` 记录。
-3. API 和 worker 一起回滚到上一组兼容版本，例如 `onestep==1.8.1` 与 `onestep-postgres==0.1.3`。这两个版本都不含 tracked execution 后端，回滚后只能使用旧 table queue、incremental、state 和 sink 能力。
+3. API 和 worker 一起回滚到兼容的 core/plugin 版本。
 4. 保留 `onestep_executions` 和 `onestep_execution_attempts` 表，不要直接 drop。它们包含审计和恢复信息。
 5. 如果恢复到新版本，先执行 smoke test，再重新放开业务提交。
 
-旧版本 worker 不会处理新 execution 表中的任务，因此回滚期间不要让新 execution 继续进入数据库，除非已经准备了对应的新版本 worker。
+旧版本 worker 不会处理 execution 表中的任务，因此回滚期间不要让新 execution 继续进入数据库，除非已经准备了对应的新版本 worker。

@@ -31,9 +31,13 @@ async def my_task(ctx, item):
 | RabbitMQ | 支持 | 支持 | 分布式队列 |
 | Redis Streams | 支持 | 支持 | 轻量级流队列 |
 | AWS SQS | 支持 | 支持 | 云队列 |
-| MySQL | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出 |
-| PostgreSQL | 支持 | 支持 | 表队列/增量同步/表输出 |
+| Cloudflare Queues | 支持 | 支持 | HTTP 拉取消费者队列 |
+| MySQL | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出/跟踪长任务执行 |
+| PostgreSQL | 支持 | 支持 | 表队列/增量同步/表输出/跟踪长任务执行 |
 | Kafka | 支持 | 支持 | topic 消费与生产 |
+| MongoDB | 支持 | 支持 | Collection 轮询/Change Stream/表输出 |
+| Elasticsearch / OpenSearch | 不支持 | 支持 | 异步 bulk Sink |
+| ClickHouse | 不支持 | 支持 | 异步确认表输出 Sink |
 | Feishu Bitable | 支持 | 支持 | 多维表格增量同步/表输出 |
 | 自定义 | 支持 | 支持 | 任意数据源 |
 

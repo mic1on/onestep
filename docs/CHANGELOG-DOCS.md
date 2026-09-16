@@ -1,5 +1,21 @@
 # 文档更新日志
 
+## 2026-09-16 - 同步 main：MySQL tracked execution 页与 onestep-sql 收尾
+
+### 变更概述
+
+合入 main 的 MySQL tracked execution backend（bfaf21a）与文档同步提交（433ed5a）。docs 分支此前已完成的 onestep-sql 规范安装迁移、Cloudflare Queues 补充与 1.12.0 版本口径保持不变；本次把 MySQL 侧 tracked execution 文档、执行入口链接和 Feishu 错误分类章节补齐。
+
+### 更新内容
+
+- 新增 [MySQL Tracked Execution](/broker/mysql-execution)（英文页 `/en/broker/mysql-execution` 按 `>=` 最低版本口径新译），侧边栏「连接器」中英各加一项，位于 SQL 之后、PostgreSQL Tracked Execution 之前。
+- [MySQL Tracked Execution](/broker/mysql-execution) 版本口径对齐本分支叙事：`onestep>=1.9.0` + `onestep-sql[mysql]>=0.4.0`，删除「发布顺序」将来时表述。
+- [SQL（MySQL / PostgreSQL）](/broker/sql)、连接器概览表、core 连接器表、Managed Execution 章节补充「跟踪长任务执行」入口（[MySQL](/broker/mysql-execution) / [PostgreSQL](/broker/postgres-execution)）。
+- [Feishu Bitable](/broker/feishu-bitable) 新增「错误分类与重试」章节：按飞书业务 `code` 判定可重试性、暂停/重试/失败不再冻结持久游标。
+- [YAML 任务定义](/yaml-task-definition) 插件资源类型清单补 `onestep-cf-queues`（`cf_queues` / `cf_queue`）。
+- 快速开始补 Cloudflare Queues 安装页签；`onestep[all]` 说明与 Worker Runtime Image 内置插件清单同步实际内容（Cloudflare Queues、MongoDB、Elasticsearch/OpenSearch、ClickHouse）。
+- `docs/pnpm-workspace.yaml` 落库（`allowBuilds: esbuild: true`），修复 docs 目录 `pnpm run build` 被构建脚本审批占位符卡住的问题。
+
 ## 2026-09-15 - 新增环境变量参考页
 
 ### 变更概述

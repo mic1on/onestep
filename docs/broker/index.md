@@ -30,6 +30,7 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 | [RabbitMQ](/broker/rabbitmq) | 支持 | 支持 | RabbitMQ 队列，安装 `onestep-mq` |
 | [AWS SQS](/broker/sqs) | 支持 | 支持 | AWS SQS 托管队列，安装 `onestep-sqs` |
 | [AWS SNS](/broker/sqs#sns-topic-sink) | 不支持 | 支持 | AWS SNS 主题扇出 Sink，安装 `onestep-sqs` |
+| [Cloudflare Queues](/broker/cf-queues) | 支持 | 支持 | HTTP 拉取消费者，批量租约 ack/retry，安装 `onestep-cf-queues` |
 | [Kafka](/broker/kafka) | 支持 | 支持 | Kafka topic source/sink，安装 `onestep-kafka` |
 | [Cloudflare Queues](/broker/cf-queues) | 支持 | 支持 | Cloudflare 托管队列拉取/推送，安装 `onestep-cf-queues` |
 
@@ -37,7 +38,7 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 
 | 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [SQL（MySQL / PostgreSQL）](/broker/sql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出，安装 `onestep-sql[mysql]` |
+| [SQL（MySQL / PostgreSQL）](/broker/sql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出/[跟踪长任务执行](/broker/mysql-execution)，安装 `onestep-sql[mysql]` |
 | [MongoDB](/broker/mongodb) | 支持 | 支持 | Collection 轮询/Change Stream/表输出，安装 `onestep-mongodb` |
 | [Elasticsearch / OpenSearch](/broker/elasticsearch) | 不支持 | 支持 | 异步 bulk Sink，安装 `onestep-elasticsearch` |
 | [ClickHouse](/broker/clickhouse) | 不支持 | 支持 | 异步确认表输出 Sink，安装 `onestep-clickhouse` |

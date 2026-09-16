@@ -1,6 +1,6 @@
 [project]
 name = "onestep-sql"
-version = "0.3.0"
+version = "0.4.0"
 description = "Unified MySQL, PostgreSQL, and SQLite connector plugin for onestep."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,6 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 mysql = [
     "asyncmy>=0.2.10",
+    "cryptography>=41.0.0",
     "mysql-replication>=1.0.15",
 ]
 postgres = [
@@ -24,6 +25,7 @@ sqlite = [
 ]
 all = [
     "asyncmy>=0.2.10",
+    "cryptography>=41.0.0",
     "mysql-replication>=1.0.15",
     "psycopg[binary]>=3.2.0",
     "aiosqlite>=0.20.0",

@@ -81,14 +81,15 @@ async def process(ctx, item):
 | `RabbitMQConnector` (`onestep-mq`) | RabbitMQ | Yes | Yes |
 | `RedisConnector` (`onestep-redis`) | Redis Streams | Yes | Yes |
 | `SQSConnector` (`onestep-sqs`) | AWS SQS | Yes | Yes |
-| `MySQLConnector` / `PostgresConnector` (`onestep-sql[mysql]` / `[postgres]`) | MySQL / PostgreSQL table queue/incremental sync/binlog CDC/table sink | Yes | Yes |
+| `CFQueuesConnector` (`onestep-cf-queues`) | Cloudflare Queues HTTP pull consumer | Yes | Yes |
+| `MySQLConnector` / `PostgresConnector` (`onestep-sql[mysql]` / `[postgres]`) | MySQL / PostgreSQL table queue/incremental sync/binlog CDC/table sink/[tracked execution](/en/broker/mysql-execution) | Yes | Yes |
 | `MongoDBConnector` (`onestep-mongodb`) | MongoDB collection polling/Change Stream/table sink | Yes | Yes |
 | `ElasticsearchConnector` (`onestep-elasticsearch`) | Elasticsearch / OpenSearch async bulk sink | No | Yes |
 | `ClickHouseConnector` (`onestep-clickhouse`) | ClickHouse async acknowledged table sink | No | Yes |
 | `KafkaConnector` (`onestep-kafka`) | Kafka topic consume and produce | Yes | Yes |
 | `FeishuBitableConnector` (`onestep-feishu-bitable`) | Feishu Bitable incremental sync/table sink | Yes | Yes |
 
-The `onestep` core package includes in-memory, timer, webhook, and HTTP Sink connectors. RabbitMQ, Redis Streams, AWS SQS, SQL (MySQL / PostgreSQL), MongoDB, Elasticsearch/OpenSearch, ClickHouse, Kafka, and Feishu Bitable require installing the corresponding plugin package and importing from the plugin module.
+The `onestep` core package includes in-memory, timer, webhook, and HTTP Sink connectors. RabbitMQ, Redis Streams, AWS SQS, Cloudflare Queues, SQL (MySQL / PostgreSQL), MongoDB, Elasticsearch/OpenSearch, ClickHouse, Kafka, and Feishu Bitable require installing the corresponding plugin package and importing from the plugin module.
 
 ## Mixing Connectors
 

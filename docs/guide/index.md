@@ -55,6 +55,10 @@ pip install onestep-redis
 pip install onestep-sqs
 ```
 
+```bash [Cloudflare Queues]
+pip install onestep-cf-queues
+```
+
 ```bash [Kafka]
 pip install onestep-kafka
 ```
@@ -73,7 +77,7 @@ pip install 'onestep[all]'
 
 :::
 
-`onestep[all]` 安装常用队列、数据库、Kafka、YAML 和 control-plane 依赖；Feishu Bitable 仍单独安装。
+`onestep[all]` 安装常用队列、数据库、Kafka、Cloudflare Queues、MongoDB、Elasticsearch/OpenSearch、ClickHouse、YAML 和 control-plane 依赖；Feishu Bitable 仍单独安装。
 
 ## 项目脚手架
 
@@ -169,7 +173,7 @@ async def main():
 asyncio.run(main())
 ```
 
-真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、MySQL、PostgreSQL、Kafka、Feishu Bitable，或把结果发送到 HTTP Sink。
+真实部署时通常把输入或输出的 `MemoryQueue` 换成外部系统连接器插件，例如 RabbitMQ、Redis Streams、AWS SQS、Cloudflare Queues、MySQL、PostgreSQL、Kafka、MongoDB、Feishu Bitable，或把结果发送到 HTTP Sink。
 
 ## 使用外部连接器
 
@@ -249,7 +253,7 @@ tasks:
 ## 下一步
 
 - [入门教程](/guide/tutorial) 通过几个完整例子串起核心概念。
-- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS、MySQL、PostgreSQL 或 Kafka。
+- [连接器概览](/broker/) 帮你选择 Memory、Cron、Webhook、HTTP Sink、RabbitMQ、Redis、SQS、Cloudflare Queues、MySQL、PostgreSQL、Kafka、MongoDB 或 Feishu Bitable。
 - [YAML 任务定义](/yaml-task-definition) 说明完整配置字段和严格校验。
 - [生产部署](/guide/deploy) 介绍 CLI、systemd 和持久化状态。
 - [Worker Runtime Image](/guide/worker-runtime-image) 介绍容器化运行 YAML worker。

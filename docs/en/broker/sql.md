@@ -20,6 +20,8 @@ pip install 'onestep-sql[mysql,postgres]'
 The legacy `onestep-mysql` and `onestep-postgres` packages now serve as forwarding shims for compatibility. New deployments should use `onestep-sql` directly. Python import paths `from onestep_mysql import ...` / `from onestep_postgres import ...` still work.
 :::
 
+Beyond table queues, incremental sync, and table sinks, `onestep-sql` also provides tracked execution, using the database as the store for long-running task submission, status, results, cancellation, and leases: see [MySQL Tracked Execution](/en/broker/mysql-execution) and [PostgreSQL Tracked Execution](/en/broker/postgres-execution).
+
 ## Table Queue
 
 Use database row-level locks to claim tasks, turning a table into a durable queue.

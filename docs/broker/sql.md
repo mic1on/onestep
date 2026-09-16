@@ -20,6 +20,8 @@ pip install 'onestep-sql[mysql,postgres]'
 旧版 `onestep-mysql` 与 `onestep-postgres` 现已作为转发 shim 保留兼容性，新项目请直接使用 `onestep-sql`。Python 导入路径 `from onestep_mysql import ...` / `from onestep_postgres import ...` 仍然可用。
 :::
 
+除表队列、增量同步与表输出外，`onestep-sql` 还提供跟踪长任务执行（Tracked Execution），把数据库用作长任务的提交、状态、结果、取消和租约存储：MySQL 见 [MySQL Tracked Execution](/broker/mysql-execution)，PostgreSQL 见 [PostgreSQL Tracked Execution](/broker/postgres-execution)。
+
 ## 表队列 (Table Queue)
 
 通过数据库行锁领取任务，把表作为 durable queue。

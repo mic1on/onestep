@@ -196,6 +196,126 @@
     ],
     "type": "mysql_cursor_store"
   },
+  "mysql_execution_source": {
+    "connector_types": [
+      "mysql"
+    ],
+    "fields": [
+      {
+        "name": "connector",
+        "required": true,
+        "secret": false,
+        "type": "ref"
+      },
+      {
+        "name": "namespace",
+        "required": true,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "name": "task_names",
+        "required": true,
+        "secret": false,
+        "type": "string_list"
+      },
+      {
+        "default": "onestep_executions",
+        "name": "table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": "onestep_execution_attempts",
+        "name": "attempts_table",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": 100,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1.0,
+        "name": "poll_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "default": 90.0,
+        "name": "lease_duration_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "default": 30.0,
+        "name": "heartbeat_interval_s",
+        "required": false,
+        "secret": false,
+        "type": "number"
+      },
+      {
+        "default": "onestep-worker",
+        "name": "worker_id",
+        "required": false,
+        "secret": false,
+        "type": "string"
+      },
+      {
+        "default": true,
+        "name": "auto_create",
+        "required": false,
+        "secret": false,
+        "type": "boolean"
+      },
+      {
+        "default": 1048576,
+        "name": "max_payload_bytes",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 65536,
+        "name": "max_metadata_bytes",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 1048576,
+        "name": "max_result_bytes",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      },
+      {
+        "default": 100,
+        "name": "reclaim_batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
+      }
+    ],
+    "label": "MySQL Execution Source",
+    "roles": [
+      "source"
+    ],
+    "topology_fields": [
+      "namespace",
+      "task_names",
+      "batch_size",
+      "poll_interval_s"
+    ],
+    "type": "mysql_execution_source"
+  },
   "mysql_incremental": {
     "connector_types": [
       "mysql"

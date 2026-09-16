@@ -5,8 +5,9 @@
 > package. New deployments should install `onestep-sql[mysql]` (or `onestep[mysql]`)
 > and import from `onestep_sql.mysql`. This package remains available so existing
 > `pip install onestep-mysql` and `from onestep_mysql import ...` keep working
-> unchanged; it no longer declares its own resource entry point. All 14 YAML
-> resource type names are unchanged. See the
+> unchanged; it no longer declares its own resource entry point. All existing
+> YAML resource type names are unchanged; the new MySQL-only
+> `mysql_execution_source` grows the set to 15. See the
 > [migration guide](../../docs/guide/migrate-to-onestep-sql.md) for details.
 
 MySQL connector plugin for `onestep`.

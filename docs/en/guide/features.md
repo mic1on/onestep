@@ -31,9 +31,13 @@ async def my_task(ctx, item):
 | RabbitMQ | Yes | Yes | Distributed queue |
 | Redis Streams | Yes | Yes | Lightweight stream queue |
 | AWS SQS | Yes | Yes | Cloud queue |
-| MySQL | Yes | Yes | Table queue / Incremental sync / binlog CDC / table output |
-| PostgreSQL | Yes | Yes | Table queue / Incremental sync / table output |
+| Cloudflare Queues | Yes | Yes | HTTP pull-consumer queue |
+| MySQL | Yes | Yes | Table queue / Incremental sync / binlog CDC / table output / tracked execution |
+| PostgreSQL | Yes | Yes | Table queue / Incremental sync / table output / tracked execution |
 | Kafka | Yes | Yes | Topic consume & produce |
+| MongoDB | Yes | Yes | Collection polling / Change Stream / table output |
+| Elasticsearch / OpenSearch | No | Yes | Async bulk sink |
+| ClickHouse | No | Yes | Async acknowledged table sink |
 | Feishu Bitable | Yes | Yes | Bitable incremental sync / table output |
 | Custom | Yes | Yes | Any data source |
 

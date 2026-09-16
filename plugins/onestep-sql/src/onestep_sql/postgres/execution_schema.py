@@ -1,46 +1,39 @@
 from __future__ import annotations
 
-import hashlib
-import re
-from dataclasses import dataclass
-
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from .._shared.execution.dialect import (
+    ExecutionTables,
+    derive_object_name,
+    validate_sql_identifier,
+)
 
-_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _POSTGRES_IDENTIFIER_MAX_LENGTH = 63
 _POSTGRES_NAME_HASH_LENGTH = 12
 _EXECUTION_STATUSES = ("queued", "retrying")
 _LEASE_STATUSES = ("running", "cancel_requested")
 
 
-@dataclass(frozen=True)
-class ExecutionTables:
-    metadata: sa.MetaData
-    executions: sa.Table
-    attempts: sa.Table
-
-
 def _validate_identifier(value: str, field: str) -> str:
-    if not isinstance(value, str) or not value or not _IDENTIFIER.fullmatch(value):
-        raise ValueError(f"{field} must be a non-empty SQL identifier")
-    if len(value) > _POSTGRES_IDENTIFIER_MAX_LENGTH:
-        raise ValueError(
-            f"{field} must be at most {_POSTGRES_IDENTIFIER_MAX_LENGTH} characters"
-        )
-    return value
+    # Thin delegation to the shared, backend-agnostic validator (design §6.9).
+    # PostgreSQL's limit stays here, where it is dialect knowledge.
+    return validate_sql_identifier(
+        value, field, max_length=_POSTGRES_IDENTIFIER_MAX_LENGTH
+    )
 
 
 def _postgres_object_name(*, table_name: str, prefix: str, suffix: str) -> str:
-    base = f"{prefix}{table_name}_{suffix}"
-    if len(base) <= _POSTGRES_IDENTIFIER_MAX_LENGTH:
-        return base
-    digest = hashlib.sha256(
-        base.encode("ascii")
-    ).hexdigest()[:_POSTGRES_NAME_HASH_LENGTH]
-    stem_length = _POSTGRES_IDENTIFIER_MAX_LENGTH - len(digest) - 1
-    return f"{base[:stem_length]}_{digest}"
+    # Thin delegation to the shared deriver (design §6.9, §6.11). Both the
+    # public path used by the PostgreSQL schema and this private alias call the
+    # same implementation, so PostgreSQL's derived names are unchanged.
+    return derive_object_name(
+        table_name=table_name,
+        prefix=prefix,
+        suffix=suffix,
+        max_length=_POSTGRES_IDENTIFIER_MAX_LENGTH,
+        hash_length=_POSTGRES_NAME_HASH_LENGTH,
+    )
 
 
 def _json_type() -> sa.JSON:

@@ -84,7 +84,7 @@ source = RabbitMQConnector("amqp://...").queue("jobs")
 source = MySQLConnector("mysql://...").table_queue("tasks")
 ```
 
-RabbitMQ, MySQL, Redis Streams, AWS SQS, and Feishu Bitable are provided by plugin packages. Install them and import from the corresponding plugin module.
+RabbitMQ, MySQL, Redis Streams, AWS SQS, Cloudflare Queues, and Feishu Bitable are provided by plugin packages. Install them and import from the corresponding plugin module.
 
 ### Custom Source
 
@@ -205,7 +205,7 @@ async def final(ctx, item):
 
 ## Managed Execution
 
-onestep 1.9 introduced Managed Execution mode, which persists task state, results, and leases to a database (currently PostgreSQL only), suitable for long-running tasks (such as AI Agent invocations).
+onestep 1.9 introduced Managed Execution mode, which persists task state, results, and leases to a database (PostgreSQL and MySQL), suitable for long-running tasks (such as AI Agent invocations). See [PostgreSQL Tracked Execution](/en/broker/postgres-execution) and [MySQL Tracked Execution](/en/broker/mysql-execution) for deployment guides.
 
 ### Architecture
 

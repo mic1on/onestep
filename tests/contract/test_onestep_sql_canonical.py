@@ -3,11 +3,12 @@
 These pin the public contract of the new canonical ``onestep-sql`` distribution
 introduced in Phase 1 of the onestep-mysql / onestep-postgres consolidation:
 
-* the single ``sql`` entry point registers exactly the same 14 YAML resource
+* the single ``sql`` entry point registers exactly the same YAML resource
   types as the two legacy plugins combined (verbatim-copy invariant);
 * the ``[mysql]`` / ``postgres`` / ``all`` extras are declared;
-* backend-specific capabilities stay backend-specific (mysql_binlog is MySQL
-  only, postgres_execution_source is PostgreSQL only);
+* backend-specific capabilities stay backend-specific (mysql_binlog and
+  mysql_execution_source are MySQL only, postgres_execution_source is
+  PostgreSQL only);
 * the package imports without either database driver installed at import time
   (driver imports are lazy / inside functions).
 
@@ -34,6 +35,7 @@ EXPECTED_TYPES = {
     # MySQL
     "mysql", "mysql_state_store", "mysql_cursor_store", "mysql_table_queue",
     "mysql_incremental", "mysql_binlog", "mysql_table_sink",
+    "mysql_execution_source",
     # PostgreSQL
     "postgres", "postgres_state_store", "postgres_cursor_store",
     "postgres_table_queue", "postgres_incremental", "postgres_execution_source",
@@ -71,7 +73,7 @@ def test_register_resources_exposes_all_backend_types():
     register_resources(registry)
     types = {e.type for e in registry.catalog_entries()}
     assert types == EXPECTED_TYPES
-    assert len(types) == 20
+    assert len(types) == 21
 
 
 def test_catalog_matches_legacy_combined():
@@ -126,9 +128,25 @@ def test_backend_specific_capabilities_stay_backend_specific():
     # PostgreSQL-only tracked-execution capability must not leak into mysql.
     assert hasattr(postgres_pkg, "PostgresExecutionSource")
     assert not hasattr(mysql_pkg, "PostgresExecutionSource")
+    # MySQL tracked execution (Phase 3) must not leak into postgres, and the
+    # MySQL source must only ever accept a MySQL connector.
+    assert hasattr(mysql_pkg, "MySQLExecutionSource")
+    assert not hasattr(postgres_pkg, "MySQLExecutionSource")
     # SQLite has no binlog and no tracked execution; it must not expose them.
     assert not hasattr(sqlite_pkg, "BinlogSource")
     assert not hasattr(sqlite_pkg, "PostgresExecutionSource")
+    assert not hasattr(sqlite_pkg, "MySQLExecutionSource")
+
+
+def test_execution_source_types_accept_only_their_own_connector():
+    """A tracked-execution source is backend-locked: mysql_execution_source
+    only accepts MySQL connectors, postgres_execution_source only PostgreSQL
+    ones (consolidation §6: no generic connector)."""
+    registry = ResourceRegistry()
+    register_resources(registry)
+    catalog = {entry.type: entry for entry in registry.catalog_entries()}
+    assert catalog["mysql_execution_source"].connector_types == ("mysql",)
+    assert catalog["postgres_execution_source"].connector_types == ("postgres",)
 
 
 def test_register_resources_is_idempotent_alias_on_subpackages():

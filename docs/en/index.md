@@ -27,7 +27,7 @@ features:
   - title: One Runtime
     details: OneStepApp handles task registration, resource opening, Source loop execution, and graceful shutdown.
   - title: Multiple Sources / Sinks
-    details: Built-in Memory, Interval, Cron, Webhook and HTTP Sink, with plugin support for RabbitMQ, Redis Streams, AWS SQS, MySQL, PostgreSQL, MongoDB, Elasticsearch/OpenSearch, ClickHouse, Kafka and Feishu Bitable.
+    details: Built-in Memory, Interval, Cron, Webhook and HTTP Sink, with plugin support for RabbitMQ, Redis Streams, AWS SQS, Cloudflare Queues, MySQL, PostgreSQL, MongoDB, Elasticsearch/OpenSearch, ClickHouse, Kafka and Feishu Bitable.
   - title: Composable Pipelines
     details: Task return values can be sent to one or more Sinks, chaining processing workflows through queues, databases, or custom interfaces.
   - title: Production Ready

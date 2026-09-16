@@ -730,6 +730,7 @@ Plugin resource types:
 - `onestep-mq`: `rabbitmq`, `rabbitmq_queue`
 - `onestep-redis`: `redis`, `redis_stream`
 - `onestep-sqs`: `sqs`, `sqs_queue`
+- `onestep-cf-queues`: `cf_queues`, `cf_queue`
 - `onestep-kafka`: `kafka`, `kafka_topic`
 - `onestep-feishu-bitable`: `feishu_bitable`, `feishu_bitable_incremental`, `feishu_bitable_table_sink`
 - `onestep-mongodb`: `mongodb`, `mongodb_polling`, `mongodb_change_stream`, `mongodb_collection_sink`

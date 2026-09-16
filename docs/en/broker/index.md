@@ -37,7 +37,7 @@ onestep 1.x uses `Source` for input and `Sink` for output. Many connectors imple
 
 | Connector | Source | Sink | Description |
 |-----------|--------|------|-------------|
-| [SQL (MySQL / PostgreSQL)](/en/broker/sql) | Yes | Yes | Table queue/incremental sync/binlog CDC/table sink, install `onestep-sql[mysql]` or `onestep-sql[postgres]` |
+| [SQL (MySQL / PostgreSQL)](/en/broker/sql) | Yes | Yes | Table queue/incremental sync/binlog CDC/table sink/[tracked execution](/en/broker/mysql-execution), install `onestep-sql[mysql]` or `onestep-sql[postgres]` |
 | [MongoDB](/en/broker/mongodb) | Yes | Yes | Collection polling/Change Stream/table sink, install `onestep-mongodb` |
 | [Elasticsearch / OpenSearch](/en/broker/elasticsearch) | No | Yes | Async bulk Sink, install `onestep-elasticsearch` |
 | [ClickHouse](/en/broker/clickhouse) | No | Yes | Async confirmed table output Sink, install `onestep-clickhouse` |

@@ -33,7 +33,7 @@ Startup sequence:
 4. Runs `onestep check "$ONESTEP_TARGET"`
 5. Runs `onestep run "$ONESTEP_TARGET"`
 
-The image comes with `onestep[all]` pre-installed, including common plugin packages for RabbitMQ, Redis, MySQL, PostgreSQL, SQS, Kafka, and the control-plane reporter. If your YAML uses additional plugin resource types, ensure `requirements.txt` or `pyproject.toml` includes the corresponding plugin, e.g., `onestep-feishu-bitable`.
+The image comes with `onestep[all]` pre-installed, including common plugin packages for RabbitMQ, Redis, MySQL, PostgreSQL, SQS, Cloudflare Queues, Kafka, MongoDB, Elasticsearch/OpenSearch, ClickHouse, and the control-plane reporter. If your YAML uses additional plugin resource types, ensure `requirements.txt` or `pyproject.toml` includes the corresponding plugin, e.g., `onestep-feishu-bitable`.
 
 ## Custom Image
 
