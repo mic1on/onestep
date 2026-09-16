@@ -29,6 +29,11 @@ unit suites can keep running this backend on ``sqlite:///`` (design §11.1):
   (§6.8) — a session-level named lock (≤64 characters, hash-truncated name)
   released in ``finally``, because MySQL DDL implicitly commits and no
   transaction rollback will release it;
+* the ready gate refuses MySQL servers older than 8.0.16 (§8.3) with an
+  explicit error — below that floor CHECK constraints are only parsed, not
+  enforced, so the backend would degrade silently. The check runs once per
+  process before any other statement, on both the ``auto_create`` and the
+  pre-created-tables paths, and is dialect-guarded;
 * engine sessions are pinned to UTC (§6.4) and ``READ COMMITTED`` (§6.10).
   When the backend owns the DSN the isolation level is passed at
   ``create_async_engine`` time; on every path a ``connect`` event re-asserts
@@ -43,6 +48,7 @@ freshly built one), as the documented API in design §10.1 does.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -73,6 +79,46 @@ _MYSQL_ISOLATION_LEVEL = "READ COMMITTED"
 #: (design §6.8). Concurrent ``auto_create`` only needs the lock for the
 #: duration of one ``CREATE TABLE`` pair; ten seconds is far beyond that.
 _MYSQL_DDL_LOCK_TIMEOUT_S = 10
+
+#: Minimum MySQL server version for tracked execution (design §8.3): 8.0.16 is
+#: the first release where CHECK constraints are actually enforced, 8.0.13 is
+#: needed for JSON expression defaults and 8.0 for ``FOR UPDATE SKIP LOCKED``.
+#: Older servers must be refused at ``open()`` instead of silently degrading.
+_MYSQL_MINIMUM_SERVER_VERSION = (8, 0, 16)
+
+_VERSION_PREFIX = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def _parse_mysql_server_version(version_string: str) -> tuple[int, int, int]:
+    """Parse the leading ``major.minor.patch`` out of a server ``VERSION()``.
+
+    MySQL appends suffixes such as ``-log`` or distro tags to ``VERSION()``;
+    the numeric prefix is what the compatibility rules are written against.
+    """
+    match = _VERSION_PREFIX.match(version_string.strip())
+    if match is None:
+        raise RuntimeError(
+            f"unrecognized MySQL server version string: {version_string!r}"
+        )
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _assert_supported_mysql_server(version_string: str) -> tuple[int, int, int]:
+    """Refuse servers older than 8.0.16 with an explicit error (design §8.3).
+
+    Below that floor the backend would degrade silently: 8.0.0–8.0.15 create
+    the tables fine (JSON expression defaults already work) but only *parse*
+    CHECK constraints, so the idempotency/status guards lose enforcement. The
+    parsed version is returned so callers can assert against the live server.
+    """
+    parsed = _parse_mysql_server_version(version_string)
+    if parsed < _MYSQL_MINIMUM_SERVER_VERSION:
+        raise RuntimeError(
+            f"MySQL {version_string} is not supported by MySQLExecutionBackend: "
+            f"8.0.16+ is required (SKIP LOCKED needs 8.0, JSON expression "
+            f"defaults 8.0.13, enforced CHECK constraints 8.0.16 — design §8.3)"
+        )
+    return parsed
 
 
 def _pin_mysql_execution_session(dbapi_connection: Any, connection_record: Any) -> None:
@@ -151,6 +197,22 @@ class MySQLExecutionDialect:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("expires_at must be timezone-aware")
         return value.astimezone(timezone.utc)
+
+    async def assert_server_version(self, engine: Any) -> None:
+        """Refuse MySQL servers older than 8.0.16 before any DDL runs (§8.3).
+
+        A no-op for non-MySQL engines so the sqlite unit path keeps working
+        (§11.1). The backend's ready gate calls this once per process —
+        covering both the ``auto_create`` and the pre-created-tables paths —
+        so no statement is ever sent to an unsupported server first.
+        """
+        if engine.dialect.name != "mysql":
+            return
+        async with engine.connect() as conn:
+            version_string = (
+                await conn.execute(sa.text("SELECT VERSION()"))
+            ).scalar_one()
+        _assert_supported_mysql_server(version_string)
 
     async def create_tables(
         self,
@@ -249,6 +311,21 @@ class MySQLExecutionBackend(ExecutionStateMachine):
         from .execution_source import MySQLExecutionSource
 
         return MySQLExecutionSource(**kwargs)
+
+    async def _ensure_ready_locked(self) -> None:
+        # Design §8.3: refuse unsupported MySQL servers before any DDL runs.
+        # The shared machine's ready gate is the single funnel both the
+        # ``auto_create`` and the pre-created-tables paths flow through, so a
+        # MySQL-side override here (instead of a new capability hook on the
+        # shared ExecutionDialect protocol) keeps the seam minimal. The check
+        # runs once per process (or after a fork rebuilds the connector) and
+        # is dialect-guarded inside the adapter, so sqlite unit engines are
+        # untouched (§11.1).
+        if not self._ready:
+            await self._dialect.assert_server_version(
+                self._ensure_connector().engine
+            )
+        await super()._ensure_ready_locked()
 
 
 __all__ = [

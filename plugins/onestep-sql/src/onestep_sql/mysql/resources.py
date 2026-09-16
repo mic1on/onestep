@@ -12,7 +12,7 @@ from onestep.resource_registry import (
 )
 
 from .connector import MySQLConnector
-from .execution_source import MySQLExecutionSource, _validate_execution_source_options
+from .execution_source import _validate_execution_source_options
 
 _MYSQL_FIELDS = frozenset({"type", "dsn", "engine_options"})
 _MYSQL_STATE_STORE_FIELDS = frozenset(
@@ -421,13 +421,10 @@ def _build_mysql_execution_source(ctx: ResourceBuildContext, spec: Mapping[str, 
         max_result_bytes=spec.get("max_result_bytes", 1024 * 1024),
         reclaim_batch_size=spec.get("reclaim_batch_size", 100),
     )
-    # ``MySQLExecutionBackend.source()`` still raises NotImplementedError (the
-    # Phase 2 ``_make_source`` seam is outside this task's scope), so the
-    # backend-named source is constructed directly. This is the exact object
-    # ``backend.source(...)`` will return once that seam is filled: the
-    # backend already wraps this connector.
-    return MySQLExecutionSource(
-        backend=backend,
+    # Equivalent to ``backend.source(...)`` (design §10.1): the public worker
+    # entry point takes exactly these options; going through it keeps the two
+    # resource builders a line-by-line mirror (design §7.4).
+    return backend.source(
         namespace=ctx.require_string(spec, "namespace"),
         task_names=tuple(
             ctx.string_list(spec.get("task_names"), field=f"{ctx.field}.task_names")

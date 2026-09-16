@@ -29,7 +29,9 @@ from onestep_mysql.execution_backend import (
     MySQLExecutionBackend,
     MySQLExecutionDialect,
     StaleExecutionLease,
+    _assert_supported_mysql_server,
     _is_mysql_dsn,
+    _parse_mysql_server_version,
     _pin_mysql_execution_engine,
     _pin_mysql_execution_session,
 )
@@ -234,6 +236,47 @@ def test_normalize_datetime_rejects_naive_datetimes() -> None:
     dialect = MySQLExecutionDialect()
     with pytest.raises(ValueError, match="timezone-aware"):
         dialect.normalize_datetime(datetime(2026, 9, 15, 12, 27, 26))
+
+
+def test_mysql_server_version_parser_handles_suffixes() -> None:
+    # §8.3: VERSION() carries suffixes like -log or distro tags; the numeric
+    # prefix is what the compatibility gate is written against.
+    assert _parse_mysql_server_version("8.0.46") == (8, 0, 46)
+    assert _parse_mysql_server_version("8.4.11") == (8, 4, 11)
+    assert _parse_mysql_server_version("5.7.44-log") == (5, 7, 44)
+    assert _parse_mysql_server_version("8.0.36-0ubuntu0.22.04.1") == (8, 0, 36)
+    assert _parse_mysql_server_version("  8.0.16  ") == (8, 0, 16)
+    with pytest.raises(RuntimeError, match="unrecognized MySQL server version"):
+        _parse_mysql_server_version("unknown")
+
+
+def test_mysql_server_version_gate_threshold() -> None:
+    # §8.3: 8.0.16 is the floor — CHECK constraints are enforced from there,
+    # while 8.0.13+ would create the tables and only *parse* the constraints,
+    # i.e. silently degrade. The error must be explicit, not a 1050/3819 later.
+    assert _assert_supported_mysql_server("8.0.16") == (8, 0, 16)
+    assert _assert_supported_mysql_server("8.0.46") == (8, 0, 46)
+    assert _assert_supported_mysql_server("8.4.11") == (8, 4, 11)
+    with pytest.raises(RuntimeError, match=r"MySQL 8\.0\.15 .*8\.0\.16\+ is required"):
+        _assert_supported_mysql_server("8.0.15")
+    with pytest.raises(RuntimeError, match="8.0.16\\+ is required"):
+        _assert_supported_mysql_server("5.7.44-log")
+
+
+def test_dialect_server_version_check_is_noop_for_sqlite(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        # §11.1: the gate is dialect-guarded; sqlite unit engines must never
+        # see a SELECT VERSION() probe.
+        connector = MySQLConnector(f"sqlite:///{tmp_path / 'version-guard.db'}")
+        try:
+            assert (
+                await MySQLExecutionDialect().assert_server_version(connector.engine)
+                is None
+            )
+        finally:
+            await connector.close()
+
+    asyncio.run(scenario())
 
 
 def test_is_mysql_dsn_drives_the_dialect_guard() -> None:

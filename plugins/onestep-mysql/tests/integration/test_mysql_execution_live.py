@@ -16,7 +16,12 @@ from onestep import (
     ExecutionStatus,
 )
 from onestep_mysql import MySQLConnector
-from onestep_mysql.execution_backend import MySQLExecutionBackend, StaleExecutionLease
+from onestep_mysql.execution_backend import (
+    MySQLExecutionBackend,
+    StaleExecutionLease,
+    _assert_supported_mysql_server,
+    _parse_mysql_server_version,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -486,6 +491,32 @@ def test_datetime_microsecond_precision_is_immediately_claimable_live():
                 [submit_connector, claim_connector],
                 (execution_table, attempts_table),
             )
+
+    asyncio.run(scenario())
+
+
+def test_server_version_gate_accepts_the_live_mysql_live():
+    async def scenario() -> None:
+        # §8.3: open() refuses MySQL servers older than 8.0.16 with an explicit
+        # RuntimeError. Every live test exercises the positive path implicitly
+        # (open() would fail below the floor); this asserts it explicitly — the
+        # gate accepts the live server and returns its parsed version. The CI
+        # matrix (8.0/8.4) runs this gate against both supported lines.
+        execution_table, attempts_table = _names("vgate")
+        connector = MySQLConnector(_dsn())
+        try:
+            backend = connector.execution_backend(
+                table=execution_table,
+                attempts_table=attempts_table,
+            )
+            await backend.open()  # RuntimeError below 8.0.16 would surface here
+            async with backend.engine.connect() as conn:
+                raw = (await conn.execute(sa.text("SELECT VERSION()"))).scalar_one()
+            parsed = _parse_mysql_server_version(raw)
+            assert parsed >= (8, 0, 16)
+            assert _assert_supported_mysql_server(raw) == parsed
+        finally:
+            await _close_and_drop([connector], (execution_table, attempts_table))
 
     asyncio.run(scenario())
 
