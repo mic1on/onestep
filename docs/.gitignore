@@ -11,6 +11,11 @@ src/assets/sprites/*.*
 *.log
 package-lock.json
 
+# Local pnpm 10 build-script approval only. pnpm 9 (used in CI) treats this
+# file as a workspace manifest and requires a `packages` field, so it must
+# stay untracked.
+pnpm-workspace.yaml
+
 ### IntelliJ IDEA ###
 .idea
 *.iws
