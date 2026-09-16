@@ -266,7 +266,7 @@ export default defineConfig({
         ],
       },
       {
-        text: '跟踪长任务执行',
+        text: '长程任务',
         items: [
           { text: 'MySQL Tracked Execution', link: '/broker/mysql-execution' },
           { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },

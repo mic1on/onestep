@@ -15,7 +15,7 @@
 - [YAML 任务定义](/yaml-task-definition) 插件资源类型清单补 `onestep-cf-queues`（`cf_queues` / `cf_queue`）。
 - 快速开始补 Cloudflare Queues 安装页签；`onestep[all]` 说明与 Worker Runtime Image 内置插件清单同步实际内容（Cloudflare Queues、MongoDB、Elasticsearch/OpenSearch、ClickHouse）。
 - `docs/pnpm-workspace.yaml` 改为不入库并加入 `.gitignore`：CI 的 pnpm 9 将其视为 workspace 清单，缺 `packages` 字段导致 `pnpm install --frozen-lockfile` 报 "packages field missing or empty"（run 35072197625/35072345429）；该文件是本地 pnpm 10 的构建脚本审批配置，保持未跟踪。
-- 侧边栏将 MySQL / PostgreSQL 两个 Tracked Execution 页从「连接器」移入新分组「跟踪长任务执行」（EN: Tracked Execution），与它们「长任务部署方案」而非「连接器选型」的内容定位一致；页面路径与 URL 不变，全部交叉链接零破坏。
+- 侧边栏将 MySQL / PostgreSQL 两个 Tracked Execution 页从「连接器」移入新分组「长程任务」（EN: Tracked Execution），与它们「长任务部署方案」而非「连接器选型」的内容定位一致；页面路径与 URL 不变，全部交叉链接零破坏。
 
 ## 2026-09-15 - 新增环境变量参考页
 
