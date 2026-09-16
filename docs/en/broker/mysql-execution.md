@@ -5,13 +5,13 @@ outline: deep
 
 # MySQL Tracked Execution
 
-This document explains how business systems can use MySQL as a submission, state, result, cancellation, and lease store for long-running tasks. The capability mirrors [PostgreSQL Tracked Execution](/en/broker/postgres-execution) point for point: the same `ExecutionClient` API, the same state machine, and the same YAML field semantics — only the database and driver layers are replaced. It is provided by core `onestep>=1.9.0` plus `onestep-sql[mysql]>=0.4.0`; both are published on PyPI.
+This document explains how to use MySQL as a submission, state, result, cancellation, and lease store for long-running tasks. The capability is provided by core `onestep>=1.9.0` plus `onestep-sql[mysql]>=0.4.0`; both are published on PyPI. It mirrors [PostgreSQL Tracked Execution](/en/broker/postgres-execution) point for point: the same `ExecutionClient` API, the same state machine, and the same YAML field semantics — only the database and driver layers are replaced.
 
 Use cases: An HTTP request submits a task that may run for seconds, minutes, or longer. The API returns a task ID, and the business side polls for status or results. Typical examples include Agents, report generation, file processing, async imports, and batch syncs.
 
 This feature is optional. Plain `MemoryQueue`, RabbitMQ, Redis, SQS, scheduled tasks, and existing MySQL table queue integrations require no changes.
 
-## 0. First Confirm Whether You Need Both Packages
+## 0. Confirm Version Requirements
 
 | Business Scenario | Required Versions | Business Code Changes Needed |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ This feature is optional. Plain `MemoryQueue`, RabbitMQ, Redis, SQS, scheduled t
 | Continue using existing MySQL table queue, incremental, binlog, state or sink | `onestep>=1.9.0` + compatible MySQL plugin | Usually no |
 | Use submission, query, result, and cancellation from this page | `onestep>=1.9.0` + `onestep-sql[mysql]>=0.4.0` | Deploy API and worker per this page |
 
-`onestep-sql[mysql]>=0.4.0` depends on `onestep>=1.9.0`. Conversely, installing `onestep>=1.9.0` alone does not automatically enable tracked execution; workers without the SQL plugin installed can run normally.
+`onestep-sql[mysql]>=0.4.0` depends on `onestep>=1.9.0` and cannot be combined with `onestep==1.8.1`. Conversely, installing `onestep>=1.9.0` alone does not automatically enable tracked execution; workers without the SQL plugin installed can run normally.
 
 ## 1. Runtime Architecture
 
@@ -46,7 +46,7 @@ Core object responsibilities:
 
 Each `MySQLExecutionSource` can only bind to one task name. To execute multiple tasks, create a separate source for each task.
 
-## 2. Publishing and Installation
+## 2. Installation and Rollout
 
 API and worker processes participating in the same execution chain must use the same locked versions:
 
@@ -668,7 +668,7 @@ Key alerts:
 
 Confirm in order before going live:
 
-- [ ] `onestep>=1.9.0` and `onestep-sql>=0.4.0` (with the MySQL backend) are both published on PyPI.
+- [ ] `onestep>=1.9.0` and `onestep-sql>=0.4.0` (with the MySQL backend) are both published on PyPI, and the target version combination resolves and installs.
 - [ ] `pip check` passes on API and worker; both processes use the same version combination.
 - [ ] MySQL version ≥ 8.0.16 (CHECK constraints); both 8.0 and 8.4 are within the supported range.
 - [ ] When the runtime account uses `caching_sha2_password`, the installation environment includes the `cryptography` dependency declared by `onestep-sql[mysql]` (`python -c "import cryptography"` succeeds after `uv sync` / `pip install`).
