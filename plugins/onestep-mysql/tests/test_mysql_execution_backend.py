@@ -255,6 +255,7 @@ def test_mysql_server_version_gate_threshold() -> None:
     # while 8.0.13+ would create the tables and only *parse* the constraints,
     # i.e. silently degrade. The error must be explicit, not a 1050/3819 later.
     assert _assert_supported_mysql_server("8.0.16") == (8, 0, 16)
+    assert _assert_supported_mysql_server("8.0.16-log") == (8, 0, 16)
     assert _assert_supported_mysql_server("8.0.46") == (8, 0, 46)
     assert _assert_supported_mysql_server("8.4.11") == (8, 4, 11)
     with pytest.raises(RuntimeError, match=r"MySQL 8\.0\.15 .*8\.0\.16\+ is required"):
