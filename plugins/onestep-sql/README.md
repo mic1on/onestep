@@ -23,8 +23,14 @@ namespace (`onestep_sql`). It is introduced incrementally per
   available as thin forwarding shims without their own resource entry points;
   existing `pip install onestep-mysql` and `from onestep_mysql import ...`
   imports keep working unchanged.
-* All 14 YAML resource type names, catalog roles, fields, defaults, and
-  connector boundaries are unchanged.
+* All existing YAML resource type names, catalog roles, fields, defaults, and
+  connector boundaries are unchanged; the MySQL-only `mysql_execution_source`
+  grows the MySQL + PostgreSQL family to 15 types (21 including the six
+  `sqlite_*` types).
+* MySQL tracked execution is available: `MySQLExecutionBackend`,
+  `MySQLExecutionSource`, and the `mysql_execution_source` YAML type mirror the
+  PostgreSQL tracked-execution capability on MySQL 8.0.16+. See
+  `docs/broker/mysql-execution.md`.
 
 ## Install
 
@@ -36,7 +42,8 @@ pip install "onestep-sql[postgres]" # PostgreSQL only
 
 ## Usage
 
-The package registers all 14 YAML resource types through a single entry point
+The package registers all 21 YAML resource types (the 15 MySQL and PostgreSQL
+types plus six `sqlite_*` types) through a single entry point
 (`sql` in the `onestep.resources` group). No import is required to use the
 types in a YAML pipeline — onestep discovers them automatically.
 
@@ -44,15 +51,35 @@ For programmatic access to the connector classes:
 
 ```python
 from onestep_sql.mysql import MySQLConnector, BinlogSource
+from onestep_sql.mysql import MySQLExecutionBackend, MySQLExecutionSource
 from onestep_sql.postgres import PostgresConnector, PostgresExecutionSource
 ```
 
 ## What is NOT changing
 
-* The 14 YAML type names (`mysql_*`, `postgres_*`) and their catalog roles,
-  fields, defaults, and connector boundaries are unchanged.
+* The existing YAML type names (`mysql_*`, `postgres_*`) and their catalog
+  roles, fields, defaults, and connector boundaries are unchanged.
+  `mysql_execution_source` is the one deliberate addition (MySQL-only).
 * `mysql_binlog` stays MySQL-only; `postgres_execution_source` stays
   PostgreSQL-only, and `mysql_execution_source` stays MySQL-only. Tracked
   execution is implemented once per backend and never shared across them: each
   backend's execution source only accepts that backend's connector.
 * See the design doc for the full non-goals and the phased rollout plan.
+
+## MySQL tracked execution
+
+`onestep-sql[mysql]==0.4.0` ships the MySQL tracked-execution backend:
+`MySQLConnector.execution_backend()`, `MySQLExecutionBackend`,
+`MySQLExecutionSource`, `MySQLExecutionDelivery`, and the
+`mysql_execution_source` YAML resource type. The `ExecutionClient` API, state
+machine, statuses, and lease semantics are identical to the PostgreSQL backend —
+business code switches backends by changing only the line that constructs the
+backend.
+
+The backend requires MySQL 8.0.16+, pins its sessions to UTC and
+`READ COMMITTED`, normalizes timezone-aware datetimes to UTC at the write
+boundary, and serializes concurrent `auto_create` with `GET_LOCK`. Like the
+PostgreSQL backend it provides at-least-once semantics and cooperative
+cancellation only; external side effects must stay idempotent on
+`execution_id`, and `result()` neither polls nor waits. Full deployment guide:
+`docs/broker/mysql-execution.md`.

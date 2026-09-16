@@ -36,7 +36,7 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 
 | 连接器 | Source | Sink | 描述 |
 |--------|--------|------|------|
-| [MySQL](/broker/mysql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出，安装 `onestep-sql[mysql]` |
+| [MySQL](/broker/mysql) | 支持 | 支持 | 表队列/增量同步/binlog CDC/表输出/[跟踪长任务执行](/broker/mysql-execution)，安装 `onestep-sql[mysql]` |
 | [PostgreSQL](/broker/postgres) | 支持 | 支持 | 表队列/增量同步/表输出/跟踪长任务执行，安装 `onestep-sql[postgres]` |
 | [MongoDB](/broker/mongodb) | 支持 | 支持 | Collection 轮询/Change Stream/表输出，安装 `onestep-mongodb` |
 | [Elasticsearch / OpenSearch](/broker/elasticsearch) | 不支持 | 支持 | 异步 bulk Sink，安装 `onestep-elasticsearch` |
