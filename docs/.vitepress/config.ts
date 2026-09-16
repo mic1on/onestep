@@ -94,14 +94,19 @@ export default defineConfig({
               { text: 'AWS SQS / SNS', link: '/en/broker/sqs' },
               { text: 'Cloudflare Queues', link: '/en/broker/cf-queues' },
               { text: 'SQL <span class="VPBadge warning" style="font-size:10px;line-height:16px;padding:0 6px;transform:none;">MySQL</span><span class="VPBadge warning" style="font-size:10px;line-height:16px;padding:0 6px;transform:none;">PostgreSQL</span>', link: '/en/broker/sql' },
-              { text: 'MySQL Tracked Execution', link: '/en/broker/mysql-execution' },
-              { text: 'PostgreSQL Tracked Execution', link: '/en/broker/postgres-execution' },
               { text: 'MongoDB', link: '/en/broker/mongodb' },
               { text: 'Elasticsearch / OpenSearch', link: '/en/broker/elasticsearch' },
               { text: 'ClickHouse', link: '/en/broker/clickhouse' },
               { text: 'Kafka', link: '/en/broker/kafka' },
               { text: 'Feishu Bitable', link: '/en/broker/feishu-bitable' },
               { text: 'Custom Source/Sink', link: '/en/broker/custom' },
+            ],
+          },
+          {
+            text: 'Tracked Execution',
+            items: [
+              { text: 'MySQL Tracked Execution', link: '/en/broker/mysql-execution' },
+              { text: 'PostgreSQL Tracked Execution', link: '/en/broker/postgres-execution' },
             ],
           },
           {
@@ -252,14 +257,19 @@ export default defineConfig({
           { text: 'AWS SQS / SNS', link: '/broker/sqs' },
           { text: 'Cloudflare Queues', link: '/broker/cf-queues' },
           { text: 'SQL <span class="VPBadge warning" style="font-size:10px;line-height:16px;padding:0 6px;transform:none;">MySQL</span><span class="VPBadge warning" style="font-size:10px;line-height:16px;padding:0 6px;transform:none;">PostgreSQL</span>', link: '/broker/sql' },
-          { text: 'MySQL Tracked Execution', link: '/broker/mysql-execution' },
-          { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
           { text: 'MongoDB', link: '/broker/mongodb' },
           { text: 'Elasticsearch / OpenSearch', link: '/broker/elasticsearch' },
           { text: 'ClickHouse', link: '/broker/clickhouse' },
           { text: 'Kafka', link: '/broker/kafka' },
           { text: 'Feishu Bitable', link: '/broker/feishu-bitable' },
           { text: '自定义 Source/Sink', link: '/broker/custom' },
+        ],
+      },
+      {
+        text: '跟踪长任务执行',
+        items: [
+          { text: 'MySQL Tracked Execution', link: '/broker/mysql-execution' },
+          { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
         ],
       },
       {
