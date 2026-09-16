@@ -16,7 +16,7 @@
 - 不实现 PostgreSQL logical replication/CDC。
 - 不把 MySQL binlog 做成 PostgreSQL feature，也不把 PostgreSQL execution backend/source 做成 MySQL feature。
 - MySQL binlog CDC（`mysql_binlog`，需正 `server_id`）始终 MySQL-only。
-- PostgreSQL tracked execution（`postgres_execution_source`、execution backend/source、lease/heartbeat/reclaim/cancellation）始终 PostgreSQL-only。
+- PostgreSQL tracked execution（`postgres_execution_source`、execution backend/source、lease/heartbeat/reclaim/cancellation）始终 PostgreSQL-only；对应的 MySQL tracked execution（`mysql_execution_source`）始终 MySQL-only。tracked execution 由两个 backend 各自实现，不跨 backend 混用。
 - 14 个 YAML type 名、catalog role、allowed fields、defaults、validators、connector boundaries 全部保持不变。
 
 ## 1. 阶段路线图
@@ -177,7 +177,7 @@
 ## 8. 跨阶段检查清单（每次合并前核对）
 
 - [ ] 14 个 YAML type 名与 strict catalog/validation/defaults/connector boundaries 未变（对照 P0.3 golden 快照）
-- [ ] `mysql_binlog` 始终 MySQL-only；`postgres_execution_source` 与 tracked execution 始终 PostgreSQL-only
+- [ ] `mysql_binlog` 始终 MySQL-only；`postgres_execution_source` 始终 PostgreSQL-only；`mysql_execution_source` 始终 MySQL-only；tracked execution 由两个 backend 各自实现，不跨 backend 混用
 - [ ] 任意 canonical/legacy 安装组合不重复注册 resource handlers（P3.2 为 release gate）
 - [ ] legacy namespace 转发保持 class/exception 身份一致（在 installed wheels 上断言）
 - [ ] root extras / workspace / lockfile / worker image / CI / live tests / docs 全部迁移到 canonical
@@ -191,7 +191,7 @@
 | 1 | `onestep-sql` 是 MySQL/PostgreSQL 唯一 canonical distribution 与唯一自动 registration path | P1 / P3 |
 | 2 | `onestep_sql.mysql` / `.postgres` 为新代码 public API；legacy import 在窗口内保持对象 identity 兼容 | P1 / P3 |
 | 3 | 14 个 YAML type 名、strict catalog/validation、defaults、connector boundaries 全部保留 | P0 / P1 / P2 |
-| 4 | `mysql_binlog` MySQL-only；`postgres_execution_source` 与 tracked execution PostgreSQL-only | 全程 |
+| 4 | `mysql_binlog` MySQL-only；`postgres_execution_source` PostgreSQL-only；`mysql_execution_source` MySQL-only；tracked execution 各 backend 自行实现，不跨 backend 混用 | 全程 |
 | 5 | forwarding distributions 保留“≥6 月或 ≥2 feature releases（取较晚）” | P3 / P5 |
 | 6 | canonical/legacy 任意组合不重复注册 | P3 |
 | 7 | canonical extras、core extras、workspace/lockfile、worker image、CI/release/live tests、docs 完成迁移 | P3 / P4 |

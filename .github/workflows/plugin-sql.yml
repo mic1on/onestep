@@ -64,7 +64,10 @@ jobs:
         run: uv sync --frozen --all-packages --extra test
 
       - name: Run plugin tests
-        run: uv run --all-packages python -m pytest -q tests/contract/test_onestep_sql_canonical.py tests/contract/test_onestep_sql_shared.py
+        # canonical + shared contract suites, plus the MySQL execution unit
+        # suites (run on sqlite, no database needed) that implement the
+        # tracked-execution backend shipped in this plugin.
+        run: uv run --all-packages python -m pytest -q tests/contract/test_onestep_sql_canonical.py tests/contract/test_onestep_sql_shared.py plugins/onestep-mysql/tests/test_mysql_execution_backend.py plugins/onestep-mysql/tests/test_mysql_execution_schema.py plugins/onestep-mysql/tests/test_mysql_execution_source.py
 
       - name: Build plugin distribution
         run: uv build --package "$PLUGIN_PACKAGE" --out-dir dist/plugin --sdist --wheel --clear
@@ -185,15 +188,80 @@ jobs:
           echo "Version exists on PyPI: $VERSION_EXISTS_ON_PYPI"
           echo "Publish plugin: $SHOULD_PUBLISH"
 
+  live-compatibility:
+    name: Live MySQL ${{ matrix.mysql-version }} (${{ matrix.driver }}) execution
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # §11.3/§15.3: cover both MySQL 8.0 and 8.4 so the tracked-execution
+        # dialect stays proven against both release lines (8.4 removed some
+        # legacy defaults; §6 behaviour was verified identical on both).
+        mysql-version: ["8.0", "8.4"]
+        # Both drivers ship in onestep-sql's mysql extra and business code can
+        # point ONESTEP_MYSQL_DSN at either; the live suite must prove the
+        # tracked-execution backend (including the connect-event session
+        # pinning) on the async-first asyncmy path, not only pymysql.
+        driver: ["asyncmy", "pymysql"]
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql-version }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: onestep
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      ONESTEP_MYSQL_DSN: mysql+${{ matrix.driver }}://root:root@127.0.0.1:3306/onestep
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run live MySQL execution tests
+        # §11.3.1/§11.3.2: MySQL 8.x defaults to caching_sha2_password, which
+        # needs `cryptography` on a plaintext-TCP first authentication. It is
+        # declared in onestep-sql's `mysql`/`all` extras, so the frozen sync
+        # below installs it; the import assert fails the job loudly if that
+        # ever regresses, instead of relying on the healthcheck warming the
+        # auth cache (a silent false-green per §11.3.2).
+        #
+        # Only the execution live suites run here: this job exists for the
+        # tracked-execution capability of onestep-sql, and the binlog live
+        # suite needs ROW-format server flags that GitHub service containers
+        # cannot set (it is covered by the compose-based integration script
+        # and the MySQL plugin workflow).
+        run: |
+          uv sync --frozen --all-packages --extra test --extra mysql
+          uv run --all-packages python -c "import cryptography; print('cryptography', cryptography.__version__)"
+          uv run --all-packages python -m pytest -q -m integration plugins/onestep-mysql/tests/integration/test_mysql_execution_live.py plugins/onestep-mysql/tests/integration/test_mysql_execution_source_live.py
+
   publish-pypi:
     name: Publish plugin to PyPI
     runs-on: ubuntu-latest
     needs:
       - test
+      - live-compatibility
       - detect-version
     if: >-
       ${{
         needs.test.result == 'success' &&
+        needs.live-compatibility.result == 'success' &&
         needs.detect-version.outputs.should_publish == 'true'
       }}
     permissions:

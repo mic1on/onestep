@@ -19,7 +19,8 @@ namespace（`onestep_sql`）和一套共用 SQL 行为实现。
 
 - `pip install onestep-mysql` 仍可安装，并自动拉取 `onestep-sql[mysql,sqlite]`。
 - `from onestep_mysql import MySQLConnector` 等导入路径保持对象 identity 兼容。
-- 所有 14 个 YAML 资源类型名（`mysql_*`、`postgres_*`）不变。
+- 既有 YAML 资源类型名（`mysql_*`、`postgres_*`）全部不变，并新增
+  `mysql_execution_source`（MySQL 专用），集合共 15 个类型。
 - 旧 shim 不再声明自己的 `onestep.resources` entry point；资源注册由
   `onestep-sql` 的单一 `sql` entry point 统一完成，因此新旧同装不会重复注册。
 
@@ -61,8 +62,8 @@ from onestep_postgres import PostgresConnector, PostgresExecutionSource
 
 ## YAML 配置
 
-**无需改动。** 所有 YAML 资源类型名、字段、默认值、catalog role 和 connector
-boundary 全部不变。`onestep-sql` 通过单一 `sql` entry point 注册全部 14 个类型，
+**无需改动。** 所有既有 YAML 资源类型名、字段、默认值、catalog role 和 connector
+boundary 全部不变。`onestep-sql` 通过单一 `sql` entry point 注册全部 15 个类型，
 YAML loader 自动发现。
 
 ```yaml
@@ -87,10 +88,13 @@ resources:
 合并不是把 MySQL 与 PostgreSQL 当作可互换后端：
 
 - `mysql_binlog` 始终是 MySQL 专属（依赖同步 `mysql-replication`）。
-- `postgres_execution_source` / tracked execution 始终是 PostgreSQL 专属
-  （依赖 PostgreSQL 事务/锁/lease 语义）。
+- `postgres_execution_source` 始终是 PostgreSQL 专属；`mysql_execution_source`
+  始终是 MySQL 专属。tracked execution 由两个 backend 各自实现（各自依赖本
+  backend 的事务/锁/lease 语义），一个 execution 表只属于一个 backend，不跨
+  backend 混用。
 
-这两项不会出现在另一后端的 namespace 中。
+这两项能力不会出现在另一后端的 namespace 中：每个 backend 的 execution source
+只接受该 backend 的 connector。
 
 ## Worker 镜像
 

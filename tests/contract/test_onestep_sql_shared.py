@@ -16,8 +16,20 @@ prove two things:
 
 The genuinely per-database parts are pinned as staying per-database: the
 SQLAlchemy error-classification tables differ between backends, MySQL binlog
-stays inside ``onestep_sql.mysql``, and PostgreSQL tracked execution stays
-inside ``onestep_sql.postgres``.
+stays inside ``onestep_sql.mysql``, and each backend's tracked-execution
+*schema* stays in its own subpackage.
+
+Phase 1 of the MySQL tracked execution backend
+(``docs/superpowers/specs/2026-09-15-mysql-tracked-execution-backend-design.md``
+§7.2–§7.4) added ``onestep_sql._shared.execution`` and is the one deliberate
+exception to the "capabilities never move into ``_shared``" rule: the
+tracked-execution *state machine* is shared precisely because both backends
+have identical machine parameters, error types and at-least-once contract. What
+stays out is the part where they genuinely differ — the schema builder — plus
+every concrete backend class. Section 6 below is re-targeted accordingly: it
+bans concrete backend classes and real backend imports, while explicitly
+allowing the shared machine to reference core's ``LeasedExecutionBackend``
+protocol it implements.
 
 No live database required: the behaviour checks run on sqlite/aiosqlite, the
 same way the per-backend plugin suites do.
@@ -26,6 +38,7 @@ same way the per-backend plugin suites do.
 from __future__ import annotations
 
 import asyncio
+import ast
 import dataclasses
 import hashlib
 import importlib
@@ -674,16 +687,34 @@ def test_error_classification_tables_stay_per_dialect() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_shared_package_exports_only_the_four_shared_modules() -> None:
+def test_shared_package_exports_only_the_shared_modules() -> None:
     import pkgutil
 
     import onestep_sql._shared as shared_pkg
 
     names = {module.name for module in pkgutil.iter_modules(shared_pkg.__path__)}
-    assert names == {"state_sqlalchemy", "table_sink_policy", "state_keys", "resilience"}
+    # ``execution`` is the Phase 1 extraction of the tracked-execution state
+    # machine; it is internal and non-public, exactly like the other four.
+    assert names == {
+        "state_sqlalchemy",
+        "table_sink_policy",
+        "state_keys",
+        "resilience",
+        "execution",
+    }
+    # The execution subpackage shares a machine, its seam and the source layer,
+    # never a schema builder (design §7.2: the schema layer is where the
+    # dialects truly differ).
+    execution_names = {
+        module.name
+        for module in pkgutil.iter_modules(
+            importlib.import_module("onestep_sql._shared.execution").__path__
+        )
+    }
+    assert execution_names == {"machine", "dialect", "source", "source_options"}
 
 
-def test_shared_package_does_not_reference_backend_only_capabilities() -> None:
+def _shared_python_files() -> list[Path]:
     root = (
         Path(__file__).resolve().parents[2]
         / "plugins"
@@ -692,21 +723,532 @@ def test_shared_package_does_not_reference_backend_only_capabilities() -> None:
         / "onestep_sql"
         / "_shared"
     )
+    # rglob (not glob) so the new ``execution`` subpackage is scanned too.
+    return sorted(root.rglob("*.py"))
+
+
+def test_shared_package_does_not_reference_backend_only_capabilities() -> None:
+    # Concrete backend classes, driver names and backend-only capabilities must
+    # never leak into _shared. The shared state machine may name core's
+    # ``LeasedExecutionBackend`` protocol (that is the abstraction it
+    # implements), which is why only the *concrete* class names are banned.
     banned = (
         "BinlogSource",
         "BinLogStreamReader",
-        "ExecutionBackend",
-        "ExecutionSource",
-        "execution_backend",
-        "execution_source",
+        "MySQLConnector",
+        "PostgresConnector",
+        "SQLiteConnector",
+        "PostgresExecutionBackend",
+        "PostgresExecutionSource",
+        "PostgresExecutionDelivery",
+        "MySQLExecutionBackend",
+        "MySQLExecutionSource",
+        "MySQLExecutionDelivery",
     )
-    for path in root.glob("*.py"):
+    # Real intra-distribution backend imports, which would invert the
+    # dependency direction (_shared must not depend on a concrete backend).
+    banned_import_prefixes = (
+        "onestep_sql.mysql",
+        "onestep_sql.postgres",
+        "onestep_sql.sqlite",
+    )
+    for path in _shared_python_files():
         if path.name == "__init__.py":
-            # the package docstring legitimately *mentions* the boundary
+            # the package docstrings legitimately *mention* the boundary
             continue
         text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(Path(__file__).resolve().parents[2])
         for token in banned:
-            assert token not in text, f"{path.name} references backend-only symbol {token!r}"
+            assert token not in text, f"{relative} references backend-only symbol {token!r}"
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                modules = [node.module]
+            for module in modules:
+                for prefix in banned_import_prefixes:
+                    assert not module.startswith(prefix), (
+                        f"{relative} imports concrete backend module {module!r}"
+                    )
+
+
+def test_shared_package_does_not_contain_a_backend_schema_builder() -> None:
+    # The DDL is the one part that stays per backend (design §7.2): a docstring
+    # may name the boundary, but no shared module may import or define a schema
+    # builder.
+    for path in _shared_python_files():
+        if path.name == "__init__.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(Path(__file__).resolve().parents[2])
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert "execution_schema" not in node.module, (
+                    f"{relative} must not import a backend schema module"
+                )
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "execution_schema" not in alias.name, (
+                        f"{relative} must not import a backend schema module"
+                    )
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.name != "build_execution_tables", (
+                    f"{relative} must not define a backend schema builder"
+                )
+
+
+def test_shared_execution_schema_stays_in_each_backend() -> None:
+    # Phase 1 currently has a single consumer (PostgreSQL), so this asserts the
+    # boundary with what exists today. Phase 2 adds
+    # ``onestep_sql.mysql.execution_schema``; extend this test to assert that the
+    # two builders are distinct objects from their own modules.
+    from onestep_sql.postgres import execution_schema as postgres_schema
+
+    assert (
+        postgres_schema.build_execution_tables.__module__
+        == "onestep_sql.postgres.execution_schema"
+    )
+    assert not hasattr(
+        importlib.import_module("onestep_sql._shared.execution.dialect"),
+        "build_execution_tables",
+    )
+
+
+def test_execution_identifier_naming_is_shared_but_stays_parameterized() -> None:
+    """Identifier naming is shared mechanism; the length limit stays per backend.
+
+    Design §6.9: the helper must be parameterized (PostgreSQL 63 / MySQL 64),
+    must not carry a backend name, and must be usable as a
+    ``sa.ForeignKey(..., name=...)`` source for §6.11's InnoDB FK fix. The
+    PostgreSQL schema module keeps thin delegations so its derived names, error
+    messages and DDL are unchanged.
+    """
+    import inspect
+
+    from onestep_sql._shared.execution import dialect as shared_dialect
+    from onestep_sql.postgres import execution_schema as postgres_schema
+
+    # Neutral naming: no backend appears in either helper's name.
+    for name in ("derive_object_name", "validate_sql_identifier"):
+        assert hasattr(shared_dialect, name)
+        assert "postgres" not in name and "mysql" not in name
+
+    # Parameterized rather than hard-coded: max_length and hash_length are both
+    # accepted, and the historical hash length is still the default.
+    params = inspect.signature(shared_dialect.derive_object_name).parameters
+    assert "max_length" in params and "hash_length" in params
+    assert params["hash_length"].default == 12
+
+    # PostgreSQL delegates rather than keeping a parallel copy, so the two
+    # paths cannot drift; the PostgreSQL limit itself stays in its own module.
+    assert postgres_schema._postgres_object_name.__module__ == (
+        "onestep_sql.postgres.execution_schema"
+    )
+    derived_pg = postgres_schema._postgres_object_name(
+        table_name="a" * 62 + "1", prefix="uq_", suffix="execution_attempt"
+    )
+    derived_shared = shared_dialect.derive_object_name(
+        table_name="a" * 62 + "1",
+        prefix="uq_",
+        suffix="execution_attempt",
+        max_length=63,
+    )
+    assert derived_pg == derived_shared
+    assert len(derived_pg) <= 63
+
+    # The truncation branch is deterministic and collision-free for two
+    # same-prefix long names, which is what makes a derived FK name safe.
+    other = shared_dialect.derive_object_name(
+        table_name="a" * 62 + "2",
+        prefix="uq_",
+        suffix="execution_attempt",
+        max_length=63,
+    )
+    assert derived_pg != other
+    assert (
+        derived_pg
+        == shared_dialect.derive_object_name(
+            table_name="a" * 62 + "1",
+            prefix="uq_",
+            suffix="execution_attempt",
+            max_length=63,
+        )
+    )
+
+    # MySQL's wider limit uses the same implementation and stays within 64.
+    derived_mysql = shared_dialect.derive_object_name(
+        table_name="a" * 64, prefix="uq_", suffix="idempotency", max_length=64
+    )
+    assert len(derived_mysql) <= 64
+
+    # 63 and 64 are genuinely different limits on the same input.
+    long_table = "a" * 61
+    assert len(
+        shared_dialect.derive_object_name(
+            table_name=long_table, prefix="ix_", suffix="", max_length=63
+        )
+    ) == 63
+    assert len(
+        shared_dialect.derive_object_name(
+            table_name=long_table, prefix="ix_", suffix="", max_length=64
+        )
+    ) == 64
+
+    # Usable as a foreign-key constraint name (§6.11) -- not merely an index or
+    # check name -- and the derived name is what reaches the DDL.
+    fk_name = shared_dialect.derive_object_name(
+        table_name="a" * 58, prefix="fk_", suffix="execution", max_length=64
+    )
+    assert len(fk_name) <= 64
+    metadata = sa.MetaData()
+    parent = sa.Table(
+        "onestep_executions", metadata, sa.Column("id", sa.Uuid, primary_key=True)
+    )
+    child = sa.Table(
+        "a" * 58,
+        metadata,
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column(
+            "execution_id",
+            sa.Uuid,
+            sa.ForeignKey(f"{parent.name}.id", name=fk_name, ondelete="CASCADE"),
+            nullable=False,
+        ),
+    )
+    from sqlalchemy.dialects import mysql as mysql_dialect
+
+    fk_ddl = str(
+        sa.schema.CreateTable(child).compile(dialect=mysql_dialect.dialect())
+    )
+    assert fk_name in fk_ddl
+
+    # The shared validator honours the caller's limit and keeps the exact
+    # messages the PostgreSQL module produced before extraction.
+    assert shared_dialect.validate_sql_identifier("ok_name", "t", max_length=63) == "ok_name"
+    with pytest.raises(ValueError, match="must be a non-empty SQL identifier"):
+        shared_dialect.validate_sql_identifier("a-b", "attempts_table", max_length=63)
+    with pytest.raises(ValueError, match="must be at most 63 characters"):
+        shared_dialect.validate_sql_identifier("a" * 64, "attempts_table", max_length=63)
+    assert (
+        shared_dialect.validate_sql_identifier("a" * 64, "attempts_table", max_length=64)
+        == "a" * 64
+    )
+
+
+def test_shared_execution_machine_is_the_single_implementation() -> None:
+    from onestep_sql._shared.execution import machine as shared_machine
+    from onestep_sql.postgres import execution_backend as postgres_execution
+
+    # The state machine now exists exactly once, in _shared.
+    assert (
+        issubclass(postgres_execution.PostgresExecutionBackend, shared_machine.ExecutionStateMachine)
+    )
+    shared_module = "onestep_sql._shared.execution.machine"
+    for name in (
+        "__init__",
+        "submit",
+        "get",
+        "list",
+        "request_cancel",
+        "claim",
+        "heartbeat",
+        "complete",
+        "release",
+        "lease_remaining",
+        "_ensure_ready",
+        "_ensure_ready_locked",
+        "_submit",
+        "_claim",
+        "_heartbeat",
+        "_complete",
+        "_release",
+        "_expire_queued",
+        "_expire_cancel_requests",
+        "_release_expired_leases",
+        "_lease_lost_retry_predicate",
+        "_row_to_execution",
+        "_encode_cursor",
+        "_decode_cursor",
+        "_now",
+        "_transaction_now",
+        "open",
+        "close",
+        "_fork_error",
+    ):
+        method = getattr(shared_machine.ExecutionStateMachine, name)
+        assert method.__module__ == shared_module, f"{name} is not shared"
+    # The PostgreSQL subclass keeps public identity but no machine behaviour.
+    for name in ("submit", "claim", "heartbeat", "complete", "release", "_claim", "_complete"):
+        assert getattr(
+            postgres_execution.PostgresExecutionBackend, name
+        ) is getattr(shared_machine.ExecutionStateMachine, name)
+    # Dialect seam: PostgreSQL supplies the adapter, not the machine.
+    assert postgres_execution.PostgresExecutionBackend._dialect_cls.name == "postgresql"
+    assert (
+        postgres_execution.StaleExecutionLease is shared_machine.StaleExecutionLease
+    )
+
+
+def test_shared_execution_source_layer_is_the_single_implementation() -> None:
+    from onestep_sql._shared.execution import source as shared_source
+    from onestep_sql.postgres import execution_source as postgres_source
+
+    assert issubclass(postgres_source.PostgresExecutionSource, shared_source.ExecutionSourceBase)
+    assert issubclass(
+        postgres_source.PostgresExecutionDelivery, shared_source.ExecutionDeliveryBase
+    )
+    shared_module = "onestep_sql._shared.execution.source"
+    for name in (
+        "__init__",
+        "validate_task",
+        "open",
+        "fetch",
+        "close",
+        "complete_execution",
+        "start_processing",
+        "release_unstarted",
+        "ack",
+        "retry",
+        "fail",
+        "_heartbeat_loop",
+        "_heartbeat_with_retry",
+        "_await_critical",
+        "_stop_heartbeat",
+    ):
+        for cls in (shared_source.ExecutionSourceBase, shared_source.ExecutionDeliveryBase):
+            method = getattr(cls, name, None)
+            if method is not None:
+                assert method.__module__ == shared_module, f"{cls.__name__}.{name} is not shared"
+    # The PostgreSQL subclasses keep only their identity plus the two seams.
+    assert postgres_source.PostgresExecutionSource.fetch is shared_source.ExecutionSourceBase.fetch
+    assert postgres_source.PostgresExecutionSource._source_kind == "postgres.execution"
+    assert (
+        postgres_source.PostgresExecutionDelivery.complete_execution
+        is shared_source.ExecutionDeliveryBase.complete_execution
+    )
+    # Option validation is shared once and re-exported on the published path.
+    from onestep_sql.postgres import resources as postgres_resources
+
+    assert (
+        postgres_resources._validate_execution_source_options
+        is shared_source._validate_execution_source_options
+    )
+
+
+def test_execution_source_option_validator_is_shared_and_backend_agnostic() -> None:
+    """The option validator is one object every backend can reach directly.
+
+    Its home is ``_shared/execution/source_options.py`` rather than
+    ``.../source.py`` so it carries none of the source layer's heavier imports;
+    ``onestep_sql.postgres.resources`` re-exports it through the published
+    ``postgres.execution_source`` path. Phase 3's MySQL source must consume this
+    same object instead of importing anything under ``onestep_sql.postgres``
+    (design §12.3, "no cross-backend dependency").
+    """
+    from onestep_sql._shared.execution import source_options as shared_options
+    from onestep_sql.postgres import execution_source as postgres_source
+    from onestep_sql.postgres import resources as postgres_resources
+
+    # Every resolution path yields the same object.
+    assert (
+        shared_options._validate_execution_source_options
+        is postgres_source._validate_execution_source_options
+        is postgres_resources._validate_execution_source_options
+    )
+    assert (
+        shared_options._validate_execution_source_options.__module__
+        == "onestep_sql._shared.execution.source_options"
+    )
+
+    # It is dependency-light: no concrete backend, and none of the source
+    # layer's runtime imports, may leak into it.
+    tree = ast.parse(
+        (
+            Path(__file__).resolve().parents[2]
+            / "plugins/onestep-sql/src/onestep_sql/_shared/execution/source_options.py"
+        ).read_text(encoding="utf-8")
+    )
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(("." * node.level) + (node.module or ""))
+    assert not [
+        name
+        for name in imported
+        if "onestep_sql" in name or "postgres" in name or "mysql" in name
+    ], f"source_options must not import a backend: {imported}"
+
+    # Behaviour is unchanged from the pre-extraction implementation: the
+    # documented boundaries and the message/`field_prefix` contract still hold.
+    validate = shared_options._validate_execution_source_options
+    assert validate(
+        namespace="agent-api",
+        task_names=("run_agent",),
+        batch_size=1,
+        poll_interval_s=0.5,
+        lease_duration_s=90.0,
+        heartbeat_interval_s=30.0,
+        worker_id="w",
+    ) == ("run_agent",)
+    # Single task name is enforced.
+    with pytest.raises(ValueError, match="exactly one task name"):
+        validate(
+            namespace="ns",
+            task_names=("a", "b"),
+            batch_size=1,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0,
+            worker_id="w",
+        )
+    # The heartbeat tolerance branch accepts exactly lease/3 (math.isclose).
+    validate(
+        namespace="ns",
+        task_names=("t",),
+        batch_size=1,
+        poll_interval_s=1.0,
+        lease_duration_s=90.0,
+        heartbeat_interval_s=30.0,
+        worker_id="w",
+    )
+    with pytest.raises(ValueError, match="lease_duration_s / 3"):
+        validate(
+            namespace="ns",
+            task_names=("t",),
+            batch_size=1,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0001,
+            worker_id="w",
+        )
+    # bool is not an acceptable batch_size.
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        validate(
+            namespace="ns",
+            task_names=("t",),
+            batch_size=True,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0,
+            worker_id="w",
+        )
+    # field_prefix is preserved in every message.
+    with pytest.raises(ValueError, match=r"jobs\.namespace"):
+        validate(
+            namespace="",
+            task_names=("t",),
+            batch_size=1,
+            poll_interval_s=1.0,
+            lease_duration_s=90.0,
+            heartbeat_interval_s=30.0,
+            worker_id="w",
+            field_prefix="jobs",
+        )
+
+
+def test_no_backend_subpackage_imports_another_backend() -> None:
+    """``mysql`` must never import ``onestep_sql.postgres`` (design §12.3).
+
+    Phase 3's MySQL source reuses the shared machine and the shared option
+    validator, so any new import edge from a backend into another backend is a
+    regression, not a convenience.
+    """
+    dist = Path(__file__).resolve().parents[2] / "plugins/onestep-sql/src/onestep_sql"
+    for package, forbidden in (
+        ("mysql", ("postgres", "sqlite")),
+        ("postgres", ("mysql", "sqlite")),
+        ("sqlite", ("mysql", "postgres")),
+    ):
+        for path in sorted((dist / package).rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                names: list[str] = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    names = [node.module]
+                for name in names:
+                    for other in forbidden:
+                        assert not name.startswith(f"onestep_sql.{other}"), (
+                            f"{path.name} imports onestep_sql.{other} ({name!r})"
+                        )
+    # The shared execution package must not depend on any concrete backend.
+    for path in sorted((dist / "_shared" / "execution").rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            for name in names:
+                for other in ("mysql", "postgres", "sqlite"):
+                    assert not name.startswith(f"onestep_sql.{other}"), (
+                        f"_shared/execution/{path.name} imports onestep_sql.{other}"
+                    )
+
+
+def test_postgres_execution_modules_keep_their_published_surface() -> None:
+    # Phase 1's zero-behaviour-change gate: the published symbols and the
+    # historical submodule paths must resolve to the same objects as before the
+    # extraction (design §7.4, §12.2).
+    import inspect
+
+    from onestep_sql.postgres import execution_backend as backend_module
+    from onestep_sql.postgres import execution_source as source_module
+
+    assert backend_module.__all__ == [
+        "ExecutionLease",
+        "HeartbeatResult",
+        "PostgresExecutionBackend",
+        "StaleExecutionLease",
+    ]
+    assert source_module.__all__ == [
+        "PostgresExecutionDelivery",
+        "PostgresExecutionSource",
+    ]
+    # The legacy sys.modules forwarders must still alias the same objects.
+    legacy_backend = importlib.import_module("onestep_postgres.execution_backend")
+    legacy_source = importlib.import_module("onestep_postgres.execution_source")
+    assert (
+        legacy_backend.PostgresExecutionBackend
+        is backend_module.PostgresExecutionBackend
+        is postgres_pkg.PostgresExecutionBackend
+    )
+    assert (
+        legacy_source.PostgresExecutionSource
+        is source_module.PostgresExecutionSource
+        is postgres_pkg.PostgresExecutionSource
+    )
+    assert (
+        legacy_backend.StaleExecutionLease
+        is backend_module.StaleExecutionLease
+        is postgres_pkg.StaleExecutionLease
+    )
+    # Public constructor signature unchanged (indented through **engine_options).
+    assert list(
+        inspect.signature(backend_module.PostgresExecutionBackend).parameters
+    ) == [
+        "dsn",
+        "connector",
+        "table",
+        "attempts_table",
+        "auto_create",
+        "max_payload_bytes",
+        "max_metadata_bytes",
+        "max_result_bytes",
+        "reclaim_batch_size",
+        "clock",
+        "engine_options",
+    ]
 
 
 def test_legacy_forwarders_still_alias_the_shared_backend_objects() -> None:

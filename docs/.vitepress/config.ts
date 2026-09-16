@@ -99,6 +99,7 @@ export default defineConfig({
           { text: 'AWS SQS', link: '/broker/sqs' },
           { text: 'Cloudflare Queues', link: '/broker/cf-queues' },
           { text: 'MySQL', link: '/broker/mysql' },
+          { text: 'MySQL Tracked Execution', link: '/broker/mysql-execution' },
           { text: 'PostgreSQL', link: '/broker/postgres' },
           { text: 'PostgreSQL Tracked Execution', link: '/broker/postgres-execution' },
           { text: 'MongoDB', link: '/broker/mongodb' },

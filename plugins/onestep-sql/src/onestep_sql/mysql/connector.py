@@ -213,6 +213,30 @@ class MySQLConnector:
             serialize_json=serialize_json,
         )
 
+    def execution_backend(
+        self,
+        *,
+        table: str = "onestep_executions",
+        attempts_table: str = "onestep_execution_attempts",
+        auto_create: bool = True,
+        max_payload_bytes: int = 1024 * 1024,
+        max_metadata_bytes: int = 64 * 1024,
+        max_result_bytes: int = 1024 * 1024,
+        reclaim_batch_size: int = 100,
+    ) -> "MySQLExecutionBackend":
+        from .execution_backend import MySQLExecutionBackend
+
+        return MySQLExecutionBackend.from_connector(
+            self,
+            table=table,
+            attempts_table=attempts_table,
+            auto_create=auto_create,
+            max_payload_bytes=max_payload_bytes,
+            max_metadata_bytes=max_metadata_bytes,
+            max_result_bytes=max_result_bytes,
+            reclaim_batch_size=reclaim_batch_size,
+        )
+
     async def _table(self, table_name: str):
         table = self._tables.get(table_name)
         if table is None:
