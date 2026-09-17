@@ -1,0 +1,253 @@
+name: npm client
+
+# CI and release for clients/ts (@mic1on/onestep-client).
+#
+# Two-tier design, mirroring the repository's PyPI workflows: the test and e2e
+# jobs run on every relevant change, while publishing happens only on an
+# explicit manual dispatch with `publish_npm=true` and a `ts-v*` tag ref. There
+# is no automatic publish path, so neither an accidental push nor a stray tag
+# can release the package.
+#
+# Publishing needs an NPM_TOKEN repository secret: a granular npm access token
+# with read+write on the @mic1on scope. Without it the test jobs still pass and
+# only the publish job fails.
+
+on:
+  # Path-filtered CI for ordinary changes to the client.
+  push:
+    paths:
+      - ".github/workflows/npm-client.yml"
+      - "clients/ts/**"
+  pull_request:
+    paths:
+      - ".github/workflows/npm-client.yml"
+      - "clients/ts/**"
+  # Deliberately NOT path-filtered and NOT tag-triggered.
+  #
+  # A `paths:` filter and a tag push do not compose: GitHub only evaluates the
+  # filter against the commits in that push, so a tag pushed without further
+  # file changes would never fire. Publishing is therefore an explicit manual
+  # dispatch that names the ref to build, which also satisfies the rule that a
+  # tag alone must never release the package.
+  workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: "Publish @mic1on/onestep-client to npm (leave off for a build-only run)"
+        required: false
+        default: false
+        type: boolean
+      ref:
+        description: "Git ref to build and publish from (e.g. ts-v0.1.0, a branch, or a SHA)"
+        required: false
+        type: string
+
+# Never cancel a publish in flight.
+concurrency:
+  group: npm-client-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: clients/ts
+
+env:
+  CLIENT_PATH: clients/ts
+  CLIENT_PACKAGE: "@mic1on/onestep-client"
+
+jobs:
+  test:
+    name: Test and build (node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor is 22.6.0: the test runner executes TypeScript directly via
+        # --experimental-strip-types, which does not exist before 22.6.
+        # 22 is the floor, 24 is current LTS, 26 tracks the dev machine.
+        node-version: ["22.6.0", "24", "26"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: clients/ts/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (golden vectors vs Python)
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify build output is importable
+        # Guards the packaging contract: a wrong `main`/`exports` path or a
+        # leaked .ts specifier would ship a broken package without this.
+        run: |
+          node -e "
+            import('./dist/index.js').then((m) => {
+              const required = ['ExecutionClient', 'PostgresBackend', 'PyFloat', 'submissionDigest'];
+              const missing = required.filter((k) => typeof m[k] === 'undefined');
+              if (missing.length) {
+                console.error('missing exports:', missing.join(', '));
+                process.exit(1);
+              }
+              // The Python-compatible float formatter must survive the build.
+              if (m.formatPyFloat(1.0) !== '1.0') {
+                console.error('formatPyFloat(1.0) did not produce \"1.0\" after build');
+                process.exit(1);
+              }
+              console.log('build output OK:', Object.keys(m).length, 'exports');
+            }).catch((e) => { console.error(e); process.exit(1); });
+          "
+
+  e2e:
+    name: End-to-end interop (TS submit -> Python worker)
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: onestep
+          POSTGRES_PASSWORD: onestep
+          POSTGRES_DB: onestep
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U onestep -d onestep"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      ONESTEP_E2E_DSN: postgresql://onestep:onestep@127.0.0.1:5432/onestep
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/ts/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The e2e test drives a real Python onestep worker, so the client is
+      # verified against the actual runtime rather than a mock.
+      - name: Install onestep with PostgreSQL support
+        working-directory: .
+        run: uv sync --frozen --all-packages --extra integration
+
+      # Regenerating the fixture must be a no-op. If it is not, the committed
+      # golden vectors no longer describe the Python implementation, and the
+      # digest contract has silently drifted.
+      - name: Verify golden vectors match the Python implementation
+        working-directory: .
+        run: |
+          cp clients/ts/fixtures/golden.json /tmp/golden.committed.json
+          uv run python clients/ts/fixtures/generate_golden.py
+          if ! diff -u /tmp/golden.committed.json clients/ts/fixtures/golden.json; then
+            echo "::error::fixtures/golden.json is stale; run 'npm run golden' and commit the result."
+            exit 1
+          fi
+          echo "golden vectors are current"
+
+      - name: Run end-to-end tests
+        env:
+          ONESTEP_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: npm run test:e2e
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - e2e
+    # Only an explicit manual dispatch can publish. There is no automatic path:
+    # neither a push nor a tag releases the package on its own.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_npm }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: clients/ts/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the ref is a ts-v tag matching package.json
+        # The published version must come from an immutable, named tag so the
+        # registry artifact is reproducible and traceable.
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            case "$GITHUB_REF_NAME" in
+              ts-v*) ;;
+              *) echo "::error::tag $GITHUB_REF_NAME must start with 'ts-v'"; exit 1 ;;
+            esac
+            TAG_VERSION="${GITHUB_REF_NAME#ts-v}"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::tag ts-v$TAG_VERSION does not match package.json version $PKG_VERSION"
+              exit 1
+            fi
+            echo "publishing $PKG_VERSION from tag $GITHUB_REF_NAME"
+          else
+            echo "::error::publishing requires a ts-v* tag ref, got '$GITHUB_REF_NAME' ($GITHUB_REF_TYPE). Re-run with ref=ts-v$PKG_VERSION."
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is not set. Add a granular npm token with read+write on the @mic1on scope."
+            exit 1
+          fi
+          npm publish --access public --provenance
+
+      - name: Summary
+        run: |
+          echo "### Published $CLIENT_PACKAGE" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- version: \`$(node -p "require('./package.json').version")\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- https://www.npmjs.com/package/$CLIENT_PACKAGE" >> "$GITHUB_STEP_SUMMARY"

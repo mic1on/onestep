@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - ".github/workflows/test.yml"
+      - "clients/**"
       - "docker/**"
       - "docker-compose.integration.yml"
       - "plugins/**"
@@ -16,6 +17,7 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - ".github/workflows/test.yml"
+      - "clients/**"
       - "docker/**"
       - "docker-compose.integration.yml"
       - "plugins/**"

@@ -1,0 +1,68 @@
+{
+  "name": "@mic1on/onestep-client",
+  "version": "0.1.0",
+  "description": "TypeScript ExecutionClient for onestep tracked execution (the worker stays Python).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "onestep",
+    "task-queue",
+    "execution",
+    "durable",
+    "postgres",
+    "typescript"
+  ],
+  "homepage": "https://github.com/mic1on/onestep/tree/main/clients/ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mic1on/onestep.git",
+    "directory": "clients/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/mic1on/onestep/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types tests/*.test.ts",
+    "test:unit": "node --test --experimental-strip-types tests/canonical.test.ts",
+    "test:e2e": "node --test --experimental-strip-types tests/e2e.test.ts",
+    "golden": "python3 fixtures/generate_golden.py",
+    "prepublishOnly": "npm run build && npm run typecheck"
+  },
+  "peerDependencies": {
+    "pg": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
