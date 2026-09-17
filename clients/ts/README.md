@@ -27,6 +27,10 @@ placeholders and is not implemented here.
 npm i @mic1on/onestep-client pg
 ```
 
+Requires **Node >= 22.6.0**. The published `dist/` is plain JavaScript and runs
+on any supported Node, but the test suite executes the TypeScript sources
+directly via `--experimental-strip-types`, which does not exist before 22.6.
+
 ## Usage
 
 ```ts

@@ -64,8 +64,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 20 is the documented floor (package.json engines); 22 is current LTS.
-        node-version: ["20", "22"]
+        # Floor is 22.6.0: the test runner executes TypeScript directly via
+        # --experimental-strip-types, which does not exist before 22.6.
+        # 22 is the floor, 24 is current LTS, 26 tracks the dev machine.
+        node-version: ["22.6.0", "24", "26"]
 
     steps:
       - name: Checkout
@@ -142,7 +144,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: clients/ts/package-lock.json
 
@@ -201,7 +203,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
           cache: npm
           cache-dependency-path: clients/ts/package-lock.json
