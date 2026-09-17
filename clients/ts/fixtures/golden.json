@@ -1,0 +1,731 @@
+{
+  "_generator": "clients/ts/fixtures/generate_golden.py",
+  "_algorithm": "sha256(json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=True))",
+  "digest": [
+    {
+      "label": "scalars",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          },
+          "b": {
+            "__t": "str",
+            "v": "x"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "99cb195dda89fb034ebe49b5140b20fe56de6f89e93446bdc95ac2ea5bb77db2"
+    },
+    {
+      "label": "nested",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          },
+          "b": {
+            "__t": "str",
+            "v": "x"
+          },
+          "n": {
+            "__t": "dict",
+            "v": {
+              "k": {
+                "__t": "none"
+              },
+              "f": {
+                "__t": "float",
+                "v": "1.5"
+              }
+            }
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "52651ebce76da044b66ba4c3c6badf97f8214a81d8b4aac1046d0bca28dad31c"
+    },
+    {
+      "label": "empty_payload",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {}
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "2620b57c90c9152fc38cddb3a8eeac433c8115be3f73df2a5a829876a2a3ffc8"
+    },
+    {
+      "label": "unicode",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "name": {
+            "__t": "str",
+            "v": "张三"
+          },
+          "emoji": {
+            "__t": "str",
+            "v": "🎉"
+          },
+          "mixed": {
+            "__t": "str",
+            "v": "a中b"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "fc31b228c8bbaf8ba82b954565822824b8f46a077386c4dae669e01e0b039785"
+    },
+    {
+      "label": "unicode_escape",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "ctrl": {
+            "__t": "str",
+            "v": "a\tb\nc"
+          },
+          "quote": {
+            "__t": "str",
+            "v": "say \"hi\""
+          },
+          "bs": {
+            "__t": "str",
+            "v": "a\\b"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "84dc1e38fcc3fd77f53d56955ae634f332083e8ea6ea4896c244b1062461cfa8"
+    },
+    {
+      "label": "float_1_0",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "1.0"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "2ea929c7a78f54e9c4a2dadf90f74dada9bed158c434f39196d1058cb6678663"
+    },
+    {
+      "label": "float_3_0",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "3.0"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "d01d42db2d80163c84ef8c8cc972ebba75bf76f75008ae7672d5068ce6d7c3df"
+    },
+    {
+      "label": "float_neg_0_0",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "-0.0"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "dd4d9b7b70989c214b70fb284f304800cac4adf1fd2402d29d19d58b83961bd1"
+    },
+    {
+      "label": "float_frac",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "0.30000000000000004"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "8f38db0c01e27023633dfd48d40c77f04ce4467ceb8a92b09912b820bba5c662"
+    },
+    {
+      "label": "float_exp_large",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "1e+30"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "9f680f0e257bc1e08fd6570b939178a8ebeb4cd8f63fc6fd1687554c781af697"
+    },
+    {
+      "label": "float_exp_small",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "1e-07"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "cc04a6ad53c35def2ac7ee02c9fb7702f1bacc3842041d16221cb1492b18c785"
+    },
+    {
+      "label": "float_exp_20",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "1e+20"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "d986cf7c3edb4973c142d96e110311737156232fd9213e59323b0a52468db96b"
+    },
+    {
+      "label": "float_exp_21",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "1e+21"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "a21fb9177d1ca3ca893c7e1634a0c5e293ce0c2781f703698e6d0262547f006b"
+    },
+    {
+      "label": "float_many",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "float",
+            "v": "1.0"
+          },
+          "b": {
+            "__t": "float",
+            "v": "2.5"
+          },
+          "c": {
+            "__t": "float",
+            "v": "1e+21"
+          },
+          "d": {
+            "__t": "float",
+            "v": "0.0001"
+          },
+          "e": {
+            "__t": "float",
+            "v": "1e-07"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "75a7cf9555ef0e7f57bead84446ba12d947ae123c6ff525c030cc84c8c43789d"
+    },
+    {
+      "label": "int_vs_float",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "i": {
+            "__t": "int",
+            "v": 1
+          },
+          "f": {
+            "__t": "float",
+            "v": "1.0"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "0778a3b2d0417ceef010fc200b2c924163cd6e252c9c6e473c107be2a3e2b022"
+    },
+    {
+      "label": "bool_null",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "t": {
+            "__t": "bool",
+            "v": true
+          },
+          "f": {
+            "__t": "bool",
+            "v": false
+          },
+          "n": {
+            "__t": "none"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "aab8713a4d00cd0272d4958317da8e5b8b03cc2246ba7991e4c68a8182fed54e"
+    },
+    {
+      "label": "list",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "xs": {
+            "__t": "list",
+            "v": [
+              {
+                "__t": "int",
+                "v": 1
+              },
+              {
+                "__t": "float",
+                "v": "2.0"
+              },
+              {
+                "__t": "str",
+                "v": "three"
+              },
+              {
+                "__t": "none"
+              },
+              {
+                "__t": "dict",
+                "v": {
+                  "k": {
+                    "__t": "int",
+                    "v": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "2bcb4bbb450d4b328ca2f7075bd0525553e9c3416d2cf51b1bc62e9ef13b3364"
+    },
+    {
+      "label": "nested_empty",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "dict",
+            "v": {}
+          },
+          "b": {
+            "__t": "list",
+            "v": []
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "54403a380e23631ad8d4d42b495250cf0740b3253b3c720271c830c2e19420ed"
+    },
+    {
+      "label": "metadata",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {
+          "trace": {
+            "__t": "str",
+            "v": "abc"
+          },
+          "n": {
+            "__t": "int",
+            "v": 2
+          }
+        }
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "881a30992102373e4ce0f91c6c76b145b9da19c2159aeb1bdf4af1cdce78780f"
+    },
+    {
+      "label": "delay",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": "30.0",
+      "expiresAt": null,
+      "expectedDigest": "87813724931a39e894e28b59c02a8c093ea0bf9d6998ee8ff69e2b79835664ad"
+    },
+    {
+      "label": "delay_int",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": "5.0",
+      "expiresAt": null,
+      "expectedDigest": "db1fbe07d6bd018442d1371d0b56c68ba1a6911896cf39c56a5df303b4f2207d"
+    },
+    {
+      "label": "expires_utc",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": "2026-09-17T10:07:00.123456+00:00",
+      "expectedDigest": "694d52f8599d93293e52ab77e32a565f63fd8e9b6467bf102cb17bc3dadf9fa3"
+    },
+    {
+      "label": "expires_utc_round",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": "2026-09-17T10:07:00+00:00",
+      "expectedDigest": "f7f6d96486774b50d853cb1b7cf3495ccd6e224797eadb50a9a5da1ba12f18c3"
+    },
+    {
+      "label": "expires_offset",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "a": {
+            "__t": "int",
+            "v": 1
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": "2026-09-17T18:07:00.123456+08:00",
+      "expectedDigest": "e9bb7636c30192f80df8ae7b33d28ef45536e9ce7749fe194daa417e1d1fd56d"
+    },
+    {
+      "label": "e2e_echo_floats",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "orderId": {
+            "__t": "str",
+            "v": "A-1001"
+          },
+          "qty": {
+            "__t": "float",
+            "v": "3.0"
+          },
+          "ratio": {
+            "__t": "float",
+            "v": "1.0"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {}
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "cbe4c756f9696ee45955287d0f5a3c5fdf8fbbbcb4d021591024c2f4a0bba00a"
+    },
+    {
+      "label": "combined",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "v": {
+            "__t": "float",
+            "v": "1.0"
+          },
+          "s": {
+            "__t": "str",
+            "v": "中文"
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {
+          "k": {
+            "__t": "float",
+            "v": "1.0"
+          }
+        }
+      },
+      "delayS": "12.5",
+      "expiresAt": "2027-01-01T00:00:00+00:00",
+      "expectedDigest": "ea7e3f9fcdc982e80db436c96287aa85c7d8c2c2bb25bca460461f3c83f6fa2e"
+    }
+  ],
+  "cursor": [
+    {
+      "label": "utc_micro",
+      "createdAt": "2026-09-17T10:07:00.123456+00:00",
+      "id": "01927f3e-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+      "expectedCursor": "eyJ2IjoxLCJjcmVhdGVkX2F0IjoiMjAyNi0wOS0xN1QxMDowNzowMC4xMjM0NTYrMDA6MDAiLCJpZCI6IjAxOTI3ZjNlLTFhMmItN2MzZC04ZTRmLTVhNmI3YzhkOWUwZiJ9",
+      "decodedKeys": [
+        "created_at",
+        "id",
+        "v"
+      ]
+    },
+    {
+      "label": "utc_round",
+      "createdAt": "2026-09-17T10:07:00+00:00",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "expectedCursor": "eyJ2IjoxLCJjcmVhdGVkX2F0IjoiMjAyNi0wOS0xN1QxMDowNzowMCswMDowMCIsImlkIjoiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwIn0",
+      "decodedKeys": [
+        "created_at",
+        "id",
+        "v"
+      ]
+    },
+    {
+      "label": "epoch",
+      "createdAt": "1970-01-01T00:00:00+00:00",
+      "id": "11111111-2222-3333-4444-555555555555",
+      "expectedCursor": "eyJ2IjoxLCJjcmVhdGVkX2F0IjoiMTk3MC0wMS0wMVQwMDowMDowMCswMDowMCIsImlkIjoiMTExMTExMTEtMjIyMi0zMzMzLTQ0NDQtNTU1NTU1NTU1NTU1In0",
+      "decodedKeys": [
+        "created_at",
+        "id",
+        "v"
+      ]
+    },
+    {
+      "label": "utc_millis",
+      "createdAt": "2026-09-17T10:07:00.123000+00:00",
+      "id": "22222222-3333-4444-5555-666666666666",
+      "expectedCursor": "eyJ2IjoxLCJjcmVhdGVkX2F0IjoiMjAyNi0wOS0xN1QxMDowNzowMC4xMjMwMDArMDA6MDAiLCJpZCI6IjIyMjIyMjIyLTMzMzMtNDQ0NC01NTU1LTY2NjY2NjY2NjY2NiJ9",
+      "decodedKeys": [
+        "created_at",
+        "id",
+        "v"
+      ]
+    }
+  ],
+  "e2ePayload": {
+    "payload": {
+      "__t": "dict",
+      "v": {
+        "orderId": {
+          "__t": "str",
+          "v": "A-1001"
+        },
+        "qty": {
+          "__t": "float",
+          "v": "3.0"
+        },
+        "ratio": {
+          "__t": "float",
+          "v": "1.0"
+        }
+      }
+    },
+    "expectedDigest": "81e0417683a7d53f7c14d17d9ae5d6eb6d8d43283d658e4e6a8792b7c8ac8b9a"
+  }
+}
