@@ -1,4 +1,4 @@
-# @onestep/client (TypeScript)
+# @mic1on/onestep-client (TypeScript)
 
 A thin TypeScript client for onestep **tracked execution**. It lets a Next.js API
 route (or any Node service) submit, inspect, list and cancel long-running tasks
@@ -24,13 +24,13 @@ placeholders and is not implemented here.
 ## Install
 
 ```bash
-npm i @onestep/client pg
+npm i @mic1on/onestep-client pg
 ```
 
 ## Usage
 
 ```ts
-import { ExecutionClient, PostgresBackend } from '@onestep/client';
+import { ExecutionClient, PostgresBackend } from '@mic1on/onestep-client';
 
 const backend = await PostgresBackend.create({
   connectionString: process.env.DATABASE_URL!,
@@ -84,7 +84,7 @@ because JSON cannot distinguish `1` from `1.0`, a TS caller must state float
 intent explicitly with `PyFloat`:
 
 ```ts
-import { PyFloat } from '@onestep/client';
+import { PyFloat } from '@mic1on/onestep-client';
 await client.submit('t', { ratio: new PyFloat(1.0) });  // digest covers 1.0
 await client.submit('t', { ratio: 1 });                 // digest covers 1
 ```
@@ -117,6 +117,7 @@ therefore always emits UTC.
 npm run test:unit    # 6 golden-vector tests, no infrastructure needed
 npm run test:e2e     # 9 live tests: TS submits -> Python worker executes
 npm run typecheck
+npm run build        # emits the publishable package into dist/
 ```
 
 The e2e suite needs a reachable PostgreSQL and the repo's Python venv with
@@ -127,6 +128,22 @@ ONESTEP_E2E_DSN=postgresql://onestep:onestep@localhost:5432/onestep \
 ONESTEP_PYTHON=../.venv/bin/python \
 npm run test:e2e
 ```
+
+### Build and publish
+
+Source files import each other with explicit `.ts` extensions so the test runner
+can execute them with no build step. `tsconfig.build.json` handles the publish
+build, using `rewriteRelativeImportExtensions` to emit `.js` specifiers and
+excluding tests from `dist/`. The two configs exist for that reason — do not
+merge them.
+
+```bash
+npm run build          # must succeed before publishing; prepublishOnly enforces it
+npm pack --dry-run     # inspect the tarball (dist/ + README only)
+```
+
+Publishing is handled by `.github/workflows/npm-client.yml`, which requires both
+a `ts-v*` tag push and an explicit `publish_npm` input.
 
 ### Regenerating the golden vectors
 

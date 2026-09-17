@@ -5,16 +5,14 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "strict": true,
-    "declaration": true,
-    "outDir": "dist",
-    "rootDir": ".",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"],
     // Source files import each other with explicit ".ts" extensions so that
-    // `node --experimental-strip-types` can run them directly, without a build
-    // step, in the test suite.
+    // `node --experimental-strip-types` can run them directly, with no build
+    // step, in the test suite. This config is typecheck-only; the publishable
+    // JS is produced by tsconfig.build.json, which rewrites those extensions.
     "allowImportingTsExtensions": true,
     "noEmit": true
   },

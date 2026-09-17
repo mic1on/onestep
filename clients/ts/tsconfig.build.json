@@ -1,0 +1,20 @@
+{
+  // Build config: emits the publishable package into dist/.
+  //
+  // The source keeps ".ts" import specifiers (so the test runner can execute it
+  // with no build step). TypeScript's `rewriteRelativeImportExtensions` turns
+  // those into ".js" on emit, which is what a consumer needs. Tests are
+  // excluded so they never ship in the published tarball.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "allowImportingTsExtensions": false,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.ts"]
+}
