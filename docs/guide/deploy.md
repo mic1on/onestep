@@ -140,7 +140,7 @@ docker build -t my-worker .
 docker run --rm my-worker
 ```
 
-worker 是长驻进程，`onestep run` 把 INFO 日志和任务事件写到 stdout，交给容器日志驱动采集即可。若 YAML 使用镜像未内置的插件（如 `onestep-feishu-bitable`），在工作区的 `requirements.txt` 或 `pyproject.toml` 中声明。
+worker 是长驻进程，`onestep run` 把 INFO 日志和任务事件写到 stdout，交给容器日志驱动采集即可。若 YAML 使用镜像未内置的插件（如 `onestep-feishu-bitable`），在工作区的 `requirements.txt` 或 `pyproject.toml` 中声明。注意：工作区根目录平铺多个顶层模块（如 `handler.py` + `client.py`）时，`pyproject.toml` 的项目安装会触发 setuptools flat-layout 报错，应改用 `requirements.txt` 或显式声明 `packages`，详见 [Worker Runtime Image](/guide/worker-runtime-image)。
 
 ## Docker Compose 部署
 

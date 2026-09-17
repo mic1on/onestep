@@ -1,5 +1,16 @@
 # 文档更新日志
 
+## 2026-09-16 - 补充 Worker 镜像 flat-layout 排障说明
+
+### 变更概述
+
+用户按 [Docker Compose 部署](/guide/deploy) 挂载含 `pyproject.toml` 的工作区时，入口脚本第 3 步 `pip install /workspace` 会把工作区当作 Python 项目构建；根目录平铺多个顶层模块（如 `handler.py` + `client.py`）触发 setuptools 报 "Multiple top-level modules discovered in a flat-layout" 后容器反复重启。文档此前未提示这一坑。
+
+### 更新内容
+
+- [Worker Runtime Image](/guide/worker-runtime-image)（中英镜像）新增「工作区里有 pyproject.toml 时」章节：说明 `handler.ref` 模块经 `PYTHONPATH` 导入、无需安装；给出三种修复——改用 `requirements.txt`（推荐）、`[tool.setuptools]` 显式声明 `packages = []`（+`py-modules = []`）、包目录 + `[tool.setuptools.packages.find]`。排查表新增对应条目。
+- [生产部署](/guide/deploy)（中英镜像）Docker 部署节的插件声明段落补一句 flat-layout 提示并链接到 Worker Runtime Image 页。
+
 ## 2026-09-16 - 同步 main：MySQL tracked execution 页与 onestep-sql 收尾
 
 ### 变更概述

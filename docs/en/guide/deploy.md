@@ -147,7 +147,11 @@ docker run --rm my-worker
 A worker is a long-running process. `onestep run` writes INFO logs and task
 events to stdout, so a container log driver can collect them directly. If the
 YAML uses a plugin not bundled in the image (e.g. `onestep-feishu-bitable`),
-declare it in the workspace `requirements.txt` or `pyproject.toml`.
+declare it in the workspace `requirements.txt` or `pyproject.toml`. Note: if the
+workspace root has multiple top-level modules side by side (e.g. `handler.py` +
+`client.py`), installing the `pyproject.toml` project triggers a setuptools
+flat-layout error — switch to `requirements.txt` or declare `packages`
+explicitly, see [Worker Runtime Image](/en/guide/worker-runtime-image).
 
 ## Docker Compose Deployment
 
