@@ -37,6 +37,16 @@ class TaskContext:
             )
         await updater(dict(values))
 
+    async def complete(self, values: Mapping[str, Any]) -> None:
+        if not isinstance(values, Mapping):
+            raise TypeError("complete() requires a mapping payload")
+        completer = getattr(self.delivery, "complete", None)
+        if completer is None:
+            raise RuntimeError(
+                "complete() is only supported for deliveries that can complete their current row atomically"
+            )
+        await completer(dict(values))
+
     @property
     def resources(self) -> Mapping[str, Any]:
         return self.app.resources

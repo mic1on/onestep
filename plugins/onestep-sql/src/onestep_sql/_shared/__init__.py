@@ -12,6 +12,10 @@ now-retired ``scripts/check_plugin_drift.py``):
   ``update_columns`` write policies (``overwrite`` / ``skip_null`` /
   ``backfill``), the ``_normalize_update_columns`` validator and the
   ``_update_payload`` / ``_coerce_json_values`` mixin;
+* :mod:`onestep_sql._shared.table_queue` — the single-transaction
+  ``complete(values)`` delivery mixin and its SQL helper that merge the
+  table-queue row write-back and the ack into one ``engine.begin()``
+  block (issue #181);
 * :mod:`onestep_sql._shared.state_keys` — the default incremental state-key
   derivation feeding the at-least-once cursor state;
 * :mod:`onestep_sql._shared.resilience` — the secret-token collection, message

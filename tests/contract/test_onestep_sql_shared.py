@@ -44,6 +44,7 @@ import hashlib
 import importlib
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import sqlalchemy as sa
@@ -53,6 +54,7 @@ from onestep_sql import sqlite as sqlite_pkg
 from onestep_sql._shared import resilience as shared_resilience
 from onestep_sql._shared import state_keys as shared_state_keys
 from onestep_sql._shared import state_sqlalchemy as shared_state
+from onestep_sql._shared import table_queue as shared_table_queue
 from onestep_sql._shared import table_sink_policy as shared_policy
 from onestep_sql._shared.resilience import redact_message
 from onestep_sql.mysql import connector as mysql_connector
@@ -64,9 +66,11 @@ from onestep_sql.postgres import state_sqlalchemy as postgres_state
 from onestep_sql.sqlite import connector as sqlite_connector
 from onestep_sql.sqlite import resilience as sqlite_resilience
 from onestep_sql.sqlite import state_sqlalchemy as sqlite_state
+from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.ext.asyncio import create_async_engine as _create_async_engine
 
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation
+from onestep import OneStepApp
 
 BACKENDS = ("mysql", "postgres", "sqlite")
 
@@ -158,6 +162,38 @@ def test_table_sink_policy_lives_once_in_shared() -> None:
     assert issubclass(sqlite_pkg.TableSink, shared_policy.TableSinkUpdatePolicy)
 
 
+def test_table_queue_complete_lives_once_in_shared() -> None:
+    """The issue #181 single-transaction complete(values) exists once, in _shared."""
+    delivery_classes = (
+        mysql_pkg.TableQueueDelivery,
+        postgres_pkg.PostgresTableQueueDelivery,
+        sqlite_pkg.TableQueueDelivery,
+    )
+    for delivery_cls in delivery_classes:
+        assert issubclass(delivery_cls, shared_table_queue.TableQueueCompleteMixin)
+        # The behavioural method is implemented on the shared mixin only.
+        assert delivery_cls.complete is shared_table_queue.TableQueueCompleteMixin.complete
+        assert "_complete_ack_applied" not in delivery_cls.__dict__
+    assert shared_table_queue.TableQueueCompleteMixin._complete_ack_applied is False
+    # The SQL helper is imported by identity into every backend module, and each
+    # backend's complete_row is a thin delegate onto it (no local SQL copy).
+    for connector_module in (mysql_connector, postgres_connector, sqlite_connector):
+        assert (
+            connector_module.complete_table_queue_row
+            is shared_table_queue.complete_table_queue_row
+        )
+    for source_cls in (
+        mysql_connector.TableQueueSource,
+        postgres_connector.PostgresTableQueueSource,
+        sqlite_connector.TableQueueSource,
+    ):
+        assert "complete_table_queue_row" in source_cls.complete_row.__code__.co_names
+    assert (
+        shared_table_queue.complete_table_queue_row.__module__
+        == "onestep_sql._shared.table_queue"
+    )
+
+
 def test_incremental_state_key_lives_once_in_shared() -> None:
     assert (
         mysql_connector._default_incremental_state_key
@@ -217,6 +253,272 @@ def test_shared_state_store_persists_across_instances(backend: str, tmp_path: Pa
         await reloaded.close()
 
     asyncio.run(scenario())
+
+
+def _seed_orders_table(tmp_path: Path, name: str, rows: list[dict]) -> tuple[str, sa.Table]:
+    """Create a sqlite-backed orders table the way the plugin suites do."""
+    db_url = f"sqlite:///{tmp_path / name}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    orders = sa.Table(
+        "orders",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("payload", sa.String, nullable=False),
+        sa.Column("status", sa.Integer, nullable=False),
+        sa.Column("score", sa.Integer),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.insert(orders),
+            [{"payload": "A", "status": 0, "score": None, **row} for row in rows],
+        )
+    engine.dispose()
+    return db_url, orders
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_writes_values_and_ack_atomically(
+    backend: str, tmp_path: Path
+) -> None:
+    """complete() lands business values and ack columns together (issue #181)."""
+    db_url, _orders = _seed_orders_table(tmp_path, f"complete-{backend}.db", [{"id": 1}])
+
+    async def scenario() -> None:
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        deliveries = await source.fetch(10)
+        assert len(deliveries) == 1
+        delivery = deliveries[0]
+        assert delivery.payload["status"] == 9  # post-claim body, unchanged by fetch
+
+        ack_row_calls: list[object] = []
+        original_ack_row = source.ack_row
+
+        async def recording_ack_row(row_ref: object) -> None:
+            ack_row_calls.append(row_ref)
+            await original_ack_row(row_ref)
+
+        source.ack_row = recording_ack_row  # type: ignore[method-assign]
+
+        await delivery.complete({"score": 42})
+
+        assert delivery._complete_ack_applied is True
+        assert delivery.payload["score"] == 42  # envelope mirrors the business payload
+        assert delivery.payload["status"] == 9  # ack columns never leak into the body
+
+        # The executor-style follow-up ack must be a delivery-local no-op.
+        await delivery.ack()
+        assert ack_row_calls == []
+
+        async with connector.engine.connect() as conn:
+            row = (
+                await conn.execute(sa.text("SELECT status, score FROM orders WHERE id = 1"))
+            ).first()
+        assert row == (1, 42)
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_midtransaction_failure_rolls_back_both_updates(
+    backend: str, tmp_path: Path
+) -> None:
+    """A failure between the two UPDATE statements leaves the row untouched."""
+    db_url, _orders = _seed_orders_table(tmp_path, f"rollback-{backend}.db", [{"id": 1}])
+
+    async def scenario() -> None:
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        deliveries = await source.fetch(10)
+        delivery = deliveries[0]
+
+        original_execute = AsyncConnection.execute
+        execute_calls = {"count": 0}
+
+        async def failing_execute(self: AsyncConnection, *args: object, **kwargs: object):
+            execute_calls["count"] += 1
+            if execute_calls["count"] == 2:
+                raise RuntimeError("injected mid-transaction failure")
+            return await original_execute(self, *args, **kwargs)
+
+        with (
+            mock.patch.object(AsyncConnection, "execute", failing_execute),
+            pytest.raises(RuntimeError, match="injected mid-transaction failure"),
+        ):
+            await delivery.complete({"score": 42})
+
+        assert execute_calls["count"] == 2  # values UPDATE ran, ack UPDATE raised
+        assert delivery._complete_ack_applied is False
+        assert delivery.payload["score"] is None  # envelope untouched on failure
+
+        async with connector.engine.connect() as conn:
+            row = (
+                await conn.execute(sa.text("SELECT status, score FROM orders WHERE id = 1"))
+            ).first()
+        # Neither the business value nor the ack survived the rollback: the row
+        # is still exactly in its claim state.
+        assert row == (9, None)
+
+        # Recovery: the plain ack path still works after the failed complete().
+        await delivery.ack()
+        async with connector.engine.connect() as conn:
+            status = (
+                await conn.execute(sa.text("SELECT status FROM orders WHERE id = 1"))
+            ).scalar()
+        assert status == 1
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_empty_ack_degenerates_to_update_current_row(
+    backend: str, tmp_path: Path
+) -> None:
+    """ack={} makes complete() equivalent to update_current_row (issue #181)."""
+    db_url, _orders = _seed_orders_table(
+        tmp_path,
+        f"degenerate-{backend}.db",
+        [{"id": 1}, {"id": 2, "payload": "B"}, {"id": 3, "payload": "C"}],
+    )
+
+    async def scenario() -> None:
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        deliveries = await source.fetch(10)
+        assert [delivery.payload["id"] for delivery in deliveries] == [1, 2, 3]
+
+        # Row 1: complete() with an empty ack mapping.
+        await deliveries[0].complete({"score": 42})
+        assert deliveries[0].payload["score"] == 42
+        assert deliveries[0]._complete_ack_applied is True
+        # Row 2: the legacy two-phase API on the same shape of source.
+        await deliveries[1].update_current_row({"score": 7})
+        await deliveries[1].ack()
+        # Row 3: complete({}) with an empty ack mapping is a documented no-op.
+        await deliveries[2].complete({})
+        assert deliveries[2]._complete_ack_applied is True
+
+        async with connector.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    sa.text("SELECT id, status, score FROM orders ORDER BY id")
+                )
+            ).all()
+        assert rows == [(1, 9, 42), (2, 9, 7), (3, 9, None)]
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_full_app_flow(backend: str, tmp_path: Path) -> None:
+    """End-to-end: a handler calling ctx.complete() lands the business value and
+    the ack status together, the executor's follow-up ack() never reaches the
+    source, and the emit sink still receives the handler result (issue #181)."""
+    db_url, _orders = _seed_orders_table(
+        tmp_path,
+        f"app-flow-{backend}.db",
+        [{"id": 1}, {"id": 2, "payload": "B"}],
+    )
+    setup_engine = sa.create_engine(db_url, future=True)
+    with setup_engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE processed_orders ("
+                "id INTEGER PRIMARY KEY, payload VARCHAR NOT NULL, status VARCHAR NOT NULL)"
+            )
+        )
+    setup_engine.dispose()
+
+    seen_scores: list[tuple[int, int]] = []
+    ack_row_calls: list[object] = []
+
+    async def scenario() -> None:
+        app = OneStepApp(f"table-queue-complete-{backend}")
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        sink = connector.table_sink(table="processed_orders", mode="upsert", keys=("id",))
+        seen: list[int] = []
+
+        original_ack_row = source.ack_row
+
+        async def recording_ack_row(row_ref: object) -> None:
+            ack_row_calls.append(row_ref)
+            await original_ack_row(row_ref)
+
+        source.ack_row = recording_ack_row  # type: ignore[method-assign]
+
+        @app.task(source=source, emit=sink, concurrency=2)
+        async def process(ctx, row):
+            await ctx.complete({"score": row["id"] * 10})
+            seen.append(row["id"])
+            seen_scores.append((row["id"], row["score"]))
+            if len(seen) == 2:
+                ctx.app.request_shutdown()
+            return {"id": row["id"], "payload": row["payload"], "status": "done"}
+
+        await app.serve()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+    verify_engine = sa.create_engine(db_url, future=True)
+    with verify_engine.begin() as conn:
+        order_rows = conn.execute(
+            sa.text("SELECT id, status, score FROM orders ORDER BY id")
+        ).all()
+        processed_rows = conn.execute(
+            sa.text("SELECT id, payload, status FROM processed_orders ORDER BY id")
+        ).all()
+    verify_engine.dispose()
+
+    assert sorted(seen_scores) == [(1, 10), (2, 20)]
+    # Both rows carry the business value AND the ack status written by complete().
+    assert order_rows == [(1, 1, 10), (2, 1, 20)]
+    assert processed_rows == [(1, "A", "done"), (2, "B", "done")]
+    # The executor's post-success ack() never reached ack_row: complete() had
+    # already applied the ack columns atomically.
+    assert ack_row_calls == []
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -701,6 +1003,7 @@ def test_shared_package_exports_only_the_shared_modules() -> None:
         "state_keys",
         "resilience",
         "execution",
+        "table_queue",
     }
     # The execution subpackage shares a machine, its seam and the source layer,
     # never a schema builder (design §7.2: the schema layer is where the
