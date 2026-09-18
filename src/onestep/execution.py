@@ -89,6 +89,13 @@ class ExecutionErrorDetail:
     backend: str | None = None
     operation: str | None = None
     connector_kind: str | None = None
+    # Comma-joined emit sink names exposing the retry-replay window for
+    # sink-stage failures (issue #182). Broader bound than the identity
+    # fields: the error payload persists as JSON without a column-width
+    # limit, and many long sink aliases must not turn an observability
+    # add-on into a delivery failure.
+    sinks_succeeded: str | None = None
+    sinks_remaining: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", _text(self.kind, "kind", maximum=64))
@@ -105,6 +112,16 @@ class ExecutionErrorDetail:
                     getattr(self, field_name),
                     field_name,
                     maximum=255,
+                ),
+            )
+        for field_name in ("sinks_succeeded", "sinks_remaining"):
+            object.__setattr__(
+                self,
+                field_name,
+                _optional_text(
+                    getattr(self, field_name),
+                    field_name,
+                    maximum=1024,
                 ),
             )
 

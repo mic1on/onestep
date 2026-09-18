@@ -239,6 +239,27 @@ def test_execution_error_detail_normalizes_text_fields() -> None:
     )
 
 
+def test_execution_error_detail_sink_replay_fields_default_and_round_trip() -> None:
+    default = ExecutionErrorDetail(kind="error", exception_type="ValueError")
+    assert default.sinks_succeeded is None
+    assert default.sinks_remaining is None
+
+    with_sinks = ExecutionErrorDetail(
+        kind="error",
+        exception_type="RuntimeError",
+        stage="sink",
+        sinks_succeeded="warehouse,audit",
+        sinks_remaining="billing",
+    )
+    assert with_sinks == ExecutionErrorDetail(
+        kind="error",
+        exception_type="RuntimeError",
+        stage="sink",
+        sinks_succeeded="  warehouse,audit  ",
+        sinks_remaining="  billing  ",
+    )
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -252,6 +273,10 @@ def test_execution_error_detail_normalizes_text_fields() -> None:
         {"backend": "x" * 256},
         {"operation": object()},
         {"connector_kind": " "},
+        {"sinks_succeeded": " "},
+        {"sinks_succeeded": "x" * 1025},
+        {"sinks_remaining": object()},
+        {"sinks_remaining": "x" * 1025},
     ],
 )
 def test_execution_error_detail_rejects_invalid_text_fields(overrides) -> None:
