@@ -10,6 +10,7 @@ from onestep.resource_registry import (
     ResourceRegistry,
     ResourceSpecHandler,
 )
+from onestep_sql._shared.table_queue_lint import warn_empty_nack_with_claim
 
 from .connector import MySQLConnector
 from .execution_source import _validate_execution_source_options
@@ -312,13 +313,16 @@ def _build_mysql_table_queue(ctx: ResourceBuildContext, spec: Mapping[str, Any])
     connector = ctx.resolve_dependency(spec, "connector")
     if not hasattr(connector, "table_queue"):
         raise TypeError(f"resource {spec['connector']!r} cannot build mysql_table_queue")
+    claim = ctx.require_mapping(spec, "claim")
+    nack = ctx.optional_mapping(spec.get("nack"), field=f"{ctx.field}.nack")
+    warn_empty_nack_with_claim(field=ctx.field, claim=claim, nack=nack)
     return connector.table_queue(
         table=ctx.require_string(spec, "table"),
         key=ctx.require_string(spec, "key"),
         where=ctx.require_string(spec, "where"),
-        claim=ctx.require_mapping(spec, "claim"),
+        claim=claim,
         ack=ctx.require_mapping(spec, "ack"),
-        nack=ctx.optional_mapping(spec.get("nack"), field=f"{ctx.field}.nack") or None,
+        nack=nack or None,
         batch_size=spec.get("batch_size", 100),
         poll_interval_s=spec.get("poll_interval_s", 1.0),
     )

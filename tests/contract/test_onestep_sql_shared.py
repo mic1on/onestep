@@ -997,9 +997,11 @@ def test_shared_package_exports_only_the_shared_modules() -> None:
     names = {module.name for module in pkgutil.iter_modules(shared_pkg.__path__)}
     # ``execution`` is the Phase 1 extraction of the tracked-execution state
     # machine; it is internal and non-public, exactly like the other four.
+    # ``table_queue_lint`` is the shared claim/nack YAML lint (issue #180).
     assert names == {
         "state_sqlalchemy",
         "table_sink_policy",
+        "table_queue_lint",
         "state_keys",
         "resilience",
         "execution",
