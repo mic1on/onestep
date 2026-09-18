@@ -17,6 +17,10 @@ from onestep.resilience import (
 )
 from onestep.state import CursorStore, InMemoryCursorStore
 from onestep_sql._shared.state_keys import _default_incremental_state_key
+from onestep_sql._shared.table_queue import (
+    TableQueueCompleteMixin,
+    complete_table_queue_row,
+)
 from onestep_sql._shared.table_sink_policy import (
     TableSinkUpdatePolicy,
     _normalize_update_columns,
@@ -277,7 +281,7 @@ class _TableRowRef:
     key_value: Any
 
 
-class TableQueueDelivery(Delivery):
+class TableQueueDelivery(TableQueueCompleteMixin, Delivery):
     def __init__(self, source: TableQueueSource, envelope: Envelope, row_ref: _TableRowRef) -> None:
         super().__init__(envelope)
         self._source = source
@@ -290,6 +294,10 @@ class TableQueueDelivery(Delivery):
             self.envelope.body.update(payload)
 
     async def ack(self) -> None:
+        if self._complete_ack_applied:
+            # complete() already wrote the ack columns in its own transaction;
+            # re-issuing the UPDATE would be an idempotent but wasted write.
+            return
         await self._source.ack_row(self._row_ref)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
@@ -371,6 +379,14 @@ class TableQueueSource(Source):
 
     async def ack_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.ack)
+
+    async def complete_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
+        await complete_table_queue_row(
+            connector=self.connector,
+            row_ref=row_ref,
+            values=values,
+            ack=self.ack,
+        )
 
     async def retry_row(self, row_ref: _TableRowRef, *, delay_s: float | None = None) -> None:
         if delay_s:

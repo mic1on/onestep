@@ -209,6 +209,64 @@ def test_table_queue_delivers_post_claim_body(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_table_queue_complete_merges_row_write_and_ack(tmp_path: Path) -> None:
+    """complete() writes the business column and the ack column in one
+    transaction, and the follow-up ack() is a delivery-local no-op (issue #181)."""
+    connector = sqlite_pkg.SQLiteConnector(f"sqlite:///{tmp_path / 'complete.db'}")
+
+    async def scenario() -> None:
+        async with connector.engine.begin() as conn:
+            await conn.run_sync(
+                lambda s: s.execute(
+                    sa.text(
+                        "CREATE TABLE jobs (id INTEGER PRIMARY KEY, status TEXT, score INTEGER)"
+                    )
+                )
+            )
+            await conn.execute(
+                sa.text("INSERT INTO jobs (id, status, score) VALUES (1, 'new', NULL)")
+            )
+        queue = connector.table_queue(
+            table="jobs",
+            key="id",
+            where="status='new'",
+            claim={"status": "claimed"},
+            ack={"status": "done"},
+            nack={"status": "new"},
+        )
+        deliveries = await queue.fetch(10)
+        assert len(deliveries) == 1
+        delivery = deliveries[0]
+        assert delivery.envelope.body["status"] == "claimed"
+
+        ack_row_calls: list[object] = []
+        original_ack_row = queue.ack_row
+
+        async def recording_ack_row(row_ref: object) -> None:
+            ack_row_calls.append(row_ref)
+            await original_ack_row(row_ref)
+
+        queue.ack_row = recording_ack_row  # type: ignore[method-assign]
+
+        await delivery.complete({"score": 42})
+
+        assert delivery._complete_ack_applied is True
+        assert delivery.envelope.body["score"] == 42
+        assert delivery.envelope.body["status"] == "claimed"
+
+        await delivery.ack()
+        assert ack_row_calls == []
+
+        async with connector.engine.begin() as conn:
+            row = (
+                await conn.execute(sa.text("SELECT status, score FROM jobs WHERE id = 1"))
+            ).first()
+        assert row == ("done", 42)
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
 def test_table_queue_no_double_claim_under_concurrent_consumers(tmp_path: Path) -> None:
     """Two consumers polling the same file must never deliver the same row twice.
 

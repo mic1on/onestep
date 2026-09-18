@@ -67,6 +67,50 @@ source = pg.table_queue(
 )
 ```
 
+### 单事务完成 complete()
+
+表队列 delivery 的 `update_current_row(values)` 与 `ack()` 是两个独立事务：
+两步之间进程崩溃，会留下"业务列已写、ack 未写"的行。多数场景 `where`
+条件会掩盖它，但这是 at-least-once 重复窗口的根源之一。
+
+`complete(values)` 把行回写与确认合并为**单个数据库事务**：在同一个
+事务里先 `UPDATE` 业务列、再 `UPDATE` ack 字段，两步全成功才提交。
+
+```python
+@app.task(source=source, emit=sink)
+async def run_job(ctx, row):
+    # 单事务内写入业务列并确认完成（status = 'done'）
+    await ctx.complete({"attempts": row["attempts"] + 1})
+    return {
+        "id": row["id"],
+        "status": "done",
+    }
+```
+
+也可以直接在 delivery 上调用：`await delivery.complete(values)`。
+
+#### 与两步 API 的关系
+
+- **纯增量**：`complete(values)` 是新增 API，旧的
+  `update_current_row(values)` + `ack()` 两步用法行为完全不变。
+- `ack={}` 时 `complete(values)` 等价于 `update_current_row(values)`：
+  只剩业务列那一条 `UPDATE`。
+- `values` 与 `ack` 都为空时不做任何写入。
+
+#### 原子性与幂等
+
+- **原子性**：`complete()` 中途失败（例如第二条语句报错）时整个事务回滚，
+  两个写入都不生效，行停留在 claim 态，按正常失败路径走 `nack` /
+  重试；不会出现"业务列已写、ack 未写"的半成品。
+- **ack 幂等**：`complete()` 成功后会在 delivery 上置位
+  `_complete_ack_applied`。executor 在 handler 返回后仍会按惯例调用
+  `delivery.ack()`，此时该调用直接跳过，不再重复发一次 `UPDATE`。
+  （即使跳过，重复写 ack 本身也是幂等的，这里只是省掉一次冗余写。）
+- envelope body 只镜像业务 `values`，ack 字段属队列簿记，不会混入 body。
+
+> 该 API 由 `onestep-sql` 的共享实现（`onestep_sql/_shared/table_queue.py`）
+> 提供，MySQL、PostgreSQL、SQLite 三后端语义一致。
+
 ## YAML 配置
 
 安装插件后，YAML 可以使用 `postgres*` 资源类型：

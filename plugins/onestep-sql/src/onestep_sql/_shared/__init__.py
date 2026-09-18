@@ -16,6 +16,10 @@ now-retired ``scripts/check_plugin_drift.py``):
   lint (issue #180): warn when ``claim`` is non-empty but ``nack`` is empty,
   because every failure path then no-ops and failed rows silently stick in
   the claimed state;
+* :mod:`onestep_sql._shared.table_queue` — the single-transaction
+  ``complete(values)`` delivery mixin and its SQL helper that merge the
+  table-queue row write-back and the ack into one ``engine.begin()``
+  block (issue #181);
 * :mod:`onestep_sql._shared.state_keys` — the default incremental state-key
   derivation feeding the at-least-once cursor state;
 * :mod:`onestep_sql._shared.resilience` — the secret-token collection, message
