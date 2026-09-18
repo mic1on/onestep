@@ -236,10 +236,13 @@ def test_fetch_rows_rejects_non_list_extractor_result() -> None:
                 timeout_s=1.0,
                 rows=lambda payload: {"not": "a list"},
             )
-            with pytest.raises(TypeError, match="must return a list"):
+            with pytest.raises(ConnectorOperationError) as raised:
                 await fetcher.fetch_rows()
         finally:
             await _close_server(server)
+
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        assert "must return a list" in str(raised.value)
 
     asyncio.run(scenario())
 
@@ -254,10 +257,28 @@ def test_fetch_rows_rejects_non_mapping_extractor_item() -> None:
                 timeout_s=1.0,
                 rows=lambda payload: [1, 2],
             )
-            with pytest.raises(TypeError, match="must be a mapping"):
+            with pytest.raises(ConnectorOperationError) as raised:
                 await fetcher.fetch_rows()
         finally:
             await _close_server(server)
+
+        assert raised.value.kind is ConnectorErrorKind.PERMANENT
+        assert "must be a mapping" in str(raised.value)
+
+    asyncio.run(scenario())
+
+
+def test_fetch_returns_none_for_empty_success_body() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_json_server(status=204, body=b"")
+        try:
+            fetcher = HttpFetcher("api", url=f"{base_url}/list", timeout_s=1.0)
+            payload = await fetcher.fetch()
+        finally:
+            await _close_server(server)
+
+        assert len(requests) == 1
+        assert payload is None
 
     asyncio.run(scenario())
 

@@ -199,7 +199,8 @@ class HttpFetcher:
         ``params_override`` entries are merged over the static ``params``
         mapping; override values win. ``body_override`` is a JSON-compatible
         value that replaces the static ``body`` for this call and is sent as
-        JSON; bodyless methods (GET, DELETE) never send a body.
+        JSON; bodyless methods (GET, DELETE) never send a body. An empty
+        response body (e.g. HTTP 204) is returned as ``None``.
         """
         params = dict(self.params)
         if params_override:
@@ -240,6 +241,8 @@ class HttpFetcher:
                 message=f"http_fetcher {self.name!r} returned HTTP {status} {reason}".rstrip(),
             )
 
+        if not body.strip():
+            return None
         try:
             return json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -261,7 +264,10 @@ class HttpFetcher:
 
         The ``rows`` callable receives the parsed response payload and may be
         synchronous or asynchronous; ``invoke_callback`` semantics let it
-        declare zero or one positional parameter.
+        declare zero or one positional parameter. Contract violations (a
+        non-list result or a non-mapping item) raise a PERMANENT
+        :class:`ConnectorOperationError`; exceptions raised inside the
+        extractor propagate unchanged.
         """
         if self._rows is None:
             raise ConnectorOperationError(
@@ -279,16 +285,28 @@ class HttpFetcher:
         if inspect.isawaitable(rows):
             rows = await rows
         if not isinstance(rows, list):
-            raise TypeError(
-                f"http_fetcher {self.name!r} rows extractor must return a list, "
-                f"got {type(rows).__name__}"
+            raise ConnectorOperationError(
+                backend="http_fetcher",
+                operation=ConnectorOperation.FETCH,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                message=(
+                    f"http_fetcher {self.name!r} rows extractor must return a list, "
+                    f"got {type(rows).__name__}"
+                ),
             )
         extracted: list[dict[str, Any]] = []
         for index, row in enumerate(rows):
             if not isinstance(row, Mapping):
-                raise TypeError(
-                    f"http_fetcher {self.name!r} rows extractor item {index} "
-                    f"must be a mapping, got {type(row).__name__}"
+                raise ConnectorOperationError(
+                    backend="http_fetcher",
+                    operation=ConnectorOperation.FETCH,
+                    kind=ConnectorErrorKind.PERMANENT,
+                    source_name=self.name,
+                    message=(
+                        f"http_fetcher {self.name!r} rows extractor item {index} "
+                        f"must be a mapping, got {type(row).__name__}"
+                    ),
                 )
             extracted.append(dict(row))
         return extracted
