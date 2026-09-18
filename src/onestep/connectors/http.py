@@ -160,6 +160,10 @@ class HttpFetcher:
     failures raise :class:`ConnectorOperationError`, so the task's retry
     policy owns failure handling; the fetcher itself keeps no state between
     calls.
+
+    The static ``body`` (or a per-call ``body_override``) is sent as JSON for
+    methods that carry a body (POST, PUT, PATCH); bodyless methods (GET,
+    DELETE) never send one, mirroring :class:`HttpSink`.
     """
 
     def __init__(
@@ -170,6 +174,7 @@ class HttpFetcher:
         method: str = "GET",
         headers: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
+        body: Any | None = None,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
         success_statuses: Sequence[int] | None = None,
         rows: Callable[..., Any] | None = None,
@@ -179,22 +184,35 @@ class HttpFetcher:
         self.method = _normalize_method(method)
         self.headers = _normalize_headers(headers)
         self.params = _normalize_params(params, field="params")
+        self.body = _normalize_body(body)
         self.timeout_s = _normalize_timeout(timeout_s)
         self.success_statuses = _normalize_success_statuses(success_statuses)
         self._rows = rows
 
-    async def fetch(self, params_override: Mapping[str, Any] | None = None) -> Any:
+    async def fetch(
+        self,
+        params_override: Mapping[str, Any] | None = None,
+        body_override: Any | None = None,
+    ) -> Any:
         """Perform the configured request and return the parsed JSON response.
 
         ``params_override`` entries are merged over the static ``params``
-        mapping; override values win.
+        mapping; override values win. ``body_override`` is a JSON-compatible
+        value that replaces the static ``body`` for this call and is sent as
+        JSON; bodyless methods (GET, DELETE) never send a body.
         """
         params = dict(self.params)
         if params_override:
             params.update(_normalize_params(params_override, field="params_override"))
+        if body_override is not None:
+            _validate_json_like(body_override, field="body_override")
+        payload = self._request_payload(
+            body_override if body_override is not None else self.body
+        )
         request = urllib.request.Request(
             _append_query_params(self.url, params),
-            headers=self._request_headers(),
+            data=payload,
+            headers=self._request_headers(has_payload=payload is not None),
             method=self.method,
         )
         try:
@@ -235,7 +253,9 @@ class HttpFetcher:
             ) from exc
 
     async def fetch_rows(
-        self, params_override: Mapping[str, Any] | None = None
+        self,
+        params_override: Mapping[str, Any] | None = None,
+        body_override: Any | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch and project the response into row mappings via ``rows``.
 
@@ -254,7 +274,7 @@ class HttpFetcher:
                     "configure the 'rows' ref or call fetch() and extract rows in the handler"
                 ),
             )
-        payload = await self.fetch(params_override)
+        payload = await self.fetch(params_override, body_override)
         rows = invoke_callback(self._rows, payload)
         if inspect.isawaitable(rows):
             rows = await rows
@@ -283,15 +303,24 @@ class HttpFetcher:
             "success_statuses": list(self.success_statuses),
             "rows": self._rows is not None,
         }
+        if self.body is not None:
+            config["body"] = _REDACTED
         return {
             "kind": "http_fetcher",
             "name": self.name,
             "config": config,
         }
 
-    def _request_headers(self) -> dict[str, str]:
+    def _request_payload(self, body: Any | None) -> bytes | None:
+        if self.method in _BODYLESS_METHODS or body is None:
+            return None
+        return json.dumps(body, default=str).encode("utf-8")
+
+    def _request_headers(self, *, has_payload: bool) -> dict[str, str]:
         headers = dict(self.headers)
         _set_header_default(headers, "Accept", "application/json")
+        if has_payload:
+            _set_header_default(headers, "Content-Type", "application/json")
         return headers
 
 

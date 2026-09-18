@@ -382,3 +382,123 @@ def test_strict_yaml_rejects_non_string_rows_ref() -> None:
             },
             strict=True,
         )
+
+
+def test_connectors_namespace_exports_http_fetcher() -> None:
+    import onestep.connectors as connectors
+
+    assert connectors.HttpFetcher is HttpFetcher
+    assert "HttpFetcher" in connectors.__all__
+
+
+def test_fetch_post_sends_static_json_body_with_content_type() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_json_server()
+        try:
+            fetcher = HttpFetcher(
+                "api",
+                url=f"{base_url}/search",
+                method="POST",
+                params={"pageSize": 10},
+                body={"page": 1, "keyword": "abc"},
+                timeout_s=1.0,
+            )
+            payload = await fetcher.fetch()
+        finally:
+            await _close_server(server)
+
+        request = requests[0]
+        assert request["method"] == "POST"
+        assert request["target"] == "/search?pageSize=10"
+        assert request["headers"]["accept"] == "application/json"
+        assert request["headers"]["content-type"] == "application/json"
+        assert json.loads(request["body"]) == {"page": 1, "keyword": "abc"}
+        assert payload == {"code": 200, "rows": [{"id": 1}, {"id": 2}]}
+
+    asyncio.run(scenario())
+
+
+def test_fetch_body_override_replaces_static_body() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_json_server()
+        try:
+            fetcher = HttpFetcher(
+                "api",
+                url=f"{base_url}/search",
+                method="POST",
+                body={"page": 1},
+                rows=_extract_rows,
+                timeout_s=1.0,
+            )
+            await fetcher.fetch(body_override={"page": 2, "keyword": "x"})
+            rows = await fetcher.fetch_rows(body_override={"page": 3})
+        finally:
+            await _close_server(server)
+
+        assert rows == [{"id": 1}, {"id": 2}]
+        assert json.loads(requests[0]["body"]) == {"page": 2, "keyword": "x"}
+        assert json.loads(requests[1]["body"]) == {"page": 3}
+
+    asyncio.run(scenario())
+
+
+def test_fetch_bodyless_method_ignores_configured_body() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_json_server()
+        try:
+            fetcher = HttpFetcher(
+                "api",
+                url=f"{base_url}/list",
+                method="GET",
+                body={"page": 1},
+                timeout_s=1.0,
+            )
+            await fetcher.fetch()
+        finally:
+            await _close_server(server)
+
+        request = requests[0]
+        assert request["method"] == "GET"
+        assert request["body"] == b""
+        assert "content-type" not in request["headers"]
+
+    asyncio.run(scenario())
+
+
+def test_yaml_http_fetcher_post_body_wiring() -> None:
+    async def scenario() -> None:
+        server, requests, base_url = await _start_json_server()
+        try:
+            app = load_app_config(
+                {
+                    "apiVersion": "onestep/v1alpha1",
+                    "kind": "App",
+                    "app": {"name": "yaml-http-fetcher-body"},
+                    "resources": {
+                        "api": {
+                            "type": "http_fetcher",
+                            "url": f"{base_url}/search",
+                            "method": "POST",
+                            "params": {"pageSize": 2},
+                            "body": {"page": 1},
+                            "rows": f"{__name__}:_extract_rows",
+                        },
+                    },
+                    "tasks": [],
+                },
+                strict=True,
+            )
+
+            fetcher = app.resources["api"]
+            assert isinstance(fetcher, HttpFetcher)
+            rows = await fetcher.fetch_rows()
+            assert rows == [{"id": 1}, {"id": 2}]
+            request = requests[0]
+            assert request["method"] == "POST"
+            assert request["target"] == "/search?pageSize=2"
+            assert request["headers"]["content-type"] == "application/json"
+            assert json.loads(request["body"]) == {"page": 1}
+        finally:
+            await _close_server(server)
+
+    asyncio.run(scenario())

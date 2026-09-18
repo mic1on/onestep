@@ -47,6 +47,7 @@ _HTTP_FETCHER_FIELDS = frozenset(
         "method",
         "headers",
         "params",
+        "body",
         "timeout_s",
         "success_statuses",
         "rows",
@@ -67,6 +68,7 @@ _HTTP_FETCHER_CATALOG = ResourceCatalogEntry(
         ),
         ResourceCatalogField("headers", "mapping", secret=True),
         ResourceCatalogField("params", "mapping", secret=True),
+        ResourceCatalogField("body", "json", secret=True),
         ResourceCatalogField("timeout_s", "number", default=5.0),
         ResourceCatalogField("success_statuses", "json"),
         ResourceCatalogField("rows", "ref"),
@@ -157,6 +159,7 @@ def _build_http_fetcher(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> H
         method=spec.get("method", "GET"),
         headers=ctx.mapping_value(spec.get("headers"), field=f"{ctx.field}.headers"),
         params=ctx.mapping_value(spec.get("params"), field=f"{ctx.field}.params"),
+        body=spec.get("body"),
         timeout_s=spec.get("timeout_s", 5.0),
         success_statuses=spec.get("success_statuses"),
         rows=ctx.optional_ref(spec.get("rows"), field=f"{ctx.field}.rows"),
@@ -173,6 +176,7 @@ def _validate_http_fetcher(ctx: ResourceValidationContext, spec: Mapping[str, An
     raw_params = spec.get("params")
     if raw_params is not None and not isinstance(raw_params, Mapping):
         raise TypeError(f"'{ctx.field}.params' must be a mapping")
+    _validate_json_like(spec.get("body"), field=f"{ctx.field}.body")
     ctx.validate_positive_number(spec.get("timeout_s"), field=f"{ctx.field}.timeout_s")
     raw_success_statuses = spec.get("success_statuses")
     if raw_success_statuses is not None:
