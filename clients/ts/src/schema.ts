@@ -109,6 +109,10 @@ export interface ExecutionErrorDetail {
   backend?: string;
   operation?: string;
   connectorKind?: string;
+  /** Comma-joined emit sink names already written before a sink-stage failure. */
+  sinksSucceeded?: string;
+  /** Comma-joined emit sink names a retry would replay after a sink-stage failure. */
+  sinksRemaining?: string;
 }
 
 /** A page of executions plus the cursor for the next page. */
@@ -218,6 +222,8 @@ function normalizeErrorDetail(value: unknown): ExecutionErrorDetail {
     ['backend', 'backend'],
     ['operation', 'operation'],
     ['connectorKind', 'connector_kind'],
+    ['sinksSucceeded', 'sinks_succeeded'],
+    ['sinksRemaining', 'sinks_remaining'],
   ];
   for (const [target, source] of mapping) {
     const raw = obj[source];

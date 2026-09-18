@@ -52,6 +52,11 @@ class ExecutionOutcome:
     completion: str
     handler_result: Any = None
     selected_sinks: list[str] = field(default_factory=list)
+    # Sinks whose emit dispatch completed successfully, in fan-out order. The
+    # sequential sink loop stops at the first failure, so this is always a
+    # prefix of ``selected_sinks``; on retry the whole fan-out replays and the
+    # already-succeeded sinks receive the envelope again (issue #182 window).
+    sinks_succeeded: list[str] = field(default_factory=list)
     delivery_action: DeliveryAction | None = None
     retry_delay_s: float | None = None
     failure: FailureInfo | None = None
@@ -136,7 +141,7 @@ class DeliveryExecutor:
                     outcome.handler_result,
                 )
                 outcome.selected_sinks = [
-                    getattr(binding.sink, "name", type(binding.sink).__name__) for binding in selected
+                    self._sink_name(binding.sink) for binding in selected
                 ]
                 await self.checkpoint(
                     active_stage,
@@ -155,6 +160,7 @@ class DeliveryExecutor:
                 for sink, emitted in prepared:
                     active_stage = "sink"
                     await self._sink_dispatcher(sink, emitted, "emit")
+                    outcome.sinks_succeeded.append(self._sink_name(sink))
 
             active_stage = "ack"
             outcome.delivery_action = DeliveryAction.ACK
@@ -298,7 +304,7 @@ class DeliveryExecutor:
         )
         outcome.failure = failure
         self._snapshot_capture_envelope(delivery, outcome)
-        outcome.public_failure = self._public_failure(failure, None)
+        outcome.public_failure = self._public_failure(failure, None, outcome)
         outcome.delivery_action = DeliveryAction.RETRY
         managed = self._managed_delivery(delivery)
         managed_status = (
@@ -322,6 +328,7 @@ class DeliveryExecutor:
             delivery,
             failure=failure,
             duration_s=duration_s,
+            event_meta=self._failure_event_meta(delivery, outcome),
         )
         if self.apply_delivery_actions:
             error = self._execution_error(outcome)
@@ -342,6 +349,7 @@ class DeliveryExecutor:
                 delivery,
                 failure=failure,
                 duration_s=duration_s,
+                event_meta=self._failure_event_meta(delivery, outcome),
             )
         await self._capture_failure(delivery, outcome)
 
@@ -358,7 +366,7 @@ class DeliveryExecutor:
         failure = FailureInfo.from_exception(exc, kind=kind)
         outcome.failure = failure
         self._snapshot_capture_envelope(delivery, outcome)
-        outcome.public_failure = self._public_failure(failure, exc)
+        outcome.public_failure = self._public_failure(failure, exc, outcome)
         outcome.completion = "failed"
         ctx.logger.exception(
             "task failed",
@@ -390,6 +398,7 @@ class DeliveryExecutor:
                 delivery,
                 failure=failure,
                 duration_s=duration_s,
+                event_meta=self._failure_event_meta(delivery, outcome),
             )
             await self._capture_failure(delivery, outcome)
             return outcome
@@ -422,6 +431,7 @@ class DeliveryExecutor:
             delivery,
             failure=failure,
             duration_s=duration_s,
+            event_meta=self._failure_event_meta(delivery, outcome),
         )
         await self._capture_failure(delivery, outcome)
         return outcome
@@ -472,6 +482,7 @@ class DeliveryExecutor:
                 delivery,
                 failure=failure,
                 duration_s=duration_s,
+                event_meta=self._failure_event_meta(delivery, outcome),
             )
             return False
         outcome.dead_letter_attempted = any_real_send
@@ -481,6 +492,7 @@ class DeliveryExecutor:
             delivery,
             failure=failure,
             duration_s=duration_s,
+            event_meta=self._failure_event_meta(delivery, outcome),
         )
         return True
 
@@ -597,6 +609,8 @@ class DeliveryExecutor:
             backend=public_failure.get("backend"),
             operation=public_failure.get("operation"),
             connector_kind=public_failure.get("connector_kind"),
+            sinks_succeeded=public_failure.get("sinks_succeeded"),
+            sinks_remaining=public_failure.get("sinks_remaining"),
         )
 
     async def _dispatch_production_sink(
@@ -694,6 +708,10 @@ class DeliveryExecutor:
                     },
                 )
 
+    @staticmethod
+    def _sink_name(sink: Sink) -> str:
+        return getattr(sink, "name", type(sink).__name__)
+
     def _build_succeeded_event_meta(
         self,
         delivery: Delivery,
@@ -703,6 +721,24 @@ class DeliveryExecutor:
         notification = self._extract_notification_payload(result)
         if notification is not None:
             event_meta["notification"] = notification
+        return event_meta
+
+    def _failure_event_meta(
+        self,
+        delivery: Delivery,
+        outcome: ExecutionOutcome,
+    ) -> dict[str, Any]:
+        # ``emit()`` replaces the envelope meta wholesale when ``event_meta``
+        # is provided, so seed from a copy of the envelope meta to preserve
+        # existing consumer expectations, then surface the retry-replay window
+        # for sink-stage failures (issue #182).
+        event_meta = copy.deepcopy(delivery.envelope.meta)
+        if outcome.failure_stage != "sink":
+            return event_meta
+        succeeded = list(outcome.sinks_succeeded)
+        remaining = outcome.selected_sinks[len(succeeded):]
+        event_meta["sinks_succeeded"] = succeeded
+        event_meta["sinks_remaining"] = remaining
         return event_meta
 
     def _extract_notification_payload(self, result: Any) -> dict[str, Any] | None:
@@ -745,6 +781,7 @@ class DeliveryExecutor:
         self,
         failure: FailureInfo,
         exc: Exception | None,
+        outcome: ExecutionOutcome | None = None,
     ) -> dict[str, str]:
         result = {
             "failure_kind": failure.kind.value,
@@ -757,6 +794,17 @@ class DeliveryExecutor:
                     "operation": exc.operation.value,
                     "connector_kind": exc.kind.value,
                 }
+            )
+        if outcome is not None and outcome.failure_stage == "sink":
+            # Comma-joined sink names (same style as the diagnostic CLI) so the
+            # dict[str, str] public-failure surface can carry the retry-replay
+            # window: a retry replays the whole fan-out, re-sending every sink
+            # listed here (issue #182). Empty string means the first sink
+            # dispatch itself failed.
+            succeeded = list(outcome.sinks_succeeded)
+            result["sinks_succeeded"] = ",".join(succeeded)
+            result["sinks_remaining"] = ",".join(
+                outcome.selected_sinks[len(succeeded):],
             )
         return result
 

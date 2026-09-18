@@ -177,6 +177,41 @@ def test_diagnostic_send_opens_and_reverse_closes_selected_sinks() -> None:
     asyncio.run(scenario())
 
 
+def test_diagnostic_send_sink_failure_reports_retry_replay_window() -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+        first = RecordingSink("first", calls)
+        second = RecordingSink("second", calls, broken=True)
+        app = OneStepApp("send-replay-window")
+
+        @app.task(emit=(first, second))
+        async def consume(ctx, payload):
+            return {"ok": True}
+
+        report = await DiagnosticRunner(app).run(
+            task_name="consume",
+            envelope=Envelope(body={"id": 1}),
+            send=True,
+        )
+
+        assert report.completion == "failed"
+        assert report.failure_stage == "sink"
+        assert report.failure == {
+            "failure_kind": "error",
+            "exception_type": "RuntimeError",
+            "sinks_succeeded": "first",
+            "sinks_remaining": "second",
+        }
+        failed_events = [
+            event for event in report.events if event.kind is TaskEventKind.FAILED
+        ]
+        assert len(failed_events) == 1
+        assert failed_events[0].meta["sinks_succeeded"] == ["first"]
+        assert failed_events[0].meta["sinks_remaining"] == ["second"]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "retry,dead_letter,expected",
     [
