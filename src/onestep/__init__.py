@@ -73,7 +73,7 @@ from .retry import (
 )
 from .state import CursorStore, InMemoryCursorStore, InMemoryStateStore, ScopedState, StateStore
 from .connectors.base import Delivery, Sink, Source
-from .connectors.http import HttpSink, HttpSinkStatusError
+from .connectors.http import HttpFetcher, HttpSink, HttpSinkStatusError
 from .connectors.memory import MemoryQueue
 from .connectors.schedule import CronSource, IntervalSource
 from .connectors.webhook import BearerAuth, WebhookResponse, WebhookSource
@@ -143,6 +143,7 @@ _CORE_EXPORTS = [
     "FailureKind",
     "GaugeMetric",
     "HeartbeatResult",
+    "HttpFetcher",
     "HttpSink",
     "HttpSinkStatusError",
     "IdentityLockError",

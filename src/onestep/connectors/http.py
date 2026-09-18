@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import json
 import re
 import urllib.parse
 import urllib.error
 import urllib.request
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from onestep.envelope import Envelope
+from onestep.invoke import invoke_callback
 from onestep.resilience import ConnectorErrorKind, ConnectorOperation, ConnectorOperationError
 
 from .base import Sink
@@ -77,7 +79,9 @@ class HttpSink(Sink):
             method=self.method,
         )
         try:
-            status, reason, body = await asyncio.to_thread(self._send_request, request)
+            status, reason, body = await asyncio.to_thread(
+                _urlopen_request, request, self.timeout_s
+            )
         except ConnectorOperationError:
             raise
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
@@ -147,17 +151,163 @@ class HttpSink(Sink):
             _set_header_default(headers, "Content-Type", "application/json")
         return headers
 
-    def _send_request(self, request: urllib.request.Request) -> tuple[int, str, bytes]:
+class HttpFetcher:
+    """Stateless HTTP client resource for handlers (``ctx.resources``).
+
+    ``http_fetcher`` is not a source: the runtime never polls it. A delivery
+    from a cron (or any other) source is the trigger; the handler calls
+    :meth:`fetch` or :meth:`fetch_rows` on demand. Transport and status
+    failures raise :class:`ConnectorOperationError`, so the task's retry
+    policy owns failure handling; the fetcher itself keeps no state between
+    calls.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        url: str,
+        method: str = "GET",
+        headers: Mapping[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
+        timeout_s: float = _DEFAULT_TIMEOUT_S,
+        success_statuses: Sequence[int] | None = None,
+        rows: Callable[..., Any] | None = None,
+    ) -> None:
+        self.name = name
+        self.url = _normalize_url(url)
+        self.method = _normalize_method(method)
+        self.headers = _normalize_headers(headers)
+        self.params = _normalize_params(params, field="params")
+        self.timeout_s = _normalize_timeout(timeout_s)
+        self.success_statuses = _normalize_success_statuses(success_statuses)
+        self._rows = rows
+
+    async def fetch(self, params_override: Mapping[str, Any] | None = None) -> Any:
+        """Perform the configured request and return the parsed JSON response.
+
+        ``params_override`` entries are merged over the static ``params``
+        mapping; override values win.
+        """
+        params = dict(self.params)
+        if params_override:
+            params.update(_normalize_params(params_override, field="params_override"))
+        request = urllib.request.Request(
+            _append_query_params(self.url, params),
+            headers=self._request_headers(),
+            method=self.method,
+        )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
-                return response.status, response.reason, response.read()
-        except urllib.error.HTTPError as exc:
-            try:
-                body = exc.read()
-            finally:
-                exc.close()
-            reason = str(getattr(exc, "reason", None) or getattr(exc, "msg", ""))
-            return exc.code, reason, body
+            status, reason, body = await asyncio.to_thread(
+                _urlopen_request, request, self.timeout_s
+            )
+        except ConnectorOperationError:
+            raise
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            raise ConnectorOperationError(
+                backend="http_fetcher",
+                operation=ConnectorOperation.FETCH,
+                kind=_classify_transport_error(exc),
+                source_name=self.name,
+                retry_delay_s=self.timeout_s,
+                cause=exc,
+            ) from exc
+
+        if status not in self.success_statuses:
+            raise ConnectorOperationError(
+                backend="http_fetcher",
+                operation=ConnectorOperation.FETCH,
+                kind=_classify_status(status),
+                source_name=self.name,
+                message=f"http_fetcher {self.name!r} returned HTTP {status} {reason}".rstrip(),
+            )
+
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ConnectorOperationError(
+                backend="http_fetcher",
+                operation=ConnectorOperation.FETCH,
+                kind=ConnectorErrorKind.PERMANENT,
+                source_name=self.name,
+                message=f"http_fetcher {self.name!r} response is not valid JSON",
+                cause=exc,
+            ) from exc
+
+    async def fetch_rows(
+        self, params_override: Mapping[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Fetch and project the response into row mappings via ``rows``.
+
+        The ``rows`` callable receives the parsed response payload and may be
+        synchronous or asynchronous; ``invoke_callback`` semantics let it
+        declare zero or one positional parameter.
+        """
+        if self._rows is None:
+            raise ConnectorOperationError(
+                backend="http_fetcher",
+                operation=ConnectorOperation.FETCH,
+                kind=ConnectorErrorKind.MISCONFIGURED,
+                source_name=self.name,
+                message=(
+                    f"http_fetcher {self.name!r} fetch_rows requires a rows extractor; "
+                    "configure the 'rows' ref or call fetch() and extract rows in the handler"
+                ),
+            )
+        payload = await self.fetch(params_override)
+        rows = invoke_callback(self._rows, payload)
+        if inspect.isawaitable(rows):
+            rows = await rows
+        if not isinstance(rows, list):
+            raise TypeError(
+                f"http_fetcher {self.name!r} rows extractor must return a list, "
+                f"got {type(rows).__name__}"
+            )
+        extracted: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping):
+                raise TypeError(
+                    f"http_fetcher {self.name!r} rows extractor item {index} "
+                    f"must be a mapping, got {type(row).__name__}"
+                )
+            extracted.append(dict(row))
+        return extracted
+
+    def control_plane_descriptor(self) -> dict[str, Any]:
+        config: dict[str, Any] = {
+            "url": _redact_url(self.url),
+            "method": self.method,
+            "headers": {key: _REDACTED for key in sorted(self.headers)},
+            "params": {key: _REDACTED for key in sorted(self.params)},
+            "timeout_s": self.timeout_s,
+            "success_statuses": list(self.success_statuses),
+            "rows": self._rows is not None,
+        }
+        return {
+            "kind": "http_fetcher",
+            "name": self.name,
+            "config": config,
+        }
+
+    def _request_headers(self) -> dict[str, str]:
+        headers = dict(self.headers)
+        _set_header_default(headers, "Accept", "application/json")
+        return headers
+
+
+def _urlopen_request(
+    request: urllib.request.Request, timeout_s: float
+) -> tuple[int, str, bytes]:
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            return response.status, response.reason, response.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read()
+        finally:
+            exc.close()
+        reason = str(getattr(exc, "reason", None) or getattr(exc, "msg", ""))
+        return exc.code, reason, body
 
 
 def _normalize_url(value: str) -> str:
