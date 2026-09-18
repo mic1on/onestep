@@ -609,8 +609,12 @@ class DeliveryExecutor:
             backend=public_failure.get("backend"),
             operation=public_failure.get("operation"),
             connector_kind=public_failure.get("connector_kind"),
-            sinks_succeeded=public_failure.get("sinks_succeeded"),
-            sinks_remaining=public_failure.get("sinks_remaining"),
+            # ``_public_failure`` records zero succeeded sinks as an empty
+            # string ("" == the first dispatch itself failed); the error
+            # detail treats that as absent so ExecutionErrorDetail's
+            # non-empty text validation never rejects the failure path.
+            sinks_succeeded=public_failure.get("sinks_succeeded") or None,
+            sinks_remaining=public_failure.get("sinks_remaining") or None,
         )
 
     async def _dispatch_production_sink(

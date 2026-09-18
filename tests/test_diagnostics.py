@@ -212,6 +212,43 @@ def test_diagnostic_send_sink_failure_reports_retry_replay_window() -> None:
     asyncio.run(scenario())
 
 
+def test_diagnostic_send_single_broken_sink_reports_failure_without_crashing() -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+        broken = RecordingSink("only", calls, broken=True)
+        app = OneStepApp("send-single-broken-sink")
+
+        @app.task(emit=(broken,))
+        async def consume(ctx, payload):
+            return {"ok": True}
+
+        report = await DiagnosticRunner(app).run(
+            task_name="consume",
+            envelope=Envelope(body={"id": 1}),
+            send=True,
+        )
+
+        # The run must reach a normal failure outcome instead of the
+        # child_failed fallback the empty sinks_succeeded value used to
+        # trigger while building the execution error detail.
+        assert report.completion == "failed"
+        assert report.failure_stage == "sink"
+        assert report.failure == {
+            "failure_kind": "error",
+            "exception_type": "RuntimeError",
+            "sinks_succeeded": "",
+            "sinks_remaining": "only",
+        }
+        failed_events = [
+            event for event in report.events if event.kind is TaskEventKind.FAILED
+        ]
+        assert len(failed_events) == 1
+        assert failed_events[0].meta["sinks_succeeded"] == []
+        assert failed_events[0].meta["sinks_remaining"] == ["only"]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "retry,dead_letter,expected",
     [

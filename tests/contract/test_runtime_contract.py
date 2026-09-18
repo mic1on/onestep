@@ -1361,6 +1361,80 @@ def test_transform_failure_keeps_sink_replay_fields_absent_contract() -> None:
     asyncio.run(scenario())
 
 
+def test_first_sink_failure_still_applies_retry_and_reports_empty_replay_lists_contract() -> None:
+    async def scenario() -> None:
+        steps: list[str] = []
+        event_meta: list[tuple[str, dict]] = []
+        app = OneStepApp("first-sink-replay-window")
+        failing = _AlwaysFailSink("first")
+        second = _RecordingSink("second")
+
+        @app.on_event
+        def event(item):
+            event_meta.append((item.kind.value, item.meta))
+
+        @app.task(
+            emit=[failing, second],
+            retry=MaxAttempts(max_attempts=2, delay_s=0),
+        )
+        async def consume(ctx, payload):
+            return payload
+
+        delivery = _RecordingManagedDelivery({"id": 1}, steps)
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        # The delivery action is applied despite zero succeeded sinks; a
+        # crash here used to swallow the retry entirely.
+        completion = delivery.completions[0]
+        assert completion.status is ExecutionStatus.RETRYING
+        assert "managed:retrying" in steps
+
+        retried = [meta for kind, meta in event_meta if kind == "retried"]
+        assert len(retried) == 1
+        assert retried[0]["sinks_succeeded"] == []
+        assert retried[0]["sinks_remaining"] == ["first", "second"]
+
+        # The empty-string public-failure value maps to an absent detail
+        # field; ExecutionErrorDetail must never see an empty text value.
+        assert completion.error is not None
+        assert completion.error.sinks_succeeded is None
+        assert completion.error.sinks_remaining == "first,second"
+        assert second.envelopes == []
+
+    asyncio.run(scenario())
+
+
+def test_single_sink_failure_failed_path_reports_none_succeeded_detail_contract() -> None:
+    async def scenario() -> None:
+        event_meta: list[tuple[str, dict]] = []
+        app = OneStepApp("single-sink-replay-window")
+        failing = _AlwaysFailSink("only")
+
+        @app.on_event
+        def event(item):
+            event_meta.append((item.kind.value, item.meta))
+
+        @app.task(emit=[failing], retry=NoRetry())
+        async def consume(ctx, payload):
+            return payload
+
+        delivery = _RecordingManagedDelivery({"id": 1}, [])
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        failed = [meta for kind, meta in event_meta if kind == "failed"]
+        assert len(failed) == 1
+        assert failed[0]["sinks_succeeded"] == []
+        assert failed[0]["sinks_remaining"] == ["only"]
+
+        completion = delivery.completions[0]
+        assert completion.status is ExecutionStatus.FAILED
+        assert completion.error is not None
+        assert completion.error.sinks_succeeded is None
+        assert completion.error.sinks_remaining == "only"
+
+    asyncio.run(scenario())
+
+
 def test_emit_bindings_send_per_sink_bodies_after_preparation() -> None:
     async def scenario() -> None:
         source = MemoryQueue("incoming", poll_interval_s=0.01)
