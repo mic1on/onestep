@@ -12,6 +12,10 @@ now-retired ``scripts/check_plugin_drift.py``):
   ``update_columns`` write policies (``overwrite`` / ``skip_null`` /
   ``backfill``), the ``_normalize_update_columns`` validator and the
   ``_update_payload`` / ``_coerce_json_values`` mixin;
+* :mod:`onestep_sql._shared.table_queue_lint` — the shared table_queue YAML
+  lint (issue #180): warn when ``claim`` is non-empty but ``nack`` is empty,
+  because every failure path then no-ops and failed rows silently stick in
+  the claimed state;
 * :mod:`onestep_sql._shared.state_keys` — the default incremental state-key
   derivation feeding the at-least-once cursor state;
 * :mod:`onestep_sql._shared.resilience` — the secret-token collection, message
