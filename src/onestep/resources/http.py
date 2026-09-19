@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from onestep.connectors.http import HttpSink
+from onestep.connectors.http import HttpFetcher, HttpSink
 from onestep.resource_registry import (
     ResourceCatalogEntry,
     ResourceCatalogField,
@@ -39,6 +39,44 @@ _HTTP_SINK_CATALOG = ResourceCatalogEntry(
 )
 
 
+_HTTP_FETCHER_FIELDS = frozenset(
+    {
+        "type",
+        "name",
+        "url",
+        "method",
+        "headers",
+        "params",
+        "body",
+        "timeout_s",
+        "success_statuses",
+        "rows",
+    }
+)
+_HTTP_FETCHER_CATALOG = ResourceCatalogEntry(
+    type="http_fetcher",
+    roles=("connector",),
+    label="HTTP Fetcher",
+    fields=(
+        ResourceCatalogField("name", "string"),
+        ResourceCatalogField("url", "string", required=True, secret=True),
+        ResourceCatalogField(
+            "method",
+            "string",
+            default="GET",
+            options=("GET", "POST", "PUT", "PATCH", "DELETE"),
+        ),
+        ResourceCatalogField("headers", "mapping", secret=True),
+        ResourceCatalogField("params", "mapping", secret=True),
+        ResourceCatalogField("body", "json", secret=True),
+        ResourceCatalogField("timeout_s", "number", default=5.0),
+        ResourceCatalogField("success_statuses", "json"),
+        ResourceCatalogField("rows", "ref"),
+    ),
+    topology_fields=("url", "method", "timeout_s", "success_statuses"),
+)
+
+
 def register_resources(registry: ResourceRegistry) -> None:
     registry.register_resource_type(
         ResourceSpecHandler(
@@ -47,6 +85,15 @@ def register_resources(registry: ResourceRegistry) -> None:
             allowed_fields=_HTTP_SINK_FIELDS,
             build=_build_http_sink,
             validate=_validate_http_sink,
+        )
+    )
+    registry.register_resource_type(
+        ResourceSpecHandler(
+            type="http_fetcher",
+            catalog=_HTTP_FETCHER_CATALOG,
+            allowed_fields=_HTTP_FETCHER_FIELDS,
+            build=_build_http_fetcher,
+            validate=_validate_http_fetcher,
         )
     )
 
@@ -103,3 +150,45 @@ def _validate_json_like(value: Any, *, field: str) -> None:
             _validate_json_like(item, field=f"{field}[{index}]")
         return
     raise TypeError(f"'{field}' must be a JSON-compatible value")
+
+
+def _build_http_fetcher(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> HttpFetcher:
+    return HttpFetcher(
+        ctx.resource_name(spec),
+        url=ctx.require_string(spec, "url"),
+        method=spec.get("method", "GET"),
+        headers=ctx.mapping_value(spec.get("headers"), field=f"{ctx.field}.headers"),
+        params=ctx.mapping_value(spec.get("params"), field=f"{ctx.field}.params"),
+        body=spec.get("body"),
+        timeout_s=spec.get("timeout_s", 5.0),
+        success_statuses=spec.get("success_statuses"),
+        rows=ctx.optional_ref(spec.get("rows"), field=f"{ctx.field}.rows"),
+    )
+
+
+def _validate_http_fetcher(ctx: ResourceValidationContext, spec: Mapping[str, Any]) -> None:
+    ctx.require_string(spec, "url")
+    if "method" in spec:
+        ctx.string_value(spec.get("method"), field=f"{ctx.field}.method")
+    raw_headers = spec.get("headers")
+    if raw_headers is not None and not isinstance(raw_headers, Mapping):
+        raise TypeError(f"'{ctx.field}.headers' must be a mapping")
+    raw_params = spec.get("params")
+    if raw_params is not None and not isinstance(raw_params, Mapping):
+        raise TypeError(f"'{ctx.field}.params' must be a mapping")
+    _validate_json_like(spec.get("body"), field=f"{ctx.field}.body")
+    ctx.validate_positive_number(spec.get("timeout_s"), field=f"{ctx.field}.timeout_s")
+    raw_success_statuses = spec.get("success_statuses")
+    if raw_success_statuses is not None:
+        if not isinstance(raw_success_statuses, Sequence) or isinstance(raw_success_statuses, (str, bytes)):
+            raise TypeError(f"'{ctx.field}.success_statuses' must be a list of integers")
+        if not raw_success_statuses:
+            raise ValueError(f"'{ctx.field}.success_statuses' must not be empty")
+        for index, status in enumerate(raw_success_statuses):
+            if isinstance(status, bool) or not isinstance(status, int):
+                raise TypeError(f"'{ctx.field}.success_statuses[{index}]' must be an integer")
+            if status < 100 or status > 599:
+                raise ValueError(f"'{ctx.field}.success_statuses[{index}]' must be an HTTP status code")
+    raw_rows = spec.get("rows")
+    if raw_rows is not None and (not isinstance(raw_rows, str) or not raw_rows.strip()):
+        raise TypeError(f"'{ctx.field}.rows' must be a callable ref string")
