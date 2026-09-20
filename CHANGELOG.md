@@ -153,6 +153,52 @@ carries a regression test.
   lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
   serialization, ACK/retry fencing, and PostgreSQL behaviour unchanged.
 
+## onestep 1.13.0
+
+New `http_fetcher` connector resource, emit partial-failure observability, and
+single-transaction table-queue completion; plus the TypeScript execution
+client.
+
+- Adds a stateless `http_fetcher` resource (#186): a YAML-declarable HTTP
+  client that task handlers call on demand through `ctx.resources`. It is a
+  connector, not a source — the runtime never polls it; a delivery from a cron
+  (or any other) source is the trigger, and the handler calls
+  `fetch(params_override)` / `fetch_rows()` when it needs data. It reuses the
+  `http_sink` transport stack (URL/header/param/timeout/status normalization
+  and error classification), supports a static or per-call JSON request body,
+  validates `success_statuses`, and parses the JSON response;
+  `fetch_rows()` projects the response into row mappings through an optional
+  `rows` callable (sync or async) so emit-to-sink flows can fan out fetched
+  rows without a hand-written HTTP client. Failures raise
+  `ConnectorOperationError`, so the task retry policy owns handling, and the
+  control-plane descriptor inherits the sink's secret redaction.
+
+- Records `sinks_succeeded` when an emit partially fails (#182): when a fan-out
+  emit commits only some of its sinks, the execution failure now names exactly
+  which sinks succeeded, making the retry replay window (which sinks will see
+  the row again) explicit instead of implicit.
+
+- Fixes an execution-error build crash when the first sink of a fan-out fails
+  (#182): with zero sinks succeeded, the empty `sinks_succeeded` marker hit
+  `ExecutionErrorDetail`'s non-empty text validation, the resulting
+  `ValueError` bubbled out of failure handling, and the RETRY/FAIL delivery
+  action was never applied — the task ended in a lost-retry limbo and
+  diagnostics degraded to the `child_failed` fallback. The error detail now
+  normalizes the empty marker to absent; event semantics (empty list) are
+  unchanged.
+
+- Adds `TableQueueDelivery.complete(values)` (#181): merges the row write-back
+  and the queue ack into a single transaction, so a crash between sink commit
+  and ack can no longer double-write rows or lose the completion. Core support
+  lands in `context.py`; the MySQL/PostgreSQL/SQLite delivery implementations
+  ship in `onestep-sql` 0.5.0. `onestep check` also warns when a table_queue
+  task configures a non-empty claim with an empty nack (#180) — a
+  misconfiguration that silently drops the retry path.
+
+- Adds `@mic1on/onestep-client` (#178, #179): a TypeScript `ExecutionClient`
+  for onestep's tracked execution state (`clients/ts`), published to npm
+  separately from the Python package.
+
 ## onestep 1.12.0
 
 Fixes for silent data loss, cursor stalls, and error misclassification, plus
