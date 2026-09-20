@@ -349,7 +349,13 @@ def test_scanner_run_uses_async_scan_functions(db_session, monkeypatch) -> None:
 
     asyncio.run(scenario())
 
-    assert observed == ["missed_start", "connectivity"]
+    # The scanner loop can complete more than one iteration before
+    # task.cancel() lands (scan_interval_s=0), so `observed` may hold several
+    # repeats. Assert the FIRST iteration's shape rather than the exact length:
+    # the point is that the scanner awaits both async scan helpers, in order.
+    assert observed[:2] == ["missed_start", "connectivity"], (
+        f"scanner did not await the async scan helpers in order: {observed[:6]}"
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -1227,15 +1233,7 @@ def test_postgres_advisory_lease_holds_no_idle_transaction() -> None:
     engine = create_async_engine(url, future=True, poolclass=NullPool)
     lock_key = 8675310
 
-    async def scenario() -> dict:
-        lease = PostgresAdvisoryAsyncWorkerLease(
-            engine=engine, lock_key=lock_key, worker_name="idle-probe"
-        )
-        await lease.ensure_leader()
-        # Let any transaction age accumulate, then look at the backend that
-        # holds this advisory lock.
-        await asyncio.sleep(1.0)
-        await lease.ensure_leader()  # renew path
+    async def idle_state() -> tuple[str | None, bool | None]:
         async with engine.connect() as conn:
             row = (
                 await conn.execute(
@@ -1248,21 +1246,49 @@ def test_postgres_advisory_lease_holds_no_idle_transaction() -> None:
                     {"key": lock_key},
                 )
             ).first()
-        result = {"state": row[0] if row else None, "has_xact": bool(row[1]) if row else None}
+        return (row[0] if row else None, bool(row[1]) if row else None)
+
+    async def scenario() -> dict:
+        lease = PostgresAdvisoryAsyncWorkerLease(
+            engine=engine, lock_key=lock_key, worker_name="idle-probe"
+        )
+        # ACQUIRE path: assert immediately after the first ensure_leader(), with
+        # no renew in between. The renew path commits too, so calling
+        # ensure_leader() again before asserting would mask an uncommitted
+        # acquire -- which is exactly the regression this test exists to catch.
+        await lease.ensure_leader()
+        await asyncio.sleep(1.0)  # let any transaction age accumulate
+        acquire_state, acquire_has_xact = await idle_state()
+
+        # RENEW path: assert again after a second ensure_leader() so both paths
+        # are covered independently.
+        await lease.ensure_leader()
+        await asyncio.sleep(1.0)
+        renew_state, renew_has_xact = await idle_state()
+
         await lease.release()
-        return result
+        return {
+            "acquire_state": acquire_state,
+            "acquire_has_xact": acquire_has_xact,
+            "renew_state": renew_state,
+            "renew_has_xact": renew_has_xact,
+        }
 
     try:
         observed = asyncio.run(scenario())
     finally:
         asyncio.run(engine.dispose())
 
-    assert observed["state"] is not None, "no backend was found holding the advisory lock"
-    assert observed["state"] != "idle in transaction", (
-        "holding leadership left a backend idle in transaction; commit after "
-        "pg_try_advisory_lock instead of holding the transaction open"
-    )
-    assert observed["has_xact"] is False, "leadership is holding an open transaction"
+    for phase in ("acquire", "renew"):
+        state = observed[f"{phase}_state"]
+        assert state is not None, f"no backend was found holding the advisory lock ({phase})"
+        assert state != "idle in transaction", (
+            f"the {phase} path left a backend idle in transaction; commit right after "
+            "pg_try_advisory_lock instead of holding the transaction open"
+        )
+        assert observed[f"{phase}_has_xact"] is False, (
+            f"the {phase} path is holding an open transaction"
+        )
 
 
 def test_scanner_uses_configured_intervals_when_unset(db_session) -> None:
