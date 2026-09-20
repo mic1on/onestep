@@ -677,15 +677,6 @@ class ControlPlaneWsSender:
         session_id = getattr(self._transport, "session_id", None)
         return session_id if isinstance(session_id, str) else None
 
-    @property
-    def session_generation(self) -> int:
-        """Count of sessions established since this sender started.
-
-        It advances only when a connect completes hello, so it identifies the
-        session telemetry is currently written to.
-        """
-        return self._session_generation
-
     def supports_custom_metrics(self) -> bool:
         hello_ack = getattr(self._transport, "hello_ack", None)
         if hello_ack is None:
