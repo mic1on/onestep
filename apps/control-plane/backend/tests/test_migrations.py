@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ALEMBIC_INI_PATH = ROOT_DIR / "alembic.ini"
 INITIAL_REVISION = "202603080001"
-HEAD_REVISION = "202607240001"
+HEAD_REVISION = "202607250001"
 
 
 def make_alembic_config(database_url: str) -> Config:
@@ -194,6 +194,14 @@ def test_alembic_upgrade_head_creates_expected_schema(tmp_path) -> None:
         "instance_id",
         "last_connectivity",
         "last_transition_at",
+        # issue #196: stable confirmation + flap damping state (migration
+        # 202607250001). Persisted so damping survives a restart or leader switch.
+        "pending_connectivity",
+        "pending_since",
+        "flap_episode_started_at",
+        "flap_episode_last_flip_at",
+        "flap_episode_flips",
+        "flap_suppressed_count",
         "created_at",
         "updated_at",
     }
