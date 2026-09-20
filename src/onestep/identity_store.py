@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,18 +27,6 @@ def _format_datetime(value: datetime) -> str:
 
 def _parse_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-
-
-def _pid_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def derive_replica_instance_id(
@@ -99,8 +89,7 @@ def peek_instance_id(state_dir: str | os.PathLike[str]) -> UUID | None:
 def _safe_path_component(value: str) -> str:
     normalized = value.strip() or "default"
     return "".join(
-        char if char.isalnum() or char in {"-", "_", "."} else "_"
-        for char in normalized
+        char if char.isalnum() or char in {"-", "_", "."} else "_" for char in normalized
     )
 
 
@@ -114,11 +103,15 @@ class IdentityStore:
         self.state_dir = Path(state_dir)
         self.state_path = self.state_dir / STATE_FILENAME
         self.lock_path = self.state_dir / LOCK_FILENAME
-        self._lock_owner: dict[str, Any] | None = None
+        self._lock_fd: int | None = None
         self._closed = False
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._acquire_lock()
-        self._state = self._load_state(instance_id=instance_id)
+        try:
+            self._state = self._load_state(instance_id=instance_id)
+        except BaseException:
+            self.close()
+            raise
 
     def __enter__(self) -> IdentityStore:
         return self
@@ -147,10 +140,11 @@ class IdentityStore:
         if self._closed:
             return
         self._closed = True
-        try:
-            self.lock_path.unlink()
-        except FileNotFoundError:
-            return
+        if self._lock_fd is not None:
+            # Closing releases the OS lock. Never unlink: other contenders may
+            # already have this inode open.
+            os.close(self._lock_fd)
+            self._lock_fd = None
 
     def _load_state(self, *, instance_id: UUID | None) -> _IdentityState:
         if self.state_path.exists():
@@ -182,43 +176,42 @@ class IdentityStore:
             "hostname": socket.gethostname(),
             "created_at": _format_datetime(_utcnow()),
         }
-        for _ in range(2):
-            try:
-                fd = os.open(
-                    self.lock_path,
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                    0o600,
-                )
-            except FileExistsError:
-                if self._reclaim_stale_lock():
-                    continue
-                owner = _read_lock_owner(self.lock_path)
-                owner_pid = owner.get("pid")
-                raise IdentityLockError(
-                    "identity state dir "
-                    f"{self.state_dir} is already locked"
-                    + (f" by pid={owner_pid}" if isinstance(owner_pid, int) else "")
-                )
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(lock_payload, handle, sort_keys=True)
-                handle.flush()
-                os.fsync(handle.fileno())
-            self._lock_owner = lock_payload
-            return
-        raise IdentityLockError(f"failed to acquire identity lock for {self.state_dir}")
-
-    def _reclaim_stale_lock(self) -> bool:
-        owner = _read_lock_owner(self.lock_path)
-        owner_pid = owner.get("pid")
-        if not isinstance(owner_pid, int):
-            return False
-        if _pid_is_running(owner_pid):
-            return False
+        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            self.lock_path.unlink()
-        except FileNotFoundError:
-            return True
-        return True
+            try:
+                _lock_file(fd)
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                raise IdentityLockError(
+                    f"identity state dir {self.state_dir} is already locked"
+                ) from exc
+            # Only the lock owner can replace the diagnostic payload. Metadata
+            # is never used to decide liveness (PIDs can be reused).
+            payload = json.dumps(lock_payload, sort_keys=True).encode("utf-8")
+            os.lseek(fd, 0, os.SEEK_SET)
+            offset = 0
+            while offset < len(payload):
+                offset += os.write(fd, payload[offset:])
+            os.ftruncate(fd, len(payload))
+            os.fsync(fd)
+        except BaseException:
+            os.close(fd)
+            raise
+        self._lock_fd = fd
+
+
+def _lock_file(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        # Windows permits locking a byte beyond EOF for a newly created file.
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def _read_state(path: Path) -> _IdentityState:
@@ -244,16 +237,6 @@ def _read_state(path: Path) -> _IdentityState:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise IdentityStateError(f"identity state file {path} is missing required fields") from exc
-
-
-def _read_lock_owner(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return payload
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix runtime identity locks after process termination and container PID reuse.
+  Use OS file locks instead of PID liveness; retain the lock file and existing
+  identity/sequences. Stop old workers before upgrading a shared state directory.
+  See `docs/stable-instance-identity.md` for upgrade and rollback instructions.
+
 ## onestep-feishu-bitable 0.6.1
 
 - **Table sink: `cache: eager` relations keyed on a text field silently dropped
