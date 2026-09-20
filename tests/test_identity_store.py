@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 
@@ -35,7 +36,7 @@ def test_identity_store_persists_instance_id_and_sequences(tmp_path) -> None:
 def test_identity_store_rejects_second_owner_for_same_state_dir(tmp_path) -> None:
     store = IdentityStore(tmp_path)
 
-    with pytest.raises(IdentityLockError, match=str(tmp_path)):
+    with pytest.raises(IdentityLockError, match=re.escape(str(tmp_path))):
         IdentityStore(tmp_path)
 
     store.close()
