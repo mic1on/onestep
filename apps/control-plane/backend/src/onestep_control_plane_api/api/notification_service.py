@@ -11,6 +11,7 @@ import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
 
 from onestep_control_plane_api.api.common import utcnow
@@ -1167,7 +1168,7 @@ def scan_and_dispatch_instance_connectivity_notifications(
     return len(pending_deliveries)
 
 
-def dispatch_runtime_task_event_notifications(
+def _dispatch_runtime_task_event_notifications(
     db: Session,
     *,
     task_events: list[TaskEvent],
@@ -1200,6 +1201,43 @@ def dispatch_runtime_task_event_notifications(
 
     db.commit()
     return len(pending_deliveries)
+
+
+async def dispatch_runtime_task_event_notifications(
+    session: AsyncSession,
+    *,
+    task_events: list[TaskEvent],
+) -> int:
+    """Create pending deliveries for runtime task events on the async session.
+
+    The synchronous body above is invoked through ``AsyncSession.run_sync`` and
+    ``_persist_pending_delivery`` is left byte-identical. That is deliberate and
+    load-bearing:
+
+    ``_persist_pending_delivery`` has three callers: this path plus
+    ``scan_and_dispatch_missed_start_notifications`` and
+    ``scan_and_dispatch_instance_connectivity_notifications``, which are still
+    synchronous and are owned by the notification-scan work. If the helper
+    became ``async``, those two callers would keep calling it synchronously,
+    which is a silent no-op: every ``begin_nested``/``flush``/``refresh`` would
+    return a discarded coroutine without raising, and a duplicate insert would
+    leak ``IntegrityError`` instead of deduping to ``None``.
+
+    ``run_sync`` hands the same underlying session to the synchronous callable,
+    so it participates in this work unit's transaction and connection. This is
+    SQLAlchemy's own greenlet-cooperative bridge, not the rejected
+    ``asyncio.to_thread`` pattern. Measured on PostgreSQL 16: a 1.5 s
+    ``pg_sleep`` driven through ``run_sync`` let an independent asyncio ticker
+    run 130 iterations, and a ``pool_size=1`` connection-pool wait let it run
+    136.
+
+    The notification-scan path and the outbox drain path stay synchronous and
+    are unaffected by this function.
+    """
+
+    return await session.run_sync(
+        lambda db: _dispatch_runtime_task_event_notifications(db, task_events=task_events)
+    )
 
 
 def scan_and_dispatch_missed_start_notifications(

@@ -7,13 +7,18 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from conftest import AsyncTestHarness, shared_cache_sync_url
 from fastapi import FastAPI
-from onestep_control_plane_api.api.agent_ingestion_service import ingest_events_request
+from onestep_control_plane_api.api.agent_ingestion_service import (
+    ingest_events_request as ingest_events_request_async,
+)
 from onestep_control_plane_api.api.notification_service import (
     claim_next_pending_outbox_row,
     delete_notification_channel,
-    dispatch_runtime_task_event_notifications,
     drain_notification_outbox,
+)
+from onestep_control_plane_api.api.notification_service import (
+    dispatch_runtime_task_event_notifications as dispatch_runtime_task_event_notifications_async,
 )
 from onestep_control_plane_api.api.schemas import (
     EventsIngestRequest,
@@ -31,14 +36,15 @@ from onestep_control_plane_api.db.models import (
     Service,
     TaskEvent,
 )
+from onestep_control_plane_api.db.session import session_scope
 from onestep_control_plane_api.ops.readiness import build_default_background_task_states
 from onestep_control_plane_api.workers.leader import WorkerLease
 from onestep_control_plane_api.workers.notification_outbox_worker import (
     NOTIFICATION_OUTBOX_WORKER_NAME,
     run_notification_outbox_worker,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.pool import StaticPool
 
 
@@ -109,7 +115,34 @@ def seed_failed_task_event(db: Session, service: Service, instance: Instance) ->
     return task_event
 
 
-def test_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) -> None:
+
+def dispatch_runtime_task_event_notifications(db_session, *, task_events):
+    """Drive the async dispatch from a synchronous test.
+
+    The dispatch opens its own short work unit on the test's async engine — the
+    same database the synchronous ``db_session`` fixture reads — exactly as the
+    events-ingest path does now that it awaits it.
+    """
+
+    async def _work_unit() -> int:
+        async with session_scope() as session:
+            return await dispatch_runtime_task_event_notifications_async(
+                session, task_events=task_events
+            )
+
+    return asyncio.run(_work_unit())
+
+
+def ingest_events_request(db_session, request):
+    """Drive the async events ingest from a synchronous test."""
+
+    async def _work_unit():
+        async with session_scope() as session:
+            return await ingest_events_request_async(session, request)
+
+    return asyncio.run(_work_unit())
+
+def test_receive_path_does_not_block_on_slow_webhook(db_session, async_db, monkeypatch) -> None:
     """A slow/hung webhook must not stall the telemetry receive path.
 
     The receive path (``dispatch_runtime_task_event_notifications``, called from
@@ -154,7 +187,11 @@ def test_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) ->
     assert delivery.sent_at is None
 
 
-def test_ingest_events_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) -> None:
+def test_ingest_events_receive_path_does_not_block_on_slow_webhook(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     """The full agent WS ingest receive path stays fast under a slow webhook."""
     seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -209,7 +246,7 @@ def test_ingest_events_receive_path_does_not_block_on_slow_webhook(db_session, m
     assert db_session.query(NotificationOutbox).count() == 1
 
 
-def test_outbox_snapshots_webhook_url_at_enqueue(db_session, monkeypatch) -> None:
+def test_outbox_snapshots_webhook_url_at_enqueue(db_session, async_db, monkeypatch) -> None:
     """The webhook target is frozen at enqueue so a later channel edit cannot
     reroute a delivery already queued for dispatch."""
     service, instance = seed_service_and_instance(db_session)
@@ -229,7 +266,11 @@ def test_outbox_snapshots_webhook_url_at_enqueue(db_session, monkeypatch) -> Non
     assert outbox.webhook_url == original_url
 
 
-def test_outbox_uses_frozen_provider_contract_after_channel_edit(db_session, monkeypatch) -> None:
+def test_outbox_uses_frozen_provider_contract_after_channel_edit(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = NotificationChannel(
         name=f"ops-custom-{uuid4().hex[:6]}",
@@ -298,7 +339,11 @@ def test_outbox_uses_frozen_provider_contract_after_channel_edit(db_session, mon
     assert sent_requests == [("GET", "https://example.com/custom", {"service": "billing-sync"})]
 
 
-def test_channel_delete_preserves_and_drains_accepted_delivery(db_session, monkeypatch) -> None:
+def test_channel_delete_preserves_and_drains_accepted_delivery(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -324,7 +369,10 @@ def test_channel_delete_preserves_and_drains_accepted_delivery(db_session, monke
     assert db_session.query(NotificationOutbox).one().status == "delivered"
 
 
-def test_channel_delete_removes_terminal_history_but_preserves_retries(db_session) -> None:
+def test_channel_delete_removes_terminal_history_but_preserves_retries(
+    db_session,
+    async_db,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = seed_channel(db_session, event_types=["task_failed"])
     deliveries: list[NotificationDelivery] = []
@@ -364,7 +412,7 @@ def test_channel_delete_removes_terminal_history_but_preserves_retries(db_sessio
     assert all(outbox.status == "pending" for outbox in remaining_outboxes)
 
 
-def test_outbox_drain_delivers_and_marks_succeeded(db_session, monkeypatch) -> None:
+def test_outbox_drain_delivers_and_marks_succeeded(db_session, async_db, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -400,7 +448,7 @@ def test_outbox_drain_delivers_and_marks_succeeded(db_session, monkeypatch) -> N
 
 
 def test_outbox_drain_retries_with_backoff_then_marks_permanently_failed(
-    db_session, monkeypatch
+    db_session, async_db, monkeypatch
 ) -> None:
     """At-least-once delivery: transient failures retry with backoff up to a
     bounded max-attempts, after which the row is permanently failed."""
@@ -454,7 +502,11 @@ def test_outbox_drain_retries_with_backoff_then_marks_permanently_failed(
     assert delivery.error_message == "boom"
 
 
-def test_outbox_backoff_starts_when_slow_attempt_finishes(db_session, monkeypatch) -> None:
+def test_outbox_backoff_starts_when_slow_attempt_finishes(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -491,7 +543,11 @@ def test_outbox_backoff_starts_when_slow_attempt_finishes(db_session, monkeypatc
     assert outbox.next_attempt_at == attempt_finished_at + timedelta(seconds=10)
 
 
-def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypatch) -> None:
+def test_outbox_retry_replaces_previous_attempt_diagnostics(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -564,7 +620,7 @@ def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypa
     assert delivery.response_body == "ok"
 
 
-def test_claim_increments_only_the_next_outbox_attempt(db_session) -> None:
+def test_claim_increments_only_the_next_outbox_attempt(db_session, async_db) -> None:
     """Claiming a row increments attempts in its own committed transaction so a
     worker crash after claiming leaves the row retriable (at-least-once)."""
     service, instance = seed_service_and_instance(db_session)
@@ -584,7 +640,7 @@ def test_claim_increments_only_the_next_outbox_attempt(db_session) -> None:
     assert all(outbox.status == "pending" for outbox in outboxes)
 
 
-def test_drain_failure_does_not_claim_later_rows(db_session) -> None:
+def test_drain_failure_does_not_claim_later_rows(db_session, async_db) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     for _ in range(2):
@@ -607,7 +663,7 @@ def test_drain_failure_does_not_claim_later_rows(db_session) -> None:
     assert sorted(outbox.attempts for outbox in outboxes) == [0, 1]
 
 
-def test_drain_terminalizes_exhausted_row_without_dispatch(db_session) -> None:
+def test_drain_terminalizes_exhausted_row_without_dispatch(db_session, async_db) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -694,28 +750,61 @@ def _build_memory_app(session_factory) -> FastAPI:
 
 
 def _build_session_factory():
+    """A sync session factory plus a matching async harness on the SAME database.
+
+    The three worker scenarios build their own database, so they need their own
+    async harness too: the dispatch is async now, and ``_seed_pending_outbox``
+    must reach the same rows the sync factory seeded. A shared-cache URI bridges
+    the two engines, and the sync engine's ``StaticPool`` connection keeps the
+    in-memory database alive for the scenario.
+    """
+
+    name = f"onestep_outbox_{uuid4().hex}"
     engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
+        shared_cache_sync_url(name),
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
+    async_harness = AsyncTestHarness(name)
 
     def factory() -> Session:
         return Session(engine)
 
-    return factory, engine
+    return factory, engine, async_harness
 
 
-def _seed_pending_outbox(session_factory) -> None:
+async def _seed_pending_outbox(session_factory, async_harness) -> None:
+    """Seed one pending outbox row.
+
+    This runs inside a scenario that is already on an event loop, so it awaits
+    the dispatch directly rather than spawning a second loop. The dispatch uses
+    the caller's async harness, which points at the same database the sync
+    ``session_factory`` writes.
+    """
+
     with session_factory() as db:
         service, instance = seed_service_and_instance(db)
         seed_channel(db, event_types=["task_failed"])
         seed_failed_task_event(db, service, instance)
-        dispatch_runtime_task_event_notifications(
-            db,
-            task_events=db.query(TaskEvent).all(),
+        # Read the ids only: the dispatch runs on a different session, so ORM
+        # instances must not cross the boundary (lazy ``service`` would raise
+        # DetachedInstanceError once this session closes).
+        task_event_ids = [row.id for row in db.query(TaskEvent).all()]
+
+    async with async_harness.factory() as session:
+        task_events = (
+            await session.scalars(
+                select(TaskEvent)
+                .options(selectinload(TaskEvent.service))
+                .where(TaskEvent.id.in_(task_event_ids))
+                .order_by(TaskEvent.created_at)
+            )
+        ).all()
+        await dispatch_runtime_task_event_notifications_async(
+            session, task_events=list(task_events)
         )
+        await session.commit()
 
 
 def test_worker_waits_for_in_flight_drain_before_releasing_lease() -> None:
@@ -729,7 +818,7 @@ def test_worker_waits_for_in_flight_drain_before_releasing_lease() -> None:
         return 0
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
             coordinator = SharedLeaseCoordinator()
             lease = CoordinatedLease(coordinator=coordinator, replica_id="one")
@@ -775,9 +864,9 @@ def test_only_one_replica_drains_outbox_when_leases_contend(monkeypatch) -> None
     )
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
-            _seed_pending_outbox(session_factory)
+            await _seed_pending_outbox(session_factory, async_harness)
             coordinator = SharedLeaseCoordinator()
             app_one = _build_memory_app(session_factory)
             app_two = _build_memory_app(session_factory)
@@ -861,14 +950,32 @@ def test_worker_marks_readiness_tick_after_each_processed_row(monkeypatch) -> No
     from onestep_control_plane_api.workers.leader import LocalWorkerLease
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
             with session_factory() as db:
                 service, instance = seed_service_and_instance(db)
                 seed_channel(db, event_types=["task_failed"])
+                # Collect ids rather than ORM instances: the dispatch runs on the
+                # async harness's session, so instances must not cross the
+                # boundary (lazy ``service`` would raise DetachedInstanceError).
+                task_event_ids = []
                 for _ in range(3):
                     task_event = seed_failed_task_event(db, service, instance)
-                    dispatch_runtime_task_event_notifications(db, task_events=[task_event])
+                    task_event_ids.append(task_event.id)
+
+            async with async_harness.factory() as async_session:
+                for task_event_id in task_event_ids:
+                    reload = (
+                        await async_session.scalars(
+                            select(TaskEvent)
+                            .options(selectinload(TaskEvent.service))
+                            .where(TaskEvent.id == task_event_id)
+                        )
+                    ).one()
+                    await dispatch_runtime_task_event_notifications_async(
+                        async_session, task_events=[reload]
+                    )
+                await async_session.commit()
 
             app = _build_memory_app(session_factory)
             state = app.state.background_task_states[NOTIFICATION_OUTBOX_WORKER_NAME]
@@ -930,9 +1037,9 @@ def test_outbox_worker_runs_in_local_mode(monkeypatch) -> None:
     from onestep_control_plane_api.workers.leader import LocalWorkerLease
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
-            _seed_pending_outbox(session_factory)
+            await _seed_pending_outbox(session_factory, async_harness)
             app = _build_memory_app(session_factory)
 
             task = asyncio.create_task(

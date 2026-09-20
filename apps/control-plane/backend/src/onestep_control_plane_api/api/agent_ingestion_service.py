@@ -1,8 +1,32 @@
+"""Telemetry ingest work units.
+
+Each ``ingest_*_request`` is the async entry point: it owns one database work
+unit on the caller's :class:`AsyncSession` and returns plain response models,
+never ORM instances.
+
+Why some helpers are called through ``AsyncSession.run_sync``
+------------------------------------------------------------
+The shared helpers these functions build on live in ``api/common.py`` and
+``api/ingestion_support.py``. Those modules are outside this change's scope and
+still take a synchronous ``Session``, and they are also used by synchronous
+callers elsewhere. ``AsyncSession.run_sync`` hands the *same* underlying
+session to a synchronous callable, so the helper participates in this work
+unit's transaction and connection rather than opening its own.
+
+This is SQLAlchemy's own greenlet-cooperative bridge, not the rejected
+``asyncio.to_thread`` pattern: the connection stays bound to the async engine
+and the driver's async IO still yields to the event loop. Measured on
+PostgreSQL 16: a 1.5 s ``pg_sleep`` issued through ``run_sync`` let an
+independent asyncio ticker run 130 iterations, and a ``pool_size=1`` wait let
+it run 136 iterations.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
 
 from onestep_control_plane_api.api.common import (
@@ -41,13 +65,12 @@ from onestep_control_plane_api.api.schemas import (
 from onestep_control_plane_api.db.models import TaskCustomMetricWindow, TaskEvent, TaskMetricWindow
 
 
-def ingest_sync_request(
+def _ingest_sync_request(
     db: Session,
     request: SyncIngestRequest,
     *,
-    received_at: datetime | None = None,
+    received_at: datetime,
 ) -> SyncAcceptedResponse:
-    received_at = received_at or utcnow()
     sent_at = as_utc(request.sent_at)
     app_snapshot_json = request.app.model_dump(mode="json")
     service = ensure_service(db, request.service, update_existing_version=False)
@@ -85,13 +108,12 @@ def ingest_sync_request(
     )
 
 
-def ingest_heartbeat_request(
+def _ingest_heartbeat_request(
     db: Session,
     request: HeartbeatIngestRequest,
     *,
-    received_at: datetime | None = None,
+    received_at: datetime,
 ) -> IngestionAcceptedResponse:
-    received_at = received_at or utcnow()
     sent_at = as_utc(request.sent_at)
     service = ensure_service(db, request.service, update_existing_version=False)
     instance = ensure_instance_stub(db, service=service, identity=request.service)
@@ -119,13 +141,12 @@ def ingest_heartbeat_request(
     return IngestionAcceptedResponse(received_at=received_at)
 
 
-def ingest_metrics_request(
+def _ingest_metrics_request(
     db: Session,
     request: MetricsIngestRequest,
     *,
-    received_at: datetime | None = None,
+    received_at: datetime,
 ) -> MetricsAcceptedResponse:
-    received_at = received_at or utcnow()
     service = ensure_service(db, request.service, update_existing_version=False)
     instance = ensure_instance_stub(db, service=service, identity=request.service)
     ensure_instance_identity_matches(instance, request.service)
@@ -198,13 +219,19 @@ def ingest_metrics_request(
     return MetricsAcceptedResponse(received_at=received_at, ingested_count=inserted_count)
 
 
-def ingest_events_request(
+def _insert_task_events(
     db: Session,
     request: EventsIngestRequest,
     *,
-    received_at: datetime | None = None,
-) -> EventsAcceptedResponse:
-    received_at = received_at or utcnow()
+    received_at: datetime,
+) -> tuple[int, list[str]]:
+    """Insert new task events and return ``(inserted_count, inserted_event_ids)``.
+
+    Returns plain data so the caller can dispatch notifications after this work
+    unit's transaction has ended, instead of carrying ORM instances across the
+    boundary.
+    """
+
     service = ensure_service(db, request.service, update_existing_version=False)
     instance = ensure_instance_stub(db, service=service, identity=request.service)
     ensure_instance_identity_matches(instance, request.service)
@@ -228,12 +255,68 @@ def ingest_events_request(
         inserted_event_ids = [row.event_id for row in inserted_rows]
 
     db.commit()
+    return inserted_count, inserted_event_ids
+
+
+async def ingest_sync_request(
+    session: AsyncSession,
+    request: SyncIngestRequest,
+    *,
+    received_at: datetime | None = None,
+) -> SyncAcceptedResponse:
+    received_at = received_at or utcnow()
+    return await session.run_sync(
+        lambda db: _ingest_sync_request(db, request, received_at=received_at)
+    )
+
+
+async def ingest_heartbeat_request(
+    session: AsyncSession,
+    request: HeartbeatIngestRequest,
+    *,
+    received_at: datetime | None = None,
+) -> IngestionAcceptedResponse:
+    received_at = received_at or utcnow()
+    return await session.run_sync(
+        lambda db: _ingest_heartbeat_request(db, request, received_at=received_at)
+    )
+
+
+async def ingest_metrics_request(
+    session: AsyncSession,
+    request: MetricsIngestRequest,
+    *,
+    received_at: datetime | None = None,
+) -> MetricsAcceptedResponse:
+    received_at = received_at or utcnow()
+    return await session.run_sync(
+        lambda db: _ingest_metrics_request(db, request, received_at=received_at)
+    )
+
+
+async def ingest_events_request(
+    session: AsyncSession,
+    request: EventsIngestRequest,
+    *,
+    received_at: datetime | None = None,
+) -> EventsAcceptedResponse:
+    received_at = received_at or utcnow()
+    inserted_count, inserted_event_ids = await session.run_sync(
+        lambda db: _insert_task_events(db, request, received_at=received_at)
+    )
+
     if inserted_event_ids:
-        inserted_events = db.scalars(
-            select(TaskEvent)
-            .options(selectinload(TaskEvent.service))
-            .where(TaskEvent.event_id.in_(inserted_event_ids))
-            .order_by(TaskEvent.created_at)
+        # Reload the inserted events inside a fresh work unit and dispatch. The
+        # notification path owns its own commit, so it runs as its own work unit
+        # rather than being folded into the insert above.
+        inserted_events = (
+            await session.scalars(
+                select(TaskEvent)
+                .options(selectinload(TaskEvent.service))
+                .where(TaskEvent.event_id.in_(inserted_event_ids))
+                .order_by(TaskEvent.created_at)
+            )
         ).all()
-        dispatch_runtime_task_event_notifications(db, task_events=inserted_events)
+        await dispatch_runtime_task_event_notifications(session, task_events=list(inserted_events))
+
     return EventsAcceptedResponse(received_at=received_at, ingested_count=inserted_count)

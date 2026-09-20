@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
-from onestep_control_plane_api.api.agent_ingestion_service import ingest_heartbeat_request
+from onestep_control_plane_api.api.agent_ingestion_service import (
+    ingest_heartbeat_request as ingest_heartbeat_request_async,
+)
 from onestep_control_plane_api.api.schemas import HeartbeatIngestRequest
 from onestep_control_plane_api.api.ui_event_stream import ui_event_stream_broker
 from onestep_control_plane_api.db.models import (
@@ -33,6 +35,25 @@ def _drain_ui_stream_channels(queue: asyncio.Queue) -> list[str]:
             channels.append(queue.get_nowait().channel)
         except asyncio.QueueEmpty:
             return channels
+
+
+def ingest_heartbeat_request(db_session, request: HeartbeatIngestRequest):
+    """Run the async ingest helper to completion on the test's async engine.
+
+    The production path awaits this inside its own work unit; a synchronous test
+    drives one event loop instead. The ``db_session`` argument is kept for call
+    compatibility but the work unit opens its own session, exactly as the router
+    does.
+    """
+
+    return asyncio.run(_ingest_heartbeat(request))
+
+
+async def _ingest_heartbeat(request: HeartbeatIngestRequest):
+    from onestep_control_plane_api.db.session import session_scope
+
+    async with session_scope() as session:
+        return await ingest_heartbeat_request_async(session, request)
 
 
 def make_service_payload(

@@ -1,3 +1,28 @@
+"""Agent control WebSocket.
+
+Database access convention
+--------------------------
+Every message is handled as one or more *short database work units*. Each work
+unit opens its own :class:`AsyncSession` through :func:`session_scope`, commits
+or rolls back, and closes before the handler awaits the next
+``websocket.receive_text()``. Nothing is shared across the connection lifetime.
+
+That is the point of this change. The previous implementation took a single
+synchronous ``Session`` as a FastAPI dependency and held it for the whole
+connection, so the read transaction opened by the hello path stayed open while
+the handler blocked in ``receive_text()``: an idle agent held a checked-out
+connection and an idle transaction indefinitely, and every slow query blocked
+the event loop for every other connection. The ``hello`` path with an EMPTY
+pending-command list was the worst case, because the early return left the read
+transaction open with nothing to commit.
+
+Plain data, not ORM instances
+-----------------------------
+Work units return dataclasses and scalars. An ORM instance whose attribute is
+read after its transaction closed would trigger implicit IO or raise, so
+service functions convert before the boundary.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,18 +30,19 @@ import uuid
 from dataclasses import dataclass
 from uuid import UUID
 
+import anyio
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 from pydantic import ValidationError
-from sqlalchemy import update
-from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_command_service import (
-    build_command_message,
-    get_command_by_id,
+    PendingCommandDelivery,
+    apply_command_ack,
+    apply_command_result,
+    build_command_message_from_delivery,
     get_command_capability,
-    list_redeliverable_commands_for_instance,
-    mark_command_dispatched,
-    reject_redelivery_for_unsupported_capability,
+    list_redeliverable_commands_for_instance_async,
+    mark_command_dispatched_async,
+    reject_redelivery_for_unsupported_capability_async,
 )
 from onestep_control_plane_api.api.agent_connection_registry import agent_connection_registry
 from onestep_control_plane_api.api.agent_ingestion_service import (
@@ -25,13 +51,14 @@ from onestep_control_plane_api.api.agent_ingestion_service import (
     ingest_metrics_request,
     ingest_sync_request,
 )
-from onestep_control_plane_api.api.common import (
-    apply_service_metadata,
-    as_utc,
-    ensure_instance_stub,
-    ensure_service,
-    utcnow,
+from onestep_control_plane_api.api.agent_session_service import (
+    OpenedAgentSession,
+    close_agent_session,
+    mark_session_message,
+    open_agent_session,
 )
+from onestep_control_plane_api.api.common import as_utc
+from onestep_control_plane_api.api.common import utcnow as _utcnow
 from onestep_control_plane_api.api.schemas import (
     AgentCommandAckMessage,
     AgentCommandResultMessage,
@@ -49,11 +76,10 @@ from onestep_control_plane_api.api.schemas import (
 )
 from onestep_control_plane_api.api.security import (
     WebSocketIngestAuth,
-    require_websocket_ingest_token,
+    require_async_websocket_ingest_token,
 )
 from onestep_control_plane_api.api.ui_event_stream import publish_ui_stream_event
-from onestep_control_plane_api.db.models import AgentCommand, AgentSession
-from onestep_control_plane_api.db.session import get_db_session
+from onestep_control_plane_api.db.session import session_scope
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agent-ws"])
 
@@ -106,7 +132,7 @@ def _build_error_message(
     message: str,
     close_connection: bool,
 ) -> AgentErrorMessage:
-    now = utcnow()
+    now = _utcnow()
     return AgentErrorMessage(
         type="error",
         message_id=_new_message_id(),
@@ -136,63 +162,56 @@ async def _send_error(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=message)
 
 
-def _handle_hello(
-    db: Session,
+async def _handle_hello(
     *,
     message: AgentHelloMessage,
     connected_at,
-) -> AgentHelloAckMessage:
+) -> tuple[OpenedAgentSession, list[PendingCommandDelivery], AgentHelloAckMessage]:
+    """Register the hello AND list its redeliverable commands in ONE work unit.
+
+    Why they share a work unit
+    --------------------------
+    Splitting them would change behaviour. The synchronous original held a
+    single session with an open transaction from the hello insert through the
+    pending-command listing, so a command created by a concurrent HTTP request
+    in between was either fully invisible to the listing or fully visible, never
+    half-observed. With two separate async work units, a command created in the
+    gap is picked up by the listing AND immediately pushed by
+    ``create_instance_command`` to the live connection — so the agent receives
+    it twice.
+
+    Doing both in one work unit keeps the original atomicity: the listing sees
+    exactly the commands that existed when the session row was created.
+
+    The work unit still ends before the caller sends the ack or waits for the
+    next frame, so the idle-transaction leak the issue calls out is fixed — and
+    it is fixed for the EMPTY pending list too, which is the case the old early
+    return left dangling.
+    """
+
     if message.payload.protocol_version != SUPPORTED_PROTOCOL_VERSION:
         raise ValueError(
             f"protocol_version={message.payload.protocol_version} is not supported"
         )
 
     accepted_capabilities = _accepted_capabilities(message.payload.capabilities)
-    service = ensure_service(db, message.payload.service, update_existing_version=True)
-    apply_service_metadata(service, message.payload.service)
-    instance = ensure_instance_stub(db, service=service, identity=message.payload.service)
-    instance.service = service
-    instance.node_name = message.payload.service.node_name
-    instance.hostname = message.payload.runtime.hostname
-    instance.pid = message.payload.runtime.pid
-    instance.deployment_version = message.payload.service.deployment_version
-    instance.onestep_version = message.payload.runtime.onestep_version
-    instance.python_version = message.payload.runtime.python_version
-    instance.started_at = as_utc(message.payload.runtime.started_at)
-    instance.last_seen_at = connected_at
-
     session_id = _new_session_id()
-    db.execute(
-        update(AgentSession)
-        .where(
-            AgentSession.instance_id == message.payload.service.instance_id,
-            AgentSession.status == "active",
-        )
-        .values(
-            status="superseded",
-            superseded_at=connected_at,
-            disconnected_at=connected_at,
-            updated_at=connected_at,
-        )
-    )
-    db.add(
-        AgentSession(
-            session_id=session_id,
-            service=service,
-            instance_id=message.payload.service.instance_id,
-            protocol_version=message.payload.protocol_version,
-            status="active",
-            capabilities_json=list(message.payload.capabilities),
-            accepted_capabilities_json=accepted_capabilities,
-            connected_at=connected_at,
-            last_hello_at=connected_at,
-            last_message_at=connected_at,
-        )
-    )
-    db.commit()
+
+    with anyio.CancelScope(shield=True):
+        async with session_scope() as session:
+            opened = await open_agent_session(
+                session,
+                message=message,
+                session_id=session_id,
+                accepted_capabilities=accepted_capabilities,
+                connected_at=connected_at,
+            )
+            pending = await list_redeliverable_commands_for_instance_async(
+                session, instance_id=message.payload.service.instance_id
+            )
     publish_ui_stream_event("sessions")
 
-    return AgentHelloAckMessage(
+    hello_ack = AgentHelloAckMessage(
         type="hello_ack",
         message_id=_new_message_id(),
         sent_at=connected_at,
@@ -204,29 +223,50 @@ def _handle_hello(
             server_time=connected_at,
         ),
     )
+    return opened, pending, hello_ack
 
 
-def _mark_session_message(db: Session, session_id: str, occurred_at) -> None:
-    db.execute(
-        update(AgentSession)
-        .where(AgentSession.session_id == session_id)
-        .values(last_message_at=occurred_at, updated_at=occurred_at)
-    )
-    db.commit()
+async def _enqueue_pending_commands(
+    *,
+    pending: list[PendingCommandDelivery],
+    session_id: str,
+    accepted_capabilities: list[str],
+    send_queue: asyncio.Queue[dict[str, object]],
+) -> None:
+    """Redeliver already-listed commands, one work unit per command.
 
+    The listing itself happened in :func:`_handle_hello`; this only dispatches
+    or rejects what it returned, which is why it never touches the listing
+    query.
 
-def _close_session(db: Session, session_id: str, *, disconnected_at) -> None:
-    db.execute(
-        update(AgentSession)
-        .where(AgentSession.session_id == session_id, AgentSession.status == "active")
-        .values(
-            status="disconnected",
-            disconnected_at=disconnected_at,
-            last_message_at=disconnected_at,
-            updated_at=disconnected_at,
+    Each dispatch or rejection is its own work unit, so a slow command never
+    holds a transaction across the ``send_queue.put`` that follows.
+    """
+
+    for delivery in pending:
+        required_capability = get_command_capability(delivery.kind)
+        if required_capability not in accepted_capabilities:
+            with anyio.CancelScope(shield=True):
+                async with session_scope() as session:
+                    await reject_redelivery_for_unsupported_capability_async(
+                        session,
+                        command_id=delivery.command_id,
+                        capability=required_capability,
+                    )
+            publish_ui_stream_event("commands")
+            continue
+
+        with anyio.CancelScope(shield=True):
+            async with session_scope() as session:
+                dispatched = await mark_command_dispatched_async(
+                    session,
+                    command_id=delivery.command_id,
+                    session_id=session_id,
+                )
+        publish_ui_stream_event("commands")
+        await send_queue.put(
+            build_command_message_from_delivery(dispatched).model_dump(mode="json")
         )
-    )
-    db.commit()
 
 
 async def _send_loop(
@@ -238,116 +278,10 @@ async def _send_loop(
         await websocket.send_json(message)
 
 
-async def _enqueue_pending_commands(
-    db: Session,
-    *,
-    instance_id: UUID,
-    session_id: str,
-    accepted_capabilities: list[str],
-    send_queue: asyncio.Queue[dict[str, object]],
-) -> None:
-    for command in list_redeliverable_commands_for_instance(db, instance_id=instance_id):
-        required_capability = get_command_capability(command.kind)
-        if required_capability not in accepted_capabilities:
-            reject_redelivery_for_unsupported_capability(
-                db,
-                command=command,
-                capability=required_capability,
-            )
-            publish_ui_stream_event("commands")
-            continue
-        command = mark_command_dispatched(
-            db,
-            command=command,
-            session_id=session_id,
-        )
-        publish_ui_stream_event("commands")
-        await send_queue.put(build_command_message(command).model_dump(mode="json"))
-
-
-def _resolve_command_for_session(
-    db: Session,
-    *,
-    context: _ConnectionContext,
-    command_id: str,
-) -> AgentCommand | None:
-    command = get_command_by_id(db, command_id=command_id)
-    if command is None or command.instance_id != context.instance_id:
-        return None
-    return command
-
-
-def _handle_command_ack(
-    db: Session,
-    *,
-    context: _ConnectionContext,
-    message: AgentCommandAckMessage,
-    received_at,
-) -> bool:
-    command = _resolve_command_for_session(
-        db,
-        context=context,
-        command_id=message.payload.command_id,
-    )
-    if command is None:
-        return False
-    if command.finished_at is not None or command.ack_status is not None:
-        return True
-
-    command.session_id = context.session_id
-    command.ack_status = message.payload.status
-    command.acked_at = as_utc(message.payload.received_at)
-    command.updated_at = received_at
-    if message.payload.status == "accepted":
-        command.status = "accepted"
-    else:
-        command.status = "rejected"
-        command.finished_at = as_utc(message.payload.received_at)
-        command.error_code = message.payload.error_code
-        command.error_message = message.payload.error_message
-    db.commit()
-    publish_ui_stream_event("commands")
-    return True
-
-
-def _handle_command_result(
-    db: Session,
-    *,
-    context: _ConnectionContext,
-    message: AgentCommandResultMessage,
-    received_at,
-) -> str:
-    command = _resolve_command_for_session(
-        db,
-        context=context,
-        command_id=message.payload.command_id,
-    )
-    if command is None:
-        return "unknown"
-    if command.finished_at is not None:
-        return "duplicate"
-
-    command.session_id = context.session_id
-    command.status = message.payload.status
-    command.finished_at = as_utc(message.payload.finished_at)
-    command.result_json = message.payload.result
-    command.duration_ms = message.payload.duration_ms
-    command.error_code = message.payload.error_code
-    command.error_message = message.payload.error_message
-    if command.ack_status is None:
-        command.ack_status = "accepted"
-        command.acked_at = received_at
-    command.updated_at = received_at
-    db.commit()
-    publish_ui_stream_event("commands")
-    return "ok"
-
-
 @router.websocket("/ws")
 async def agent_ws(
     websocket: WebSocket,
-    auth: WebSocketIngestAuth = Depends(require_websocket_ingest_token),
-    db: Session = Depends(get_db_session),
+    auth: WebSocketIngestAuth = Depends(require_async_websocket_ingest_token),
 ) -> None:
     await websocket.accept(subprotocol=auth.accepted_subprotocol)
     send_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -356,7 +290,7 @@ async def agent_ws(
     try:
         while True:
             raw_message = await websocket.receive_text()
-            now = utcnow()
+            now = _utcnow()
             try:
                 envelope = AgentWsEnvelope.model_validate_json(raw_message)
             except ValidationError:
@@ -371,7 +305,9 @@ async def agent_ws(
             if envelope.type == "hello":
                 try:
                     hello = AgentHelloMessage.model_validate_json(raw_message)
-                    hello_ack = _handle_hello(db, message=hello, connected_at=now)
+                    _opened, pending_commands, hello_ack = await _handle_hello(
+                        message=hello, connected_at=now
+                    )
                 except ValidationError:
                     await _send_error(
                         websocket,
@@ -400,8 +336,7 @@ async def agent_ws(
                 )
                 await websocket.send_json(hello_ack.model_dump(mode="json"))
                 await _enqueue_pending_commands(
-                    db,
-                    instance_id=context.instance_id,
+                    pending=pending_commands,
                     session_id=context.session_id,
                     accepted_capabilities=hello_ack.payload.accepted_capabilities,
                     send_queue=send_queue,
@@ -432,16 +367,24 @@ async def agent_ws(
                 try:
                     if telemetry.payload.channel == "sync":
                         request = SyncIngestRequest.model_validate(telemetry.payload.body)
-                        ingest_sync_request(db, request, received_at=now)
+                        await _ingest(
+                            ingest_sync_request, request, received_at=now
+                        )
                     elif telemetry.payload.channel == "heartbeat":
                         request = HeartbeatIngestRequest.model_validate(telemetry.payload.body)
-                        ingest_heartbeat_request(db, request, received_at=now)
+                        await _ingest(
+                            ingest_heartbeat_request, request, received_at=now
+                        )
                     elif telemetry.payload.channel == "metrics":
                         request = MetricsIngestRequest.model_validate(telemetry.payload.body)
-                        ingest_metrics_request(db, request, received_at=now)
+                        await _ingest(
+                            ingest_metrics_request, request, received_at=now
+                        )
                     elif telemetry.payload.channel == "events":
                         request = EventsIngestRequest.model_validate(telemetry.payload.body)
-                        ingest_events_request(db, request, received_at=now)
+                        await _ingest(
+                            ingest_events_request, request, received_at=now
+                        )
                     else:  # pragma: no cover - guarded by schema literal
                         await _send_error(
                             websocket,
@@ -462,7 +405,7 @@ async def agent_ws(
                     )
                     continue
 
-                _mark_session_message(db, context.session_id, now)
+                await _touch_session(context.session_id, now)
                 continue
 
             if envelope.type == "command_ack":
@@ -476,12 +419,10 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                if not _handle_command_ack(
-                    db,
-                    context=context,
-                    message=command_ack,
-                    received_at=now,
-                ):
+                outcome = await _run_command_ack(context, command_ack, received_at=now)
+                if outcome == "unchanged":
+                    continue
+                if outcome == "unknown":
                     await _send_error(
                         websocket,
                         code="unknown_command",
@@ -489,7 +430,7 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                _mark_session_message(db, context.session_id, now)
+                await _touch_session(context.session_id, now)
                 continue
 
             if envelope.type == "command_result":
@@ -503,13 +444,8 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                result = _handle_command_result(
-                    db,
-                    context=context,
-                    message=command_result,
-                    received_at=now,
-                )
-                if result == "unknown":
+                outcome = await _run_command_result(context, command_result, received_at=now)
+                if outcome == "unknown":
                     await _send_error(
                         websocket,
                         code="unknown_command",
@@ -517,7 +453,7 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                if result == "duplicate":
+                if outcome == "duplicate":
                     await _send_error(
                         websocket,
                         code="duplicate_command_result",
@@ -528,7 +464,7 @@ async def agent_ws(
                         close_connection=False,
                     )
                     continue
-                _mark_session_message(db, context.session_id, now)
+                await _touch_session(context.session_id, now)
                 continue
 
             await _send_error(
@@ -546,9 +482,108 @@ async def agent_ws(
         except asyncio.CancelledError:
             pass
         if context is not None:
-            await agent_connection_registry.unregister(
-                instance_id=context.instance_id,
-                session_id=context.session_id,
-            )
-            _close_session(db, context.session_id, disconnected_at=utcnow())
+            # Shielded: unregistering and the disconnect work unit must complete
+            # even when the enclosing task was already cancelled, or a
+            # disconnected agent keeps an active session and a live registry
+            # entry forever. See ``_close_connection_session``.
+            with anyio.CancelScope(shield=True):
+                await agent_connection_registry.unregister(
+                    instance_id=context.instance_id,
+                    session_id=context.session_id,
+                )
+                await _close_connection_session(context.session_id)
             publish_ui_stream_event("sessions")
+
+
+async def _ingest(ingest_fn, request, *, received_at) -> None:
+    """Run one telemetry ingest as its own short work unit.
+
+    Shielded so the work unit cannot be cut in half: a cancellation that arrives
+    while the insert is in flight would otherwise roll back a frame the agent
+    has already been told (implicitly, by the next successful frame) was
+    accepted. See :func:`_close_connection_session` for the full reasoning.
+    """
+
+    with anyio.CancelScope(shield=True):
+        async with session_scope() as session:
+            await ingest_fn(session, request, received_at=received_at)
+
+
+async def _touch_session(session_id: str, occurred_at) -> None:
+    """Record that a session delivered a message, as its own work unit."""
+
+    with anyio.CancelScope(shield=True):
+        async with session_scope() as session:
+            await mark_session_message(session, session_id, occurred_at)
+
+
+async def _close_connection_session(session_id: str) -> None:
+    """Mark the session disconnected during cleanup, as its own work unit.
+
+    Runs inside :func:`anyio.CancelScope` with ``shield=True``. The enclosing
+    task is frequently already cancelled by the time cleanup runs — Starlette's
+    test client cancels the websocket scope as soon as the ``with`` block exits,
+    and a real disconnect or server shutdown can do the same. Without the
+    shield, the first ``await`` inside the work unit would raise
+    ``CancelledError`` and the session would stay ``active`` forever: a
+    disconnect that is never recorded. Shielding lets this one work unit commit
+    or roll back and release its connection, then the cancellation resumes.
+    """
+
+    with anyio.CancelScope(shield=True):
+        async with session_scope() as session:
+            await close_agent_session(session, session_id, disconnected_at=_utcnow())
+
+
+async def _run_command_ack(
+    context: _ConnectionContext,
+    message: AgentCommandAckMessage,
+    *,
+    received_at,
+) -> str:
+    """Apply a ``command_ack`` as one work unit and return its outcome."""
+
+    with anyio.CancelScope(shield=True):
+        async with session_scope() as session:
+            outcome = await apply_command_ack(
+            session,
+            instance_id=context.instance_id,
+            session_id=context.session_id,
+            command_id=message.payload.command_id,
+            ack_status=message.payload.status,
+            acked_at=as_utc(message.payload.received_at),
+            received_at=received_at,
+            error_code=message.payload.error_code,
+            error_message=message.payload.error_message,
+        )
+    if outcome == "ok":
+        publish_ui_stream_event("commands")
+    return outcome
+
+
+async def _run_command_result(
+    context: _ConnectionContext,
+    message: AgentCommandResultMessage,
+    *,
+    received_at,
+) -> str:
+    """Apply a ``command_result`` as one work unit and return its outcome."""
+
+    with anyio.CancelScope(shield=True):
+        async with session_scope() as session:
+            outcome = await apply_command_result(
+            session,
+            instance_id=context.instance_id,
+            session_id=context.session_id,
+            command_id=message.payload.command_id,
+            status_value=message.payload.status,
+            finished_at=as_utc(message.payload.finished_at),
+            result_json=message.payload.result,
+            duration_ms=message.payload.duration_ms,
+            received_at=received_at,
+            error_code=message.payload.error_code,
+            error_message=message.payload.error_message,
+        )
+    if outcome == "ok":
+        publish_ui_stream_event("commands")
+    return outcome
