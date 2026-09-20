@@ -71,6 +71,13 @@ class NotificationEventRecord:
     console_url: str | None = None
     detected_at: datetime | None = None
     missed_start_grace_seconds: int | None = None
+    # --- issue #196: flapping summary ----------------------------------------
+    # Set only on the single summary emitted when a flapping episode goes quiet.
+    # suppressed_flip_count is how many flips were damped, so the summary can
+    # never read as "all clear" -- it reports what was withheld.
+    suppressed_flip_count: int | None = None
+    flap_episode_started_at: datetime | None = None
+    flap_episode_last_flip_at: datetime | None = None
 
 
 def normalize_notification_event_type(raw_value: str) -> NotificationEventType:
