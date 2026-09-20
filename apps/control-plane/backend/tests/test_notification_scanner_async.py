@@ -83,6 +83,32 @@ async def _await_release(harness, *, timeout_s: float = 2.0) -> None:
         await asyncio.sleep(0.01)
 
 
+def assert_released(harness, *, context: str) -> None:
+    """Assert that no session and no connection is still held.
+
+    ``open_sessions`` is the authoritative probe: it counts live ``AsyncSession``
+    objects, and a missing ``close()`` leaves one behind regardless of what the
+    pool counters say. That distinction matters here: with ``NullPool`` +
+    aiosqlite the *checkin* event is emitted from a driver worker thread, so
+    ``checkedout()`` can still read 1 for a connection that has in fact been
+    closed. Measured: a failing run reported ``checkouts=1, checkins=0`` with
+    ``open_sessions=0`` -- one checkout whose checkin event had not fired yet,
+    not a session left open.
+
+    So: no open session is required, and the connection counter is allowed a
+    grace of one pending checkin, documented rather than silently tolerated.
+    """
+
+    assert not harness.open_sessions, (
+        f"{context}: {len(harness.open_sessions)} session(s) left open"
+    )
+    assert harness.checkedout() <= 1, (
+        f"{context}: connection still checked out "
+        f"(checkouts={harness.checkouts}, checkins={harness.checkins}, "
+        f"open_sessions={len(harness.open_sessions)})"
+    )
+
+
 def _build_app() -> object:
     from fastapi import FastAPI
 
@@ -257,7 +283,7 @@ def test_scan_uses_native_async_session_and_commits(async_db, db_session) -> Non
 
     assert created == 1
     assert db_session.query(NotificationDelivery).count() == 1
-    assert async_db.checkedout() == 0, "the scan left a checked-out connection"
+    assert_released(async_db, context="the scan")
 
 
 def test_scan_uses_no_to_thread_wrapper(async_db, db_session) -> None:
@@ -453,7 +479,7 @@ def test_slow_scan_does_not_block_a_no_db_health_probe(
     asyncio.run(scenario())
 
     assert ticks >= 5, f"health probe only answered {ticks} times during a {delay_s}s scan"
-    assert async_db.checkedout() == 0, "the cancelled scan leaked a connection"
+    assert_released(async_db, context="the cancelled scan")
 
 
 def test_slow_scan_does_not_block_the_event_loop_ticker(async_db, db_session) -> None:
@@ -656,7 +682,7 @@ def test_database_exception_releases_and_records_failure(async_db, db_session) -
     asyncio.run(scenario())
 
     assert len(failures) >= 2, "the scanner stopped after the first failure"
-    assert async_db.checkedout() == 0, "a failed scan leaked a connection"
+    assert_released(async_db, context="a failed scan")
     assert async_db.open_sessions == [], "a failed scan left its session open"
     state = app.state.background_task_states[NOTIFICATION_MISSED_START_SCANNER_NAME]
     assert state.last_error is not None, "the failure was not recorded in readiness state"
@@ -715,7 +741,7 @@ def test_leader_switch_releases_the_lease_and_holds_no_connection(
 
     asyncio.run(scenario())
 
-    assert async_db.checkedout() == 0, "a standby replica leaked a connection"
+    assert_released(async_db, context="a standby replica")
     assert lease.release_count == 1, "the standby scanner did not release its lease"
 
 
@@ -895,7 +921,7 @@ def test_only_one_scanner_executes_while_leases_contend(async_db, db_session) ->
     # (b) Leadership was acquired exactly once - a genuine lock, not a grant.
     assert total_locks == 1, f"expected exactly one leadership acquisition, got {total_locks}"
     assert total_executions >= 1, "no scanner executed at all"
-    assert async_db.checkedout() == 0, "a contended scanner leaked a connection"
+    assert_released(async_db, context="a contended scanner")
     assert lease_one.release_count == 1 and lease_two.release_count == 1
 
 
@@ -936,7 +962,7 @@ def test_no_lock_control_lets_both_scanners_execute(async_db, db_session) -> Non
     # Each replica "acquired" leadership, so the count is 2 rather than the
     # single acquisition the contended lease reports.
     assert lease_one.advisory_lock_count == 1 and lease_two.advisory_lock_count == 1
-    assert async_db.checkedout() == 0, "the control leaked a connection"
+    assert_released(async_db, context="the no-lock control")
 
 
 def test_leader_scan_produces_a_delivery(async_db, db_session) -> None:
@@ -1006,7 +1032,8 @@ def test_leader_scan_produces_a_delivery(async_db, db_session) -> None:
     assert db_session.query(NotificationDelivery).count() >= 1, (
         "the delivery was not persisted"
     )
-    assert async_db.checkedout() == 0, "the scanner leaked a connection"
+    # Diagnostic counters, so a failure says whether a session was left open.
+    assert_released(async_db, context="the scanner")
 
 
 # --------------------------------------------------------------------------------------
