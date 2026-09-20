@@ -10,8 +10,11 @@ now-retired ``scripts/check_plugin_drift.py``):
   (``mysql+asyncmy`` vs ``postgresql+psycopg``) and install hint;
 * :mod:`onestep_sql._shared.table_sink_policy` — the table-sink
   ``update_columns`` write policies (``overwrite`` / ``skip_null`` /
-  ``backfill``), the ``_normalize_update_columns`` validator and the
-  ``_update_payload`` / ``_coerce_json_values`` mixin;
+  ``backfill``), the ``_normalize_update_columns`` validator, the
+  ``_update_payload`` / ``_coerce_json_values`` mixin, and the upsert key
+  preflight (issue #188): ``mode: upsert`` whose ``keys`` have no matching
+  unique constraint or primary key fails with ``MISCONFIGURED`` instead of
+  silently degrading into plain inserts on MySQL;
 * :mod:`onestep_sql._shared.table_queue_lint` — the shared table_queue YAML
   lint (issue #180): warn when ``claim`` is non-empty but ``nack`` is empty,
   because every failure path then no-ops and failed rows silently stick in

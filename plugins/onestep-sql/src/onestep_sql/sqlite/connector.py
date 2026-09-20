@@ -690,6 +690,8 @@ class IncrementalTableSource(Source):
 
 
 class TableSink(TableSinkUpdatePolicy, Sink):
+    _backend = "sqlite"
+
     def __init__(
         self,
         *,
@@ -747,6 +749,7 @@ class TableSink(TableSinkUpdatePolicy, Sink):
 
     async def _send(self, payload: dict[str, Any]) -> None:
         table = await self.connector._table(self.table_name)
+        self._validate_upsert_keys(table)
         stmt = self._build_statement(payload, table)
         if stmt is None:
             logger.info(

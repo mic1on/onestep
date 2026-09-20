@@ -69,7 +69,12 @@ from onestep_sql.sqlite import state_sqlalchemy as sqlite_state
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.ext.asyncio import create_async_engine as _create_async_engine
 
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
+from onestep.envelope import Envelope
 from onestep import OneStepApp
 
 BACKENDS = ("mysql", "postgres", "sqlite")
@@ -800,6 +805,263 @@ def test_coerce_json_values_always_and_never(backend: str) -> None:
     never = _make_sink(backend, update_columns=("note",), serialize_json="never")
     payload = {"note": ["a"]}
     assert never._coerce_json_values(payload, _policy_table()) is payload
+
+
+# ---------------------------------------------------------------------------
+# 3b. Upsert key preflight (issue #188) — shared rule, identical on 3 backends.
+# ---------------------------------------------------------------------------
+
+
+def _unique_candidate_table() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        "device",
+        metadata,
+        sa.Column("device_key", sa.Text, unique=True),
+        sa.Column("tenant", sa.Text),
+        sa.Column("payload", sa.Text),
+    )
+
+
+def _plain_index_table() -> sa.Table:
+    """The ceegic-sync shape: a *plain* index on the declared key."""
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "sale_device",
+        metadata,
+        sa.Column("device_key", sa.Text),
+        sa.Column("payload", sa.Text),
+    )
+    sa.Index("idx_device_key", table.c.device_key)
+    return table
+
+
+def _composite_unique_table() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        "composite",
+        metadata,
+        sa.Column("a", sa.Text),
+        sa.Column("b", sa.Text),
+        sa.Column("payload", sa.Text),
+        sa.UniqueConstraint("a", "b", name="uq_ab"),
+    )
+
+
+def test_upsert_preflight_lives_once_in_shared() -> None:
+    """The issue #188 rule is one shared implementation, not three copies."""
+    assert (
+        mysql_pkg.TableSink._validate_upsert_keys
+        is postgres_pkg.PostgresTableSink._validate_upsert_keys
+        is sqlite_pkg.TableSink._validate_upsert_keys
+        is shared_policy.TableSinkUpdatePolicy._validate_upsert_keys
+    )
+    assert not hasattr(mysql_connector, "validate_upsert_key_uniqueness")
+    assert not hasattr(postgres_connector, "validate_upsert_key_uniqueness")
+    assert not hasattr(sqlite_connector, "validate_upsert_key_uniqueness")
+    assert mysql_pkg.TableSink._backend == "mysql"
+    assert postgres_pkg.PostgresTableSink._backend == "postgres"
+    assert sqlite_pkg.TableSink._backend == "sqlite"
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_rejects_keys_without_matching_unique_index(backend: str) -> None:
+    """Acceptance 1: no equivalent unique index -> MISCONFIGURED on first send."""
+    sink = _make_sink(backend, table="sale_device", keys=("device_key",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._validate_upsert_keys(_plain_index_table())
+    assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+    assert excinfo.value.operation is ConnectorOperation.SEND
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_error_names_table_keys_and_existing_indexes(backend: str) -> None:
+    """Acceptance 1: the message carries table, declared keys, existing indexes."""
+    sink = _make_sink(backend, table="sale_device", keys=("device_key",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._validate_upsert_keys(_plain_index_table())
+    message = str(excinfo.value)
+    assert "sale_device" in message
+    assert "device_key" in message
+    # The near-miss plain index must be visible, not just reported as absent.
+    assert "idx_device_key" in message
+    assert "upsert" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_accepts_equivalent_unique_constraint(backend: str) -> None:
+    """Acceptance 2: a matching unique constraint (or PK) keeps working."""
+    sink = _make_sink(backend, table="device", keys=("device_key",))
+    sink._validate_upsert_keys(_unique_candidate_table())  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_accepts_composite_unique_index_order_insensitively(
+    backend: str,
+) -> None:
+    """Acceptance 2: composite unique index matches regardless of key order."""
+    for keys in (("a", "b"), ("b", "a")):
+        sink = _make_sink(backend, table="composite", keys=keys)
+        sink._validate_upsert_keys(_composite_unique_table())  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_accepts_primary_key_match(backend: str) -> None:
+    """Acceptance 2: a matching primary key is an equally valid conflict target."""
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "pk_table",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("payload", sa.Text),
+    )
+    sink = _make_sink(backend, table="pk_table", keys=("id",))
+    sink._validate_upsert_keys(table)  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_rejects_subset_of_composite_unique(backend: str) -> None:
+    """Exact-set rule: UNIQUE(a, b) does not constrain a alone."""
+    sink = _make_sink(backend, table="composite", keys=("a",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._validate_upsert_keys(_composite_unique_table())
+    assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_ignores_insert_and_update_modes(backend: str) -> None:
+    """Acceptance 3: insert/update modes are untouched by the preflight."""
+    insert_sink = _make_sink(backend, table="sale_device", mode="insert", keys=("device_key",))
+    insert_sink._validate_upsert_keys(_plain_index_table())  # must not raise
+    assert getattr(insert_sink, "_upsert_keys_validated", False) is False
+
+    update_sink = _make_sink(
+        backend,
+        table="sale_device",
+        mode="update",
+        keys=("device_key",),
+        update_columns=("payload",),
+    )
+    update_sink._validate_upsert_keys(_plain_index_table())  # must not raise
+    assert getattr(update_sink, "_upsert_keys_validated", False) is False
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_result_is_cached_per_sink(backend: str) -> None:
+    """Acceptance 4: the check is cached, so the per-row path pays no rework."""
+    sink = _make_sink(backend, table="device", keys=("device_key",))
+    calls: list[object] = []
+    original = shared_policy.validate_upsert_key_uniqueness
+
+    def counting(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    with mock.patch.object(shared_policy, "validate_upsert_key_uniqueness", counting):
+        for _ in range(5):
+            sink._validate_upsert_keys(_unique_candidate_table())
+
+    assert len(calls) == 1
+    assert sink._upsert_keys_validated is True
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_failure_is_not_cached(backend: str) -> None:
+    """A failed preflight must re-raise on every send, never latch as valid."""
+    sink = _make_sink(backend, table="sale_device", keys=("device_key",))
+    for _ in range(3):
+        with pytest.raises(ConnectorOperationError):
+            sink._validate_upsert_keys(_plain_index_table())
+    assert getattr(sink, "_upsert_keys_validated", False) is False
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_runs_before_the_first_write(backend: str) -> None:
+    """The guard sits on the send path, ahead of statement construction."""
+    table = _plain_index_table()
+
+    class _Engine:
+        def begin(self):
+            raise AssertionError("engine must not be touched when keys are not unique")
+
+    class _Connector:
+        engine = _Engine()
+
+        async def _table(self, table_name):
+            return table
+
+    sink_cls = _backend_sink_cls(backend)
+    sink = sink_cls(
+        connector=_Connector(),
+        table="sale_device",
+        mode="upsert",
+        keys=("device_key",),
+        update_columns=("payload",),
+    )
+    sink._build_statement = mock.Mock(  # type: ignore[method-assign]
+        side_effect=AssertionError("statement must not be built when keys are not unique")
+    )
+    with pytest.raises(ConnectorOperationError):
+        asyncio.run(sink._send({"device_key": "k", "payload": "p"}))
+    sink._build_statement.assert_not_called()
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_sqlite_unique_constraint_is_detected(backend: str) -> None:
+    """SQLite/PG reflect inline UNIQUE as a constraint, not an index.
+
+    Reading only ``table.indexes`` (as issue #188 originally proposed) would
+    miss this and let a correctly-configured sink fail.
+    """
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "inline_unique",
+        metadata,
+        sa.Column("device_key", sa.Text, unique=True),
+        sa.Column("payload", sa.Text),
+    )
+    sink = _make_sink(backend, table="inline_unique", keys=("device_key",))
+    sink._validate_upsert_keys(table)  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_end_to_end_send_raises_misconfigured(backend: str) -> None:
+    """Acceptance 1+5: a real _send against reflected metadata fails loudly."""
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE sale_device (device_key TEXT, payload TEXT)"))
+        conn.execute(sa.text("CREATE INDEX idx_device_key ON sale_device(device_key)"))
+    reflected = sa.Table("sale_device", sa.MetaData(), autoload_with=engine)
+    engine.dispose()
+
+    class _Engine:
+        def begin(self):
+            raise AssertionError("engine must not be used: preflight fails first")
+
+    class _Connector:
+        engine = _Engine()
+
+        async def _table(self, table_name):
+            return reflected
+
+        def _secret_tokens(self):
+            return []
+
+        def secret_tokens(self):
+            return []
+
+    sink_cls = _backend_sink_cls(backend)
+    sink = sink_cls(
+        connector=_Connector(),
+        table="sale_device",
+        mode="upsert",
+        keys=("device_key",),
+        update_columns=("payload",),
+    )
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        asyncio.run(sink.send(Envelope(body={"device_key": "k", "payload": "p"})))
+    assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+    assert "idx_device_key" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
