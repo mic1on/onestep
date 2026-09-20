@@ -1234,6 +1234,12 @@ def test_clean_close_reconnects_from_base_backoff(tmp_path, monkeypatch) -> None
     # at its base value on the clean-close branch, so the test would pass even
     # if the reset were deleted -- it could not tell a real reset apart from a
     # budget that had never escalated.
+    #
+    # The injected RNG draws a value STRICTLY INSIDE the budget (0.75 * budget)
+    # rather than pinning it to the top. That matters: asserting the raw budget
+    # here would be satisfied by a clean-close path that never draws jitter at
+    # all. Asserting the drawn value proves the clean-close path both resets the
+    # budget AND actually consumes the jitter draw.
     sessions = {"n": 0}
     delays: list[float] = []
 
@@ -1250,28 +1256,28 @@ def test_clean_close_reconnects_from_base_backoff(tmp_path, monkeypatch) -> None
 
     monkeypatch.setattr(asyncio, "sleep", recording_sleep)
 
+    base = client_module._BASE_BACKOFF_SECONDS
     diagnostics = asyncio.run(
         _drive_control_loop(
             run_control_loop(
                 config=_config(tmp_path),
                 identity=_identity(),
                 supervisor=FakeSupervisor(),
-                rng=_UpperBoundRng(),
+                rng=_MidRangeRng(),  # draws 0.75 * budget
             ),
             until=lambda: len(delays) >= 4,
         )
     )
     assert sessions["n"] >= 4, sessions
-    # The two failing sessions escalate the budget: 1.0 then 2.0.
-    assert delays[:2] == [
-        client_module._BASE_BACKOFF_SECONDS,
-        client_module._BASE_BACKOFF_SECONDS * 2,
-    ], delays
+    # The two failing sessions escalate the budget 1.0 -> 2.0, and the delay is
+    # the DRAW from each budget, not the budget itself.
+    assert delays[:2] == pytest.approx([0.75 * base, 0.75 * base * 2]), delays
     # Every clean close after that must drop back to the BASE budget instead of
-    # keeping the escalated 4.0. This is the assertion that fails if the
-    # clean-close reset is lost.
-    assert delays[2:] == [client_module._BASE_BACKOFF_SECONDS] * 2, (
-        f"clean close kept the escalated budget: {delays}"
+    # keeping the escalated 4.0, and must use the drawn value. This fails if
+    # either the reset is lost (delays become 0.75 * 4.0 = 3.0) or the
+    # clean-close path stops drawing jitter (delays become the raw 1.0).
+    assert delays[2:] == pytest.approx([0.75 * base] * 2), (
+        f"clean close did not reconnect from the drawn base delay: {delays}"
     )
     assert diagnostics == [], f"unretrieved errors: {diagnostics}"
 
