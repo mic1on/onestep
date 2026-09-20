@@ -15,6 +15,12 @@ Other alerts depend on a metrics pipeline or SQL exporter that emits the followi
 - `onestep_control_plane_agent_commands_total{status=...}`
 - `onestep_control_plane_notification_deliveries_total{status=...}`
 
+Latency alerts and connection-failure triage use the series emitted directly by the
+control plane `/metrics` endpoint (`onestep_control_plane_event_loop_lag_*`,
+`onestep_control_plane_db_pool_*`, `onestep_control_plane_scan_*`). To tell event-loop
+blocking apart from connection-pool wait or a slow database, follow
+`docs/runbooks/control-plane-latency-diagnostics.md`.
+
 ## OneStepControlPlaneApiDown
 
 Immediate meaning:
