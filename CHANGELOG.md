@@ -114,6 +114,38 @@ carries a regression test.
 - Caches are in-process and not persisted; deletion is not observed — a stale
   `record_id` surfaces as a write error and is resolved by restarting the task.
 
+## onestep-sql 0.5.0
+
+Reliability fixes for silent data loss, plus single-transaction table-queue
+completion.
+
+- **`mode: upsert` silently degraded into plain inserts when the declared
+  `keys` had no equivalent unique index (issue #188).** MySQL renders
+  `INSERT ... ON DUPLICATE KEY UPDATE`, which declares no conflict target and
+  only takes the update branch when *some* unique key is hit; with a plain
+  (non-unique) index on `keys` every run inserted fresh duplicates and
+  `check` / `run` / startup logs said nothing. `sqlite`/`postgres` declare the
+  conflict target and so failed loudly, but only per row and with a
+  dialect-specific message. All three backends now run a preflight on the
+  first `_send`, once the table metadata has been reflected: a unique
+  constraint or primary key whose column set **exactly** matches `keys`
+  (order-insensitive, composite included) must exist, otherwise the write is
+  refused with `ConnectorOperationError(kind=MISCONFIGURED)` naming the table,
+  the declared keys and the existing indexes. A subset is deliberately not
+  accepted — `UNIQUE(a, b)` does not constrain `a` alone. The result is cached
+  per sink, so per-row writes pay no extra reflection. Note that a unique index
+  over a nullable column still permits multiple NULLs, so the preflight is not
+  a guarantee of idempotency for nullable keys.
+- **Adds `TableQueueDelivery.complete(values)` (#181):** merges the row
+  write-back and the queue ack into a single transaction, so a crash between
+  sink commit and ack can no longer double-write rows or lose the completion.
+  Implemented once in `onestep_sql._shared.table_queue` for the
+  MySQL/PostgreSQL/SQLite deliveries; core support lands in `onestep` 1.13.0.
+- **`onestep check` warns when a table_queue task configures a non-empty
+  `claim` with an empty `nack` (#180)** — a misconfiguration whose every
+  failure path no-ops, leaving failed rows silently stuck in the claimed
+  state. The lint lives in `onestep_sql._shared.table_queue_lint`.
+
 ## onestep-sql 0.4.0
 
 - Adds MySQL tracked execution: `MySQLConnector.execution_backend()`,
