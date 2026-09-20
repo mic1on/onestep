@@ -1459,6 +1459,68 @@ def test_ws_transport_marks_itself_disconnected_after_receive_failure() -> None:
     assert connection.closed is True
 
 
+def test_ws_sender_session_generation_advances_once_per_hello_completed_connect() -> None:
+    """``session_generation`` counts connects that completed hello, nothing else.
+
+    It is the input that decides whether a new session still needs the topology
+    re-armed, so it must advance exactly once per successful connect and must
+    NOT advance when a connect attempt fails before hello completes.
+    """
+
+    @dataclass
+    class FailingThenWorkingTransport:
+        connected: bool = False
+        connect_calls: int = 0
+        fail_remaining: int = 0
+
+        async def connect(self, *, service: dict[str, object], runtime: dict[str, object]) -> None:
+            self.connect_calls += 1
+            if self.fail_remaining > 0:
+                self.fail_remaining -= 1
+                raise RuntimeError("handshake failed")
+            self.connected = True
+
+        async def send_telemetry(self, channel: str, body: dict[str, object]) -> None:
+            return None
+
+        async def close(self) -> None:
+            self.connected = False
+
+    transport = FailingThenWorkingTransport(fail_remaining=2)
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    sender._service_descriptor = {"name": "billing-sync"}
+    sender._runtime_descriptor = {"onestep_version": "1.0.0"}
+
+    async def scenario() -> None:
+        assert sender.session_generation == 0, "starts with no session established"
+
+        # Failed connect attempts must not advance the counter: no hello
+        # completed, so no session was established.
+        assert await sender._ensure_connected_in_background() is False
+        assert await sender._ensure_connected_in_background() is False
+        assert sender.session_generation == 0
+        assert transport.connect_calls == 2
+
+        # The first connect that completes hello advances it to 1.
+        assert await sender._ensure_connected_in_background() is True
+        assert sender.session_generation == 1
+
+        # Reconnecting advances by exactly one per new session.
+        transport.connected = False
+        assert await sender._ensure_connected_in_background() is True
+        assert sender.session_generation == 2
+        transport.connected = False
+        assert await sender._ensure_connected_in_background() is True
+        assert sender.session_generation == 3
+
+        # An already-connected sender does not advance: no new session.
+        assert await sender._ensure_connected_in_background() is True
+        assert sender.session_generation == 3
+        assert transport.connect_calls == 5
+
+    asyncio.run(scenario())
+
+
 def test_ws_sender_reconnects_and_retries_current_payload_after_send_failure() -> None:
     @dataclass
     class FlakyTransport:
