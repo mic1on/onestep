@@ -1256,22 +1256,30 @@ def test_clean_close_reconnects_from_base_backoff(tmp_path, monkeypatch) -> None
                 config=_config(tmp_path),
                 identity=_identity(),
                 supervisor=FakeSupervisor(),
-                rng=_UpperBoundRng(),
+                rng=_MidRangeRng(),  # draws 0.75 * budget, strictly inside the range
             ),
             until=lambda: len(delays) >= 4,
         )
     )
     assert sessions["n"] >= 4, sessions
-    # The two failing sessions escalate the budget: 1.0 then 2.0.
+    # The two failing sessions escalate the budget: 1.0 then 2.0. _MidRangeRng
+    # draws 0.75 of each range, so these are the drawn values, not the raw budget.
     assert delays[:2] == [
-        client_module._BASE_BACKOFF_SECONDS,
-        client_module._BASE_BACKOFF_SECONDS * 2,
+        client_module._BASE_BACKOFF_SECONDS * 0.75,
+        client_module._BASE_BACKOFF_SECONDS * 2 * 0.75,
     ], delays
     # Every clean close after that must drop back to the BASE budget instead of
     # keeping the escalated 4.0. This is the assertion that fails if the
     # clean-close reset is lost.
-    assert delays[2:] == [client_module._BASE_BACKOFF_SECONDS] * 2, (
-        f"clean close kept the escalated budget: {delays}"
+    #
+    # The expected value is 0.75 * base rather than the base itself. With
+    # _UpperBoundRng the drawn value EQUALS the budget, so a clean close that
+    # discarded the jitter draw entirely would still produce an identical number
+    # and this test could not tell them apart. Drawing strictly inside the range
+    # makes the jittered value distinguishable from the raw budget, so this
+    # assertion also fails if jitter is dropped from the clean-close branch.
+    assert delays[2:] == [client_module._BASE_BACKOFF_SECONDS * 0.75] * 2, (
+        f"clean close did not use the jittered base budget: {delays}"
     )
     assert diagnostics == [], f"unretrieved errors: {diagnostics}"
 
