@@ -5,6 +5,8 @@ from unittest import mock
 
 import pytest
 import sqlalchemy as sa
+from onestep.envelope import Envelope
+from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
 from onestep_mysql import MySQLConnector
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -496,6 +498,75 @@ def test_mysql_table_queue_complete_midtransaction_failure_rolls_back_live():
 
         await db.close()
         metadata.drop_all(engine)
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_upsert_without_unique_index_fails_live():
+    """The issue #188 silent-degradation guard, on a real server.
+
+    ``ON DUPLICATE KEY UPDATE`` declares no conflict target: with only a plain
+    index on the declared keys, every run inserted fresh duplicates and nothing
+    reported an error. The preflight must now refuse the write outright, and a
+    correctly-configured table must stay idempotent.
+    """
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        plain_table = f"sale_device_{suffix}"
+        unique_table = f"sale_device_uq_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            # ceegic-sync shape: a *plain* index on device_key.
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {plain_table} "
+                    "(device_key VARCHAR(64), payload VARCHAR(64), "
+                    "INDEX idx_device_key (device_key))"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {unique_table} "
+                    "(device_key VARCHAR(64), payload VARCHAR(64), "
+                    "UNIQUE KEY uq_device_key (device_key))"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+
+        bad_sink = db.table_sink(
+            table=plain_table, mode="upsert", keys=("device_key",), update_columns=("payload",)
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await bad_sink.send(Envelope(body={"device_key": "k1", "payload": "p1"}))
+        assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+        assert plain_table in str(excinfo.value)
+        assert "idx_device_key" in str(excinfo.value)
+
+        # The refusal happens before any write: no duplicate row was created.
+        with engine.connect() as conn:
+            assert conn.execute(sa.text(f"SELECT COUNT(*) FROM {plain_table}")).scalar() == 0
+
+        good_sink = db.table_sink(
+            table=unique_table, mode="upsert", keys=("device_key",), update_columns=("payload",)
+        )
+        for _ in range(3):
+            await good_sink.send(Envelope(body={"device_key": "k1", "payload": "p1"}))
+
+        with engine.connect() as conn:
+            rows = conn.execute(sa.text(f"SELECT COUNT(*) FROM {unique_table}")).scalar()
+            distinct = conn.execute(
+                sa.text(f"SELECT COUNT(DISTINCT device_key) FROM {unique_table}")
+            ).scalar()
+        assert (rows, distinct) == (1, 1)
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {plain_table}"))
+            conn.execute(sa.text(f"DROP TABLE {unique_table}"))
+        await db.close()
         engine.dispose()
 
     asyncio.run(scenario())
