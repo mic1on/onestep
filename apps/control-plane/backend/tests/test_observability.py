@@ -32,6 +32,18 @@ INGEST_TOKEN_VALUE = "super-secret-ingest-token-value"
 AUTHORIZATION_VALUE = "Bearer super-secret-ingest-token-value"
 MESSAGE_BODY_VALUE = "private-agent-message-body"
 
+#: The only pool labels production code may use. A pool name is a metric label,
+#: so this set must stay small: adding an entry is allowed but should be a
+#: deliberate decision, not something that happens per connection or per worker.
+BOUNDED_POOL_LABELS: frozenset[str] = frozenset({"async", "default"})
+
+#: Shape of a ``uuid4()`` string. Any label matching this is per-object data and
+#: therefore unbounded cardinality.
+UUID4_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+
 
 @pytest.fixture(autouse=True)
 def _reset_observability() -> None:
@@ -965,6 +977,84 @@ def test_scan_wiring_uses_the_registered_bounded_scan_name() -> None:
     # Not an identity: no instance or session id can reach a label.
     assert IDENTITY_INSTANCE_ID not in scanner.SCAN_METRIC_NAME
     assert IDENTITY_SESSION_ID not in scanner.SCAN_METRIC_NAME
+
+
+def test_scanner_pool_label_is_bounded_not_an_identity() -> None:
+    """The pool label must be a small constant, never a per-connection value.
+
+    This mirrors ``test_scan_wiring_uses_the_registered_bounded_scan_name`` for
+    the pool dimension. A pool name is a metric label, so anything unbounded
+    here (an instance id, a session id, a uuid) would create a new Prometheus
+    series per connection or per worker — exactly the unbounded-cardinality
+    failure #197 warns about.
+
+    Why the assertions look redundant: ``obs._normalize_pool_name`` would
+    silently collapse a malformed name to ``"unnamed"``, so a test that only
+    inspects the *exported* label would still pass with a uuid in the constant.
+    Asserting on the constant itself is what makes the check discriminating —
+    mutation M3 (swap the constant for ``str(uuid4())``) fails here.
+    """
+
+    import importlib
+
+    scanner = importlib.import_module(SCANNER_MODULE)
+    pool_label = scanner.DEFAULT_POOL_METRIC_NAME
+
+    # 1. It is a string at all.
+    assert isinstance(pool_label, str), f"pool label is {type(pool_label).__name__}, not str"
+
+    # 2. It is one of a small, conscious set of pool labels. Adding a pool is
+    #    allowed but must be a deliberate edit here, not an accident.
+    assert pool_label in BOUNDED_POOL_LABELS, (
+        f"pool label {pool_label!r} is not in the bounded allowlist "
+        f"{sorted(BOUNDED_POOL_LABELS)}"
+    )
+
+    # 3. No identity value can reach a label.
+    assert IDENTITY_INSTANCE_ID not in pool_label
+    assert IDENTITY_SESSION_ID not in pool_label
+
+    # 4. It is not uuid4-shaped (the specific thing mutation M3 introduces).
+    assert not UUID4_PATTERN.search(pool_label), (
+        f"pool label {pool_label!r} looks like a uuid; that would be unbounded cardinality"
+    )
+
+    # 5. The module accepts it as-is rather than collapsing it to "unnamed":
+    #    a label that only *looks* bounded because it got discarded is not safe.
+    assert obs._normalize_pool_name(pool_label) == pool_label
+
+
+def test_instrument_async_engine_passes_the_bounded_pool_label(monkeypatch) -> None:
+    """``_instrument_async_engine`` must forward that same bounded constant.
+
+    Guards the wiring, not just the constant: a future edit could keep the
+    constant bounded but pass something else (say ``str(instance_id)``) at the
+    call site, and only this test would notice.
+    """
+
+    import importlib
+
+    scanner = importlib.import_module(SCANNER_MODULE)
+
+    captured: dict[str, object] = {}
+
+    def fake_ensure(bind, *, name):
+        captured["name"] = name
+        return True
+
+    monkeypatch.setattr(scanner, "ensure_engine_instrumented", fake_ensure)
+    monkeypatch.setattr(scanner, "get_async_engine", lambda: object())
+
+    assert scanner._instrument_async_engine() is True
+
+    passed = captured["name"]
+    assert passed == scanner.DEFAULT_POOL_METRIC_NAME
+    # And the value actually handed over obeys the same boundedness rules.
+    assert isinstance(passed, str)
+    assert passed in BOUNDED_POOL_LABELS
+    assert not UUID4_PATTERN.search(passed)
+    assert IDENTITY_INSTANCE_ID not in passed
+    assert IDENTITY_SESSION_ID not in passed
 
 
 def test_ws_wiring_module_does_not_log_the_auth_token() -> None:
