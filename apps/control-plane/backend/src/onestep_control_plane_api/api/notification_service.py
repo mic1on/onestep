@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -88,38 +89,17 @@ INSTANCE_CONNECTIVITY_EVENT_TYPES = frozenset({"instance_online", "instance_offl
 # part of confirm_after_s that outlives it (confirmation), bounded above by
 # 2 x instance_offline_after_s because confirmation is clamped.
 #
+# Parameter coupling that must hold for damping to ever engage: the SHORTEST real
+# gap between two confirmed flips is (offline detection + confirmation) =
+# instance_offline_after_s + _connectivity_confirm_after_s(). If the flap window is
+# not at least that long, every consecutive flip arrives after the previous episode
+# has already gone quiet, so each flip starts a fresh episode and the suppressed
+# count stays zero forever. The default therefore derives the window as 2x that
+# sum; see `_connectivity_flap_window_s`.
+#
 # Explicitly NOT claimed: exactly-once delivery, and no claim that a suppressed
 # flip "did not happen" -- the summary states the count, so silence never reads as
 # health.
-# --------------------------------------------------------------------------------------
-
-# --------------------------------------------------------------------------------------
-# Issue #196 -- stable confirmation and flapping damping for connectivity flips.
-#
-# A raw connectivity observation is a *sample*, not a fact: a host that misses one
-# heartbeat looks offline and looks fine a moment later. Notifying every sample
-# produces a storm; suppressing everything hides real outages. Two independent
-# mechanisms resolve this, both persisted on NotificationInstanceState so they
-# survive a restart or a leader switch:
-#
-#   1. STABLE CONFIRMATION -- a flip is notified only once the new connectivity
-#      has held for `instance_connectivity_confirm_after_s`, measured from the
-#      flip's own transition_at (offline: last_seen_at + instance_offline_after_s)
-#      rather than from the scan that noticed it. A flip that heals inside the
-#      window is cancelled and never notified.
-#   2. FLAP DAMPING -- a run of confirmed flips closer together than
-#      `instance_connectivity_flap_window_s` is one episode. The first
-#      `instance_connectivity_flap_max_notifications` flips are notified; later
-#      ones are counted, not sent; one summary reports the suppressed count when
-#      the episode goes quiet.
-#
-# Alert delay for a sustained outage: instance_offline_after_s (detection) plus
-# the part of confirm_after_s that outlives it (confirmation), bounded above by
-# 2 x instance_offline_after_s because confirmation is clamped.
-#
-# Explicitly NOT claimed: exactly-once delivery, and no claim that a suppressed
-# flip "did not happen" -- the summary states the count, so silence never reads
-# as health.
 # --------------------------------------------------------------------------------------
 
 
@@ -360,9 +340,22 @@ def _connectivity_confirm_after_s() -> int:
 
 
 def _connectivity_flap_window_s() -> int:
-    """Flap episode window. Defaults to, and is derived from, the offline window."""
+    """Flap episode window, with a floor derived from the detection mechanics.
 
-    return settings.instance_connectivity_flap_window_s
+    Two confirmed flips can never be closer together than the shortest real
+    offline leg: an offline observation only exists after
+    ``instance_offline_after_s`` of silence, and only notifies after the
+    confirmation window on top of that. A window below that sum makes damping
+    UNREACHABLE with the default parameters -- each flip arrives after the
+    previous episode has already gone quiet, so every flip starts a fresh
+    episode and the suppressed count stays zero forever. The floor enforces the
+    constraint ``flap_window_s >= 2 x (offline_after + confirm_after)`` (2x for
+    headroom), so consecutive flips always land inside one episode.
+    """
+
+    configured = settings.instance_connectivity_flap_window_s
+    floor = 2 * (settings.instance_offline_after_s + _connectivity_confirm_after_s())
+    return max(configured, floor)
 
 
 def _pending_flip_is_confirmed(
@@ -391,25 +384,31 @@ def _build_flap_summary_event(
     instance: Instance,
     *,
     service: Service,
+    final_connectivity: str,
     suppressed_count: int,
+    episode_flips: int,
     episode_started_at: datetime,
     episode_last_flip_at: datetime,
     now: datetime,
 ) -> NotificationEventRecord:
     """One summary for a flapping episode whose later flips were suppressed.
 
-    Rides `instance_online` so it reaches the channels already opted into
-    connectivity notifications, and states the suppressed count explicitly. It is
-    a comment on the episode, never a health claim: a sustained offline is
-    reported separately, so a real outage is never summarised as recovered.
+    The event type reflects the episode's FINAL state, never a fixed one: the
+    summary must not disagree with the last notified fact. If the instance is
+    still offline when the episode quiets, an ``instance_online`` (green
+    "recovered") card would tell the operator the opposite of the truth, so the
+    final offline state renders as ``instance_offline``; a final online state
+    renders as ``instance_online``. Either way it states the suppressed count
+    explicitly: it is a comment on the episode, never a health claim.
     """
 
+    event_type = "instance_online" if final_connectivity == "online" else "instance_offline"
     return NotificationEventRecord(
-        event_type="instance_online",
+        event_type=event_type,
         service_name=service.name,
         service_environment=service.environment,
         task_name=None,
-        occurred_at=episode_started_at,
+        occurred_at=episode_last_flip_at,
         instance_id=str(instance.instance_id),
         node_name=instance.node_name,
         last_seen_at=instance.last_seen_at,
@@ -421,7 +420,62 @@ def _build_flap_summary_event(
         suppressed_flip_count=suppressed_count,
         flap_episode_started_at=episode_started_at,
         flap_episode_last_flip_at=episode_last_flip_at,
+        flap_episode_flips=episode_flips,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _FlapEpisodeSnapshot:
+    """Episode bookkeeping captured BEFORE the counters are reset.
+
+    The summary must carry the suppressed count and episode bounds, so they are
+    read out first and the reset happens afterwards -- never the other way
+    round, which would summarise a blank episode.
+    """
+
+    suppressed_count: int
+    episode_flips: int
+    started_at: datetime
+    last_flip_at: datetime
+    final_connectivity: str
+
+
+def _snapshot_flap_episode(
+    state: NotificationInstanceState,
+    *,
+    now: datetime,
+) -> _FlapEpisodeSnapshot | None:
+    """Capture and clear an episode that just went quiet.
+
+    Returns None when there was no quiet episode (or it owed no summary, i.e.
+    nothing had been suppressed). The snapshot is taken before any counter is
+    mutated, so the summary never renders zeroed-out state.
+    """
+
+    last_flip_at = state.flap_episode_last_flip_at
+    if last_flip_at is None:
+        return None
+    if _flap_episode_is_open(
+        last_flip_at=as_utc_datetime(last_flip_at),
+        now=now,
+        flap_window_s=_connectivity_flap_window_s(),
+    ):
+        return None
+    suppressed_count = int(state.flap_suppressed_count or 0)
+    if suppressed_count <= 0:
+        # Nothing was withheld, so there is nothing to summarise; still close
+        # the episode so a fresh one can start.
+        _close_flap_episode(state)
+        return None
+    snapshot = _FlapEpisodeSnapshot(
+        suppressed_count=suppressed_count,
+        episode_flips=int(state.flap_episode_flips or 0),
+        started_at=as_utc_datetime(state.flap_episode_started_at or last_flip_at),
+        last_flip_at=as_utc_datetime(last_flip_at),
+        final_connectivity=state.last_connectivity,
+    )
+    _close_flap_episode(state)
+    return snapshot
 
 
 def _emit_flap_summary(
@@ -430,17 +484,26 @@ def _emit_flap_summary(
     channel: NotificationChannel,
     instance: Instance,
     service: Service,
-    state: NotificationInstanceState,
+    snapshot: _FlapEpisodeSnapshot,
     now: datetime,
 ) -> list[tuple[NotificationDelivery, str]]:
     """Emit the single summary for a flapping episode that just went quiet."""
 
+    summary_event_type = (
+        "instance_online" if snapshot.final_connectivity == "online" else "instance_offline"
+    )
+    if summary_event_type not in channel.event_types_json:
+        # Channel not subscribed to the episode's final event type: skip rather
+        # than mislabel the summary so it can sneak through a different filter.
+        return []
     summary = _build_flap_summary_event(
         instance,
         service=service,
-        suppressed_count=int(state.flap_suppressed_count or 0),
-        episode_started_at=as_utc_datetime(state.flap_episode_started_at or now),
-        episode_last_flip_at=as_utc_datetime(state.flap_episode_last_flip_at or now),
+        final_connectivity=snapshot.final_connectivity,
+        suppressed_count=snapshot.suppressed_count,
+        episode_flips=snapshot.episode_flips,
+        episode_started_at=snapshot.started_at,
+        episode_last_flip_at=snapshot.last_flip_at,
         now=now,
     )
     delivery = _persist_pending_delivery(
@@ -452,7 +515,7 @@ def _emit_flap_summary(
             service_name=service.name,
             service_environment=service.environment,
             instance_id=str(instance.instance_id),
-            event_type="instance_online",
+            event_type=summary_event_type,
             occurred_at=summary.occurred_at,
         ),
         task_event_id=None,
@@ -477,30 +540,6 @@ def _close_flap_episode(state: NotificationInstanceState) -> None:
     state.flap_episode_last_flip_at = None
     state.flap_episode_flips = 0
     state.flap_suppressed_count = 0
-
-
-def _close_flap_episode_if_quiet(state: NotificationInstanceState, *, now: datetime) -> bool:
-    """Close the episode once no confirmed flip has arrived within the window.
-
-    Returns True when an episode was closed that still owed a summary, i.e. it had
-    suppressed flips the operator never heard about. Closing on quietness (not on
-    a timer) is what keeps this restart-safe: state is persisted on the row, so a
-    leader switch neither replays a storm nor permanently suppresses the next
-    genuine failure.
-    """
-
-    last_flip_at = state.flap_episode_last_flip_at
-    if last_flip_at is None:
-        return False
-    if _flap_episode_is_open(
-        last_flip_at=as_utc_datetime(last_flip_at),
-        now=now,
-        flap_window_s=_connectivity_flap_window_s(),
-    ):
-        return False
-    owed = int(state.flap_suppressed_count or 0) > 0
-    _close_flap_episode(state)
-    return owed
 
 
 def _service_matches_channel(
@@ -1364,27 +1403,20 @@ def _scan_and_dispatch_instance_connectivity_notifications_sync(
                     # A candidate flip healed inside the window: cancel it. This
                     # is what makes a transient drop invisible instead of noisy.
                     _reset_pending_flip(state)
-                    if _close_flap_episode_if_quiet(state, now=current_time):
-                        pending_deliveries.extend(
-                            _emit_flap_summary(
-                                db,
-                                channel=channel,
-                                instance=instance,
-                                service=service,
-                                state=state,
-                                now=current_time,
-                            )
-                        )
-                elif _close_flap_episode_if_quiet(state, now=current_time):
-                    # A quiet scan also ends a flapping episode that went silent,
-                    # so damping cannot outlive the flapping it was damping.
+                snapshot = _snapshot_flap_episode(state, now=current_time)
+                if snapshot is not None:
+                    # A quiet scan ends a flapping episode that went silent, so
+                    # damping cannot outlive the flapping it was damping. The
+                    # snapshot was captured before the counters were reset, so
+                    # the summary still carries the suppressed count and the
+                    # episode's final (possibly offline) state.
                     pending_deliveries.extend(
                         _emit_flap_summary(
                             db,
                             channel=channel,
                             instance=instance,
                             service=service,
-                            state=state,
+                            snapshot=snapshot,
                             now=current_time,
                         )
                     )

@@ -9,9 +9,16 @@ State machine under test (per channel x instance), with DEFAULT settings
   its own ``transition_at`` (offline = ``last_seen_at + 90``, online =
   ``last_seen_at``);
 * a flip that heals inside that window is CANCELLED and never notified;
-* a run of confirmed flips closer together than ``flap_window_s`` (90 s) is one
+* a run of confirmed flips closer together than ``flap_window_s`` is one
   FLAP EPISODE: the first ``flap_max_notifications`` (3) are notified, later ones
   are suppressed but counted, and ONE summary is emitted when the episode quiets.
+  The summary reflects the episode's FINAL state (offline stays red), never a
+  hardcoded "online".
+
+The effective flap window is floored at 2 x (offline_after + confirm_after)
+= 240 s with defaults: two confirmed flips can never be closer than 120 s, so a
+smaller window would close every episode before the next flip and damping could
+never engage (defect-2 regression: test_default_parameters_*).
 
 Every test drives the scan with an explicit ``now=`` (controlled clock). None of
 them sleep on wall time.
@@ -42,7 +49,11 @@ from test_notification_service import seed_channel, seed_runtime_service
 BASE = datetime(2026, 4, 30, 2, 0, 0, tzinfo=UTC)
 OFFLINE_AFTER = settings.instance_offline_after_s  # 90
 CONFIRM_AFTER = settings.instance_connectivity_confirm_after_s  # 30
-FLAP_WINDOW = settings.instance_connectivity_flap_window_s  # 90
+# Effective episode window: max(configured, 2 x (OFFLINE_AFTER + CONFIRM_AFTER)).
+FLAP_WINDOW = max(
+    settings.instance_connectivity_flap_window_s,
+    2 * (OFFLINE_AFTER + CONFIRM_AFTER),
+)
 FLAP_MAX = settings.instance_connectivity_flap_max_notifications  # 3
 
 
@@ -106,23 +117,19 @@ def go_online_confirmed(db_session: Session, instance, *, last_seen_at: float):
 
 
 def flap_once(db_session: Session, instance, *, last_seen_at: float) -> tuple[int, float]:
-    """One offline->online flip pair whose flips are CLOSER than flap_window_s.
+    """One offline->online flip pair whose flips are CLOSER than the episode window.
 
-    Offline confirms at ``last_seen + 90 + 30 = +120``. For the online flip to be
-    confirmed and still land inside the 90 s flap window, the online check-in is
-    placed at ``+100`` (before the offline flip confirms, so it stays pending)
-    and confirmed at ``+130`` -- only 10 s after the offline flip. The next
-    offline leg then confirms at ``+190``, i.e. 60 s later, so every consecutive
-    confirmed flip is < 90 s apart and the whole run is ONE episode.
+    Offline confirms at ``last_seen + 90 + 30 = +120``. The instance checks in at
+    ``+110`` (before that), so the online candidate is confirmed at ``+140`` --
+    only 20 s after the offline flip, with the online transition_at at +110.
+    The next offline leg then confirms at ``+230`` (silence from +110), i.e.
+    90 s later -- every consecutive confirmed flip is inside the (floored)
+    240 s episode window, so the whole run is ONE episode.
 
     Returns (notifications, new_last_seen_offset).
     """
 
     notified = go_offline_confirmed(db_session, instance, last_seen_at=last_seen_at)
-    # Check in at +110 (10 s after the offline flip confirmed at +120 -> no, that
-    # is BEFORE: use +110 so the offline flip confirms at +120 first, then the
-    # online candidate is confirmed 30 s after this check-in, i.e. at +170,
-    # exactly 50 s after the offline flip -> well inside the 90 s window).
     online_seen = last_seen_at + OFFLINE_AFTER + 20
     seen(db_session, instance, online_seen)
     notified += scan(db_session, online_seen + CONFIRM_AFTER)
@@ -238,11 +245,6 @@ def test_flapping_is_rate_limited(db_session, monkeypatch) -> None:
 
     silence_webhooks(monkeypatch)
     instance = seed(db_session)
-    # A confirmed offline flip inherently takes 90 s of silence, so consecutive
-    # flips are ~90 s apart. Widen the flap window to 150 s so this run is ONE
-    # episode -- otherwise each flip correctly starts a fresh episode and nothing
-    # is damped (which is the documented behaviour, not the property under test).
-    monkeypatch.setattr(settings, "instance_connectivity_flap_window_s", 150)
     assert scan(db_session, 0) == 0
 
     flip_at = 0.0
@@ -271,7 +273,6 @@ def test_flap_summary_reports_the_suppressed_count(db_session, monkeypatch) -> N
 
     silence_webhooks(monkeypatch)
     instance = seed(db_session)
-    monkeypatch.setattr(settings, "instance_connectivity_flap_window_s", 180)
     assert scan(db_session, 0) == 0
 
     flip_at = 0.0
@@ -281,8 +282,8 @@ def test_flap_summary_reports_the_suppressed_count(db_session, monkeypatch) -> N
     state = state_of(db_session)
     assert int(state.flap_suppressed_count or 0) > 0, "no flip was suppressed"
 
-    # Let the episode go quiet: no flip for a full (widened) flap window.
-    quiet_at = flip_at + 180 + 60
+    # Let the episode go quiet: no flip for a full (floored) episode window.
+    quiet_at = flip_at + FLAP_WINDOW + 60
     seen(db_session, instance, quiet_at - 10)
     before_quiet = len(deliveries(db_session))
     scan(db_session, quiet_at)
@@ -359,7 +360,6 @@ def test_leader_switch_does_not_permanently_suppress_a_sustained_failure(
 
     silence_webhooks(monkeypatch)
     instance = seed(db_session)
-    monkeypatch.setattr(settings, "instance_connectivity_flap_window_s", 150)
     assert scan(db_session, 0) == 0
 
     flip_at = 0.0
@@ -424,3 +424,231 @@ def test_confirmation_window_is_clamped_to_the_offline_window(
 
     # Clamped to instance_offline_after_s (90): alerts by 90 + 90 = 180.
     assert scan(db_session, 180) == 1
+
+
+# --------------------------------------------------------------------------------------
+# 7. Defect regressions (post-review fixes)
+# --------------------------------------------------------------------------------------
+
+
+def test_flap_summary_reflects_final_offline_state(db_session, monkeypatch) -> None:
+    """A damped episode ending OFFLINE must summarise as offline, never online.
+
+    Defect-1 regression: the summary used to hardcode ``instance_online``, so a
+    host that ended the episode offline (and stayed offline) was announced with
+    a green "recovered" card -- the exact opposite of the truth.
+    """
+
+    silence_webhooks(monkeypatch)
+    instance = seed(db_session)
+    assert scan(db_session, 0) == 0
+
+    # Flap until damping engages, then END THE EPISODE OFFLINE and stay there.
+    flip_at = 0.0
+    for _ in range(4):
+        _, flip_at = flap_once(db_session, instance, last_seen_at=flip_at)
+    assert int(state_of(db_session).flap_suppressed_count or 0) > 0
+
+    # The last flip pair left the instance online (last_seen at flip_at). Now it
+    # goes offline again -- a damped flip inside the same episode -- and stays
+    # offline until the episode quiets.
+    assert go_offline_confirmed(db_session, instance, last_seen_at=flip_at) == 0, (
+        "the final offline flip must be suppressed, not notified"
+    )
+    state = state_of(db_session)
+    assert state.last_connectivity == "offline"
+    final_last_flip = state.flap_episode_last_flip_at
+    assert final_last_flip is not None
+    final_last_flip_offset = float(
+        final_last_flip.timestamp() - at(0).timestamp()
+    )
+
+    # Silence past the episode window: the summary fires while still offline.
+    # (No heartbeat in between -- the instance is DOWN, and it must stay down so
+    # the final state at summary time is offline.)
+    quiet_at = final_last_flip_offset + FLAP_WINDOW + 60
+    before_quiet = len(deliveries(db_session))
+    assert scan(db_session, quiet_at) == 1
+
+    rows = deliveries(db_session)
+    summary = rows[-1]
+    assert len(rows) == before_quiet + 1
+    # THE FIX: the summary carries the episode's final (offline) semantics --
+    # red card, offline rendering -- never a green instance_online card.
+    assert summary.event_type == "instance_offline", (
+        "a damped episode that ended offline must summarise as offline"
+    )
+    # The summary must carry the REAL counters, not zeroed bookkeeping
+    # (defect-1's second half: state used to be reset before it was read).
+    assert state_of(db_session).flap_suppressed_count == 0, "episode closed after summary"
+    payload = summary.request_payload_json
+    assert payload is not None
+    rendered = payload["card"]["header"]["title"]["content"]
+    assert "[实例下线]" in rendered, f"summary must render offline semantics: {rendered}"
+
+
+def test_flap_summary_final_online_state_reports_online(db_session, monkeypatch) -> None:
+    """A damped episode ending ONLINE still summarises as online (unchanged)."""
+
+    silence_webhooks(monkeypatch)
+    instance = seed(db_session)
+    assert scan(db_session, 0) == 0
+
+    flip_at = 0.0
+    for _ in range(4):
+        _, flip_at = flap_once(db_session, instance, last_seen_at=flip_at)
+    assert int(state_of(db_session).flap_suppressed_count or 0) > 0
+
+    # Instance stays online: keep the heartbeat fresh past the offline cutoff
+    # while the episode quiets, so the final state at summary time is online.
+    quiet_at = flip_at + FLAP_WINDOW + 60
+    seen(db_session, instance, quiet_at - 10)
+    before_quiet = len(deliveries(db_session))
+    assert scan(db_session, quiet_at) == 1
+
+    summary = deliveries(db_session)[-1]
+    assert len(deliveries(db_session)) == before_quiet + 1
+    assert summary.event_type == "instance_online"
+    payload = summary.request_payload_json
+    assert payload is not None
+    # The online summary must state the withheld count, not read as all-clear.
+    detail_content = payload["card"]["body"]["elements"][0]["content"]
+    assert "抖动抑制" in detail_content
+    rendered_suppressed = detail_content.split("已静默 ")[1].split(" ")[0]
+    assert int(rendered_suppressed) > 0
+
+
+def test_flap_summary_respects_channel_subscription(db_session, monkeypatch) -> None:
+    """A channel subscribed only to ``instance_offline`` gets no online summary.
+
+    The old fixed ``instance_online`` summary leaked into offline-only channels;
+    the final-state summary must pass the same event-type filter as any other
+    connectivity notification.
+    """
+
+    silence_webhooks(monkeypatch)
+    instance = seed(db_session, event_types=["instance_offline"])
+    assert scan(db_session, 0) == 0
+
+    flip_at = 0.0
+    for _ in range(4):
+        _, flip_at = flap_once(db_session, instance, last_seen_at=flip_at)
+    assert int(state_of(db_session).flap_suppressed_count or 0) > 0
+
+    # Episode quiets while ONLINE on an offline-only channel: no summary at all
+    # (a relabelled summary would be a filter bypass). Keep the heartbeat fresh
+    # so the final state really is online.
+    quiet_at = flip_at + FLAP_WINDOW + 60
+    seen(db_session, instance, quiet_at - 10)
+    assert scan(db_session, quiet_at) == 0
+    types = [row.event_type for row in deliveries(db_session)]
+    assert "instance_online" not in types
+
+    # And a later episode that quiets OFFLINE on this channel still summarises.
+    flip_at = quiet_at
+    for _ in range(4):
+        _, flip_at = flap_once(db_session, instance, last_seen_at=flip_at)
+    assert int(state_of(db_session).flap_suppressed_count or 0) > 0
+    assert go_offline_confirmed(db_session, instance, last_seen_at=flip_at) == 0
+    final_last_flip = state_of(db_session).flap_episode_last_flip_at
+    assert final_last_flip is not None
+    final_last_flip_offset = float(
+        final_last_flip.timestamp() - at(0).timestamp()
+    )
+    quiet_at = final_last_flip_offset + FLAP_WINDOW + 60
+    assert scan(db_session, quiet_at) == 1
+    assert deliveries(db_session)[-1].event_type == "instance_offline"
+
+
+def test_flap_window_floor_derives_from_detection_and_confirmation(
+    db_session, monkeypatch
+) -> None:
+    """The effective window never drops below 2 x (offline_after + confirm_after).
+
+    Guards the invariant the default now bakes in, even if an operator sets a
+    too-small value (or shrinks the other windows and expects the floor to
+    follow).
+    """
+
+    from onestep_control_plane_api.api.notification_service import _connectivity_flap_window_s
+
+    original_offline = settings.instance_offline_after_s
+    original_confirm = settings.instance_connectivity_confirm_after_s
+    try:
+        monkeypatch.setattr(settings, "instance_connectivity_flap_window_s", 1)
+        # Defaults: floor = 2 x (90 + 30) = 240.
+        assert _connectivity_flap_window_s() == 240
+
+        monkeypatch.setattr(settings, "instance_offline_after_s", 60)
+        monkeypatch.setattr(settings, "instance_connectivity_confirm_after_s", 15)
+        assert _connectivity_flap_window_s() == 2 * (60 + 15)
+
+        # A configured value above the floor is honoured as-is.
+        monkeypatch.setattr(settings, "instance_connectivity_flap_window_s", 10_000)
+        assert _connectivity_flap_window_s() == 10_000
+    finally:
+        settings.instance_offline_after_s = original_offline
+        settings.instance_connectivity_confirm_after_s = original_confirm
+
+
+def test_default_parameters_damp_realistic_flapping(db_session, monkeypatch) -> None:
+    """Defect-2 regression: DEFAULTS damp flapping at realistic cadences.
+
+    The old default window (90 s) was shorter than the shortest possible gap
+    between two confirmed flips (offline detection 90 s + confirmation 30 s),
+    so every flip opened a fresh episode and the suppressed count stayed zero
+    forever -- five reviewer-simulated flips produced five notifications. With
+    monotonic time and realistic scan/heartbeat spacing, the suppressed count
+    must now climb past the threshold.
+    """
+
+    silence_webhooks(monkeypatch)
+    instance = seed(db_session)
+    assert scan(db_session, 0) == 0
+
+    # Heartbeat every 10 s; notification scanner every 30 s; all clocks advance
+    # monotonically. Each leg: go silent ~100 s (detection at +90, confirmed at
+    # +120, found by the scan at the next tick), then check in again and let
+    # the recovery confirm 30 s later. Two confirmed flips per leg are ~110 s
+    # apart -- closer than the floored 240 s window, so this is ONE episode.
+    heartbeat = 10.0
+    scanner = 30.0
+
+    def next_scan(t: float) -> float:
+        return (int(t / scanner) + 1) * scanner
+
+    now = 0.0
+    notified_flips = 0
+    episode_flips_seen = 0
+    for _ in range(5):
+        # --- offline leg ---------------------------------------------------
+        last_heartbeat = now
+        while now < last_heartbeat + OFFLINE_AFTER + CONFIRM_AFTER + heartbeat:
+            now += heartbeat
+        scan_at = next_scan(now)
+        now = scan_at
+        notified_flips += scan(db_session, now)
+        state = state_of(db_session)
+        episode_flips_seen = int(state.flap_episode_flips or 0)
+        # --- recovery ------------------------------------------------------
+        recovery_seen = now + heartbeat
+        seen(db_session, instance, recovery_seen)
+        now = next_scan(recovery_seen + CONFIRM_AFTER)
+        notified_flips += scan(db_session, now)
+        episode_flips_seen = max(
+            episode_flips_seen,
+            int(state_of(db_session).flap_episode_flips or 0),
+        )
+
+    assert episode_flips_seen > 1, (
+        "realistic flipping must accumulate inside ONE episode; "
+        "a fresh episode per flip means damping can never engage"
+    )
+    state = state_of(db_session)
+    assert int(state.flap_suppressed_count or 0) >= 1, (
+        "with default parameters the suppressed count must reach the threshold"
+    )
+    assert notified_flips <= FLAP_MAX, (
+        f"five realistic flip pairs must be damped to <= {FLAP_MAX} notifications, "
+        f"got {notified_flips}"
+    )

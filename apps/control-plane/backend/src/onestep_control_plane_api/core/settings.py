@@ -29,10 +29,17 @@ class Settings(BaseSettings):
     # accepts.
     instance_connectivity_confirm_after_s: int = Field(default=30, ge=0)
     # Flap episode window: consecutive confirmed flips closer together than this
-    # belong to one flapping episode. Derived (default equals
-    # instance_offline_after_s): "flapping" means flipping faster than the
-    # offline window, not an arbitrary constant.
-    instance_connectivity_flap_window_s: int = Field(default=90, ge=1)
+    # belong to one flapping episode. CONSTRAINT: two confirmed flips can never
+    # be closer than instance_offline_after_s (an offline observation only
+    # exists after that much silence) plus the confirmation window, so the
+    # effective window is floored at 2 x (instance_offline_after_s +
+    # instance_connectivity_confirm_after_s) at use time -- see
+    # `_connectivity_flap_window_s`. A smaller window would make damping
+    # unreachable: every flip would arrive after the previous episode already
+    # went quiet, so each flip starts a fresh episode and nothing is ever
+    # suppressed. The default already satisfies the floor for the defaults of
+    # the other two settings (2 x (90 + 30) = 240).
+    instance_connectivity_flap_window_s: int = Field(default=240, ge=1)
     # Confirmed flips of one episode that are notified before the rest are
     # suppressed and summarized. Headroom before damping: early flips may be
     # benign, so stay conservative before going quiet.

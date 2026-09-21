@@ -78,6 +78,7 @@ class NotificationEventRecord:
     suppressed_flip_count: int | None = None
     flap_episode_started_at: datetime | None = None
     flap_episode_last_flip_at: datetime | None = None
+    flap_episode_flips: int | None = None
 
 
 def normalize_notification_event_type(raw_value: str) -> NotificationEventType:
@@ -343,6 +344,15 @@ def build_message_lines(event: NotificationEventRecord) -> list[str]:
 
     if event.attempts is not None:
         lines.append(f"尝试次数: {event.attempts}")
+    if is_instance_event_type(event.event_type) and event.suppressed_flip_count is not None:
+        # Flap-episode summary: state plainly what was withheld, so the message
+        # can never read as a routine single flip.
+        lines.append(f"抖动抑制: 已静默 {event.suppressed_flip_count} 次状态翻转")
+        if event.flap_episode_flips is not None:
+            lines.append(f"周期翻转总数: {event.flap_episode_flips}")
+        started_at = format_datetime_for_message(event.flap_episode_started_at)
+        if started_at is not None:
+            lines.append(f"周期开始: {started_at}")
     if event.instance_id is not None and is_instance_event_type(event.event_type):
         pass
     elif event.instance_id is not None:
