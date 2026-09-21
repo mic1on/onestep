@@ -390,6 +390,7 @@ def expire_stale_commands(
     instance_id: UUID | None = None,
     service_id: UUID | None = None,
     as_of: datetime | None = None,
+    commit: bool = True,
 ) -> int:
     as_of = as_of or utcnow()
     filters = [AgentCommand.status.in_(RECONCILABLE_COMMAND_STATUSES)]
@@ -424,7 +425,14 @@ def expire_stale_commands(
         command.updated_at = as_of
         stale_count += 1
 
-    if stale_count:
+    # Commit only when the caller owns the transaction. The synchronous read
+    # paths rely on this default to persist the expiry writes. A caller that
+    # runs inside a larger work unit (the async pending-command listing on the
+    # hello path) passes ``commit=False``: an inner commit there would pin the
+    # newly inserted AgentSession row before the work unit finishes, so a later
+    # failure could no longer roll the session back and an ``active`` session
+    # would leak past every cleanup path.
+    if commit and stale_count:
         db.commit()
     return stale_count
 
@@ -550,10 +558,19 @@ async def list_redeliverable_commands_for_instance_async(
     """List redeliverable commands as plain data on an async session.
 
     Stale-command expiry and the listing run in one work unit so the two agree
-    on which commands are still live. The caller's work unit owns the commit.
+    on which commands are still live. The caller's work unit owns the commit;
+    the inner expiry pass must not commit, or it would pin earlier writes of
+    this work unit (the hello's new AgentSession row) before the unit finished.
     """
 
-    await session.run_sync(lambda db: expire_stale_commands(db, instance_id=instance_id))
+    await session.run_sync(
+        lambda db: expire_stale_commands(db, instance_id=instance_id, commit=False)
+    )
+    # The session runs with ``autoflush=False``, so the expiry writes made
+    # inside ``run_sync`` have to be flushed explicitly for the SELECT below
+    # to see them. A flush stays inside the caller's transaction — the unit
+    # still commits or rolls back as a whole.
+    await session.flush()
     rows = await session.scalars(
         select(AgentCommand)
         .where(

@@ -29,7 +29,14 @@ from onestep_control_plane_api.api.agent_command_service import (
     list_redeliverable_commands_for_instance_async,
 )
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_heartbeat_request
-from onestep_control_plane_api.api.schemas import HeartbeatIngestRequest
+from onestep_control_plane_api.api.agent_session_service import (
+    open_agent_session,
+    session_is_active,
+)
+from onestep_control_plane_api.api.schemas import (
+    AgentHelloMessage,
+    HeartbeatIngestRequest,
+)
 from onestep_control_plane_api.db import session as db_session_module
 from onestep_control_plane_api.db.models import AgentCommand, AgentSession, Instance, Service
 from onestep_control_plane_api.db.session import session_scope
@@ -684,7 +691,13 @@ def test_pending_command_listing_returns_plain_data_not_orm(db_session, async_db
 
 
 def test_expired_command_is_not_redelivered(db_session, async_db):
-    """Stale-command expiry still runs as part of the listing work unit."""
+    """Stale-command expiry still runs as part of the listing work unit.
+
+    The expiry writes now commit together with the work unit (not inside the
+    inner sync helper), so they are asserted after ``session_scope`` has
+    committed — which is also the guarantee the hello path needs: the expiry
+    lands atomically with everything else in the unit, or not at all.
+    """
 
     service = _seed_service(db_session)
     stale = AgentCommand(
@@ -703,12 +716,17 @@ def test_expired_command_is_not_redelivered(db_session, async_db):
 
     async def scenario():
         async with session_scope() as session:
-            return await list_redeliverable_commands_for_instance_async(
+            pending = await list_redeliverable_commands_for_instance_async(
                 session, instance_id=INSTANCE_ID
             )
+            # The inner sync helper must not have committed the expiry yet:
+            # the work unit is still open, so a cross-connection read (the
+            # synchronous fixture's connection) cannot see the new status.
+            return pending, session.in_transaction()
 
-    pending = asyncio.run(scenario())
+    pending, was_open = asyncio.run(scenario())
 
+    assert was_open, "the listing work unit was committed before session_scope"
     assert all(item.command_id != "cmd_async_stale" for item in pending)
     db_session.expire_all()
     refreshed = db_session.scalar(
@@ -790,10 +808,115 @@ def test_hello_and_pending_listing_are_one_work_unit(client, auth_headers, db_se
         "the pending-command listing ran on a different session than the hello "
         "insert, so the two no longer agree on which commands exist"
     )
-    # Both ran inside the same session, which is what makes them atomic. (The
-    # transaction flag is not asserted: SQLAlchemy only starts an explicit
-    # transaction on the first statement, so it is not a reliable marker here.)
-    assert observed["listing_in_transaction"] == observed["open_in_transaction"]
+    # The listing runs INSIDE the open transaction the hello insert started.
+    # (Under the pre-fix implementation this was only vacuously equal: the
+    # inner commits meant no transaction was open at either point. Now the two
+    # genuinely share one transaction, so a failure after the insert rolls the
+    # insert back.)
+    assert observed["listing_in_transaction"] is True
+
+
+def test_hello_listing_failure_rolls_back_the_new_session(
+    client, auth_headers, db_session, async_db
+):
+    """A failure after the hello insert must not leave an ``active`` session.
+
+    The hello path runs ``open_agent_session`` AND the pending-command listing
+    in ONE ``session_scope``. Neither helper may commit on its own: if the
+    listing raises after the insert, the outer rollback has to remove the new
+    session row. With an inner commit the row would survive as ``active`` while
+    the handler never sets its ``context``, so no disconnect cleanup path could
+    ever close it — a leaked session.
+
+    Regression test for the review finding on PR #206.
+    """
+
+    import onestep_control_plane_api.api.routers.agent_ws as agent_ws
+
+    real_listing = agent_ws.list_redeliverable_commands_for_instance_async
+    real_open = agent_ws.open_agent_session
+    opened_session_ids: list[str] = []
+
+    async def recording_open(session, *, message, session_id, accepted_capabilities, connected_at):
+        result = await real_open(
+            session,
+            message=message,
+            session_id=session_id,
+            accepted_capabilities=accepted_capabilities,
+            connected_at=connected_at,
+        )
+        opened_session_ids.append(session_id)
+        return result
+
+    async def failing_listing(session, *, instance_id):
+        # The sync unit of work inside run_sync has flushed the insert by now;
+        # simulate the reviewer's failure injected after the session creation
+        # and before the pending-command query returns.
+        raise OperationalError("SELECT pending_commands", {}, RuntimeError("boom"))
+
+    agent_ws.open_agent_session = recording_open
+    agent_ws.list_redeliverable_commands_for_instance_async = failing_listing
+
+    try:
+        # The handler has no graceful path for a database failure: it crashes
+        # the connection and the test transport surfaces the app error on
+        # unwind. Which exact transport error arrives is not the point here;
+        # what matters is the database state afterwards.
+        with pytest.raises(Exception):
+            with client.websocket_connect(
+                "/api/v1/agents/ws", headers=auth_headers
+            ) as websocket:
+                websocket.send_json(_hello_message())
+                time.sleep(0.2)
+    finally:
+        agent_ws.open_agent_session = real_open
+        agent_ws.list_redeliverable_commands_for_instance_async = real_listing
+
+    assert opened_session_ids, "hello never attempted to open a session"
+    leaked_session_id = opened_session_ids[0]
+
+    db_session.expire_all()
+    # The rollback must have removed the row entirely: no ``active`` session
+    # may survive a hello whose work unit failed.
+    assert not session_is_active(db_session, leaked_session_id), (
+        "a hello whose pending-command listing failed left an ``active`` "
+        "AgentSession behind; the outer rollback did not cover the insert, "
+        "which leaks a session no cleanup path can find"
+    )
+    assert async_db.checkedout() == 0
+    assert async_db.open_sessions == []
+
+
+def test_open_agent_session_does_not_commit_inside_the_work_unit(db_session, async_db):
+    """``open_agent_session`` must leave the commit to the caller's work unit.
+
+    Direct work-unit-level guard, complementing the WS-level test above: the
+    helper runs through ``run_sync``, and a ``db.commit()`` inside that sync
+    function would commit the OUTER transaction — invisible to the helper's
+    own ``session_scope`` and un-rollbackable afterwards.
+    """
+
+    hello = AgentHelloMessage.model_validate(_hello_message())
+
+    async def scenario() -> bool:
+        async with session_scope() as session:
+            await open_agent_session(
+                session,
+                message=hello,
+                session_id="sess_no_inner_commit",
+                accepted_capabilities=["command.ping"],
+                connected_at=datetime.now(UTC),
+            )
+            # An inner commit would have ended the session's transaction. While
+            # the work unit is still open, the transaction must be running.
+            return session.in_transaction()
+
+    still_in_transaction = asyncio.run(scenario())
+
+    assert still_in_transaction, (
+        "open_agent_session committed inside the work unit: the caller's "
+        "transaction ended before session_scope could own the commit"
+    )
 
 
 def test_ui_stream_events_are_still_published_for_command_lifecycle(
