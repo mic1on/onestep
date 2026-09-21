@@ -175,11 +175,28 @@ def _build_detail_lines(event: NotificationEventRecord) -> list[str]:
         )
         if line is not None
     )
+    lines.extend(_flap_summary_lines(event))
     return lines
 
 
 def _build_success_metric_lines(event: NotificationEventRecord) -> list[str]:
     return [f"• **{metric.label}**：{metric.value}" for metric in event.success_metrics]
+
+
+def _flap_summary_lines(event: NotificationEventRecord) -> list[str]:
+    """Render the flap-episode summary fields, when this message carries them."""
+
+    if not is_instance_event_type(event.event_type):
+        return []
+    if event.suppressed_flip_count is None:
+        return []
+    lines = [f"**抖动抑制**：已静默 {event.suppressed_flip_count} 次状态翻转"]
+    if event.flap_episode_flips is not None:
+        lines.append(f"**周期翻转总数**：{event.flap_episode_flips}")
+    started_at = _format_time(event.flap_episode_started_at)
+    if started_at is not None:
+        lines.append(f"**周期开始**：{started_at}")
+    return lines
 
 
 def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
@@ -282,7 +299,31 @@ def _build_feishu_detail_lines(event: NotificationEventRecord) -> list[str]:
         )
         if line is not None
     )
+    lines.extend(
+        _build_feishu_field_line(label, _escape_plain(value))
+        for label, value in _flap_summary_plain_lines(event)
+    )
     return lines
+
+
+def _escape_plain(value: str) -> str:
+    return _escape_feishu_markdown_text(value)
+
+
+def _flap_summary_plain_lines(event: NotificationEventRecord) -> list[tuple[str, str]]:
+    """Flap-summary fields as (label, value) pairs for the feishu renderer."""
+
+    if not is_instance_event_type(event.event_type):
+        return []
+    if event.suppressed_flip_count is None:
+        return []
+    pairs = [("抖动抑制", f"已静默 {event.suppressed_flip_count} 次状态翻转")]
+    if event.flap_episode_flips is not None:
+        pairs.append(("周期翻转总数", str(event.flap_episode_flips)))
+    started_at = _format_time(event.flap_episode_started_at)
+    if started_at is not None:
+        pairs.append(("周期开始", started_at))
+    return pairs
 
 
 def _build_feishu_field_line(label: str, value: str | None) -> str | None:

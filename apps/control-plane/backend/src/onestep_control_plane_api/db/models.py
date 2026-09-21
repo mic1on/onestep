@@ -898,6 +898,22 @@ class NotificationInstanceState(Base):
     )
     last_connectivity: Mapped[str] = mapped_column(sa.String(32), nullable=False)
     last_transition_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # --- issue #196: stable confirmation + flapping damping -------------------
+    # A flip is notified only after the new connectivity has been observed for
+    # `instance_connectivity_confirm_after_s`, measured from the flip's own
+    # transition_at. Until then the candidate is parked here; a flip that heals
+    # inside the window is cancelled and never notified -- that is what removes
+    # transient-drop noise.
+    pending_connectivity: Mapped[str | None] = mapped_column(sa.String(32))
+    pending_since: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Flap episode bookkeeping. A run of confirmed flips closer together than
+    # `instance_connectivity_flap_window_s` is one episode; flips beyond
+    # `instance_connectivity_flap_max_notifications` are suppressed but counted,
+    # and one summary is emitted when the episode goes quiet.
+    flap_episode_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    flap_episode_last_flip_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    flap_episode_flips: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0)
+    flap_suppressed_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(),
