@@ -152,22 +152,16 @@ def _instrument_sync_engine(engine: Engine) -> bool:
     Mirrors the defensive style of the scanner's ``_instrument_async_engine``.
 
     The :mod:`onestep_control_plane_api.ops.observability` import is deferred to
-    call time. ``ops.observability`` itself never imports ``db.session`` (zero
-    dependency cycles by contract), but importing it while *this* module is
-    still mid-import can trip the pre-existing ``ops.__init__`` ->
-    ``ops.readiness`` -> workers -> ``api.__init__`` -> ``api.routers.health``
-    -> ``ops.readiness`` cycle (documented in the latency diagnostics runbook)
-    and leave broken residue in ``sys.modules``. The
-    :data:`_MODULE_IMPORT_COMPLETE` gate therefore skips the import-time
-    self-call; the module-level ``engine`` is instrumented later by the app
-    lifespan and the ``/metrics`` exporter, which import observability safely
-    after the API package has initialized. Any *later* ``create_engine_from_url``
-    call (tests, scripts) runs after import completed and is instrumented
-    immediately.
+    call time only as a layering nicety (``db`` is a lower layer than ``ops``),
+    not for cycle safety: since #216 the ops import cycle is gone -- the
+    ``ops/__init__`` lazy re-exports and the deferred workers imports in
+    ``ops.readiness`` mean importing observability from here can no longer trip
+    a half-initialized ``ops`` package, no matter which module is imported
+    first. The call therefore runs unconditionally (also for the module-level
+    ``engine`` created during this module's own import), and
+    :func:`ensure_sync_engine_instrumented` remains as the idempotent entry
+    point the lifespan and the ``/metrics`` exporter call.
     """
-
-    if not globals().get("_MODULE_IMPORT_COMPLETE", False):
-        return False
 
     try:
         from onestep_control_plane_api.ops.observability import instrument_engine
@@ -184,11 +178,12 @@ def _instrument_sync_engine(engine: Engine) -> bool:
 def ensure_sync_engine_instrumented() -> bool:
     """Idempotently instrument the module-level synchronous engine.
 
-    Called from the app lifespan and the ``/metrics`` exporter, which import
-    :mod:`onestep_control_plane_api.ops.observability` safely after the API
-    package has initialized. The import-time engine cannot instrument itself
-    (see :func:`_instrument_sync_engine` for why), so this is the production
-    path that closes the gap.
+    Called from the app lifespan and the ``/metrics`` exporter. Since #216 the
+    import-time ``engine = create_engine_from_url(...)`` is instrumented by the
+    factory itself (the ops import cycle that forced the old import-time skip
+    gate is gone), so this is belt-and-braces: it stays as a single idempotent
+    seam for callers that hold no reference to ``engine`` and as a safety net
+    if the factory call ever fails.
     """
 
     return _instrument_sync_engine(engine)
@@ -259,23 +254,8 @@ def create_async_session_factory(bind: AsyncEngine) -> async_sessionmaker[AsyncS
     )
 
 
-#: True once this module finished importing. ``engine = create_engine_from_url(...)
-#: `` runs *during* the import, and letting the factory attach pool
-#: instrumentation at that moment would import
-#: :mod:`onestep_control_plane_api.ops.observability` mid-import -- which can
-#: trip the pre-existing ``ops.__init__`` -> ``ops.readiness`` -> workers ->
-#: ``api.__init__`` -> ``api.routers.health`` -> ``ops.readiness`` import cycle
-#: (documented in the latency diagnostics runbook) and leave broken module
-#: residue in ``sys.modules`` for every later import to stumble over. The
-#: import-time engine is instrumented later instead: by the app lifespan and
-#: the ``/metrics`` exporter, both of which import observability safely after
-#: the API package has fully initialized.
-_MODULE_IMPORT_COMPLETE = False
-
 engine = create_engine_from_url(settings.database_url)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
-
-_MODULE_IMPORT_COMPLETE = True
 
 
 def get_async_engine() -> AsyncEngine:
