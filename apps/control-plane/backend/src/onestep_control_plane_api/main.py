@@ -59,8 +59,10 @@ def create_app() -> FastAPI:
         except Exception:  # pragma: no cover - defensive, mirrors observability's tolerance
             logger.warning("could not start the event-loop lag sampler", exc_info=True)
         try:
-            # The import-time sync engine cannot instrument itself (see
-            # db.session._instrument_sync_engine); the lifespan closes the gap.
+            # Idempotent belt-and-braces: the import-time sync engine is
+            # already instrumented by the factory itself since #216 retired
+            # the import-time skip gate; the lifespan call remains as the
+            # single seam that guarantees the process-wide engine is covered.
             ensure_sync_engine_instrumented()
         except Exception:  # pragma: no cover - defensive, mirrors observability's tolerance
             logger.warning(

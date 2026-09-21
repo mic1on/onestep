@@ -38,9 +38,9 @@ async def ensure_observability_samplers_started() -> None:
     threadpool because it performs blocking SQLAlchemy work). Idempotent, so it is
     safe on every scrape. Since #213 the application lifespan starts the sampler
     at startup; this dependency remains as a fallback for processes that serve
-    ``/metrics`` without ever running the lifespan, and it also instruments the
-    module-level synchronous engine, which cannot instrument itself at import
-    time (see ``db.session._instrument_sync_engine``).
+    ``/metrics`` without ever running the lifespan, and it also (redundantly,
+    since #216) instruments the module-level synchronous engine through the same
+    idempotent seam as the lifespan.
     """
 
     ensure_event_loop_lag_sampler_started()

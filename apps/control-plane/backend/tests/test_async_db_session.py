@@ -1194,12 +1194,12 @@ def test_create_engine_from_url_instrumentation_is_idempotent(tmp_path: Path) ->
 def test_ensure_sync_engine_instrumented_covers_the_import_time_engine() -> None:
     """The lifespan/exporter seam instruments the module-level engine.
 
-    ``engine`` is created during the module import, before
-    ``ops.observability`` can be imported safely, so the lifespan and the
-    ``/metrics`` exporter call this idempotent helper to close the gap. The
+    Since #216 the import-time ``engine`` is already instrumented by the
+    factory itself (the ops import cycle that forced the #215 import-time
+    skip gate is gone), so this seam is belt-and-braces. It stays as a single
+    idempotent entry point for callers that hold no ``engine`` reference. The
     call never opens a connection: it only wraps ``pool.connect``.
     """
-
 
     assert db_session.ensure_sync_engine_instrumented() is True
     # Idempotent: a second call is a no-op that still reports success.
@@ -1212,8 +1212,8 @@ def test_create_engine_from_url_survives_instrumentation_failure(
     """Instrumentation is observation only: its failure must not break engine creation.
 
     Covers both failure shapes the wiring must tolerate -- the observability
-    import itself blowing up (e.g. the pre-existing ops import cycle in an
-    unusual import order) and ``instrument_engine`` raising at call time.
+    import itself failing (e.g. a broken install) and ``instrument_engine``
+    raising at call time.
     """
 
     from onestep_control_plane_api.ops import observability as obs
