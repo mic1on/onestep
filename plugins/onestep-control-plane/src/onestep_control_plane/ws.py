@@ -655,6 +655,12 @@ class ControlPlaneWsSender:
         self._worker_task: asyncio.Task[None] | None = None
         self._stop_requested = False
         self._reconnect_attempts = 0
+        # Monotonic count of sessions this sender has established (a connect
+        # that completed hello). The first session is covered by the reporter's
+        # startup sync; every later one is a reconnect whose new session needs
+        # the current topology re-armed, because a send that reached the wire
+        # says nothing about server-side persistence.
+        self._session_generation = 0
         self._max_pending_metric_payloads = config.max_pending_metric_batches
         self._max_pending_event_payloads = max(
             1,
@@ -1130,7 +1136,33 @@ class ControlPlaneWsSender:
                 previous_attempts,
             )
         self._reconnect_attempts = 0
+        self._session_generation += 1
+        if self._session_generation > 1:
+            await self._schedule_topology_resync()
         return True
+
+    async def _schedule_topology_resync(self) -> None:
+        """Re-arm the current topology for a session that just completed hello.
+
+        Called at most once per session, right after the session counter
+        advanced. That is what restores the topology after a reconnect: an
+        earlier send reaching the wire says nothing about whether the server
+        persisted it, so a new session is never treated as already covered.
+
+        The very first session is excluded because the reporter's own startup
+        sync is already queued for it; only a genuine reconnect (a second or
+        later session) needs the topology re-armed.
+
+        The send goes through the normal telemetry path and inherits its
+        coalescing and backpressure, so repeated reconnects cannot spin: at most
+        one extra sync per new session, bounded by the reconnect count.
+        """
+        reporter = self._reporter
+        if reporter is None:
+            return
+        resync = getattr(reporter, "resync_topology_for_new_session", None)
+        if callable(resync):
+            await resync()
 
     def _fail_all_pending_waiters(self, error: Exception) -> None:
         if self._pending_sync is not None:
