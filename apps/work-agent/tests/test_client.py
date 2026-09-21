@@ -670,6 +670,18 @@ class _UpperBoundRng:
         return end
 
 
+class _MidRangeRng:
+    """An injected RNG that always returns a fixed fraction of the jitter range.
+
+    Unlike :class:`_UpperBoundRng`, the drawn value is *strictly inside* the
+    range, so a delay that equals the raw budget proves the draw was discarded
+    rather than merely pinned to its upper bound.
+    """
+
+    def uniform(self, start: float, end: float) -> float:
+        return start + (end - start) * 0.75
+
+
 class _ZeroRng:
     """An injected RNG that always returns the bottom of the jitter range.
 
@@ -1216,11 +1228,19 @@ def test_reconnect_backoff_ramps_is_capped_and_resets_after_stable_session(
 def test_clean_close_reconnects_from_base_backoff(tmp_path, monkeypatch) -> None:
     # A clean close must reconnect promptly from the base budget rather than
     # escalating the retry the way a failing session does.
+    #
+    # The first two sessions FAIL on purpose so the budget has escalated to 4.0
+    # before any clean close happens. Without those failures the budget is still
+    # at its base value on the clean-close branch, so the test would pass even
+    # if the reset were deleted -- it could not tell a real reset apart from a
+    # budget that had never escalated.
     sessions = {"n": 0}
     delays: list[float] = []
 
     async def fake_run_one_session(**_kwargs) -> None:
         sessions["n"] += 1
+        if sessions["n"] <= 2:
+            raise RuntimeError("session failed")
 
     monkeypatch.setattr(client_module, "_run_one_session", fake_run_one_session)
 
@@ -1236,14 +1256,102 @@ def test_clean_close_reconnects_from_base_backoff(tmp_path, monkeypatch) -> None
                 config=_config(tmp_path),
                 identity=_identity(),
                 supervisor=FakeSupervisor(),
-                rng=_UpperBoundRng(),
+                rng=_MidRangeRng(),  # draws 0.75 * budget, strictly inside the range
             ),
-            until=lambda: len(delays) >= 6,
+            until=lambda: len(delays) >= 4,
         )
     )
-    assert sessions["n"] >= 6, sessions
-    assert delays == [client_module._BASE_BACKOFF_SECONDS] * 6, delays
+    assert sessions["n"] >= 4, sessions
+    # The two failing sessions escalate the budget: 1.0 then 2.0. _MidRangeRng
+    # draws 0.75 of each range, so these are the drawn values, not the raw budget.
+    assert delays[:2] == [
+        client_module._BASE_BACKOFF_SECONDS * 0.75,
+        client_module._BASE_BACKOFF_SECONDS * 2 * 0.75,
+    ], delays
+    # Every clean close after that must drop back to the BASE budget instead of
+    # keeping the escalated 4.0. This is the assertion that fails if the
+    # clean-close reset is lost.
+    #
+    # The expected value is 0.75 * base rather than the base itself. With
+    # _UpperBoundRng the drawn value EQUALS the budget, so a clean close that
+    # discarded the jitter draw entirely would still produce an identical number
+    # and this test could not tell them apart. Drawing strictly inside the range
+    # makes the jittered value distinguishable from the raw budget, so this
+    # assertion also fails if jitter is dropped from the clean-close branch.
+    assert delays[2:] == [client_module._BASE_BACKOFF_SECONDS * 0.75] * 2, (
+        f"clean close did not use the jittered base budget: {delays}"
+    )
     assert diagnostics == [], f"unretrieved errors: {diagnostics}"
+
+
+def test_error_path_uses_the_drawn_jitter_value(tmp_path, monkeypatch) -> None:
+    # The production error path must use the value actually drawn from the
+    # jitter source. A unit test on _jittered_backoff_delay alone cannot prove
+    # this: a defect that stops run_control_loop calling the helper at all
+    # leaves the helper -- and its unit test -- perfectly green.
+    delays: list[float] = []
+
+    async def fake_run_one_session(**_kwargs) -> None:
+        raise RuntimeError("session failed")
+
+    monkeypatch.setattr(client_module, "_run_one_session", fake_run_one_session)
+
+    async def recording_sleep(delay: float) -> None:
+        delays.append(delay)
+        await _REAL_SLEEP(0)
+
+    monkeypatch.setattr(asyncio, "sleep", recording_sleep)
+
+    asyncio.run(
+        _drive_control_loop(
+            run_control_loop(
+                config=_config(tmp_path),
+                identity=_identity(),
+                supervisor=FakeSupervisor(),
+                rng=_MidRangeRng(),  # draws 0.75 * budget
+            ),
+            until=lambda: len(delays) >= 4,
+        )
+    )
+    # Budgets ramp 1, 2, 4, 8 -> drawn delays 0.75, 1.5, 3.0, 6.0. Anything that
+    # ignores the draw reports the raw budgets instead.
+    expected = [0.75, 1.5, 3.0, 6.0]
+    assert delays == pytest.approx(expected), (
+        f"the drawn jitter value was not used; got {delays}, expected {expected}"
+    )
+
+
+def test_default_rng_produces_varying_reconnect_delays(tmp_path, monkeypatch) -> None:
+    # With no rng injected the production path must draw from a real random
+    # source, so repeated reconnects spread instead of landing on one delay.
+    # This pins the end-to-end property: jitter reaches the *production* delay,
+    # not merely the helper.
+    delays: list[float] = []
+
+    async def fake_run_one_session(**_kwargs) -> None:
+        raise RuntimeError("session failed")
+
+    monkeypatch.setattr(client_module, "_run_one_session", fake_run_one_session)
+
+    async def recording_sleep(delay: float) -> None:
+        delays.append(delay)
+        await _REAL_SLEEP(0)
+
+    monkeypatch.setattr(asyncio, "sleep", recording_sleep)
+
+    # No rng argument: run_control_loop must build its own random.Random().
+    asyncio.run(
+        _drive_control_loop(
+            run_control_loop(
+                config=_config(tmp_path), identity=_identity(), supervisor=FakeSupervisor()
+            ),
+            until=lambda: len(delays) >= 12,
+        )
+    )
+    # Full jitter over a growing budget: delays must not all be identical, and
+    # none may escape the cap.
+    assert len(set(delays)) > 1, f"reconnect delays were deterministic: {delays}"
+    assert all(0.0 <= delay <= client_module._MAX_BACKOFF_SECONDS for delay in delays), delays
 
 
 def test_jittered_backoff_spreads_retries_deterministically() -> None:
