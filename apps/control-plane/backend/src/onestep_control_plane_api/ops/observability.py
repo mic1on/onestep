@@ -65,10 +65,18 @@ Cardinality and privacy contract
 * Metric labels are bounded by construction: pool labels are a pool class name
   plus a sanitized pool name, scan labels come from a registered allowlist
   (:data:`KNOWN_SCAN_NAMES`) and fall back to ``"other"``.
-* Credentials are scrubbed before logging: field names matching
-  :data:`SENSITIVE_FIELD_PATTERN` are replaced wholesale, and string values are
-  scrubbed for ``Bearer <token>`` / ``token=<value>`` shapes and truncated.
-  Message bodies, auth headers and tokens must never be passed to this module.
+* Credentials are scrubbed before logging, with one rule that matters more than
+  the rest: a value whose **field name** matches
+  :data:`SENSITIVE_FIELD_PATTERN` is dropped no matter what it contains, at any
+  nesting depth within :data:`MAX_SANITIZE_DEPTH` levels -- and once that depth
+  budget is spent the whole remaining subtree is replaced by :data:`REDACTED`
+  rather than stringified, so a deep structure cannot smuggle a secret out
+  through the ``str(value)`` fallback. Strings are additionally scrubbed for
+  ``Bearer <token>`` / ``token=<value>`` *shapes*.
+  Known limitation the scrubber does NOT cover: a bare secret under a
+  **non**-sensitive field name (e.g. ``{"note": "hunter2"}``) has neither a
+  sensitive name nor a credential shape and therefore passes through, as does a
+  DSN outside the sensitive names. See the runbook's blind-spot list.
 
 Seams for the #192/#193 wiring (no imports of those modules today)
 ------------------------------------------------------------------
@@ -201,6 +209,19 @@ REDACTED = "[redacted]"
 MAX_LOG_VALUE_CHARS = 256
 #: Longest websocket close reason kept in a structured log record.
 MAX_CLOSE_REASON_CHARS = 120
+#: How many nesting levels :func:`_sanitize_log_value` walks before it stops
+#: recursing and replaces the whole remaining subtree with :data:`REDACTED`.
+#:
+#: The budget exists because the sanitizer runs *before* ``logger.log(...)``, so
+#: an exception raised here propagates to the caller instead of being swallowed
+#: by logging's handler error path -- a crash there could surface inside
+#: websocket disconnect cleanup. Two inputs would exceed Python's recursion
+#: limit: a self-referential container and a pathologically deep one (both are
+#: reachable, since ``json.loads`` parses arbitrarily deep input iteratively).
+#: Walking until the budget is spent and then redacting wholesale satisfies both
+#: properties at once: secrets under sensitive names are still caught inside the
+#: budget, and nothing can raise.
+MAX_SANITIZE_DEPTH = 12
 #: Replacement label for scan names outside the bounded allowlist.
 UNKNOWN_LABEL_VALUE = "other"
 
@@ -276,6 +297,21 @@ _RESERVED_LOG_KEYS = frozenset(
 
 #: Keys this module always owns in a payload; caller fields cannot overwrite them.
 _RESERVED_PAYLOAD_KEYS = frozenset({"event", "logged_at"})
+#: Keys whose value the module derives itself rather than accepting from a
+#: caller, so they cannot be forged. The ``close_*`` markers are the module's
+#: honesty contract: :func:`log_ws_lifecycle` decides them from the real close
+#: code/reason, so a caller must not be able to pass
+#: ``close_reason_known=True`` next to ``close_reason="unknown"`` and make a
+#: missing reason look like a confirmed one. Extend this set -- not the caller's
+#: discretion -- whenever a new derived marker is added.
+_OWNED_PAYLOAD_KEYS = _RESERVED_PAYLOAD_KEYS | frozenset(
+    {
+        "close_code",
+        "close_code_known",
+        "close_reason",
+        "close_reason_known",
+    }
+)
 
 
 def _scrub_text(value: str) -> str:
@@ -290,7 +326,30 @@ def _scrub_text(value: str) -> str:
     return scrubbed
 
 
-def _sanitize_log_value(key: str, value: Any, *, depth: int = 0) -> Any:
+def _sanitize_log_value(
+    key: str,
+    value: Any,
+    *,
+    depth: int = 0,
+    _seen: frozenset[int] | None = None,
+) -> Any:
+    """Sanitize one log value, never raising and never leaking a named secret.
+
+    A value whose key matches :data:`SENSITIVE_FIELD_PATTERN` is dropped
+    wholesale regardless of what it holds. Containers are walked one level at a
+    time against two guards:
+
+    * a **depth budget** (:data:`MAX_SANITIZE_DEPTH`). Once it is spent the
+      remaining subtree is replaced by :data:`REDACTED` instead of being
+      stringified -- stringifying is what used to leak, because ``str()`` of a
+      nested mapping prints the secret verbatim while :func:`_scrub_text` only
+      recognises ``Bearer <t>`` / ``token=<v>`` *shapes*;
+    * a **cycle guard** on ``id()`` of the containers on the current path, so a
+      self-referential dict or list terminates instead of recursing forever.
+
+    Both guards exist for caller safety, not tidiness: this runs before
+    ``logger.log(...)``, so raising here would propagate into the caller.
+    """
     if SENSITIVE_FIELD_PATTERN.search(key):
         return REDACTED
     if value is None or isinstance(value, bool | int | float):
@@ -301,14 +360,35 @@ def _sanitize_log_value(key: str, value: Any, *, depth: int = 0) -> Any:
         return str(value)
     if isinstance(value, datetime):
         return value.isoformat()
-    if isinstance(value, Mapping) and depth < 2:
+
+    is_mapping = isinstance(value, Mapping)
+    is_sequence = isinstance(value, Sequence) and not isinstance(value, bytes | bytearray)
+    if not (is_mapping or is_sequence):
+        # Not a container we walk; the string form is all there is, scrubbed.
+        return _scrub_text(str(value))
+
+    # Depth budget: past it, give up on describing the value and redact the
+    # whole subtree rather than risk printing a secret via repr/str.
+    if depth >= MAX_SANITIZE_DEPTH:
+        return REDACTED
+
+    seen = _seen or frozenset()
+    if id(value) in seen:
+        # Reference cycle: redact rather than recurse into it again.
+        return REDACTED
+    seen = seen | {id(value)}
+
+    if is_mapping:
         return {
-            str(nested_key): _sanitize_log_value(str(nested_key), nested_value, depth=depth + 1)
+            str(nested_key): _sanitize_log_value(
+                str(nested_key), nested_value, depth=depth + 1, _seen=seen
+            )
             for nested_key, nested_value in value.items()
         }
-    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray) and depth < 2:
-        return [_sanitize_log_value(key, item, depth=depth + 1) for item in value]
-    return _scrub_text(str(value))
+    return [
+        _sanitize_log_value(key, item, depth=depth + 1, _seen=seen)
+        for item in value  # type: ignore[union-attr]
+    ]
 
 
 def _safe_log_key(key: str) -> str:
@@ -324,8 +404,12 @@ def build_log_fields(event: str, **fields: Any) -> dict[str, Any]:
     """Build the flat ``extra={...}`` payload for one structured log record.
 
     Every payload carries ``event`` and an ISO-8601 UTC ``logged_at`` timestamp so
-    lines from different emitters can be correlated on one clock. Sensitive field
-    names are dropped wholesale; string values are scrubbed and truncated.
+    lines from different emitters can be correlated on one clock. A value whose
+    key matches :data:`SENSITIVE_FIELD_PATTERN` is replaced by :data:`REDACTED`
+    at any nesting depth within the :data:`MAX_SANITIZE_DEPTH` budget; past that
+    budget the whole subtree is redacted rather than stringified. Note what this
+    does NOT cover: a bare secret under a non-sensitive key name has neither a
+    sensitive name nor a credential shape and passes through.
     """
 
     payload: dict[str, Any] = {
@@ -387,6 +471,12 @@ def log_ws_lifecycle(
             None if connection_duration_s is None else round(float(connection_duration_s), 6)
         ),
     }
+    # The close fields are derived above and are not the caller's to set: the
+    # markers state whether the code/reason was really known, so letting a
+    # caller pass close_reason_known=True next to an unknown reason would report
+    # a missing reason as a confirmed one. Drop any such caller key, then merge.
+    for forged in _OWNED_PAYLOAD_KEYS.intersection(fields):
+        del fields[forged]
     payload_fields.update(fields)
     return emit_structured_log(
         target_logger,

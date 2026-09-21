@@ -105,7 +105,12 @@ def _open_agent_session(
             last_message_at=connected_at,
         )
     )
-    db.commit()
+    # No commit here: the caller's work unit owns the transaction. The hello
+    # path opens the session AND lists redeliverable commands in ONE
+    # ``session_scope``, so a failure in the listing (or anything after this
+    # insert) must roll the new session back — an inner commit here would pin
+    # the row in the database and leak an ``active`` session no cleanup path
+    # can find, because the WS handler has not set its ``context`` yet.
     return OpenedAgentSession(
         session_id=session_id,
         accepted_capabilities=list(accepted_capabilities),
@@ -120,13 +125,17 @@ async def open_agent_session(
     accepted_capabilities: list[str],
     connected_at: datetime,
 ) -> OpenedAgentSession:
-    """Register a hello as one work unit and return plain data.
+    """Register a hello on the caller's session and return plain data.
 
     The shared helpers it builds on (``ensure_service``, ``ensure_instance_stub``,
     ``apply_service_metadata``) still take a synchronous ``Session`` and are
     used by synchronous callers, so they are invoked through
     ``AsyncSession.run_sync``: the same underlying session, so they participate
     in this work unit rather than opening their own.
+
+    This helper does not commit. Transaction ownership stays with the caller's
+    work unit (``session_scope``), so the hello insert either lands together
+    with everything else in that unit or not at all.
     """
 
     return await session.run_sync(
@@ -141,12 +150,13 @@ async def open_agent_session(
 
 
 def _mark_session_message(db: Session, session_id: str, occurred_at: datetime) -> None:
+    # No commit: this helper is the entire work unit its caller runs, so
+    # ``session_scope`` commits when the helper returns.
     db.execute(
         update(AgentSession)
         .where(AgentSession.session_id == session_id)
         .values(last_message_at=occurred_at, updated_at=occurred_at)
     )
-    db.commit()
 
 
 async def mark_session_message(
@@ -160,6 +170,8 @@ async def mark_session_message(
 
 
 def _close_session(db: Session, session_id: str, *, disconnected_at: datetime) -> None:
+    # No commit: this helper is the entire work unit its caller runs, so
+    # ``session_scope`` commits when the helper returns.
     db.execute(
         update(AgentSession)
         .where(AgentSession.session_id == session_id, AgentSession.status == "active")
@@ -170,7 +182,6 @@ def _close_session(db: Session, session_id: str, *, disconnected_at: datetime) -
             updated_at=disconnected_at,
         )
     )
-    db.commit()
 
 
 async def close_agent_session(
