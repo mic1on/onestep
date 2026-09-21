@@ -1399,3 +1399,81 @@ def test_ws_close_markers_are_honest_when_values_are_known() -> None:
     assert payload["close_code_known"] is True
     assert payload["close_reason"] == "going away"
     assert payload["close_reason_known"] is True
+
+# --------------------------------------------------------------------------------------
+# #213 wiring: lag sampler follows the application lifespan
+# --------------------------------------------------------------------------------------
+
+
+def _sampler() -> obs.EventLoopLagSampler:
+    return obs.get_event_loop_lag_sampler()
+
+
+@pytest.fixture()
+def _sqlite_app(monkeypatch):
+    """A fresh ``create_app()`` whose lifespan DB is an in-memory SQLite engine.
+
+    The real lifespan opens ``app.state.session_factory`` once on startup (it
+    marks stale agent sessions disconnected), so a bare ``create_app()`` would
+    dial PostgreSQL. Swap the factory for SQLite the same way the conftest's
+    ``client`` fixture does, then hand back a fresh app to drive.
+    """
+
+    import sqlalchemy as sa
+    from onestep_control_plane_api.db import session as db_session_module
+    from onestep_control_plane_api.db.base import Base
+    from onestep_control_plane_api.main import create_app
+
+    engine = sa.create_engine(
+        "sqlite+pysqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=sa.pool.StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    db_session_module.SessionLocal = sa.orm.sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False
+    )
+    app = create_app()
+    app.state.session_factory = db_session_module.SessionLocal
+    yield app
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+def test_lifespan_starts_the_lag_sampler_on_startup_and_stops_it_on_shutdown(
+    _sqlite_app,
+) -> None:
+    """The sampler must run for the whole lifetime of the app, not only under /metrics.
+
+    Drives the real ``create_app`` lifespan through ``TestClient`` (which enters
+    and exits the lifespan context). Before the wiring, the sampler was only
+    started lazily by a first ``/metrics`` scrape, so startup had no lag
+    coverage and the ``sampler_running`` gauge was 0 until a scrape arrived.
+    """
+
+    from fastapi.testclient import TestClient
+
+    sampler = _sampler()
+    assert sampler.running is False
+
+    with TestClient(_sqlite_app):
+        assert sampler.running is True, "sampler must be started by the lifespan"
+
+    assert sampler.running is False, "sampler must be stopped by the lifespan"
+
+
+def test_lifespan_sampler_stop_survives_a_test_client_error(_sqlite_app) -> None:
+    """An exception in the caller's ``with`` body must still stop the sampler.
+
+    ``TestClient.__exit__`` runs the shutdown branch of the lifespan even when
+    the ``with`` body raises, so shutdown-side cleanup must not depend on the
+    startup/shutdown pair completing cleanly.
+    """
+
+    from fastapi.testclient import TestClient
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with TestClient(_sqlite_app):
+            raise RuntimeError("boom")
+
+    assert _sampler().running is False

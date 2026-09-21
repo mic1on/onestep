@@ -58,6 +58,7 @@ Transaction convention
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -76,6 +77,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.base import Base
 
+logger = logging.getLogger("onestep_control_plane_api.db.session")
+
 #: Async dialects this project supports. PostgreSQL through psycopg3 is the
 #: production path; sqlite+aiosqlite is the test path.
 SUPPORTED_ASYNC_DIALECTS: frozenset[str] = frozenset({"postgresql+psycopg", "sqlite+aiosqlite"})
@@ -91,6 +94,11 @@ _SYNC_DIALECT_TO_ASYNC: dict[str, str] = {
 }
 
 _LAZY_ASYNC_NAMES = ("async_engine", "AsyncSessionLocal")
+
+#: Metric label for the process-wide synchronous engine's pool. A pool name is
+#: a Prometheus label, so it must be a small constant (see the bounded-label
+#: contract in :mod:`onestep_control_plane_api.ops.observability`).
+SYNC_POOL_METRIC_NAME = "default"
 
 if TYPE_CHECKING:
     # Resolved on first use by ``get_async_engine`` / ``get_async_session_factory``
@@ -136,6 +144,56 @@ def resolve_async_database_url(database_url: str) -> str:
     )
 
 
+def _instrument_sync_engine(engine: Engine) -> bool:
+    """Attach pool-checkout instrumentation to a synchronous engine.
+
+    Idempotent, and deliberately tolerant: instrumentation is observation only,
+    so a failure here must never block engine creation or application startup.
+    Mirrors the defensive style of the scanner's ``_instrument_async_engine``.
+
+    The :mod:`onestep_control_plane_api.ops.observability` import is deferred to
+    call time. ``ops.observability`` itself never imports ``db.session`` (zero
+    dependency cycles by contract), but importing it while *this* module is
+    still mid-import can trip the pre-existing ``ops.__init__`` ->
+    ``ops.readiness`` -> workers -> ``api.__init__`` -> ``api.routers.health``
+    -> ``ops.readiness`` cycle (documented in the latency diagnostics runbook)
+    and leave broken residue in ``sys.modules``. The
+    :data:`_MODULE_IMPORT_COMPLETE` gate therefore skips the import-time
+    self-call; the module-level ``engine`` is instrumented later by the app
+    lifespan and the ``/metrics`` exporter, which import observability safely
+    after the API package has initialized. Any *later* ``create_engine_from_url``
+    call (tests, scripts) runs after import completed and is instrumented
+    immediately.
+    """
+
+    if not globals().get("_MODULE_IMPORT_COMPLETE", False):
+        return False
+
+    try:
+        from onestep_control_plane_api.ops.observability import instrument_engine
+
+        return instrument_engine(engine, name=SYNC_POOL_METRIC_NAME)
+    except Exception:
+        logger.warning(
+            "could not attach pool instrumentation to the synchronous engine",
+            exc_info=True,
+        )
+        return False
+
+
+def ensure_sync_engine_instrumented() -> bool:
+    """Idempotently instrument the module-level synchronous engine.
+
+    Called from the app lifespan and the ``/metrics`` exporter, which import
+    :mod:`onestep_control_plane_api.ops.observability` safely after the API
+    package has initialized. The import-time engine cannot instrument itself
+    (see :func:`_instrument_sync_engine` for why), so this is the production
+    path that closes the gap.
+    """
+
+    return _instrument_sync_engine(engine)
+
+
 def create_engine_from_url(database_url: str) -> Engine:
     is_sqlite = database_url.startswith("sqlite")
     connect_args = {"check_same_thread": False} if is_sqlite else {}
@@ -153,6 +211,8 @@ def create_engine_from_url(database_url: str) -> Engine:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
+
+    _instrument_sync_engine(engine)
 
     return engine
 
@@ -199,8 +259,23 @@ def create_async_session_factory(bind: AsyncEngine) -> async_sessionmaker[AsyncS
     )
 
 
+#: True once this module finished importing. ``engine = create_engine_from_url(...)
+#: `` runs *during* the import, and letting the factory attach pool
+#: instrumentation at that moment would import
+#: :mod:`onestep_control_plane_api.ops.observability` mid-import -- which can
+#: trip the pre-existing ``ops.__init__`` -> ``ops.readiness`` -> workers ->
+#: ``api.__init__`` -> ``api.routers.health`` -> ``ops.readiness`` import cycle
+#: (documented in the latency diagnostics runbook) and leave broken module
+#: residue in ``sys.modules`` for every later import to stumble over. The
+#: import-time engine is instrumented later instead: by the app lifespan and
+#: the ``/metrics`` exporter, both of which import observability safely after
+#: the API package has fully initialized.
+_MODULE_IMPORT_COMPLETE = False
+
 engine = create_engine_from_url(settings.database_url)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, class_=Session)
+
+_MODULE_IMPORT_COMPLETE = True
 
 
 def get_async_engine() -> AsyncEngine:
