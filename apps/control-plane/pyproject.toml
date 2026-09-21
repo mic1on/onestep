@@ -18,16 +18,29 @@ dependencies = [
   "pydantic-settings>=2.7.0",
   "psycopg[binary]>=3.2.0",
   "pyyaml>=6.0.3",
-  "sqlalchemy>=2.0.36",
+  # The "asyncio" extra declares greenlet unconditionally. SQLAlchemy's own
+  # greenlet requirement is marker-gated on platform_machine values such as
+  # "aarch64"/"x86_64"; macOS arm64 reports "arm64", so the marker never
+  # matches there and AsyncSession would fail at runtime with
+  # "ValueError: the greenlet library is required to use this function".
+  "sqlalchemy[asyncio]>=2.0.36",
   "uvicorn>=0.34.0",
   "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
+# aiosqlite is the async driver for the sqlite test path. It is declared in both
+# the "test" and "dev" extras because .github/workflows/control-plane.yml runs
+# `uv sync --frozen --extra dev` and then the full backend suite, while
+# .github/workflows/control-plane-contract.yml installs `--extra test`. It stays
+# out of the default dependencies so the production image
+# (`uv sync --frozen --no-dev`) does not ship a test-only driver.
 test = [
+  "aiosqlite>=0.20.0",
   "pytest>=8.4.0",
 ]
 dev = [
+  "aiosqlite>=0.20.0",
   "pytest>=8.4.0",
   "ruff>=0.13.0",
   "pyinstaller>=6.11.0",

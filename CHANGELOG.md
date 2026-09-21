@@ -1,11 +1,51 @@
 # Changelog
 
-## Unreleased
+## onestep 1.14.0
 
-- Fix runtime identity locks after process termination and container PID reuse.
-  Use OS file locks instead of PID liveness; retain the lock file and existing
-  identity/sequences. Stop old workers before upgrading a shared state directory.
-  See `docs/stable-instance-identity.md` for upgrade and rollback instructions.
+Control-plane reliability release: native-async database access on the
+WebSocket paths, stabilised instance-connectivity notifications, and a
+baseline of event-loop and connection-pool observability.
+
+- Fixes runtime identity locks after process termination and container PID
+  reuse (#187). OS file locks replace PID liveness checks; the lock file and
+  the existing identity/sequences are retained. Stop old workers before
+  upgrading a shared state directory. See `docs/stable-instance-identity.md`
+  for upgrade and rollback instructions.
+
+- Makes the agent and worker-agent WebSocket database access native-async
+  (#192, #206, #212, #214). Every message now runs as one short-transaction
+  work unit on the async engine, so a slow query yields to the event loop
+  instead of freezing all connected agents, and the `hello` handshake commits
+  its session atomically (an exception path can no longer leak an active
+  session).
+
+- Stabilises instance-connectivity notifications (#196, #209): a state change
+  is only confirmed after it stays stable for a damping window, and flap
+  damping suppresses the rapid offline/online oscillations that previously
+  produced notification storms. Digests are sent by final state, so an
+  instance that stayed offline for the whole window no longer reports a
+  recovery it never had. The default damping window is now
+  `max(configured, 2 x (detect + confirm intervals))` — deployments that
+  relied on the previous default will see fewer, later notifications.
+
+- Wires the observability baseline into the application (#197, #213):
+  event-loop lag sampling starts and stops with the app lifespan (with a
+  `/metrics` fallback when it is not running), and the synchronous engine
+  reports connection-pool checkout waits.
+
+- Hardens the work-agent connection lifecycle (#194, #195, #201, #202, #205):
+  the heartbeat task is supervised (a failed heartbeat no longer silently
+  kills liveness), reconnect backoff uses Full Jitter to avoid reconnect
+  stampedes, and after a reconnect the agent actively requests a topology
+  re-send instead of waiting for the control plane to notice.
+
+- Adds a read-only `session_generation` property to the reporter plugin (#211).
+
+- Upgrade note: this release ships one new Alembic migration (202607250001,
+  adds nullable connectivity-damping columns). Run `alembic upgrade head`
+  before restarting; old containers stay compatible during a rolling deploy.
+
+- Refactors the internal import graph with no user-visible behaviour change.
 
 ## onestep-feishu-bitable 0.6.1
 

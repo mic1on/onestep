@@ -19,6 +19,31 @@ class Settings(BaseSettings):
     debug: bool = False
     instance_offline_after_s: int = Field(default=90, ge=1)
     instance_health_participation_window_s: int = Field(default=3600, ge=1)
+    # --- issue #196: connectivity stable confirmation + flapping damping -----
+    # Stable confirmation: a connectivity flip is notified only once the new
+    # state has held for this long. The clock starts at the flip's own
+    # transition_at (offline: last_seen_at + instance_offline_after_s), NOT at
+    # the scan that noticed it, so a sustained outage is not delayed by a full
+    # extra window. Clamped to instance_offline_after_s at use time, bounding the
+    # worst-case added latency by the detection window the operator already
+    # accepts.
+    instance_connectivity_confirm_after_s: int = Field(default=30, ge=0)
+    # Flap episode window: consecutive confirmed flips closer together than this
+    # belong to one flapping episode. CONSTRAINT: two confirmed flips can never
+    # be closer than instance_offline_after_s (an offline observation only
+    # exists after that much silence) plus the confirmation window, so the
+    # effective window is floored at 2 x (instance_offline_after_s +
+    # instance_connectivity_confirm_after_s) at use time -- see
+    # `_connectivity_flap_window_s`. A smaller window would make damping
+    # unreachable: every flip would arrive after the previous episode already
+    # went quiet, so each flip starts a fresh episode and nothing is ever
+    # suppressed. The default already satisfies the floor for the defaults of
+    # the other two settings (2 x (90 + 30) = 240).
+    instance_connectivity_flap_window_s: int = Field(default=240, ge=1)
+    # Confirmed flips of one episode that are notified before the rest are
+    # suppressed and summarized. Headroom before damping: early flips may be
+    # benign, so stay conservative before going quiet.
+    instance_connectivity_flap_max_notifications: int = Field(default=3, ge=1)
     database_url: str = DEFAULT_DATABASE_URL
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
     worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)

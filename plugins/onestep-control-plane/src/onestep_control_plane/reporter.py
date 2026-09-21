@@ -980,6 +980,22 @@ class ControlPlaneReporter:
         await self._send_via_sender("sync", payload, wait_for_delivery=wait_for_delivery)
         self._last_synced_topology_hash = topology_hash
 
+    def request_topology_resync(self) -> None:
+        """Forget the recorded topology hash so the next sync re-arms it."""
+        self._last_synced_topology_hash = None
+
+    async def resync_topology_for_new_session(self) -> None:
+        """Re-send the current topology for a session that just completed hello.
+
+        A previous sync reaching the wire says nothing about whether the server
+        persisted it, so every new session re-arms the current topology. The
+        hash is cleared first so dedupe cannot suppress the resend; the send
+        itself goes through the ordinary telemetry path and inherits its
+        coalescing and backpressure.
+        """
+        self.request_topology_resync()
+        await self._safe_send_sync()
+
     async def _safe_send_heartbeat(self) -> None:
         try:
             await self._send_heartbeat()

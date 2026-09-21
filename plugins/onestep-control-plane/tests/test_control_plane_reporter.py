@@ -975,3 +975,67 @@ def test_reporter_reports_table_sink_batch_size() -> None:
     payload = next(payload for channel, payload in recorder.calls if channel == "sync")
     config = payload["app"]["tasks"][0]["emit"][0]["config"]
     assert config["batch_size"] == 250
+
+
+def test_reporter_dedupes_unchanged_topology_within_a_session() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        # Startup already sent one sync; more syncs with no topology change and
+        # no new session must add nothing.
+        await reporter._safe_send_sync()
+        await reporter._safe_send_sync()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_calls = [payload for channel, payload in recorder.calls if channel == "sync"]
+    assert len(sync_calls) == 1, "an unchanged topology must not be re-sent"
+    hashes = {payload["app"]["topology_hash"] for payload in sync_calls}
+    assert len(hashes) == 1
+
+
+def test_reporter_resends_unchanged_topology_for_a_new_session() -> None:
+    """#194: the same hash must be re-sent once a new session completes hello.
+
+    A send only proves the payload reached the wire, so it is never treated as
+    the server having persisted the topology.
+    """
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        # Stands in for the sender signalling "this session completed hello".
+        await reporter.resync_topology_for_new_session()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_calls = [payload for channel, payload in recorder.calls if channel == "sync"]
+    assert len(sync_calls) == 2, "a new session must re-arm the current topology"
+    assert sync_calls[0]["app"]["topology_hash"] == sync_calls[1]["app"]["topology_hash"]
+    assert sync_calls[1]["sequence"] > sync_calls[0]["sequence"]
+
+
+def test_reporter_send_sync_now_still_forces_a_send() -> None:
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        await reporter.send_sync_now()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    sync_calls = [payload for channel, payload in recorder.calls if channel == "sync"]
+    assert len(sync_calls) == 2, "sync_now is explicit and ignores dedupe"

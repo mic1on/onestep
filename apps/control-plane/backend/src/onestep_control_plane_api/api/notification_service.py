@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -11,6 +12,7 @@ import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
 
 from onestep_control_plane_api.api.common import utcnow
@@ -22,6 +24,7 @@ from onestep_control_plane_api.api.notification_helpers import (
     NotificationEventRecord,
     NotificationFailureInfo,
     NotificationMetricLine,
+    as_utc_datetime,
     instance_connectivity_dedupe_key,
     is_service_in_scope,
     missed_start_dedupe_key,
@@ -61,6 +64,43 @@ DEFAULT_WEBHOOK_TIMEOUT_S = 5.0
 DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT = 32
 MISSED_START_SCAN_MAX_WINDOW = timedelta(hours=24)
 INSTANCE_CONNECTIVITY_EVENT_TYPES = frozenset({"instance_online", "instance_offline"})
+
+# --------------------------------------------------------------------------------------
+# Issue #196 -- stable confirmation and flapping damping for connectivity flips.
+#
+# A raw connectivity observation is a *sample*, not a fact: a host that misses one
+# heartbeat looks offline and looks fine a moment later. Notifying every sample
+# produces a storm; suppressing everything hides real outages. Two independent
+# mechanisms resolve this, both persisted on NotificationInstanceState so they
+# survive a restart or a leader switch:
+#
+#   1. STABLE CONFIRMATION -- a flip is notified only once the new connectivity has
+#      held for `instance_connectivity_confirm_after_s`, measured from the flip's
+#      own transition_at (offline: last_seen_at + instance_offline_after_s) rather
+#      than from the scan that noticed it. A flip that heals inside the window is
+#      cancelled and never notified.
+#   2. FLAP DAMPING -- a run of confirmed flips closer together than
+#      `instance_connectivity_flap_window_s` is one episode. The first
+#      `instance_connectivity_flap_max_notifications` flips are notified; later
+#      ones are counted, not sent; one summary reports the suppressed count when
+#      the episode goes quiet.
+#
+# Alert delay for a sustained outage: instance_offline_after_s (detection) plus the
+# part of confirm_after_s that outlives it (confirmation), bounded above by
+# 2 x instance_offline_after_s because confirmation is clamped.
+#
+# Parameter coupling that must hold for damping to ever engage: the SHORTEST real
+# gap between two confirmed flips is (offline detection + confirmation) =
+# instance_offline_after_s + _connectivity_confirm_after_s(). If the flap window is
+# not at least that long, every consecutive flip arrives after the previous episode
+# has already gone quiet, so each flip starts a fresh episode and the suppressed
+# count stays zero forever. The default therefore derives the window as 2x that
+# sum; see `_connectivity_flap_window_s`.
+#
+# Explicitly NOT claimed: exactly-once delivery, and no claim that a suppressed
+# flip "did not happen" -- the summary states the count, so silence never reads as
+# health.
+# --------------------------------------------------------------------------------------
 
 
 def _normalize_success_summary(raw_summary: Any) -> str | None:
@@ -283,6 +323,223 @@ def _build_instance_connectivity_notification_event(
             f"?environment={service.environment}"
         ),
     )
+
+
+def _connectivity_confirm_after_s() -> int:
+    """Stable-confirmation window, clamped so it cannot exceed the offline window.
+
+    The clamp bounds the added alert latency by the window the operator already
+    accepts for detection: worst case is instance_offline_after_s (detection) +
+    instance_offline_after_s (confirmation), never more.
+    """
+
+    return min(
+        settings.instance_connectivity_confirm_after_s,
+        settings.instance_offline_after_s,
+    )
+
+
+def _connectivity_flap_window_s() -> int:
+    """Flap episode window, with a floor derived from the detection mechanics.
+
+    Two confirmed flips can never be closer together than the shortest real
+    offline leg: an offline observation only exists after
+    ``instance_offline_after_s`` of silence, and only notifies after the
+    confirmation window on top of that. A window below that sum makes damping
+    UNREACHABLE with the default parameters -- each flip arrives after the
+    previous episode has already gone quiet, so every flip starts a fresh
+    episode and the suppressed count stays zero forever. The floor enforces the
+    constraint ``flap_window_s >= 2 x (offline_after + confirm_after)`` (2x for
+    headroom), so consecutive flips always land inside one episode.
+    """
+
+    configured = settings.instance_connectivity_flap_window_s
+    floor = 2 * (settings.instance_offline_after_s + _connectivity_confirm_after_s())
+    return max(configured, floor)
+
+
+def _pending_flip_is_confirmed(
+    *,
+    pending_since: datetime,
+    now: datetime,
+    confirm_after_s: int,
+) -> bool:
+    """A pending flip is confirmed once it has held for the confirmation window."""
+
+    return (now - pending_since).total_seconds() >= confirm_after_s
+
+
+def _flap_episode_is_open(
+    *,
+    last_flip_at: datetime,
+    now: datetime,
+    flap_window_s: int,
+) -> bool:
+    """An episode stays open while confirmed flips keep arriving within the window."""
+
+    return (now - last_flip_at).total_seconds() < flap_window_s
+
+
+def _build_flap_summary_event(
+    instance: Instance,
+    *,
+    service: Service,
+    final_connectivity: str,
+    suppressed_count: int,
+    episode_flips: int,
+    episode_started_at: datetime,
+    episode_last_flip_at: datetime,
+    now: datetime,
+) -> NotificationEventRecord:
+    """One summary for a flapping episode whose later flips were suppressed.
+
+    The event type reflects the episode's FINAL state, never a fixed one: the
+    summary must not disagree with the last notified fact. If the instance is
+    still offline when the episode quiets, an ``instance_online`` (green
+    "recovered") card would tell the operator the opposite of the truth, so the
+    final offline state renders as ``instance_offline``; a final online state
+    renders as ``instance_online``. Either way it states the suppressed count
+    explicitly: it is a comment on the episode, never a health claim.
+    """
+
+    event_type = "instance_online" if final_connectivity == "online" else "instance_offline"
+    return NotificationEventRecord(
+        event_type=event_type,
+        service_name=service.name,
+        service_environment=service.environment,
+        task_name=None,
+        occurred_at=episode_last_flip_at,
+        instance_id=str(instance.instance_id),
+        node_name=instance.node_name,
+        last_seen_at=instance.last_seen_at,
+        detected_at=now,
+        console_url=settings.build_console_url(
+            f"/services/{service.name}/instances/{instance.instance_id}"
+            f"?environment={service.environment}"
+        ),
+        suppressed_flip_count=suppressed_count,
+        flap_episode_started_at=episode_started_at,
+        flap_episode_last_flip_at=episode_last_flip_at,
+        flap_episode_flips=episode_flips,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _FlapEpisodeSnapshot:
+    """Episode bookkeeping captured BEFORE the counters are reset.
+
+    The summary must carry the suppressed count and episode bounds, so they are
+    read out first and the reset happens afterwards -- never the other way
+    round, which would summarise a blank episode.
+    """
+
+    suppressed_count: int
+    episode_flips: int
+    started_at: datetime
+    last_flip_at: datetime
+    final_connectivity: str
+
+
+def _snapshot_flap_episode(
+    state: NotificationInstanceState,
+    *,
+    now: datetime,
+) -> _FlapEpisodeSnapshot | None:
+    """Capture and clear an episode that just went quiet.
+
+    Returns None when there was no quiet episode (or it owed no summary, i.e.
+    nothing had been suppressed). The snapshot is taken before any counter is
+    mutated, so the summary never renders zeroed-out state.
+    """
+
+    last_flip_at = state.flap_episode_last_flip_at
+    if last_flip_at is None:
+        return None
+    if _flap_episode_is_open(
+        last_flip_at=as_utc_datetime(last_flip_at),
+        now=now,
+        flap_window_s=_connectivity_flap_window_s(),
+    ):
+        return None
+    suppressed_count = int(state.flap_suppressed_count or 0)
+    if suppressed_count <= 0:
+        # Nothing was withheld, so there is nothing to summarise; still close
+        # the episode so a fresh one can start.
+        _close_flap_episode(state)
+        return None
+    snapshot = _FlapEpisodeSnapshot(
+        suppressed_count=suppressed_count,
+        episode_flips=int(state.flap_episode_flips or 0),
+        started_at=as_utc_datetime(state.flap_episode_started_at or last_flip_at),
+        last_flip_at=as_utc_datetime(last_flip_at),
+        final_connectivity=state.last_connectivity,
+    )
+    _close_flap_episode(state)
+    return snapshot
+
+
+def _emit_flap_summary(
+    db: Session,
+    *,
+    channel: NotificationChannel,
+    instance: Instance,
+    service: Service,
+    snapshot: _FlapEpisodeSnapshot,
+    now: datetime,
+) -> list[tuple[NotificationDelivery, str]]:
+    """Emit the single summary for a flapping episode that just went quiet."""
+
+    summary_event_type = (
+        "instance_online" if snapshot.final_connectivity == "online" else "instance_offline"
+    )
+    if summary_event_type not in channel.event_types_json:
+        # Channel not subscribed to the episode's final event type: skip rather
+        # than mislabel the summary so it can sneak through a different filter.
+        return []
+    summary = _build_flap_summary_event(
+        instance,
+        service=service,
+        final_connectivity=snapshot.final_connectivity,
+        suppressed_count=snapshot.suppressed_count,
+        episode_flips=snapshot.episode_flips,
+        episode_started_at=snapshot.started_at,
+        episode_last_flip_at=snapshot.last_flip_at,
+        now=now,
+    )
+    delivery = _persist_pending_delivery(
+        db,
+        channel=channel,
+        notification_event=summary,
+        dedupe_key=instance_connectivity_dedupe_key(
+            str(channel.id),
+            service_name=service.name,
+            service_environment=service.environment,
+            instance_id=str(instance.instance_id),
+            event_type=summary_event_type,
+            occurred_at=summary.occurred_at,
+        ),
+        task_event_id=None,
+        scheduled_at=None,
+    )
+    if delivery is None:
+        return []
+    return [(delivery, channel.webhook_url)]
+
+
+def _reset_pending_flip(state: NotificationInstanceState) -> None:
+    """Drop a parked (not-yet-confirmed) flip candidate."""
+
+    state.pending_connectivity = None
+    state.pending_since = None
+
+
+def _close_flap_episode(state: NotificationInstanceState) -> None:
+    """Reset flap bookkeeping after an episode has been summarized."""
+
+    state.flap_episode_started_at = None
+    state.flap_episode_last_flip_at = None
+    state.flap_episode_flips = 0
+    state.flap_suppressed_count = 0
 
 
 def _service_matches_channel(
@@ -1056,11 +1313,19 @@ def list_notification_services(db: Session) -> NotificationServiceListResponse:
     )
 
 
-def scan_and_dispatch_instance_connectivity_notifications(
+def _scan_and_dispatch_instance_connectivity_notifications_sync(
     db: Session,
     *,
     now: datetime | None = None,
 ) -> int:
+    """Scan body. Transaction ownership stays with the caller's work unit.
+
+    Per the async transaction convention, this body never commits: the caller
+    (the synchronous entry point below, or ``session_scope`` on the async path)
+    owns the transaction, so a scan that is only part of a larger work unit can
+    still be rolled back atomically.
+    """
+
     current_time = _normalize_scan_now(now)
     channels = db.scalars(
         select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
@@ -1092,6 +1357,9 @@ def scan_and_dispatch_instance_connectivity_notifications(
     ).all()
     cutoff = online_cutoff(current_time)
     pending_deliveries: list[tuple[NotificationDelivery, str]] = []
+    confirm_after_s = _connectivity_confirm_after_s()
+    flap_window_s = _connectivity_flap_window_s()
+    flap_max_notifications = settings.instance_connectivity_flap_max_notifications
 
     for channel in connectivity_channels:
         for instance in instances:
@@ -1115,19 +1383,82 @@ def scan_and_dispatch_instance_connectivity_notifications(
             state_key = (channel.id, instance.instance_id)
             state = state_by_key.get(state_key)
             if state is None:
+                # First observation: seed the state, notify nothing -- there is no
+                # prior connectivity to have flipped from.
                 state = NotificationInstanceState(
                     channel_id=channel.id,
                     instance_id=instance.instance_id,
                     last_connectivity=connectivity,
                     last_transition_at=transition_at,
+                    flap_episode_flips=0,
+                    flap_suppressed_count=0,
                 )
                 db.add(state)
                 state_by_key[state_key] = state
                 continue
 
             if state.last_connectivity == connectivity:
+                # Observation agrees with the confirmed state.
+                if state.pending_connectivity is not None:
+                    # A candidate flip healed inside the window: cancel it. This
+                    # is what makes a transient drop invisible instead of noisy.
+                    _reset_pending_flip(state)
+                snapshot = _snapshot_flap_episode(state, now=current_time)
+                if snapshot is not None:
+                    # A quiet scan ends a flapping episode that went silent, so
+                    # damping cannot outlive the flapping it was damping. The
+                    # snapshot was captured before the counters were reset, so
+                    # the summary still carries the suppressed count and the
+                    # episode's final (possibly offline) state.
+                    pending_deliveries.extend(
+                        _emit_flap_summary(
+                            db,
+                            channel=channel,
+                            instance=instance,
+                            service=service,
+                            snapshot=snapshot,
+                            now=current_time,
+                        )
+                    )
                 continue
 
+            # --- stable confirmation ------------------------------------------
+            # The clock starts at the flip's own transition_at, not at the scan
+            # that noticed it: transition_at is when the instance factually
+            # changed (offline: last_seen_at + instance_offline_after_s), so the
+            # window confirms the STATE rather than how long this process has
+            # been watching.
+            if state.pending_connectivity != connectivity:
+                state.pending_connectivity = connectivity
+                # Recovery (online) is self-evidencing: transition_at == last_seen_at
+                # and the instance just proved it is alive by checking in, so it
+                # needs no further confirmation. Only the OFFLINE direction is
+                # ambiguous -- silence could be a blip -- so only that is damped.
+                # This is also why a recovery is never delayed: coming back must
+                # be reported promptly.
+                # Recovery (online) is self-evidencing: transition_at ==
+                # last_seen_at and the instance just proved it is alive by
+                # checking in, so it needs no further confirmation. Only the
+                # OFFLINE direction is ambiguous -- silence may be a blip -- so
+                # only that is damped. This is also what keeps a recovery prompt.
+                state.pending_since = (
+                    None if connectivity == "online" else transition_at
+                )
+            # No `continue` on purpose: the offline clock is anchored at
+            # transition_at, so the window may already have elapsed by the time a
+            # scan first sees the flip -- in which case it is confirmed in THIS
+            # pass. Parking and waiting a whole extra scan would delay every
+            # sustained outage by a full window.
+            pending_since = state.pending_since
+            if pending_since is not None and not _pending_flip_is_confirmed(
+                pending_since=as_utc_datetime(pending_since),
+                now=current_time,
+                confirm_after_s=confirm_after_s,
+            ):
+                continue
+
+            # --- confirmed flip: advance state, then apply flap damping -------
+            _reset_pending_flip(state)
             state.last_connectivity = connectivity
             state.last_transition_at = transition_at
 
@@ -1138,9 +1469,33 @@ def scan_and_dispatch_instance_connectivity_notifications(
                 now=current_time,
             )
             if notification_event.event_type not in channel.event_types_json:
+                # Unsubscribed: state still advances (unchanged behaviour), and no
+                # flap bookkeeping -- nothing was notified, so nothing to damp.
                 continue
 
             event_type = "instance_online" if connectivity == "online" else "instance_offline"
+            episode_open = state.flap_episode_last_flip_at is not None and _flap_episode_is_open(
+                last_flip_at=as_utc_datetime(state.flap_episode_last_flip_at),
+                now=current_time,
+                flap_window_s=flap_window_s,
+            )
+            if not episode_open:
+                state.flap_episode_started_at = current_time
+                state.flap_episode_flips = 1
+                state.flap_suppressed_count = 0
+                notified_this_flip = True
+            else:
+                state.flap_episode_flips = int(state.flap_episode_flips or 0) + 1
+                notified_this_flip = state.flap_episode_flips <= flap_max_notifications
+            state.flap_episode_last_flip_at = current_time
+
+            if not notified_this_flip:
+                # Damped: count it and stay quiet. A sustained outage is never
+                # hidden -- quieting applies to flip chatter, and the final
+                # offline state is still delivered by the next undamped flip.
+                state.flap_suppressed_count = int(state.flap_suppressed_count or 0) + 1
+                continue
+
             delivery = _persist_pending_delivery(
                 db,
                 channel=channel,
@@ -1159,15 +1514,55 @@ def scan_and_dispatch_instance_connectivity_notifications(
             if delivery is not None:
                 pending_deliveries.append((delivery, channel.webhook_url))
 
-    if not pending_deliveries:
-        db.commit()
-        return 0
-
-    db.commit()
+    db.flush()
     return len(pending_deliveries)
 
 
-def dispatch_runtime_task_event_notifications(
+def scan_and_dispatch_instance_connectivity_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Synchronous entry point: scan in a transaction owned here.
+
+    Behaviour is byte-for-byte what it was before the async conversion,
+    including the unconditional ``db.commit()`` this entry point has always
+    done. Kept because the synchronous tests and any synchronous caller still
+    drive it.
+    """
+
+    try:
+        count = _scan_and_dispatch_instance_connectivity_notifications_sync(db, now=now)
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return count
+
+
+async def scan_and_dispatch_instance_connectivity_notifications_async(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Scan for connectivity transitions inside the caller's async work unit.
+
+    The scan body is invoked through ``AsyncSession.run_sync``: the same
+    underlying session, so the queries, the state updates and the outbox writes
+    all participate in this work unit's transaction and connection. That is
+    SQLAlchemy's greenlet-cooperative bridge, not ``asyncio.to_thread``.
+
+    No commit here: ``session_scope`` owns the transaction, so a slow scan holds
+    one short transaction and a cancellation rolls it back instead of stranding
+    it.
+    """
+
+    return await session.run_sync(
+        lambda db: _scan_and_dispatch_instance_connectivity_notifications_sync(db, now=now)
+    )
+
+
+def _dispatch_runtime_task_event_notifications(
     db: Session,
     *,
     task_events: list[TaskEvent],
@@ -1202,12 +1597,61 @@ def dispatch_runtime_task_event_notifications(
     return len(pending_deliveries)
 
 
-def scan_and_dispatch_missed_start_notifications(
+async def dispatch_runtime_task_event_notifications(
+    session: AsyncSession,
+    *,
+    task_events: list[TaskEvent],
+) -> int:
+    """Create pending deliveries for runtime task events on the async session.
+
+    The synchronous body above is invoked through ``AsyncSession.run_sync`` and
+    ``_persist_pending_delivery`` is left byte-identical. That is deliberate and
+    load-bearing:
+
+    ``_persist_pending_delivery`` has three callers: this path plus
+    ``scan_and_dispatch_missed_start_notifications`` and
+    ``scan_and_dispatch_instance_connectivity_notifications``, which are still
+    synchronous and are owned by the notification-scan work. If the helper
+    became ``async``, those two callers would keep calling it synchronously,
+    which is a silent no-op: every ``begin_nested``/``flush``/``refresh`` would
+    return a discarded coroutine without raising, and a duplicate insert would
+    leak ``IntegrityError`` instead of deduping to ``None``.
+
+    ``run_sync`` hands the same underlying session to the synchronous callable,
+    so it participates in this work unit's transaction and connection. This is
+    SQLAlchemy's own greenlet-cooperative bridge, not the rejected
+    ``asyncio.to_thread`` pattern. Measured on PostgreSQL 16: a 1.5 s
+    ``pg_sleep`` driven through ``run_sync`` let an independent asyncio ticker
+    run 130 iterations, and a ``pool_size=1`` connection-pool wait let it run
+    136.
+
+    The notification-scanner path now goes through
+    ``scan_and_dispatch_missed_start_notifications_async`` /
+    ``scan_and_dispatch_instance_connectivity_notifications_async``, which run
+    this same helper through ``run_sync`` on their own ``session_scope`` work
+    unit. The outbox drain path stays synchronous and is unaffected by this
+    function.
+    """
+
+    return await session.run_sync(
+        lambda db: _dispatch_runtime_task_event_notifications(db, task_events=task_events)
+    )
+
+
+def _scan_and_dispatch_missed_start_notifications_sync(
     db: Session,
     *,
     now: datetime | None = None,
     min_last_seen_at: datetime | None = None,
 ) -> int:
+    """Scan body. Transaction ownership stays with the caller's work unit.
+
+    Per the async transaction convention, this body never commits: the caller
+    (the synchronous entry point below, or ``session_scope`` on the async path)
+    owns the transaction, so a scan that is only part of a larger work unit can
+    still be rolled back atomically.
+    """
+
     current_time = _normalize_scan_now(now)
     online_service_started_at_by_id = _online_service_started_at_by_id(
         db,
@@ -1298,9 +1742,54 @@ def scan_and_dispatch_missed_start_notifications(
                     pending_deliveries.append((delivery, channel.webhook_url))
                 break
 
-    if not pending_deliveries:
-        db.commit()
-        return 0
-
-    db.commit()
+    db.flush()
     return len(pending_deliveries)
+
+
+def scan_and_dispatch_missed_start_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
+) -> int:
+    """Synchronous entry point: scan in a transaction owned here.
+
+    Behaviour is byte-for-byte what it was before the async conversion,
+    including the unconditional ``db.commit()`` this entry point has always
+    done. Kept because the synchronous tests and any synchronous caller still
+    drive it.
+    """
+
+    try:
+        count = _scan_and_dispatch_missed_start_notifications_sync(
+            db,
+            now=now,
+            min_last_seen_at=min_last_seen_at,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return count
+
+
+async def scan_and_dispatch_missed_start_notifications_async(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
+) -> int:
+    """Scan for missed starts inside the caller's async work unit.
+
+    The scan body is invoked through ``AsyncSession.run_sync`` so the queries
+    and the outbox writes join this work unit's transaction and connection.
+    No commit here: ``session_scope`` owns the transaction.
+    """
+
+    return await session.run_sync(
+        lambda db: _scan_and_dispatch_missed_start_notifications_sync(
+            db,
+            now=now,
+            min_last_seen_at=min_last_seen_at,
+        )
+    )

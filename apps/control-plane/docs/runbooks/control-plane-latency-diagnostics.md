@@ -48,14 +48,14 @@ Structured log events (identity is correlated here, never in labels):
 Every record carries `event` and `logged_at` (ISO-8601 UTC), so log lines and
 metric timestamps can be put on one clock.
 
-> **Status of the wiring.** This runbook documents the baseline module plus the
-> `/metrics` exposure that landed with #197. Instrumenting the *actual* websocket
-> and scan call sites (`api/routers/agent_ws.py`, `workers/notification_scanner.py`)
-> is a follow-up wiring PR that lands after #192/#193 convert those paths to
-> native async. Until that lands, the pool histogram and the lag gauges are only
-> populated where something already calls `instrument_engine` /
-> `ensure_event_loop_lag_sampler_started` (the `/metrics` endpoint starts the lag
-> sampler on first scrape).
+> **Status of the wiring.** Since #213 the wiring is complete for the two
+> production seams: the application lifespan starts the lag sampler on startup
+> and stops it on shutdown (the `/metrics` endpoint still starts it as a
+> fallback for anything that never runs the lifespan), and the synchronous
+> engine factory (`db/session.py`) instruments the sync pool under
+> `name="default"` while the notification scanner instruments the async pool
+> under `name="async"`. The pool histogram and the lag gauges are therefore
+> populated from process start, without waiting for a scrape.
 
 ## 2. Reproducible diagnostic session
 
@@ -250,8 +250,12 @@ each one limits what the evidence can prove.
 4. **Lag conflates causes.** The sampler sees "the loop was late", not "the loop
    was late because of X". GC pauses, CPU starvation, thread-pool saturation and
    a synchronous database call all look the same.
-5. **The sampler only runs if something starts it.** `event_loop_lag_sampler_running 0`
-   means *no data*, not *no lag*.
+5. **The sampler only runs if something starts it.** Since #213 the application
+   lifespan starts it at startup and stops it at shutdown, so
+   `event_loop_lag_sampler_running 0` means either the process is not the API
+   (a worker script that never runs the lifespan) or the sampler task died.
+   In both cases the gauge means *no data*, not *no lag*; the `/metrics`
+   endpoint still starts the sampler as a fallback on its first scrape.
 6. **Per-process scope.** Every metric is process-local. With multiple replicas,
    aggregate per pod; a single scrape tells you nothing about the other replicas.
 7. **Counters reset on restart.** `*_total` values are per-process and restart at
@@ -287,6 +291,29 @@ each one limits what the evidence can prove.
     occupancy numbers are stale — check that something still calls
     `refresh_pool_occupancy` (only the follow-up wiring PR will do so
     periodically in production).
+16. **The log scrubber is name- and shape-based, and that is a real limit.**
+    `build_log_fields` redacts a value in two cases only: its **field name**
+    matches `SENSITIVE_FIELD_PATTERN` (token, authorization, password,
+    auth_header, cookie, credential, api_key, private_key, dsn, database_url,
+    body, payload, raw_message, message_body), or its **string form** contains a
+    `Bearer <token>` / `token=<value>` *shape*. Consequences to state in any
+    write-up that relies on log evidence:
+
+    * a bare secret under a **non**-sensitive key name passes through verbatim —
+      `{"note": "hunter2"}` is logged as `hunter2`, because the value has neither
+      a sensitive name nor a credential shape;
+    * a connection string under a non-sensitive name passes through too —
+      `{"target": "postgresql://user:pw@host/db"}` is not caught, while the same
+      string under `database_url` or `dsn` is;
+    * nesting is walked only within `MAX_SANITIZE_DEPTH` (12) levels and within a
+      cycle guard. Deeper than that the whole remaining subtree is replaced by
+      `[redacted]` wholesale rather than described, so a deep structure cannot
+      leak through the string fallback — but it also means a deep structure is
+      *not* usefully logged. Reduce the depth at the call site if you need the
+      contents.
+
+    Treat "no secret appears in the logs" as a statement about these three
+    mechanisms, not as proof that no secret was ever passed to a log call.
 
 ## 6. Useful PromQL
 
