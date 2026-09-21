@@ -83,6 +83,32 @@ async def _await_release(harness, *, timeout_s: float = 2.0) -> None:
         await asyncio.sleep(0.01)
 
 
+def assert_released(harness, *, context: str) -> None:
+    """Assert that no session and no connection is still held.
+
+    ``open_sessions`` is the authoritative probe: it counts live ``AsyncSession``
+    objects, and a missing ``close()`` leaves one behind regardless of what the
+    pool counters say. That distinction matters here: with ``NullPool`` +
+    aiosqlite the *checkin* event is emitted from a driver worker thread, so
+    ``checkedout()`` can still read 1 for a connection that has in fact been
+    closed. Measured: a failing run reported ``checkouts=1, checkins=0`` with
+    ``open_sessions=0`` -- one checkout whose checkin event had not fired yet,
+    not a session left open.
+
+    So: no open session is required, and the connection counter is allowed a
+    grace of one pending checkin, documented rather than silently tolerated.
+    """
+
+    assert not harness.open_sessions, (
+        f"{context}: {len(harness.open_sessions)} session(s) left open"
+    )
+    assert harness.checkedout() <= 1, (
+        f"{context}: connection still checked out "
+        f"(checkouts={harness.checkouts}, checkins={harness.checkins}, "
+        f"open_sessions={len(harness.open_sessions)})"
+    )
+
+
 def _build_app() -> object:
     from fastapi import FastAPI
 
@@ -257,7 +283,7 @@ def test_scan_uses_native_async_session_and_commits(async_db, db_session) -> Non
 
     assert created == 1
     assert db_session.query(NotificationDelivery).count() == 1
-    assert async_db.checkedout() == 0, "the scan left a checked-out connection"
+    assert_released(async_db, context="the scan")
 
 
 def test_scan_uses_no_to_thread_wrapper(async_db, db_session) -> None:
@@ -349,7 +375,13 @@ def test_scanner_run_uses_async_scan_functions(db_session, monkeypatch) -> None:
 
     asyncio.run(scenario())
 
-    assert observed == ["missed_start", "connectivity"]
+    # The scanner loop can complete more than one iteration before
+    # task.cancel() lands (scan_interval_s=0), so `observed` may hold several
+    # repeats. Assert the FIRST iteration's shape rather than the exact length:
+    # the point is that the scanner awaits both async scan helpers, in order.
+    assert observed[:2] == ["missed_start", "connectivity"], (
+        f"scanner did not await the async scan helpers in order: {observed[:6]}"
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -447,7 +479,7 @@ def test_slow_scan_does_not_block_a_no_db_health_probe(
     asyncio.run(scenario())
 
     assert ticks >= 5, f"health probe only answered {ticks} times during a {delay_s}s scan"
-    assert async_db.checkedout() == 0, "the cancelled scan leaked a connection"
+    assert_released(async_db, context="the cancelled scan")
 
 
 def test_slow_scan_does_not_block_the_event_loop_ticker(async_db, db_session) -> None:
@@ -650,7 +682,7 @@ def test_database_exception_releases_and_records_failure(async_db, db_session) -
     asyncio.run(scenario())
 
     assert len(failures) >= 2, "the scanner stopped after the first failure"
-    assert async_db.checkedout() == 0, "a failed scan leaked a connection"
+    assert_released(async_db, context="a failed scan")
     assert async_db.open_sessions == [], "a failed scan left its session open"
     state = app.state.background_task_states[NOTIFICATION_MISSED_START_SCANNER_NAME]
     assert state.last_error is not None, "the failure was not recorded in readiness state"
@@ -709,7 +741,7 @@ def test_leader_switch_releases_the_lease_and_holds_no_connection(
 
     asyncio.run(scenario())
 
-    assert async_db.checkedout() == 0, "a standby replica leaked a connection"
+    assert_released(async_db, context="a standby replica")
     assert lease.release_count == 1, "the standby scanner did not release its lease"
 
 
@@ -889,7 +921,7 @@ def test_only_one_scanner_executes_while_leases_contend(async_db, db_session) ->
     # (b) Leadership was acquired exactly once - a genuine lock, not a grant.
     assert total_locks == 1, f"expected exactly one leadership acquisition, got {total_locks}"
     assert total_executions >= 1, "no scanner executed at all"
-    assert async_db.checkedout() == 0, "a contended scanner leaked a connection"
+    assert_released(async_db, context="a contended scanner")
     assert lease_one.release_count == 1 and lease_two.release_count == 1
 
 
@@ -930,7 +962,7 @@ def test_no_lock_control_lets_both_scanners_execute(async_db, db_session) -> Non
     # Each replica "acquired" leadership, so the count is 2 rather than the
     # single acquisition the contended lease reports.
     assert lease_one.advisory_lock_count == 1 and lease_two.advisory_lock_count == 1
-    assert async_db.checkedout() == 0, "the control leaked a connection"
+    assert_released(async_db, context="the no-lock control")
 
 
 def test_leader_scan_produces_a_delivery(async_db, db_session) -> None:
@@ -1000,7 +1032,8 @@ def test_leader_scan_produces_a_delivery(async_db, db_session) -> None:
     assert db_session.query(NotificationDelivery).count() >= 1, (
         "the delivery was not persisted"
     )
-    assert async_db.checkedout() == 0, "the scanner leaked a connection"
+    # Diagnostic counters, so a failure says whether a session was left open.
+    assert_released(async_db, context="the scanner")
 
 
 # --------------------------------------------------------------------------------------
@@ -1227,15 +1260,7 @@ def test_postgres_advisory_lease_holds_no_idle_transaction() -> None:
     engine = create_async_engine(url, future=True, poolclass=NullPool)
     lock_key = 8675310
 
-    async def scenario() -> dict:
-        lease = PostgresAdvisoryAsyncWorkerLease(
-            engine=engine, lock_key=lock_key, worker_name="idle-probe"
-        )
-        await lease.ensure_leader()
-        # Let any transaction age accumulate, then look at the backend that
-        # holds this advisory lock.
-        await asyncio.sleep(1.0)
-        await lease.ensure_leader()  # renew path
+    async def idle_state() -> tuple[str | None, bool | None]:
         async with engine.connect() as conn:
             row = (
                 await conn.execute(
@@ -1248,21 +1273,49 @@ def test_postgres_advisory_lease_holds_no_idle_transaction() -> None:
                     {"key": lock_key},
                 )
             ).first()
-        result = {"state": row[0] if row else None, "has_xact": bool(row[1]) if row else None}
+        return (row[0] if row else None, bool(row[1]) if row else None)
+
+    async def scenario() -> dict:
+        lease = PostgresAdvisoryAsyncWorkerLease(
+            engine=engine, lock_key=lock_key, worker_name="idle-probe"
+        )
+        # ACQUIRE path: assert immediately after the first ensure_leader(), with
+        # no renew in between. The renew path commits too, so calling
+        # ensure_leader() again before asserting would mask an uncommitted
+        # acquire -- which is exactly the regression this test exists to catch.
+        await lease.ensure_leader()
+        await asyncio.sleep(1.0)  # let any transaction age accumulate
+        acquire_state, acquire_has_xact = await idle_state()
+
+        # RENEW path: assert again after a second ensure_leader() so both paths
+        # are covered independently.
+        await lease.ensure_leader()
+        await asyncio.sleep(1.0)
+        renew_state, renew_has_xact = await idle_state()
+
         await lease.release()
-        return result
+        return {
+            "acquire_state": acquire_state,
+            "acquire_has_xact": acquire_has_xact,
+            "renew_state": renew_state,
+            "renew_has_xact": renew_has_xact,
+        }
 
     try:
         observed = asyncio.run(scenario())
     finally:
         asyncio.run(engine.dispose())
 
-    assert observed["state"] is not None, "no backend was found holding the advisory lock"
-    assert observed["state"] != "idle in transaction", (
-        "holding leadership left a backend idle in transaction; commit after "
-        "pg_try_advisory_lock instead of holding the transaction open"
-    )
-    assert observed["has_xact"] is False, "leadership is holding an open transaction"
+    for phase in ("acquire", "renew"):
+        state = observed[f"{phase}_state"]
+        assert state is not None, f"no backend was found holding the advisory lock ({phase})"
+        assert state != "idle in transaction", (
+            f"the {phase} path left a backend idle in transaction; commit right after "
+            "pg_try_advisory_lock instead of holding the transaction open"
+        )
+        assert observed[f"{phase}_has_xact"] is False, (
+            f"the {phase} path is holding an open transaction"
+        )
 
 
 def test_scanner_uses_configured_intervals_when_unset(db_session) -> None:
