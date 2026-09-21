@@ -717,3 +717,218 @@ def test_label_cardinality_stays_bounded_under_identity_flood() -> None:
     assert 'scan="scan_7"' not in body
     # No identity-shaped value leaks into any label.
     assert not re.search(r'(instance_id|session_id)="', body)
+
+
+# --------------------------------------------------------------------------------------
+# Credential redaction: nesting depth, cycles and robustness (#197 follow-up)
+#
+# The original redaction test only exercised Bearer-shaped values at the top
+# level, so a bare secret under a sensitive key name -- which has no credential
+# *shape* for the text scrubber to recognise -- shipped unredacted as soon as it
+# was nested past the old two-level recursion guard. These tests pin the depth
+# dimension and the two failure modes that motivated the bounded budget: a
+# reference cycle and a pathologically deep structure. Both must be sanitized
+# WITHOUT raising, because _sanitize_log_value runs before logger.log(...) and
+# therefore propagates exceptions to the caller rather than to logging's
+# handler error path.
+# --------------------------------------------------------------------------------------
+
+# A bare secret: no "Bearer " prefix, no "token=" assignment, so only the KEY
+# NAME can identify it. This is the shape the original code leaked.
+BARE_SECRET = "sk-bare-EXFILTRATED-9f8a7b6c5d4e"
+SENSITIVE_LEAF_KEYS = ("token", "authorization", "password", "auth_header", "secret", "credential")
+
+# The field the #197 wiring (t17) actually passes; kept non-sensitive so it does
+# not mask the depth behaviour under test the way a sensitive top-level key would.
+NEUTRAL_TOP_KEY = "ctx"
+
+
+def _nest_secret(leaf_key: str, depth: int) -> dict[str, object]:
+    """Return {NEUTRAL_TOP_KEY: {...{leaf_key: BARE_SECRET}...}} at `depth` levels."""
+
+    value: object = {leaf_key: BARE_SECRET}
+    for level in range(depth):
+        value = {f"level_{level}": value}
+    return {NEUTRAL_TOP_KEY: value}
+
+
+@pytest.mark.parametrize("leaf_key", SENSITIVE_LEAF_KEYS)
+@pytest.mark.parametrize("depth", [0, 1, 2, 3, 4, 5, 6, 7])
+def test_bare_secret_under_sensitive_name_is_redacted_at_every_depth(
+    leaf_key: str, depth: int
+) -> None:
+    """A bare secret must never survive, at any nesting depth.
+
+    Fails against the pre-fix implementation (d920657) for depth >= 2: there the
+    recursion stopped at `depth < 2` and the leftover subtree was stringified
+    with `str(value)`, which prints the secret verbatim.
+    """
+
+    payload = obs.build_log_fields("probe", **{NEUTRAL_TOP_KEY: _nest_secret(leaf_key, depth)})
+
+    rendered = repr(payload)
+    assert BARE_SECRET not in rendered, f"leaked {leaf_key} at depth {depth}: {rendered}"
+    assert obs.REDACTED in rendered
+
+
+def test_bare_secret_is_redacted_beyond_the_depth_budget() -> None:
+    """Past MAX_SANITIZE_DEPTH the subtree is redacted wholesale, not stringified."""
+
+    budget = obs.MAX_SANITIZE_DEPTH
+    for depth in (budget - 1, budget, budget + 1, budget * 2):
+        payload = obs.build_log_fields("probe", **_nest_secret("token", depth))
+        assert BARE_SECRET not in repr(payload), f"leaked at depth {depth}"
+        assert obs.REDACTED in repr(payload), f"no placeholder at depth {depth}"
+
+
+def test_bare_secret_in_nested_list_is_redacted() -> None:
+    """The sequence branch must sanitize items, not just mappings."""
+
+    payload = obs.build_log_fields(
+        "probe", **{NEUTRAL_TOP_KEY: {"entries": [{"n": [{"token": BARE_SECRET}]}]}}
+    )
+
+    assert BARE_SECRET not in repr(payload)
+    assert obs.REDACTED in repr(payload)
+
+
+def test_cyclic_structure_is_sanitized_without_raising() -> None:
+    """A self-referential dict must terminate and must not emit its secret.
+
+    This is the caller-safety half of the fix: an unbounded walk would raise
+    RecursionError, and because sanitizing happens before logger.log(...) that
+    exception would reach the caller -- plausibly inside WS disconnect cleanup.
+    """
+
+    cyclic: dict[str, object] = {"name": "outer", "token": BARE_SECRET}
+    cyclic["self"] = cyclic
+
+    payload = obs.build_log_fields("probe", **{NEUTRAL_TOP_KEY: cyclic})
+
+    assert BARE_SECRET not in repr(payload)
+    assert obs.REDACTED in repr(payload)
+
+
+def test_deeply_nested_structure_is_sanitized_without_raising() -> None:
+    """A >=1000-level structure must not raise and must not emit its secret.
+
+    Reachable in practice: json.loads parses arbitrarily deep input iteratively,
+    so a deeply nested payload body can reach the sanitizer.
+    """
+
+    deep: object = {"token": BARE_SECRET}
+    for _ in range(1200):
+        deep = {"nested": deep}
+
+    payload = obs.build_log_fields("probe", **{NEUTRAL_TOP_KEY: deep})
+
+    assert BARE_SECRET not in repr(payload)
+    assert obs.REDACTED in repr(payload)
+
+
+def test_sanitizer_never_raises_on_adversarial_containers() -> None:
+    """Property-style sweep: no input shape may raise out of the sanitizer."""
+
+    cyclic_list: list[object] = [{"token": BARE_SECRET}]
+    cyclic_list.append(cyclic_list)
+    shared = {"token": BARE_SECRET}
+    inputs: list[object] = [
+        cyclic_list,
+        {"a": shared, "b": shared},  # shared (not cyclic) subtree, repeated
+        [[[[{"authorization": BARE_SECRET}]]]],
+        {"tuple": ({"password": BARE_SECRET},)},
+    ]
+    for index, value in enumerate(inputs):
+        payload = obs.build_log_fields("probe", **{NEUTRAL_TOP_KEY: value})
+        assert BARE_SECRET not in repr(payload), f"leaked for input {index}"
+
+
+def test_non_sensitive_name_is_documented_as_passing_through() -> None:
+    """Pin the honest limitation: a bare secret under a NEUTRAL name is not caught.
+
+    This locks the documented blind spot into a test so the docstring and runbook
+    cannot drift back into overclaiming. If a future change starts catching this,
+    the documentation must be updated together with this test.
+    """
+
+    payload = obs.build_log_fields("probe", note=BARE_SECRET)
+
+    assert payload["note"] == BARE_SECRET
+    assert "non-sensitive" in " ".join(_runbook_blind_spot_text().lower().split())
+
+
+def _runbook_blind_spot_text() -> str:
+    """Return the runbook's redaction blind-spot paragraph (or '' if absent)."""
+
+    runbook = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "runbooks"
+        / "control-plane-latency-diagnostics.md"
+    )
+    return runbook.read_text(encoding="utf-8")
+
+
+def test_wiring_shape_payload_body_headers_authorization_is_redacted() -> None:
+    """The planned t17 wiring shape must stay redacted after this fix.
+
+    Guard against the repair regressing the usage it was written for: the wiring
+    passes the raw message body through, whose headers carry the auth value.
+    """
+
+    payload = obs.build_log_fields(
+        "probe", **{NEUTRAL_TOP_KEY: {"body": {"headers": {"authorization": BARE_SECRET}}}}
+    )
+
+    assert BARE_SECRET not in repr(payload)
+    assert obs.REDACTED in repr(payload)
+
+
+@pytest.mark.parametrize("marker", ["close_code_known", "close_reason_known"])
+# close_code / close_reason themselves are keyword-only parameters, so a
+# duplicate is a TypeError at call time; the *_known markers are the ones
+# reachable through **fields and therefore need the runtime guard.
+
+def test_caller_cannot_forge_ws_close_markers(marker: str) -> None:
+    """A caller passing **fields must not be able to overwrite a derived marker.
+
+    The markers state whether the close code/reason was genuinely known; letting
+    a caller set close_reason_known=True next to close_reason="unknown" would
+    report a missing reason as a confirmed one, undercutting the issue's
+    "record unknown honestly" requirement.
+    """
+
+    payload = obs.log_ws_lifecycle(
+        logging.getLogger("onestep_control_plane_api.observability.forge"),
+        "disconnected",
+        instance_id=IDENTITY_INSTANCE_ID,
+        session_id=IDENTITY_SESSION_ID,
+        close_code=None,
+        close_reason=None,
+        **{marker: True},
+    )
+
+    # Both markers must reflect the real (absent) code/reason...
+    assert payload["close_code_known"] is False
+    assert payload["close_reason_known"] is False
+    assert payload["close_code"] == "unknown"
+    assert payload["close_reason"] == "unknown"
+
+
+def test_ws_close_markers_are_honest_when_values_are_known() -> None:
+    """The positive counterpart: real values still produce known=True."""
+
+    payload = obs.log_ws_lifecycle(
+        logging.getLogger("onestep_control_plane_api.observability.forge"),
+        "disconnected",
+        instance_id=IDENTITY_INSTANCE_ID,
+        session_id=IDENTITY_SESSION_ID,
+        close_code=1006,
+        close_reason="going away",
+        close_reason_known=False,  # attempted forgery of the other direction
+    )
+
+    assert payload["close_code"] == 1006
+    assert payload["close_code_known"] is True
+    assert payload["close_reason"] == "going away"
+    assert payload["close_reason_known"] is True

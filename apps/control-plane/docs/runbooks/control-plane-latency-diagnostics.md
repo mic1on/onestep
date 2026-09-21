@@ -287,6 +287,29 @@ each one limits what the evidence can prove.
     occupancy numbers are stale — check that something still calls
     `refresh_pool_occupancy` (only the follow-up wiring PR will do so
     periodically in production).
+16. **The log scrubber is name- and shape-based, and that is a real limit.**
+    `build_log_fields` redacts a value in two cases only: its **field name**
+    matches `SENSITIVE_FIELD_PATTERN` (token, authorization, password,
+    auth_header, cookie, credential, api_key, private_key, dsn, database_url,
+    body, payload, raw_message, message_body), or its **string form** contains a
+    `Bearer <token>` / `token=<value>` *shape*. Consequences to state in any
+    write-up that relies on log evidence:
+
+    * a bare secret under a **non**-sensitive key name passes through verbatim —
+      `{"note": "hunter2"}` is logged as `hunter2`, because the value has neither
+      a sensitive name nor a credential shape;
+    * a connection string under a non-sensitive name passes through too —
+      `{"target": "postgresql://user:pw@host/db"}` is not caught, while the same
+      string under `database_url` or `dsn` is;
+    * nesting is walked only within `MAX_SANITIZE_DEPTH` (12) levels and within a
+      cycle guard. Deeper than that the whole remaining subtree is replaced by
+      `[redacted]` wholesale rather than described, so a deep structure cannot
+      leak through the string fallback — but it also means a deep structure is
+      *not* usefully logged. Reduce the depth at the call site if you need the
+      contents.
+
+    Treat "no secret appears in the logs" as a statement about these three
+    mechanisms, not as proof that no secret was ever passed to a log call.
 
 ## 6. Useful PromQL
 
