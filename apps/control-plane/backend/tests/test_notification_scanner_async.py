@@ -411,6 +411,10 @@ def test_slow_scan_does_not_block_a_no_db_health_probe(
     delay_s = 1.0
     entered = threading.Event()
     probe_done = threading.Event()
+    # asyncio.Event, not threading.Event: slow_scan and scenario share one
+    # event loop, so the finish signal is awaited cooperatively (same shape as
+    # ``test_leader_scan_produces_a_delivery``'s ``completed``).
+    scan_finished = asyncio.Event()
     real = scan_and_dispatch_instance_connectivity_notifications_async
 
     import onestep_control_plane_api.workers.notification_scanner as scanner_module
@@ -421,7 +425,13 @@ def test_slow_scan_does_not_block_a_no_db_health_probe(
         # awaited, so it yields to the loop exactly like a slow query.
         while not probe_done.is_set():
             await asyncio.sleep(0.01)
-        return await real(session, now=now)
+        try:
+            return await real(session, now=now)
+        finally:
+            # Mark the work unit (including its commit/rollback) as done, so
+            # the scenario cancels the scanner between scans rather than
+            # mid-transaction.
+            scan_finished.set()
 
     monkeypatch.setattr(
         scanner_module,
@@ -474,6 +484,15 @@ def test_slow_scan_does_not_block_a_no_db_health_probe(
         finally:
             probe_done.set()
             probe_thread.join(timeout=10.0)
+            # Wait for the scan to FINISH rather than merely start. Cancelling
+            # mid-transaction would leave the rollback to complete
+            # asynchronously on aiosqlite's worker thread, which can still be
+            # closing a connection when the fixture drops the schema (SQLite
+            # then reports "database table is locked"). Cancelling between
+            # scans has none of that and still exercises the scanner's
+            # shutdown path. (Same guard as
+            # ``test_leader_scan_produces_a_delivery``.)
+            await asyncio.wait_for(scan_finished.wait(), timeout=10.0)
             await _cancel_together(task)
 
     asyncio.run(scenario())
