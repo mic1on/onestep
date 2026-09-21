@@ -21,11 +21,25 @@ Plain data, not ORM instances
 Work units return dataclasses and scalars. An ORM instance whose attribute is
 read after its transaction closed would trigger implicit IO or raise, so
 service functions convert before the boundary.
+
+Observability (additive)
+------------------------
+Open and close emit one structured record each through
+:func:`~onestep_control_plane_api.ops.observability.log_ws_lifecycle`, carrying
+instance and session identity for log correlation. Identity is never a metric
+label. A close code or reason is only reported when the peer actually sent one;
+otherwise it is recorded as ``"unknown"`` with the matching ``*_known`` flag set
+to ``False``. No token, authorization header or message body is logged.
+
+Cost: two dict-built log records per connection — one on open, one on close —
+not per message. Records are assembled only from already-computed values, so
+the steady-state cost is one dict construction per connection event.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from uuid import UUID
@@ -80,8 +94,14 @@ from onestep_control_plane_api.api.security import (
 )
 from onestep_control_plane_api.api.ui_event_stream import publish_ui_stream_event
 from onestep_control_plane_api.db.session import session_scope
+from onestep_control_plane_api.ops.observability import log_ws_lifecycle
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agent-ws"])
+
+#: Logger for websocket lifecycle records. Identity fields land here and only
+#: here — never in a metric label, where an unbounded set of instance/session
+#: ids would blow up cardinality.
+_WS_LIFECYCLE_LOGGER = logging.getLogger("onestep_control_plane_api.agent_ws.lifecycle")
 
 SUPPORTED_PROTOCOL_VERSION = "1"
 SUPPORTED_CAPABILITIES = frozenset(
@@ -269,6 +289,72 @@ async def _enqueue_pending_commands(
         )
 
 
+def _close_info_from_disconnect(exc: BaseException) -> tuple[int | None, str | None]:
+    """Extract the close code and reason a disconnect actually carries.
+
+    Honesty rule: only report what the exception really holds. Starlette raises
+    ``WebSocketDisconnect(code, reason)`` where ``reason`` defaults to ``""``,
+    and an ASGI server may omit both. An empty reason or a missing code is
+    reported as ``None`` so :func:`log_ws_lifecycle` records
+    ``close_reason_known=False`` instead of inventing a plausible-sounding cause.
+    """
+
+    code = getattr(exc, "code", None)
+    reason = getattr(exc, "reason", None)
+    resolved_code = int(code) if isinstance(code, int) else None
+    resolved_reason: str | None = None
+    if isinstance(reason, str) and reason.strip():
+        resolved_reason = reason
+    return resolved_code, resolved_reason
+
+
+def _log_ws_open(*, instance_id: UUID, session_id: str) -> None:
+    """Record one accepted agent websocket connection.
+
+    Carries instance and session identity for log correlation only. No token,
+    authorization header or message body is involved on this path: the auth
+    work unit has already finished by the time the socket is accepted.
+    """
+
+    log_ws_lifecycle(
+        _WS_LIFECYCLE_LOGGER,
+        "connected",
+        instance_id=str(instance_id),
+        session_id=session_id,
+    )
+
+
+def _log_ws_close(
+    *,
+    instance_id: UUID,
+    session_id: str,
+    connected_at,
+    code: int | None,
+    reason: str | None,
+    event: str = "disconnected",
+) -> None:
+    """Record one agent websocket close, with the reason actually obtainable.
+
+    ``event`` is ``"disconnected"`` for a normal close and ``"error"`` when the
+    loop exited through an exception, so the two are distinguishable in logs.
+    A missing code or reason is passed through as ``None`` and therefore logged
+    as ``"unknown"`` with the corresponding ``*_known`` flag set to ``False``.
+    """
+
+    duration_s: float | None = None
+    if connected_at is not None:
+        duration_s = (_utcnow() - connected_at).total_seconds()
+    log_ws_lifecycle(
+        _WS_LIFECYCLE_LOGGER,
+        event,
+        instance_id=str(instance_id),
+        session_id=session_id,
+        close_code=code,
+        close_reason=reason,
+        connection_duration_s=duration_s,
+    )
+
+
 async def _send_loop(
     websocket: WebSocket,
     send_queue: asyncio.Queue[dict[str, object]],
@@ -287,6 +373,12 @@ async def agent_ws(
     send_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     send_task = asyncio.create_task(_send_loop(websocket, send_queue))
     context: _ConnectionContext | None = None
+    connected_at = _utcnow()
+    # Close details are only knowable if the peer actually sent them. These stay
+    # None (=> logged as "unknown") unless a real disconnect frame arrives.
+    close_code: int | None = None
+    close_reason: str | None = None
+    close_event = "disconnected"
     try:
         while True:
             raw_message = await websocket.receive_text()
@@ -333,6 +425,12 @@ async def agent_ws(
                     instance_id=context.instance_id,
                     session_id=context.session_id,
                     send_queue=send_queue,
+                )
+                # Logged after the session row is committed, so the identity in
+                # the log is one that actually exists in the database.
+                _log_ws_open(
+                    instance_id=context.instance_id,
+                    session_id=context.session_id,
                 )
                 await websocket.send_json(hello_ack.model_dump(mode="json"))
                 await _enqueue_pending_commands(
@@ -473,8 +571,18 @@ async def agent_ws(
                 message=f"message type {envelope.type} is not supported",
                 close_connection=False,
             )
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as exc:
+        # The peer's close frame is the only source of a real code/reason.
+        close_code, close_reason = _close_info_from_disconnect(exc)
         return
+    except asyncio.CancelledError:
+        # A cancelled handler never receives a close frame, so no code or reason
+        # is knowable. Reported as unknown rather than guessed.
+        close_event = "error"
+        raise
+    except Exception:
+        close_event = "error"
+        raise
     finally:
         send_task.cancel()
         try:
@@ -482,6 +590,16 @@ async def agent_ws(
         except asyncio.CancelledError:
             pass
         if context is not None:
+            # Logged before the cleanup work unit so the record is emitted even
+            # if cleanup itself fails or is cancelled.
+            _log_ws_close(
+                instance_id=context.instance_id,
+                session_id=context.session_id,
+                connected_at=connected_at,
+                code=close_code,
+                reason=close_reason,
+                event=close_event,
+            )
             # Shielded: unregistering and the disconnect work unit must complete
             # even when the enclosing task was already cancelled, or a
             # disconnected agent keeps an active session and a live registry

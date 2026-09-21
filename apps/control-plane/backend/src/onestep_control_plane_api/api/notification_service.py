@@ -1057,11 +1057,19 @@ def list_notification_services(db: Session) -> NotificationServiceListResponse:
     )
 
 
-def scan_and_dispatch_instance_connectivity_notifications(
+def _scan_and_dispatch_instance_connectivity_notifications_sync(
     db: Session,
     *,
     now: datetime | None = None,
 ) -> int:
+    """Scan body. Transaction ownership stays with the caller's work unit.
+
+    Per the async transaction convention, this body never commits: the caller
+    (the synchronous entry point below, or ``session_scope`` on the async path)
+    owns the transaction, so a scan that is only part of a larger work unit can
+    still be rolled back atomically.
+    """
+
     current_time = _normalize_scan_now(now)
     channels = db.scalars(
         select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
@@ -1160,12 +1168,52 @@ def scan_and_dispatch_instance_connectivity_notifications(
             if delivery is not None:
                 pending_deliveries.append((delivery, channel.webhook_url))
 
-    if not pending_deliveries:
-        db.commit()
-        return 0
-
-    db.commit()
+    db.flush()
     return len(pending_deliveries)
+
+
+def scan_and_dispatch_instance_connectivity_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Synchronous entry point: scan in a transaction owned here.
+
+    Behaviour is byte-for-byte what it was before the async conversion,
+    including the unconditional ``db.commit()`` this entry point has always
+    done. Kept because the synchronous tests and any synchronous caller still
+    drive it.
+    """
+
+    try:
+        count = _scan_and_dispatch_instance_connectivity_notifications_sync(db, now=now)
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return count
+
+
+async def scan_and_dispatch_instance_connectivity_notifications_async(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Scan for connectivity transitions inside the caller's async work unit.
+
+    The scan body is invoked through ``AsyncSession.run_sync``: the same
+    underlying session, so the queries, the state updates and the outbox writes
+    all participate in this work unit's transaction and connection. That is
+    SQLAlchemy's greenlet-cooperative bridge, not ``asyncio.to_thread``.
+
+    No commit here: ``session_scope`` owns the transaction, so a slow scan holds
+    one short transaction and a cancellation rolls it back instead of stranding
+    it.
+    """
+
+    return await session.run_sync(
+        lambda db: _scan_and_dispatch_instance_connectivity_notifications_sync(db, now=now)
+    )
 
 
 def _dispatch_runtime_task_event_notifications(
@@ -1231,8 +1279,12 @@ async def dispatch_runtime_task_event_notifications(
     run 130 iterations, and a ``pool_size=1`` connection-pool wait let it run
     136.
 
-    The notification-scan path and the outbox drain path stay synchronous and
-    are unaffected by this function.
+    The notification-scanner path now goes through
+    ``scan_and_dispatch_missed_start_notifications_async`` /
+    ``scan_and_dispatch_instance_connectivity_notifications_async``, which run
+    this same helper through ``run_sync`` on their own ``session_scope`` work
+    unit. The outbox drain path stays synchronous and is unaffected by this
+    function.
     """
 
     return await session.run_sync(
@@ -1240,12 +1292,20 @@ async def dispatch_runtime_task_event_notifications(
     )
 
 
-def scan_and_dispatch_missed_start_notifications(
+def _scan_and_dispatch_missed_start_notifications_sync(
     db: Session,
     *,
     now: datetime | None = None,
     min_last_seen_at: datetime | None = None,
 ) -> int:
+    """Scan body. Transaction ownership stays with the caller's work unit.
+
+    Per the async transaction convention, this body never commits: the caller
+    (the synchronous entry point below, or ``session_scope`` on the async path)
+    owns the transaction, so a scan that is only part of a larger work unit can
+    still be rolled back atomically.
+    """
+
     current_time = _normalize_scan_now(now)
     online_service_started_at_by_id = _online_service_started_at_by_id(
         db,
@@ -1336,9 +1396,54 @@ def scan_and_dispatch_missed_start_notifications(
                     pending_deliveries.append((delivery, channel.webhook_url))
                 break
 
-    if not pending_deliveries:
-        db.commit()
-        return 0
-
-    db.commit()
+    db.flush()
     return len(pending_deliveries)
+
+
+def scan_and_dispatch_missed_start_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
+) -> int:
+    """Synchronous entry point: scan in a transaction owned here.
+
+    Behaviour is byte-for-byte what it was before the async conversion,
+    including the unconditional ``db.commit()`` this entry point has always
+    done. Kept because the synchronous tests and any synchronous caller still
+    drive it.
+    """
+
+    try:
+        count = _scan_and_dispatch_missed_start_notifications_sync(
+            db,
+            now=now,
+            min_last_seen_at=min_last_seen_at,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return count
+
+
+async def scan_and_dispatch_missed_start_notifications_async(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
+) -> int:
+    """Scan for missed starts inside the caller's async work unit.
+
+    The scan body is invoked through ``AsyncSession.run_sync`` so the queries
+    and the outbox writes join this work unit's transaction and connection.
+    No commit here: ``session_scope`` owns the transaction.
+    """
+
+    return await session.run_sync(
+        lambda db: _scan_and_dispatch_missed_start_notifications_sync(
+            db,
+            now=now,
+            min_last_seen_at=min_last_seen_at,
+        )
+    )
