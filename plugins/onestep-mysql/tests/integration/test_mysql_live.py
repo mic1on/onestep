@@ -15,7 +15,21 @@ if not os.getenv("ONESTEP_MYSQL_DSN"):
 
 
 def _engine():
-    return sa.create_engine(os.environ["ONESTEP_MYSQL_DSN"], future=True)
+    """A *synchronous* engine for the DDL/verification probes in this file.
+
+    The connector under test always uses the exact ``ONESTEP_MYSQL_DSN`` it was
+    pointed at, but these probes run outside ``asyncio`` and SQLAlchemy's sync
+    engine cannot drive an asyncio driver: ``mysql+asyncmy://`` raises
+    ``MissingGreenlet`` on the first statement. The live CI matrix points the
+    DSN at both drivers, so the probes normalise an async DSN onto ``pymysql``
+    (also a hard dependency of onestep-sql's ``mysql`` extra) — the same
+    driver-immunity trick ``test_mysql_execution_live.py`` uses in the other
+    direction.
+    """
+    dsn = os.environ["ONESTEP_MYSQL_DSN"]
+    if "+asyncmy" in dsn:
+        dsn = dsn.replace("+asyncmy", "+pymysql")
+    return sa.create_engine(dsn, future=True)
 
 
 @pytest.mark.integration
