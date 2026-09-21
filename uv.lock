@@ -1960,7 +1960,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-control-plane"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "plugins/onestep-control-plane" }
 dependencies = [
     { name = "onestep" },

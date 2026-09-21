@@ -246,10 +246,19 @@ jobs:
         # suite needs ROW-format server flags that GitHub service containers
         # cannot set (it is covered by the compose-based integration script
         # and the MySQL plugin workflow).
+        #
+        # ``test_mysql_live.py`` is included for its table-sink batch cases:
+        # the multi-row ``AS new ON DUPLICATE KEY UPDATE`` rendering depends on
+        # driver/server version behaviour, and the compose-based integration
+        # job only exercises it through pymysql while production resolves
+        # ``mysql://`` to asyncmy. This matrix covers both drivers on 8.0/8.4.
+        # Its binlog case is deselected here (ROW format is unavailable in
+        # service containers) and stays covered by the integration script.
         run: |
           uv sync --frozen --all-packages --extra test --extra mysql
           uv run --all-packages python -c "import cryptography; print('cryptography', cryptography.__version__)"
           uv run --all-packages python -m pytest -q -m integration plugins/onestep-mysql/tests/integration/test_mysql_execution_live.py plugins/onestep-mysql/tests/integration/test_mysql_execution_source_live.py
+          uv run --all-packages python -m pytest -q -m integration plugins/onestep-mysql/tests/integration/test_mysql_live.py -k "table_sink"
 
   publish-pypi:
     name: Publish plugin to PyPI

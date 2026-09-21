@@ -6,7 +6,7 @@ from unittest import mock
 import pytest
 import sqlalchemy as sa
 from onestep.envelope import Envelope
-from onestep.resilience import ConnectorOperationError
+from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
 from onestep_postgres import PostgresConnector
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -452,6 +452,70 @@ def test_postgres_table_sink_batch_writes_live():
                 sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE device_key = 'dup'")
             ).scalar()
         assert dups == 0
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_postgres_table_sink_batch_rejects_secondary_unique_conflict_live():
+    """Review P2 on PostgreSQL: the same batch MySQL used to last-wins must be
+    refused deterministically here too (PostgreSQL raises UniqueViolation
+    otherwise), keeping the two backends observably identical."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_uq2_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "id INT PRIMARY KEY, "
+                    "email VARCHAR(64), "
+                    "note VARCHAR(64), "
+                    "CONSTRAINT uq_email UNIQUE (email))"
+                )
+            )
+
+        db = PostgresConnector(os.environ["ONESTEP_POSTGRES_DSN"])
+        sink = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("id",),
+            update_columns=("email", "note"),
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await sink.send(
+                Envelope(
+                    body=[
+                        {"id": 1, "email": "same@x.com", "note": "first"},
+                        {"id": 2, "email": "same@x.com", "note": "second"},
+                    ]
+                )
+            )
+        assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 0
+
+        await sink.send(
+            Envelope(
+                body=[
+                    {"id": 1, "email": "a@x.com", "note": "first"},
+                    {"id": 2, "email": "b@x.com", "note": "second"},
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 2
 
         with engine.begin() as conn:
             conn.execute(sa.text(f"DROP TABLE {table_name}"))

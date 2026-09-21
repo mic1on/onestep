@@ -668,3 +668,115 @@ def test_table_sink_single_row_path_unchanged(tmp_path: Path) -> None:
         await connector.close()
 
     asyncio.run(scenario())
+
+
+def test_table_sink_batch_rejects_unknown_payload_column(tmp_path: Path) -> None:
+    """A mistyped payload column is PERMANENT, not a bare CompileError/KeyError
+    (review P3/P4): PostgreSQL's executymany silently dropped it, MySQL/SQLite
+    raised CompileError, and the batch SET path raised a bare KeyError."""
+    from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
+
+    connector = sqlite_pkg.SQLiteConnector(f"sqlite:///{tmp_path / 'bu2.db'}")
+
+    async def scenario() -> None:
+        async with connector.engine.begin() as conn:
+            await conn.run_sync(
+                lambda s: s.execute(
+                    sa.text("CREATE TABLE jobs (id INTEGER PRIMARY KEY, status TEXT)")
+                )
+            )
+        for mode, kwargs in (
+            ("insert", {}),
+            ("upsert", {"keys": ("id",), "update_columns": ("status",)}),
+            # mode: update without a whitelist carries every payload column
+            # into the SET derivation, so the unknown column must be refused.
+            ("update", {"keys": ("id",)}),
+        ):
+            sink = connector.table_sink(table="jobs", mode=mode, **kwargs)
+            body = [{"id": 1, "status": "a", "zzz": "typo"}, {"id": 2, "status": "b", "zzz": "typo"}]
+            with pytest.raises(ConnectorOperationError) as excinfo:
+                await sink.send(Envelope(body=body))
+            assert excinfo.value.kind is ConnectorErrorKind.PERMANENT, mode
+            assert "zzz" in str(excinfo.value)
+        async with connector.engine.begin() as conn:
+            count = (await conn.execute(sa.text("SELECT COUNT(*) FROM jobs"))).scalar()
+        assert count == 0
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_table_sink_batch_update_tolerates_whitelist_excluded_column(tmp_path: Path) -> None:
+    """``mode: update`` renders no INSERT, so a payload column outside the
+    whitelist never reaches the statement — matching the single-row path."""
+    connector = sqlite_pkg.SQLiteConnector(f"sqlite:///{tmp_path / 'bt.db'}")
+
+    async def scenario() -> None:
+        async with connector.engine.begin() as conn:
+            await conn.run_sync(
+                lambda s: s.execute(
+                    sa.text("CREATE TABLE jobs (id INTEGER PRIMARY KEY, status TEXT)")
+                )
+            )
+            await conn.execute(sa.text("INSERT INTO jobs (id, status) VALUES (1, 'old')"))
+        sink = connector.table_sink(
+            table="jobs", mode="update", keys=("id",), update_columns=("status",)
+        )
+        await sink.send(Envelope(body=[{"id": 1, "status": "new", "zzz": "ignored"}]))
+        async with connector.engine.begin() as conn:
+            row = (await conn.execute(sa.text("SELECT status FROM jobs WHERE id=1"))).scalar()
+        assert row == "new"
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_table_sink_batch_rejects_secondary_unique_conflict(tmp_path: Path) -> None:
+    """Review P2: rows colliding on a second unique index diverge across
+    dialects, so the batch is refused before any write."""
+    from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
+
+    connector = sqlite_pkg.SQLiteConnector(f"sqlite:///{tmp_path / 'b2u.db'}")
+
+    async def scenario() -> None:
+        async with connector.engine.begin() as conn:
+            await conn.run_sync(
+                lambda s: s.execute(
+                    sa.text(
+                        "CREATE TABLE jobs (id INTEGER PRIMARY KEY, "
+                        "email TEXT UNIQUE, status TEXT)"
+                    )
+                )
+            )
+        sink = connector.table_sink(
+            table="jobs", mode="upsert", keys=("id",), update_columns=("email", "status")
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await sink.send(
+                Envelope(
+                    body=[
+                        {"id": 1, "email": "same@x.com", "status": "first"},
+                        {"id": 2, "email": "same@x.com", "status": "second"},
+                    ]
+                )
+            )
+        assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+        assert "collides with an earlier row" in str(excinfo.value)
+        async with connector.engine.begin() as conn:
+            count = (await conn.execute(sa.text("SELECT COUNT(*) FROM jobs"))).scalar()
+        assert count == 0
+        # distinct values still write
+        await sink.send(
+            Envelope(
+                body=[
+                    {"id": 1, "email": "a@x.com", "status": "first"},
+                    {"id": 2, "email": "b@x.com", "status": "second"},
+                ]
+            )
+        )
+        async with connector.engine.begin() as conn:
+            count = (await conn.execute(sa.text("SELECT COUNT(*) FROM jobs"))).scalar()
+        assert count == 2
+        await connector.close()
+
+    asyncio.run(scenario())

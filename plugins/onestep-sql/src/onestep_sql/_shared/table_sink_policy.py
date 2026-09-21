@@ -46,6 +46,14 @@ except ImportError:  # pragma: no cover - exercised when optional deps are missi
 
 _UPDATE_COLUMN_POLICIES = frozenset({"overwrite", "skip_null", "backfill"})
 
+#: Conservative per-statement byte budget for MySQL batches. ``max_allowed_packet``
+#: defaults to 64MB on MySQL 8 but is commonly lowered (4MB was the MySQL 5.7
+#: default and several managed services keep it), and exceeding it kills the
+#: connection with a retryable-looking error. 4MB keeps a chunk well inside even
+#: a small server configuration while still batching thousands of ordinary rows;
+#: operators with large payloads lower ``batch_size`` or raise the server limit.
+_MYSQL_BATCH_BYTE_BUDGET = 4 * 1024 * 1024
+
 
 def _normalize_update_columns(
     update_columns: Sequence[str | Mapping[str, str]] | None,
@@ -336,6 +344,46 @@ class TableSinkUpdatePolicy:
 
         prepared = [self._coerce_json_values(row, table) for row in prepared]
 
+        # Columns the write paths will reference must exist on the table.
+        # Without this the backends diverge on a mistyped payload column:
+        # MySQL/SQLite raise a bare CompileError, PostgreSQL's executemany
+        # silently *drops* the unknown key and writes the row anyway, and the
+        # batch SET derivation raises a bare KeyError that bypasses connector
+        # error classification entirely.
+        #
+        # ``update_columns`` is a whitelist of *table* columns, so an entry
+        # naming a non-existent column is a configuration typo (the single-row
+        # path fails it too, with CompileError).
+        if self.update_columns is not None:
+            unknown_whitelist = sorted(
+                column for column in self.update_columns if column not in table.columns
+            )
+            if unknown_whitelist:
+                raise self._batch_payload_error(
+                    f"update_columns names column(s) not present on table "
+                    f"{table.name!r}: {', '.join(unknown_whitelist)}"
+                )
+        # ``mode: update`` renders no INSERT, so a payload column the whitelist
+        # excludes never reaches the statement — the single-row path tolerates
+        # it and so does the batch. ``insert``/``upsert`` do carry every payload
+        # column into VALUES, where an unknown column is a CompileError
+        # (MySQL/SQLite) or a silently dropped key (PostgreSQL executemany).
+        tolerated = (
+            set(first_columns) - set(self.update_columns)
+            if self.update_columns is not None and self.mode == "update"
+            else set()
+        )
+        unknown_columns = sorted(
+            column
+            for column in first_columns
+            if column not in table.columns and column not in tolerated
+        )
+        if unknown_columns:
+            raise self._batch_payload_error(
+                f"batch payload has column(s) not present on table {table.name!r}: "
+                f"{', '.join(unknown_columns)}"
+            )
+
         candidates = self._batch_candidate_columns(first_columns)
         if self.mode in {"upsert", "update"}:
             if not self.keys:
@@ -368,6 +416,7 @@ class TableSinkUpdatePolicy:
                         "Deduplicate upstream or split the batch."
                     )
                 seen_keys.add(key_value)
+            self._reject_secondary_unique_conflicts(prepared, table)
 
         skipped = 0
         if self.mode in {"upsert", "update"} and not self.update_expr:
@@ -384,6 +433,51 @@ class TableSinkUpdatePolicy:
                     kept.append(row)
             prepared = kept
         return prepared, skipped, candidates
+
+    def _reject_secondary_unique_conflicts(
+        self, rows: Sequence[Mapping[str, Any]], table: sa.Table
+    ) -> None:
+        """Refuse a batch whose rows collide on a *second* unique key.
+
+        ``INSERT ... ON DUPLICATE KEY UPDATE`` (MySQL/SQLite semantics) takes
+        the update branch for **any** unique index, not only the declared
+        ``keys``. Two rows that differ in ``keys`` but share a value of another
+        unique column therefore overwrite each other silently on MySQL/SQLite,
+        while PostgreSQL raises ``cannot affect row a second time`` — the same
+        dialect divergence the ``keys`` check removes, reached through a
+        different index. The feasibility review reproduced exactly this
+        (``PRIMARY KEY(id)`` + ``UNIQUE(email)``, ``keys=("id",)``: MySQL kept
+        only the second row, PostgreSQL failed).
+
+        Every unique column set that is *fully present in the payload* and
+        differs from ``keys`` is checked; a set the payload does not carry
+        cannot collide within this batch. The check is skipped when the payload
+        is a single row (no intra-batch collision is possible).
+        """
+        if len(rows) < 2:
+            return
+        payload_columns = frozenset(rows[0])
+        key_set = frozenset(self.keys)
+        for label, columns in _unique_column_sets(table):
+            column_set = frozenset(columns)
+            if column_set == key_set or not column_set <= payload_columns:
+                continue
+            seen: set[tuple[Any, ...]] = set()
+            for index, row in enumerate(rows):
+                value = tuple(row[column] for column in columns)
+                try:
+                    duplicate = value in seen
+                except TypeError:
+                    continue
+                if duplicate:
+                    declared = ", ".join(columns)
+                    raise self._batch_payload_error(
+                        f"batch item {index} collides with an earlier row on {label} "
+                        f"({declared})={value!r}. MySQL/SQLite would silently keep the "
+                        "last row while PostgreSQL fails the statement, so the batch "
+                        "is refused. Deduplicate upstream or split the batch."
+                    )
+                seen.add(value)
 
     def _upsert_batch_set(
         self,
@@ -482,16 +576,85 @@ class TableSinkUpdatePolicy:
             return max(1, 999 // max(1, column_count))
         return None
 
+    def _batch_byte_budget(self) -> int | None:
+        """Per-statement byte ceiling for dialects whose limit is a packet size.
+
+        MySQL aborts an oversized statement by **killing the connection**
+        (error 2013), which the resilience table classifies as ``DISCONNECTED``
+        — i.e. *retryable*, even though replaying the same batch can never
+        succeed. The feasibility review measured exactly that: a 1000×70KB
+        batch against the default 64MB ``max_allowed_packet`` produced a
+        retryable ``disconnected`` error on every attempt while re-serializing
+        70MB each time. There is no cheap way to ask the server for the packet
+        limit from the sink (it needs a live round trip and can change at
+        runtime), so the batch path refuses to *guess*: it caps the estimated
+        statement size well below the documented default and fails the batch
+        with PERMANENT when even a single row exceeds it, telling the operator
+        to lower ``batch_size``.
+
+        PostgreSQL and SQLite statements are not packet-bound this way (they
+        go through executemany pipelines), so they have no byte budget.
+        """
+        sync_engine = getattr(self.connector, "engine", None)
+        if sync_engine is None:
+            return None
+        dialect = getattr(sync_engine, "sync_engine", sync_engine).dialect.name
+        if dialect == "mysql":
+            return _MYSQL_BATCH_BYTE_BUDGET
+        return None
+
+    @staticmethod
+    def _estimate_row_bytes(row: Mapping[str, Any]) -> int:
+        """Conservative per-row wire-size estimate for the byte budget.
+
+        Values are counted at their UTF-8 length plus a fixed per-column
+        overhead covering quoting, escaping and separators. Escaping can
+        double a string's size (``max_allowed_packet`` counts the escaped
+        bytes), so the estimate deliberately over-counts rather than
+        under-counts.
+        """
+        total = 0
+        for value in row.values():
+            if value is None:
+                total += 8
+            elif isinstance(value, (bytes, bytearray)):
+                total += len(value) * 2 + 8
+            elif isinstance(value, str):
+                total += len(value.encode("utf-8")) * 2 + 8
+            else:
+                total += len(str(value)) * 2 + 8
+        return total
+
     def _batch_chunks(
         self, rows: Sequence[Mapping[str, Any]]
     ) -> Iterator[list[Mapping[str, Any]]]:
-        size = self.batch_size
+        """Split rows by ``batch_size`` and by the dialect's row/byte budgets.
+
+        Chunking is purely a *statement size* control: every chunk of one
+        ``send()`` still executes inside the same transaction, so a failure
+        rolls the whole batch back and a retry never leaves a partial write.
+        """
+        size = max(1, self.batch_size)
         row_limit = self._batch_row_limit(max(1, len(rows[0])))
         if row_limit is not None:
             size = min(size, row_limit)
-        size = max(1, size)
-        for start in range(0, len(rows), size):
-            yield list(rows[start : start + size])
+        byte_budget = self._batch_byte_budget()
+
+        chunk: list[Mapping[str, Any]] = []
+        chunk_bytes = 0
+        for row in rows:
+            row_bytes = self._estimate_row_bytes(row)
+            if chunk and (
+                len(chunk) >= size
+                or (byte_budget is not None and chunk_bytes + row_bytes > byte_budget)
+            ):
+                yield chunk
+                chunk = []
+                chunk_bytes = 0
+            chunk.append(row)
+            chunk_bytes += row_bytes
+        if chunk:
+            yield chunk
 
     def _build_batch_statements(
         self,

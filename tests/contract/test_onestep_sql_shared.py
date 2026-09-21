@@ -1317,6 +1317,142 @@ def test_batch_size_must_be_a_positive_integer(backend: str) -> None:
         )
 
 
+# -- review follow-ups: unknown columns, secondary unique keys, byte budget --
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_unknown_payload_columns(backend: str) -> None:
+    """A mistyped payload column must fail as PERMANENT on every backend.
+
+    MySQL/SQLite raised a bare CompileError, PostgreSQL's executemany silently
+    dropped the key and wrote the row, and the batch SET derivation raised a
+    bare KeyError — three different outcomes for one mistake.
+    """
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink, [{"id": 1, "title": "t", "zzz": "x"}, {"id": 2, "title": "t", "zzz": "x"}]
+    )
+    assert "not present on table" in message
+    assert "zzz" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_unknown_update_columns_entry(backend: str) -> None:
+    """A whitelist entry naming a non-existent column is a config typo."""
+    sink = _make_sink(backend, update_columns=("typo",))
+    message = _batch_permutation_error(
+        sink, [{"id": 1, "typo": "v"}, {"id": 2, "typo": "v"}]
+    )
+    assert "update_columns names column(s) not present" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_tolerates_whitelist_excluded_column_in_update_mode(
+    backend: str,
+) -> None:
+    """``mode: update`` renders no INSERT, so an excluded payload column never
+    reaches the statement — the single-row path tolerates it and so must the
+    batch."""
+    sink = _make_sink(backend, mode="update", update_columns=("title",))
+    prepared, skipped, candidates = sink._prepare_batch_rows(
+        [{"id": 1, "title": "t", "zzz": "x"}, {"id": 2, "title": "t", "zzz": "x"}],
+        _policy_table(),
+    )
+    assert len(prepared) == 2
+    assert candidates == ("title",)
+
+
+def _secondary_unique_table() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        "records",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("email", sa.String(64), unique=True),
+        sa.Column("title", sa.Text),
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_secondary_unique_conflict(backend: str) -> None:
+    """Rows colliding on a unique column other than ``keys`` diverge across
+    dialects (MySQL/SQLite last-wins, PostgreSQL errors), so the batch is
+    refused before the write."""
+    sink = _make_sink(backend, update_columns=("title",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._prepare_batch_rows(
+            [
+                {"id": 1, "email": "same@x.com", "title": "first"},
+                {"id": 2, "email": "same@x.com", "title": "second"},
+            ],
+            _secondary_unique_table(),
+        )
+    assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+    assert "collides with an earlier row" in str(excinfo.value)
+    assert "email" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_allows_distinct_secondary_unique_values(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    prepared, _, _ = sink._prepare_batch_rows(
+        [
+            {"id": 1, "email": "a@x.com", "title": "first"},
+            {"id": 2, "email": "b@x.com", "title": "second"},
+        ],
+        _secondary_unique_table(),
+    )
+    assert len(prepared) == 2
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_skips_secondary_check_when_column_absent(backend: str) -> None:
+    """A unique column the payload does not carry cannot collide in-batch."""
+    sink = _make_sink(backend, update_columns=("title",))
+    prepared, _, _ = sink._prepare_batch_rows(
+        [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}], _secondary_unique_table()
+    )
+    assert len(prepared) == 2
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_respect_mysql_byte_budget(backend: str) -> None:
+    """MySQL kills the connection on an oversized statement (error 2013),
+    which the resilience table classifies as retryable — so chunks are capped
+    by an estimated byte budget instead of only by row count."""
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")
+    rows = [{"id": i, "payload": "x" * (300 * 1024)} for i in range(20)]
+    chunks = list(sink._batch_chunks(rows))
+    assert len(chunks) > 1, "byte budget must split the batch"
+    assert sum(len(chunk) for chunk in chunks) == 20
+    for chunk in chunks:
+        estimated = sum(sink._estimate_row_bytes(row) for row in chunk)
+        assert estimated <= shared_policy._MYSQL_BATCH_BYTE_BUDGET
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_keep_oversized_single_row_as_its_own_chunk(backend: str) -> None:
+    """A row larger than the budget cannot be split further; it is what the
+    single-mapping path already sends, so it forms its own chunk."""
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")
+    rows = [
+        {"id": 1, "payload": "x" * (8 * 1024 * 1024)},
+        {"id": 2, "payload": "small"},
+    ]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [1, 1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_byte_budget_only_applies_to_mysql(backend: str) -> None:
+    assert _chunking_sink(backend, batch_size=1000, engine_dialect="postgresql")._batch_byte_budget() is None
+    assert _chunking_sink(backend, batch_size=1000, engine_dialect="sqlite")._batch_byte_budget() is None
+    assert (
+        _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")._batch_byte_budget()
+        == shared_policy._MYSQL_BATCH_BYTE_BUDGET
+    )
+
+
 # ---------------------------------------------------------------------------
 # 4. Shared default incremental state-key.
 # ---------------------------------------------------------------------------

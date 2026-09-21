@@ -691,3 +691,119 @@ def test_mysql_table_sink_batch_writes_live():
         engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_batch_chunks_oversized_statements_live():
+    """Review P1: a batch whose multi-row statement would exceed
+    ``max_allowed_packet`` must be chunked, not sent whole.
+
+    Exceeding the packet limit does not return a clean error — MySQL kills the
+    connection (2013), which is classified as ``DISCONNECTED`` and therefore
+    *retryable*, so the sink would retry a batch that can never succeed while
+    re-serializing tens of megabytes each time. Measured before the fix: a
+    1000×70KB batch failed on every attempt against the default 64MB limit.
+    """
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_packet_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "id INT PRIMARY KEY, payload LONGTEXT)"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        sink = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("id",),
+            update_columns=("payload",),
+        )
+        # ~68MB of payload: above the default 64MB max_allowed_packet if sent
+        # as one statement, comfortably fine once the byte budget splits it.
+        blob = "x" * (70 * 1024)
+        rows = [{"id": i, "payload": blob} for i in range(1000)]
+        await sink.send(Envelope(body=rows))
+
+        with engine.connect() as conn:
+            written = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar()
+        assert written == 1000
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_batch_rejects_secondary_unique_conflict_live():
+    """Review P2: with ``PRIMARY KEY(id)`` + ``UNIQUE(email)`` and
+    ``keys=("id",)``, two rows sharing an email used to overwrite each other
+    silently on MySQL while PostgreSQL raised ``UniqueViolation``."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_uq2_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "id INT PRIMARY KEY, "
+                    "email VARCHAR(64), "
+                    "note VARCHAR(64), "
+                    "UNIQUE KEY uq_email (email))"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        sink = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("id",),
+            update_columns=("email", "note"),
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await sink.send(
+                Envelope(
+                    body=[
+                        {"id": 1, "email": "same@x.com", "note": "first"},
+                        {"id": 2, "email": "same@x.com", "note": "second"},
+                    ]
+                )
+            )
+        assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 0
+
+        # Distinct values still write normally.
+        await sink.send(
+            Envelope(
+                body=[
+                    {"id": 1, "email": "a@x.com", "note": "first"},
+                    {"id": 2, "email": "b@x.com", "note": "second"},
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 2
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())

@@ -847,7 +847,7 @@ class ControlPlaneReporter:
                 "poll_interval_s": resource.poll_interval_s,
                 "state_key": resource.state_key,
             }
-        if class_name == "TableSink":
+        if class_name in {"TableSink", "PostgresTableSink"}:
             config = {
                 "table": resource.table_name,
                 "mode": resource.mode,
@@ -858,6 +858,12 @@ class ControlPlaneReporter:
             if resource.update_expr:
                 config["update_expr"] = dict(resource.update_expr)
             config["serialize_json"] = resource.serialize_json
+            # ``batch_size`` is part of the sink's topology_fields, so the
+            # control-plane detail view reports it; omitting it here would
+            # render "not reported" for every table sink.
+            batch_size = getattr(resource, "batch_size", None)
+            if batch_size is not None:
+                config["batch_size"] = batch_size
             return config
         return {}
 
