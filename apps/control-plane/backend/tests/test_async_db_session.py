@@ -1123,3 +1123,124 @@ def test_async_engine_singleton_is_cached_after_first_use(async_db: AsyncTestDat
 
     assert db_session.get_async_engine() is async_db.engine
     assert db_session.get_async_session_factory() is async_db.factory
+
+
+# --------------------------------------------------------------------------- #
+# #213: the synchronous engine factory is pool-instrumented
+# --------------------------------------------------------------------------- #
+
+
+def test_create_engine_from_url_instruments_the_engine_pool(tmp_path: Path) -> None:
+    """Every engine from the factory must land in the pool-wait observability.
+
+    The synchronous engine carries all REST routes, so its checkout waits were
+    completely blind before #213. A checkout must be observable through the
+    registry, under the factory's bounded pool name.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    sync_engine = db_session.create_engine_from_url(f"sqlite:///{tmp_path / 'instr.db'}")
+    try:
+        with sync_engine.connect():
+            pass  # one checkout through the instrumented pool.connect
+    finally:
+        sync_engine.dispose()
+
+    histogram = next(
+        sample
+        for sample in obs.collect_prometheus_snapshot().histograms
+        if sample.name == "onestep_control_plane_db_pool_wait_seconds"
+        and dict(sample.labels)["name"] == db_session.SYNC_POOL_METRIC_NAME
+    )
+    assert histogram.count >= 1
+
+
+def test_create_engine_from_url_instrumentation_is_idempotent(tmp_path: Path) -> None:
+    """Re-instrumenting an already-instrumented engine must not double-count.
+
+    The assertion uses a count *delta*: the ``("default", QueuePool)`` series is
+    shared by every QueuePool engine instrumented under the default name in this
+    process, so an absolute count would depend on test ordering.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    def _pool_wait_count() -> int:
+        return sum(
+            sample.count
+            for sample in obs.collect_prometheus_snapshot().histograms
+            if sample.name == "onestep_control_plane_db_pool_wait_seconds"
+            and dict(sample.labels)["name"] == db_session.SYNC_POOL_METRIC_NAME
+        )
+
+    sync_engine = db_session.create_engine_from_url(f"sqlite:///{tmp_path / 'idem.db'}")
+    try:
+        # The factory already instrumented it; a repeat call is a no-op.
+        assert obs.instrument_engine(sync_engine, name=db_session.SYNC_POOL_METRIC_NAME) is True
+
+        before = _pool_wait_count()
+        with sync_engine.connect():
+            pass
+        with sync_engine.connect():
+            pass
+    finally:
+        sync_engine.dispose()
+
+    # Exactly one observation per checkout: no double-wrapping.
+    assert _pool_wait_count() - before == 2
+
+
+def test_ensure_sync_engine_instrumented_covers_the_import_time_engine() -> None:
+    """The lifespan/exporter seam instruments the module-level engine.
+
+    ``engine`` is created during the module import, before
+    ``ops.observability`` can be imported safely, so the lifespan and the
+    ``/metrics`` exporter call this idempotent helper to close the gap. The
+    call never opens a connection: it only wraps ``pool.connect``.
+    """
+
+
+    assert db_session.ensure_sync_engine_instrumented() is True
+    # Idempotent: a second call is a no-op that still reports success.
+    assert db_session.ensure_sync_engine_instrumented() is True
+
+
+def test_create_engine_from_url_survives_instrumentation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Instrumentation is observation only: its failure must not break engine creation.
+
+    Covers both failure shapes the wiring must tolerate -- the observability
+    import itself blowing up (e.g. the pre-existing ops import cycle in an
+    unusual import order) and ``instrument_engine`` raising at call time.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    # 1. The deferred import fails.
+    monkeypatch.setitem(
+        __import__("sys").modules, "onestep_control_plane_api.ops.observability", None
+    )
+    try:
+        broken_engine = db_session.create_engine_from_url(f"sqlite:///{tmp_path / 'broken.db'}")
+        assert broken_engine is not None
+        with broken_engine.connect() as connection:
+            assert connection.execute(text("SELECT 1")).scalar() == 1
+        broken_engine.dispose()
+    finally:
+        monkeypatch.undo()
+
+    # 2. instrument_engine raises at call time.
+    def _boom(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("instrumentation exploded")
+
+    monkeypatch.setattr(obs, "instrument_engine", _boom)
+    try:
+        raised_engine = db_session.create_engine_from_url(f"sqlite:///{tmp_path / 'raised.db'}")
+        assert raised_engine is not None
+        with raised_engine.connect() as connection:
+            assert connection.execute(text("SELECT 1")).scalar() == 1
+        raised_engine.dispose()
+    finally:
+        monkeypatch.undo()

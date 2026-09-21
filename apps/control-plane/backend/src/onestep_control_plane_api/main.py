@@ -18,7 +18,14 @@ from onestep_control_plane_api.api import router
 from onestep_control_plane_api.api.agent_session_service import disconnect_active_sessions
 from onestep_control_plane_api.api.security import require_console_auth
 from onestep_control_plane_api.core import settings
-from onestep_control_plane_api.db.session import SessionLocal
+from onestep_control_plane_api.db.session import (
+    SessionLocal,
+    ensure_sync_engine_instrumented,
+)
+from onestep_control_plane_api.ops.observability import (
+    ensure_event_loop_lag_sampler_started,
+    stop_event_loop_lag_sampler,
+)
 from onestep_control_plane_api.ops.readiness import (
     build_default_background_task_states,
 )
@@ -42,6 +49,24 @@ logger = logging.getLogger("onestep_control_plane_api.startup")
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
+        # Instrumentation starts first: the lag sampler needs the running loop,
+        # and it must observe the rest of startup (DB connect, migrations,
+        # scanner warm-up) exactly like any other loop resident. Both helpers
+        # are idempotent and defensive by design -- a monitoring hook must not
+        # be able to block application startup or shutdown.
+        try:
+            ensure_event_loop_lag_sampler_started()
+        except Exception:  # pragma: no cover - defensive, mirrors observability's tolerance
+            logger.warning("could not start the event-loop lag sampler", exc_info=True)
+        try:
+            # The import-time sync engine cannot instrument itself (see
+            # db.session._instrument_sync_engine); the lifespan closes the gap.
+            ensure_sync_engine_instrumented()
+        except Exception:  # pragma: no cover - defensive, mirrors observability's tolerance
+            logger.warning(
+                "could not attach pool instrumentation to the synchronous engine",
+                exc_info=True,
+            )
         session_factory = getattr(app.state, "session_factory", SessionLocal)
         with session_factory() as session:
             disconnected_count = disconnect_active_sessions(session)
@@ -83,6 +108,10 @@ def create_app() -> FastAPI:
                 pass
             finally:
                 app.state.background_task_refs[name] = None
+        try:
+            stop_event_loop_lag_sampler()
+        except Exception:  # pragma: no cover - defensive, mirrors observability's tolerance
+            logger.warning("could not stop the event-loop lag sampler", exc_info=True)
 
     app = FastAPI(
         title="OneStep Control Plane API",
