@@ -10,6 +10,8 @@ from onestep_control_plane_api.ops.readiness import build_default_background_tas
 from onestep_control_plane_api.workers.leader import LocalWorkerLease, WorkerLease
 from onestep_control_plane_api.workers.notification_scanner import (
     NOTIFICATION_MISSED_START_SCANNER_NAME,
+    AsyncWorkerLease,
+    LocalAsyncWorkerLease,
     run_notification_missed_start_scanner,
 )
 from onestep_control_plane_api.workers.retention_worker import (
@@ -70,13 +72,46 @@ class CoordinatedLease(WorkerLease):
         self.acquired_at = None
 
 
+class CoordinatedAsyncLease(AsyncWorkerLease):
+    """Async counterpart of :class:`CoordinatedLease` for the converted scanner.
+
+    Same coordination semantics, so the three leadership assertions below mean
+    exactly what they meant before: only one replica scans, a standby takes over
+    when the leader exits, and both leases are released exactly once.
+    """
+
+    mode = "postgres_advisory_lock"
+
+    def __init__(self, *, coordinator: SharedLeaseCoordinator, replica_id: str) -> None:
+        self._coordinator = coordinator
+        self._replica_id = replica_id
+        self.acquired_at: datetime | None = None
+        self.release_count = 0
+        self.advisory_lock_count = 0
+
+    async def ensure_leader(self) -> bool:
+        if self._coordinator.owner in (None, self._replica_id):
+            if self._coordinator.owner is None:
+                self._coordinator.owner = self._replica_id
+                self.acquired_at = datetime.now(UTC)
+                self.advisory_lock_count += 1
+            return True
+        return False
+
+    async def release(self) -> None:
+        self.release_count += 1
+        if self._coordinator.owner == self._replica_id:
+            self._coordinator.owner = None
+        self.acquired_at = None
+
+
 def test_notification_scanner_runs_in_local_mode() -> None:
     async def scenario() -> None:
         app = _build_app()
         scan_count = 0
         scan_event = asyncio.Event()
 
-        def scan_fn(_session, _started_at: datetime) -> int:
+        async def scan_fn(_session, _started_at: datetime) -> int:
             nonlocal scan_count
             scan_count += 1
             scan_event.set()
@@ -87,7 +122,7 @@ def test_notification_scanner_runs_in_local_mode() -> None:
                 app,
                 sleep_fn=_yield_once,
                 scan_fn=scan_fn,
-                lease_factory=LocalWorkerLease,
+                lease_factory=LocalAsyncWorkerLease,
                 scan_interval_s=0,
                 leader_poll_interval_s=0,
             )
@@ -113,15 +148,15 @@ def test_only_one_replica_executes_scanner_when_leases_contend() -> None:
         coordinator = SharedLeaseCoordinator()
         app_one = _build_app()
         app_two = _build_app()
-        lease_one = CoordinatedLease(coordinator=coordinator, replica_id="one")
-        lease_two = CoordinatedLease(coordinator=coordinator, replica_id="two")
+        lease_one = CoordinatedAsyncLease(coordinator=coordinator, replica_id="one")
+        lease_two = CoordinatedAsyncLease(coordinator=coordinator, replica_id="two")
         scans = {"one": 0, "two": 0}
 
-        def scan_one(_session, _started_at: datetime) -> int:
+        async def scan_one(_session, _started_at: datetime) -> int:
             scans["one"] += 1
             return 1
 
-        def scan_two(_session, _started_at: datetime) -> int:
+        async def scan_two(_session, _started_at: datetime) -> int:
             scans["two"] += 1
             return 1
 
@@ -177,16 +212,16 @@ def test_standby_replica_takes_over_after_leader_exit() -> None:
         coordinator = SharedLeaseCoordinator()
         app_one = _build_app()
         app_two = _build_app()
-        lease_one = CoordinatedLease(coordinator=coordinator, replica_id="one")
-        lease_two = CoordinatedLease(coordinator=coordinator, replica_id="two")
+        lease_one = CoordinatedAsyncLease(coordinator=coordinator, replica_id="one")
+        lease_two = CoordinatedAsyncLease(coordinator=coordinator, replica_id="two")
         first_scan_event = asyncio.Event()
         second_scan_event = asyncio.Event()
 
-        def scan_one(_session, _started_at: datetime) -> int:
+        async def scan_one(_session, _started_at: datetime) -> int:
             first_scan_event.set()
             return 1
 
-        def scan_two(_session, _started_at: datetime) -> int:
+        async def scan_two(_session, _started_at: datetime) -> int:
             second_scan_event.set()
             return 1
 
