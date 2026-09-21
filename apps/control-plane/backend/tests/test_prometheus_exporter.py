@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_metrics_request
 from onestep_control_plane_api.api.routers.prometheus import (
     build_prometheus_metrics,
@@ -7,7 +9,24 @@ from onestep_control_plane_api.api.routers.prometheus import (
 )
 from onestep_control_plane_api.api.schemas import MetricsIngestRequest
 from onestep_control_plane_api.core.settings import settings
+from onestep_control_plane_api.db.session import session_scope
 from sqlalchemy import event
+
+
+def ingest_metrics(db_session, payload: dict[str, object]):
+    """Drive the async metrics ingest from a synchronous test.
+
+    The work unit opens its own session on the test's async engine, which is the
+    same database the synchronous ``db_session`` fixture reads.
+    """
+
+    async def _work_unit() -> None:
+        async with session_scope() as session:
+            await ingest_metrics_request(
+                session, MetricsIngestRequest.model_validate(payload)
+            )
+
+    return asyncio.run(_work_unit())
 
 INSTANCE_ID = "33fb10d0-7580-4552-b8ca-4ef55f98f844"
 
@@ -84,18 +103,8 @@ def test_prometheus_metrics_exports_runtime_and_custom_metrics(
     db_session,
     auth_headers,
 ) -> None:
-    ingest_metrics_request(
-        db_session,
-        MetricsIngestRequest.model_validate(
-            _metrics_payload(suffix="30", succeeded=118, failed=2, inflight=2)
-        ),
-    )
-    ingest_metrics_request(
-        db_session,
-        MetricsIngestRequest.model_validate(
-            _metrics_payload(suffix="31", succeeded=5, failed=1, inflight=0)
-        ),
-    )
+    ingest_metrics(db_session, _metrics_payload(suffix="30", succeeded=118, failed=2, inflight=2))
+    ingest_metrics(db_session, _metrics_payload(suffix="31", succeeded=5, failed=1, inflight=0))
 
     response = client.get("/metrics", headers=auth_headers)
 
@@ -154,14 +163,8 @@ def test_prometheus_metrics_keeps_custom_metric_kinds_separate(
             "labels": {"tenant": "acme"},
         }
     ]
-    ingest_metrics_request(
-        db_session,
-        MetricsIngestRequest.model_validate(counter_payload),
-    )
-    ingest_metrics_request(
-        db_session,
-        MetricsIngestRequest.model_validate(gauge_payload),
-    )
+    ingest_metrics(db_session, counter_payload)
+    ingest_metrics(db_session, gauge_payload)
 
     response = client.get("/metrics", headers=auth_headers)
 
@@ -179,15 +182,10 @@ def test_prometheus_metrics_keeps_custom_metric_kinds_separate(
     ) in body
 
 
-def test_prometheus_metrics_reuses_cached_response(db_session, monkeypatch) -> None:
+def test_prometheus_metrics_reuses_cached_response(db_session, async_db, monkeypatch) -> None:
     monkeypatch.setattr(settings, "prometheus_cache_ttl_s", 60.0)
     reset_prometheus_metrics_cache()
-    ingest_metrics_request(
-        db_session,
-        MetricsIngestRequest.model_validate(
-            _metrics_payload(suffix="30", succeeded=118, failed=2, inflight=2)
-        ),
-    )
+    ingest_metrics(db_session, _metrics_payload(suffix="30", succeeded=118, failed=2, inflight=2))
 
     statement_count = 0
 

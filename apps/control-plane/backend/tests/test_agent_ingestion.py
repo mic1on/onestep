@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from onestep_control_plane_api.db.models import (
     TaskEvent,
     TaskMetricWindow,
 )
+from onestep_control_plane_api.db.session import session_scope
 from sqlalchemy import select, update
 
 DESCRIPTION_UNSET = object()
@@ -224,35 +226,51 @@ def make_sync_payload(
     }
 
 
+async def _run_work_unit(work_unit, *args, **kwargs):
+    """Run one async work unit to completion inside its own session."""
+
+    async with session_scope() as session:
+        return await work_unit(session, *args, **kwargs)
+
+
 def ingest_heartbeat(db_session, payload: dict[str, object]):
-    return ingest_heartbeat_request(
-        db_session,
-        HeartbeatIngestRequest.model_validate(payload),
+    """Drive the async heartbeat ingest from a synchronous test.
+
+    Each ingest opens its own short work unit on the test's async engine, which
+    is the same database the synchronous ``db_session`` fixture reads, exactly
+    as the router does in production.
+    """
+
+    return asyncio.run(
+        _run_work_unit(
+            ingest_heartbeat_request, HeartbeatIngestRequest.model_validate(payload)
+        )
     )
 
 
 def ingest_metrics(db_session, payload: dict[str, object]):
-    return ingest_metrics_request(
-        db_session,
-        MetricsIngestRequest.model_validate(payload),
+    return asyncio.run(
+        _run_work_unit(
+            ingest_metrics_request, MetricsIngestRequest.model_validate(payload)
+        )
     )
 
 
 def ingest_events(db_session, payload: dict[str, object]):
-    return ingest_events_request(
-        db_session,
-        EventsIngestRequest.model_validate(payload),
+    return asyncio.run(
+        _run_work_unit(
+            ingest_events_request, EventsIngestRequest.model_validate(payload)
+        )
     )
 
 
 def ingest_sync(db_session, payload: dict[str, object]):
-    return ingest_sync_request(
-        db_session,
-        SyncIngestRequest.model_validate(payload),
+    return asyncio.run(
+        _run_work_unit(ingest_sync_request, SyncIngestRequest.model_validate(payload))
     )
 
 
-def test_heartbeat_ingestion_service_creates_service_and_instance(db_session) -> None:
+def test_heartbeat_ingestion_service_creates_service_and_instance(db_session, async_db) -> None:
     response = ingest_heartbeat(db_session, make_heartbeat_payload())
 
     assert response.status == "accepted"
@@ -276,7 +294,7 @@ def test_heartbeat_ingestion_service_creates_service_and_instance(db_session) ->
     assert instance.last_seen_at is not None
 
 
-def test_stale_heartbeat_does_not_roll_back_instance_snapshot(db_session) -> None:
+def test_stale_heartbeat_does_not_roll_back_instance_snapshot(db_session, async_db) -> None:
     ingest_heartbeat(
         db_session,
         make_heartbeat_payload(
@@ -308,7 +326,7 @@ def test_stale_heartbeat_does_not_roll_back_instance_snapshot(db_session) -> Non
     assert instance.last_seen_at == latest_seen
 
 
-def test_heartbeat_task_controls_merge_into_instance_snapshot(db_session) -> None:
+def test_heartbeat_task_controls_merge_into_instance_snapshot(db_session, async_db) -> None:
     ingest_sync(db_session, make_sync_payload())
     ingest_heartbeat(
         db_session,
@@ -348,7 +366,7 @@ def test_heartbeat_task_controls_merge_into_instance_snapshot(db_session) -> Non
     ]
 
 
-def test_sync_drops_task_control_states_for_removed_tasks(db_session) -> None:
+def test_sync_drops_task_control_states_for_removed_tasks(db_session, async_db) -> None:
     ingest_sync(db_session, make_sync_payload())
     ingest_heartbeat(
         db_session,
@@ -389,7 +407,7 @@ def test_sync_drops_task_control_states_for_removed_tasks(db_session) -> None:
     ]
 
 
-def test_conflicting_service_cannot_reuse_existing_instance_id(db_session) -> None:
+def test_conflicting_service_cannot_reuse_existing_instance_id(db_session, async_db) -> None:
     ingest_heartbeat(
         db_session,
         {
@@ -417,7 +435,7 @@ def test_conflicting_service_cannot_reuse_existing_instance_id(db_session) -> No
     assert "instance_id is already bound" in str(exc_info.value.detail)
 
 
-def test_metrics_ingestion_is_idempotent_without_prior_heartbeat(db_session) -> None:
+def test_metrics_ingestion_is_idempotent_without_prior_heartbeat(db_session, async_db) -> None:
     first = ingest_metrics(db_session, make_metrics_payload())
     second = ingest_metrics(db_session, make_metrics_payload())
 
@@ -437,7 +455,7 @@ def test_metrics_ingestion_is_idempotent_without_prior_heartbeat(db_session) -> 
     assert metric_windows[0].succeeded == 118
 
 
-def test_metrics_ingestion_persists_custom_metrics_idempotently(db_session) -> None:
+def test_metrics_ingestion_persists_custom_metrics_idempotently(db_session, async_db) -> None:
     payload = make_metrics_payload()
     payload["tasks"][0]["custom_metrics"] = [
         {
@@ -479,7 +497,7 @@ def test_metrics_ingestion_persists_custom_metrics_idempotently(db_session) -> N
     assert by_name["batch_size"].metric_value == 120
 
 
-def test_metrics_ingestion_keeps_custom_metric_kinds_idempotent(db_session) -> None:
+def test_metrics_ingestion_keeps_custom_metric_kinds_idempotent(db_session, async_db) -> None:
     payload = make_metrics_payload()
     payload["tasks"][0]["custom_metrics"] = [
         {
@@ -512,7 +530,7 @@ def test_metrics_ingestion_keeps_custom_metric_kinds_idempotent(db_session) -> N
     assert by_kind["gauge"].metric_value == 9
 
 
-def test_metrics_ingestion_rejects_invalid_custom_metric_labels(db_session) -> None:
+def test_metrics_ingestion_rejects_invalid_custom_metric_labels(db_session, async_db) -> None:
     payload = make_metrics_payload()
     payload["tasks"][0]["custom_metrics"] = [
         {
@@ -527,7 +545,7 @@ def test_metrics_ingestion_rejects_invalid_custom_metric_labels(db_session) -> N
         ingest_metrics(db_session, payload)
 
 
-def test_events_ingestion_is_idempotent(db_session) -> None:
+def test_events_ingestion_is_idempotent(db_session, async_db) -> None:
     first = ingest_events(db_session, make_events_payload())
     second = ingest_events(db_session, make_events_payload())
 
@@ -540,7 +558,7 @@ def test_events_ingestion_is_idempotent(db_session) -> None:
     assert events[0].message == "task exceeded timeout"
 
 
-def test_sync_ingestion_creates_service_instance_and_task_definitions(db_session) -> None:
+def test_sync_ingestion_creates_service_instance_and_task_definitions(db_session, async_db) -> None:
     response = ingest_sync(db_session, make_sync_payload())
 
     assert response.service_name == "billing-sync"
@@ -570,7 +588,7 @@ def test_sync_ingestion_creates_service_instance_and_task_definitions(db_session
     ]
 
 
-def test_sync_ingestion_persists_service_description(db_session) -> None:
+def test_sync_ingestion_persists_service_description(db_session, async_db) -> None:
     payload = make_sync_payload()
     payload["service"] = make_service_payload(
         description="  Reconciles billing data into the warehouse.  "
@@ -583,7 +601,7 @@ def test_sync_ingestion_persists_service_description(db_session) -> None:
     assert service.description == "Reconciles billing data into the warehouse."
 
 
-def test_newer_heartbeat_persists_service_description(db_session) -> None:
+def test_newer_heartbeat_persists_service_description(db_session, async_db) -> None:
     payload = make_heartbeat_payload()
     payload["service"] = make_service_payload(
         description="Processes billing health checks."
@@ -596,7 +614,7 @@ def test_newer_heartbeat_persists_service_description(db_session) -> None:
     assert service.description == "Processes billing health checks."
 
 
-def test_missing_service_description_does_not_clear_existing_value(db_session) -> None:
+def test_missing_service_description_does_not_clear_existing_value(db_session, async_db) -> None:
     ingest_sync(db_session, make_sync_payload())
     service = db_session.scalar(select(Service))
     assert service is not None
@@ -612,7 +630,7 @@ def test_missing_service_description_does_not_clear_existing_value(db_session) -
     assert service.description == "Existing description"
 
 
-def test_explicit_null_service_description_clears_existing_value(db_session) -> None:
+def test_explicit_null_service_description_clears_existing_value(db_session, async_db) -> None:
     ingest_sync(db_session, make_sync_payload())
     service = db_session.scalar(select(Service))
     assert service is not None
@@ -629,7 +647,7 @@ def test_explicit_null_service_description_clears_existing_value(db_session) -> 
     assert service.description is None
 
 
-def test_blank_service_description_clears_existing_value(db_session) -> None:
+def test_blank_service_description_clears_existing_value(db_session, async_db) -> None:
     ingest_sync(db_session, make_sync_payload())
     service = db_session.scalar(select(Service))
     assert service is not None
@@ -646,7 +664,7 @@ def test_blank_service_description_clears_existing_value(db_session) -> None:
     assert service.description is None
 
 
-def test_metrics_and_events_do_not_update_service_description(db_session) -> None:
+def test_metrics_and_events_do_not_update_service_description(db_session, async_db) -> None:
     payload = make_sync_payload()
     payload["service"] = make_service_payload(description="Original description")
     ingest_sync(db_session, payload)
@@ -672,6 +690,7 @@ def test_metrics_and_events_do_not_update_service_description(db_session) -> Non
 
 def test_sync_refreshes_task_definitions_for_newer_payload_with_same_topology_hash(
     db_session,
+    async_db,
 ) -> None:
     ingest_sync(db_session, make_sync_payload())
     service = db_session.scalar(
@@ -713,7 +732,10 @@ def test_sync_refreshes_task_definitions_for_newer_payload_with_same_topology_ha
     assert instance.last_sync_sent_at == datetime(2026, 3, 8, 17, 31, 6, tzinfo=UTC)
 
 
-def test_sync_out_of_order_payload_does_not_rollback_instance_snapshot(db_session) -> None:
+def test_sync_out_of_order_payload_does_not_rollback_instance_snapshot(
+    db_session,
+    async_db,
+) -> None:
     newest_payload = make_sync_payload(
         topology_hash="sha256:new-topology",
         tasks=[
@@ -924,7 +946,7 @@ def test_http_ingestion_routes_are_not_exposed_and_absent_from_openapi(client) -
 
 
 def test_ingest_events_creates_notification_delivery_only_for_new_events(
-    db_session, monkeypatch
+    db_session, async_db, monkeypatch
 ) -> None:
     channel = NotificationChannel(
         name="ops-feishu",

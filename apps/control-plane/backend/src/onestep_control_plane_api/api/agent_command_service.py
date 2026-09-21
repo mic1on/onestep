@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.agent_connection_registry import agent_connection_registry
@@ -389,6 +390,7 @@ def expire_stale_commands(
     instance_id: UUID | None = None,
     service_id: UUID | None = None,
     as_of: datetime | None = None,
+    commit: bool = True,
 ) -> int:
     as_of = as_of or utcnow()
     filters = [AgentCommand.status.in_(RECONCILABLE_COMMAND_STATUSES)]
@@ -423,7 +425,14 @@ def expire_stale_commands(
         command.updated_at = as_of
         stale_count += 1
 
-    if stale_count:
+    # Commit only when the caller owns the transaction. The synchronous read
+    # paths rely on this default to persist the expiry writes. A caller that
+    # runs inside a larger work unit (the async pending-command listing on the
+    # hello path) passes ``commit=False``: an inner commit there would pin the
+    # newly inserted AgentSession row before the work unit finishes, so a later
+    # failure could no longer roll the session back and an ``active`` session
+    # would leak past every cleanup path.
+    if commit and stale_count:
         db.commit()
     return stale_count
 
@@ -514,6 +523,117 @@ def mark_command_dispatched(
     return command
 
 
+@dataclass(frozen=True)
+class PendingCommandDelivery:
+    """Plain data for one redeliverable command, safe outside a transaction.
+
+    The WS path must not carry ORM instances across a transaction boundary:
+    reading an attribute after the session closes would trigger implicit IO or
+    raise. Every field the outbound ``command`` message and the capability check
+    need is captured here instead.
+    """
+
+    command_id: str
+    kind: AgentCommandKind
+    args_json: dict[str, object]
+    timeout_s: float
+    created_at: datetime
+
+
+def _to_pending_delivery(command: AgentCommand) -> PendingCommandDelivery:
+    return PendingCommandDelivery(
+        command_id=command.command_id,
+        kind=command.kind,
+        args_json=dict(command.args_json or {}),
+        timeout_s=command.timeout_s,
+        created_at=command.created_at,
+    )
+
+
+async def list_redeliverable_commands_for_instance_async(
+    session: AsyncSession,
+    *,
+    instance_id: UUID,
+) -> list[PendingCommandDelivery]:
+    """List redeliverable commands as plain data on an async session.
+
+    Stale-command expiry and the listing run in one work unit so the two agree
+    on which commands are still live. The caller's work unit owns the commit;
+    the inner expiry pass must not commit, or it would pin earlier writes of
+    this work unit (the hello's new AgentSession row) before the unit finished.
+    """
+
+    await session.run_sync(
+        lambda db: expire_stale_commands(db, instance_id=instance_id, commit=False)
+    )
+    # The session runs with ``autoflush=False``, so the expiry writes made
+    # inside ``run_sync`` have to be flushed explicitly for the SELECT below
+    # to see them. A flush stays inside the caller's transaction — the unit
+    # still commits or rolls back as a whole.
+    await session.flush()
+    rows = await session.scalars(
+        select(AgentCommand)
+        .where(
+            AgentCommand.instance_id == instance_id,
+            AgentCommand.status.in_(REDISPATCHABLE_COMMAND_STATUSES),
+        )
+        .order_by(AgentCommand.created_at.asc(), AgentCommand.command_id.asc())
+    )
+    return [_to_pending_delivery(command) for command in rows.all()]
+
+
+async def mark_command_dispatched_async(
+    session: AsyncSession,
+    *,
+    command_id: str,
+    session_id: str,
+    dispatched_at: datetime | None = None,
+) -> PendingCommandDelivery:
+    """Mark a command dispatched on an async session and return its plain data."""
+
+    command = await session.scalar(
+        select(AgentCommand).where(AgentCommand.command_id == command_id)
+    )
+    if command is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"command {command_id} was not found",
+        )
+    dispatched_at = dispatched_at or utcnow()
+    command.session_id = session_id
+    command.dispatched_at = dispatched_at
+    if command.status == "pending":
+        command.status = "dispatched"
+    command.updated_at = dispatched_at
+    await session.commit()
+    return _to_pending_delivery(command)
+
+
+async def reject_redelivery_for_unsupported_capability_async(
+    session: AsyncSession,
+    *,
+    command_id: str,
+    capability: str,
+) -> None:
+    """Abandon a queued command whose reconnect lacks ``capability``."""
+
+    command = await session.scalar(
+        select(AgentCommand).where(AgentCommand.command_id == command_id)
+    )
+    if command is None:
+        return
+    rejected_at = utcnow()
+    command.status = "rejected"
+    command.finished_at = rejected_at
+    command.error_code = "command_capability_missing_on_reconnect"
+    command.error_message = (
+        "the reconnecting session does not advertise "
+        f"{capability}; queued delivery was abandoned"
+    )
+    command.updated_at = rejected_at
+    await session.commit()
+
+
 def build_command_message(
     command: AgentCommand,
     *,
@@ -534,12 +654,144 @@ def build_command_message(
     )
 
 
+def build_command_message_from_delivery(
+    delivery: PendingCommandDelivery,
+    *,
+    sent_at: datetime | None = None,
+) -> AgentCommandMessage:
+    """Build the outbound ``command`` frame from plain data.
+
+    Same output as :func:`build_command_message`, but it never touches ORM
+    state, so it can run after the work unit's transaction has closed.
+    """
+
+    sent_at = sent_at or utcnow()
+    return AgentCommandMessage(
+        type="command",
+        message_id=_new_message_id(),
+        sent_at=sent_at,
+        payload=AgentCommandPayload(
+            command_id=delivery.command_id,
+            kind=delivery.kind,
+            args=delivery.args_json,
+            timeout_s=delivery.timeout_s,
+            created_at=delivery.created_at,
+        ),
+    )
+
+
 def get_command_by_id(
     db: Session,
     *,
     command_id: str,
 ) -> AgentCommand | None:
     return db.scalar(select(AgentCommand).where(AgentCommand.command_id == command_id))
+
+
+async def _resolve_command_for_session(
+    session: AsyncSession,
+    *,
+    instance_id: UUID,
+    command_id: str,
+) -> AgentCommand | None:
+    command = await session.scalar(
+        select(AgentCommand).where(AgentCommand.command_id == command_id)
+    )
+    if command is None or command.instance_id != instance_id:
+        return None
+    return command
+
+
+async def apply_command_ack(
+    session: AsyncSession,
+    *,
+    instance_id: UUID,
+    session_id: str,
+    command_id: str,
+    ack_status: str,
+    acked_at: datetime,
+    received_at: datetime,
+    error_code: str | None,
+    error_message: str | None,
+) -> str:
+    """Apply one ``command_ack`` on an async session.
+
+    Returns ``"unknown"`` when the command does not belong to this instance,
+    ``"ok"`` when the ack was applied, and ``"unchanged"`` when the command was
+    already finished or already acknowledged. The last case is deliberately
+    distinct: a late ack must not clobber a terminal result, and it must not
+    publish a UI event either, because nothing actually changed.
+
+    This function commits: the ack is one complete work unit.
+    """
+
+    command = await _resolve_command_for_session(
+        session, instance_id=instance_id, command_id=command_id
+    )
+    if command is None:
+        return "unknown"
+    if command.finished_at is not None or command.ack_status is not None:
+        return "unchanged"
+
+    command.session_id = session_id
+    command.ack_status = ack_status
+    command.acked_at = acked_at
+    command.updated_at = received_at
+    if ack_status == "accepted":
+        command.status = "accepted"
+    else:
+        command.status = "rejected"
+        command.finished_at = acked_at
+        command.error_code = error_code
+        command.error_message = error_message
+    await session.commit()
+    return "ok"
+
+
+async def apply_command_result(
+    session: AsyncSession,
+    *,
+    instance_id: UUID,
+    session_id: str,
+    command_id: str,
+    status_value: str,
+    finished_at: datetime,
+    result_json: dict[str, object] | None,
+    duration_ms: int | None,
+    received_at: datetime,
+    error_code: str | None,
+    error_message: str | None,
+) -> str:
+    """Apply one ``command_result`` on an async session.
+
+    Returns ``"unknown"`` for a command outside this instance and
+    ``"duplicate"`` when a terminal result is already recorded — the duplicate
+    dedupe the issue requires to survive the conversion.
+
+    This function commits: the result is one complete work unit.
+    """
+
+    command = await _resolve_command_for_session(
+        session, instance_id=instance_id, command_id=command_id
+    )
+    if command is None:
+        return "unknown"
+    if command.finished_at is not None:
+        return "duplicate"
+
+    command.session_id = session_id
+    command.status = status_value
+    command.finished_at = finished_at
+    command.result_json = result_json
+    command.duration_ms = duration_ms
+    command.error_code = error_code
+    command.error_message = error_message
+    if command.ack_status is None:
+        command.ack_status = "accepted"
+        command.acked_at = received_at
+    command.updated_at = received_at
+    await session.commit()
+    return "ok"
 
 
 def build_command_summary(command: AgentCommand) -> AgentCommandSummary:

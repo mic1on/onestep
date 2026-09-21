@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from onestep_control_plane_api.api.notification_service import (
-    dispatch_runtime_task_event_notifications,
+    dispatch_runtime_task_event_notifications as dispatch_runtime_task_event_notifications_async,
+)
+from onestep_control_plane_api.api.notification_service import (
     drain_notification_outbox,
     scan_and_dispatch_instance_connectivity_notifications,
     scan_and_dispatch_missed_start_notifications,
@@ -19,6 +22,7 @@ from onestep_control_plane_api.db.models import (
     TaskDefinition,
     TaskEvent,
 )
+from onestep_control_plane_api.db.session import session_scope
 
 
 def seed_runtime_service(db_session) -> tuple[Service, Instance]:
@@ -90,6 +94,23 @@ def seed_custom_channel(
     return channel
 
 
+
+def dispatch_runtime_task_event_notifications(db_session, *, task_events):
+    """Drive the async dispatch from a synchronous test.
+
+    The dispatch opens its own short work unit on the test's async engine — the
+    same database the synchronous ``db_session`` fixture reads — exactly as the
+    events-ingest path does now that it awaits the dispatch.
+    """
+
+    async def _work_unit() -> int:
+        async with session_scope() as session:
+            return await dispatch_runtime_task_event_notifications_async(
+                session, task_events=task_events
+            )
+
+    return asyncio.run(_work_unit())
+
 def test_custom_webhook_get_sends_rendered_query_params(db_session, monkeypatch) -> None:
     service, instance = seed_runtime_service(db_session)
     seed_custom_channel(
@@ -154,7 +175,9 @@ def test_custom_webhook_get_sends_rendered_query_params(db_session, monkeypatch)
     ]
 
 
-def test_custom_webhook_post_sends_rendered_query_and_body(db_session, monkeypatch) -> None:
+def test_custom_webhook_post_sends_rendered_query_and_body(
+    db_session, async_db, monkeypatch
+) -> None:
     service, instance = seed_runtime_service(db_session)
     seed_custom_channel(
         db_session,
@@ -224,6 +247,7 @@ def test_custom_webhook_post_sends_rendered_query_and_body(db_session, monkeypat
 
 def test_runtime_notifications_build_absolute_console_url_when_base_url_configured(
     db_session,
+    async_db,
     monkeypatch,
 ) -> None:
     original_base_url = settings.console_base_url
@@ -277,7 +301,7 @@ def test_runtime_notifications_build_absolute_console_url_when_base_url_configur
 
 
 def test_dispatch_runtime_task_event_notifications_creates_one_delivery_per_new_event(
-    db_session, monkeypatch
+    db_session, async_db, monkeypatch
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -335,7 +359,7 @@ def test_dispatch_runtime_task_event_notifications_creates_one_delivery_per_new_
 
 
 def test_dispatch_runtime_task_event_notifications_renders_success_summary_and_metrics(
-    db_session, monkeypatch
+    db_session, async_db, monkeypatch
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     seed_channel(db_session, event_types=["task_succeeded"])
@@ -397,7 +421,7 @@ def test_dispatch_runtime_task_event_notifications_renders_success_summary_and_m
 
 
 def test_dispatch_runtime_task_event_notifications_ignores_malformed_success_notification_payload(
-    db_session, monkeypatch
+    db_session, async_db, monkeypatch
 ) -> None:
     service, instance = seed_runtime_service(db_session)
     seed_channel(db_session, event_types=["task_succeeded"])
