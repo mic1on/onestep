@@ -157,6 +157,7 @@ class PostgresConnector:
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> "PostgresTableSink":
         return PostgresTableSink(
             connector=self,
@@ -166,6 +167,7 @@ class PostgresConnector:
             update_columns=tuple(update_columns) if update_columns is not None else None,
             update_expr=update_expr,
             serialize_json=serialize_json,
+            batch_size=batch_size,
         )
 
     def execution_backend(
@@ -679,6 +681,7 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> None:
         super().__init__(f"postgres.table_sink:{table}")
         if mode not in {"insert", "upsert", "update"}:
@@ -696,6 +699,8 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
         )
         if mode in {"upsert", "update"} and update_columns_tuple == () and not update_expr_dict:
             raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
         self.connector = connector
         self.table_name = table
         self.mode = mode
@@ -704,12 +709,29 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
         self.column_policies = column_policies
         self.update_expr = update_expr_dict
         self.serialize_json = serialize_json
+        self.batch_size = batch_size
 
     async def send(self, envelope: Envelope) -> None:
-        if not isinstance(envelope.body, Mapping):
-            raise TypeError("PostgresTableSink only accepts mapping payloads")
+        body = envelope.body
+        if not isinstance(body, Mapping):
+            if isinstance(body, (list, tuple)):
+                try:
+                    await self._send_batch(body)
+                except Exception as exc:
+                    connector_error = as_postgres_connector_operation_error(
+                        operation=ConnectorOperation.SEND,
+                        exc=exc,
+                        source_name=self.name,
+                        retry_delay_s=1.0,
+                        secrets=self.connector.secret_tokens(),
+                    )
+                    if connector_error is None:
+                        raise
+                    raise connector_error from None
+                return
+            raise TypeError("PostgresTableSink only accepts mapping or list-of-mapping payloads")
         try:
-            await self._send(dict(envelope.body))
+            await self._send(dict(body))
         except Exception as exc:
             connector_error = as_postgres_connector_operation_error(
                 operation=ConnectorOperation.SEND,
@@ -784,3 +806,52 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
                 index_elements=list(self.keys), set_=update_payload
             )
         return sa.insert(table).values(**payload)
+
+    def _build_batch_statements(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        table: sa.Table,
+        candidates: Sequence[str],
+    ) -> list[tuple[Any, list[dict[str, Any]] | None]]:
+        dialect = self.connector.engine.dialect.name
+        statements: list[tuple[Any, list[dict[str, Any]] | None]] = []
+        for chunk in self._batch_chunks(rows):
+            if self.mode == "insert":
+                # Executemany insert: SQLAlchemy's insertmanyvalues renders
+                # multi-row VALUES (and splits at its own parameter budget),
+                # so no dialect row limit applies here.
+                statements.append((sa.insert(table), [dict(row) for row in chunk]))
+            elif self.mode == "update":
+                statement, parameter_template = self._update_batch_statement(table, candidates)
+                statements.append(
+                    (
+                        statement,
+                        [
+                            {name: row[column] for name, column in parameter_template.items()}
+                            for row in chunk
+                        ],
+                    )
+                )
+            elif dialect == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert as postgres_insert
+
+                insert_stmt = postgres_insert(table)
+                set_ = self._upsert_batch_set(table, insert_stmt.excluded, candidates)
+                statement = insert_stmt.on_conflict_do_update(
+                    index_elements=list(self.keys), set_=set_
+                )
+                # psycopg3 pipelines executemany in one round trip; per-row
+                # statements stay far below the 65535 bind parameter ceiling.
+                statements.append((statement, [dict(row) for row in chunk]))
+            else:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                stmt = sqlite_insert(table).values(chunk)
+                set_ = self._upsert_batch_set(table, stmt.excluded, candidates)
+                statements.append(
+                    (
+                        stmt.on_conflict_do_update(index_elements=list(self.keys), set_=set_),
+                        None,
+                    )
+                )
+        return statements

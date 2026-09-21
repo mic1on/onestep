@@ -44,7 +44,7 @@ _MYSQL_BINLOG_FIELDS = frozenset(
     }
 )
 _MYSQL_TABLE_SINK_FIELDS = frozenset(
-    {"type", "connector", "table", "mode", "keys", "update_columns", "update_expr", "serialize_json"}
+    {"type", "connector", "table", "mode", "keys", "update_columns", "update_expr", "serialize_json", "batch_size"}
 )
 _MYSQL_EXECUTION_SOURCE_FIELDS = frozenset(
     {
@@ -179,8 +179,9 @@ _MYSQL_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("update_columns", "json"),
         ResourceCatalogField("update_expr", "mapping"),
         ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
+        ResourceCatalogField("batch_size", "integer", default=1000),
     ),
-    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json"),
+    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json", "batch_size"),
 )
 _MYSQL_EXECUTION_SOURCE_CATALOG = ResourceCatalogEntry(
     type="mysql_execution_source",
@@ -409,6 +410,7 @@ def _build_mysql_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any]) 
         if update_expr is not None
         else None,
         serialize_json=spec.get("serialize_json", "auto"),
+        batch_size=spec.get("batch_size", 1000),
     )
 
 

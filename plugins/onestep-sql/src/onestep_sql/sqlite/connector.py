@@ -189,6 +189,7 @@ class SQLiteConnector:
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> TableSink:
         return TableSink(
             connector=self,
@@ -198,6 +199,7 @@ class SQLiteConnector:
             update_columns=tuple(update_columns) if update_columns is not None else None,
             update_expr=update_expr,
             serialize_json=serialize_json,
+            batch_size=batch_size,
         )
 
     async def _table(self, table_name: str):
@@ -702,6 +704,7 @@ class TableSink(TableSinkUpdatePolicy, Sink):
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> None:
         super().__init__(f"sqlite.table_sink:{table}")
         if mode not in {"insert", "upsert", "update"}:
@@ -721,6 +724,8 @@ class TableSink(TableSinkUpdatePolicy, Sink):
             raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
         if serialize_json not in {"auto", "always", "never"}:
             raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
         self.connector = connector
         self.table_name = table
         self.mode = mode
@@ -729,12 +734,29 @@ class TableSink(TableSinkUpdatePolicy, Sink):
         self.column_policies = column_policies
         self.update_expr = update_expr_dict
         self.serialize_json = serialize_json
+        self.batch_size = batch_size
 
     async def send(self, envelope: Envelope) -> None:
-        if not isinstance(envelope.body, Mapping):
-            raise TypeError("TableSink only accepts mapping payloads")
+        body = envelope.body
+        if not isinstance(body, Mapping):
+            if isinstance(body, (list, tuple)):
+                try:
+                    await self._send_batch(body)
+                except Exception as exc:
+                    connector_error = as_sqlite_connector_operation_error(
+                        operation=ConnectorOperation.SEND,
+                        exc=exc,
+                        source_name=self.name,
+                        retry_delay_s=1.0,
+                        secrets=self.connector._secret_tokens(),
+                    )
+                    if connector_error is None:
+                        raise
+                    raise connector_error from exc
+                return
+            raise TypeError("TableSink only accepts mapping or list-of-mapping payloads")
         try:
-            await self._send(dict(envelope.body))
+            await self._send(dict(body))
         except Exception as exc:
             connector_error = as_sqlite_connector_operation_error(
                 operation=ConnectorOperation.SEND,
@@ -797,3 +819,45 @@ class TableSink(TableSinkUpdatePolicy, Sink):
             stmt = mysql_insert(table).values(**payload)
             return stmt.on_duplicate_key_update(**update_payload)
         return sa.insert(table).values(**payload)
+
+    def _build_batch_statements(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        table: sa.Table,
+        candidates: Sequence[str],
+    ) -> list[tuple[Any, list[dict[str, Any]] | None]]:
+        sync_engine = getattr(self.connector.engine, "sync_engine", self.connector.engine)
+        dialect = sync_engine.dialect.name
+        statements: list[tuple[Any, list[dict[str, Any]] | None]] = []
+        for chunk in self._batch_chunks(rows):
+            if self.mode == "insert":
+                statements.append((sa.insert(table).values(chunk), None))
+            elif self.mode == "update":
+                statement, parameter_template = self._update_batch_statement(table, candidates)
+                statements.append(
+                    (
+                        statement,
+                        [
+                            {name: row[column] for name, column in parameter_template.items()}
+                            for row in chunk
+                        ],
+                    )
+                )
+            elif dialect == "mysql":
+                from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+                stmt = mysql_insert(table).values(chunk)
+                set_ = self._upsert_batch_set(table, stmt.inserted, candidates)
+                statements.append((stmt.on_duplicate_key_update(**set_), None))
+            else:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                stmt = sqlite_insert(table).values(chunk)
+                set_ = self._upsert_batch_set(table, stmt.excluded, candidates)
+                statements.append(
+                    (
+                        stmt.on_conflict_do_update(index_elements=list(self.keys), set_=set_),
+                        None,
+                    )
+                )
+        return statements

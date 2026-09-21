@@ -1065,6 +1065,259 @@ def test_upsert_preflight_end_to_end_send_raises_misconfigured(backend: str) -> 
 
 
 # ---------------------------------------------------------------------------
+# 3c. Batch payloads (issue #189) — shared validation, SET derivation,
+#     chunking and executemany projection, identical on all backends.
+#
+# Semantics are pinned by the adversarial feasibility review
+# (docs/superpowers/specs/2026-09-20-issue-189-*): payload-shape violations
+# raise PERMANENT before any write, rows must share one column set,
+# same-batch duplicate upsert keys are rejected, skip_null becomes a shared
+# CASE expression, fully-filtered rows are removed from the batch, and
+# update-mode executemany uses collision-proof bindparam names with explicit
+# parameter projection.
+# ---------------------------------------------------------------------------
+
+
+def test_batch_machinery_lives_once_in_shared() -> None:
+    for name in (
+        "_prepare_batch_rows",
+        "_send_batch",
+        "_upsert_batch_set",
+        "_update_batch_statement",
+        "_batch_chunks",
+        "_batch_row_limit",
+        "_batch_bind_names",
+        "_batch_candidate_columns",
+        "_batch_payload_error",
+    ):
+        resolved = {
+            getattr(_backend_sink_cls(backend), name) for backend in BACKENDS
+        }
+        assert len(resolved) == 1, name
+        assert resolved.pop() is getattr(shared_policy.TableSinkUpdatePolicy, name)
+
+
+def _batch_permutation_error(sink, rows):
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._prepare_batch_rows(rows, _policy_table())
+    assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+    assert excinfo.value.operation is ConnectorOperation.SEND
+    return str(excinfo.value)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_non_mapping_item_with_index(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(sink, [{"id": 1, "title": "t"}, "oops"])
+    assert "batch item 1 must be a mapping, got str" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_heterogeneous_column_sets(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink,
+        [{"id": 1, "title": "t"}, {"id": 2, "title": "t", "note": "n"}],
+    )
+    assert "row 1 differs from row 0" in message
+    assert "'note'" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_duplicate_upsert_keys(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink,
+        [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}, {"id": 1, "title": "c"}],
+    )
+    assert "batch item 2 duplicates earlier keys (1,)" in message
+    assert "last-wins" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_unhashable_key_values(backend: str) -> None:
+    # serialize_json="never" keeps the dict value intact, so the duplicate-key
+    # scan hits a genuinely unhashable key tuple.
+    sink = _make_sink(backend, update_columns=("title",), serialize_json="never")
+    message = _batch_permutation_error(
+        sink, [{"id": 1, "title": "t"}, {"id": {"bad": "dict"}, "title": "t"}]
+    )
+    assert "unhashable key value" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_requires_keys_present(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink, [{"title": "t"}, {"title": "t"}]
+    )
+    assert "requires keys present in payload: id" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_requires_update_candidate(backend: str) -> None:
+    # update_columns naming only columns the payload does not carry: the
+    # §2.2.1 intersection leaves no candidates.
+    sink = _make_sink(backend, update_columns=("note",), update_expr={})
+    message = _batch_permutation_error(sink, [{"id": 1, "title": "t"}, {"id": 2, "title": "t"}])
+    assert "requires at least one update column or update_expr" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_coerces_json_per_row(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title", "note"))
+    prepared, skipped, candidates = sink._prepare_batch_rows(
+        [{"id": 1, "title": "t", "note": ["a"]}, {"id": 2, "title": "t", "note": ["b"]}],
+        _policy_table(),
+    )
+    assert skipped == 0
+    assert [row["note"] for row in prepared] == ['["a"]', '["b"]']
+    assert set(candidates) == {"title", "note"}
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_drops_fully_skip_null_filtered_rows(backend: str) -> None:
+    sink = _make_sink(
+        backend, update_columns=({"name": "title", "policy": "skip_null"},)
+    )
+    prepared, skipped, _ = sink._prepare_batch_rows(
+        [
+            {"id": 1, "title": None},  # fully filtered: not written at all
+            {"id": 2, "title": "keep"},
+            {"id": 3, "title": None},  # fully filtered
+        ],
+        _policy_table(),
+    )
+    assert skipped == 2
+    assert [row["id"] for row in prepared] == [2]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_keeps_partially_skipped_rows(backend: str) -> None:
+    # Only one candidate column is null under skip_null; the other survives,
+    # so the row stays in the batch (the CASE keeps the null column's value).
+    sink = _make_sink(
+        backend,
+        update_columns=(
+            {"name": "title", "policy": "skip_null"},
+            {"name": "note", "policy": "skip_null"},
+        ),
+    )
+    prepared, skipped, _ = sink._prepare_batch_rows(
+        [{"id": 1, "title": None, "note": "n"}], _policy_table()
+    )
+    assert skipped == 0
+    assert prepared == [{"id": 1, "title": None, "note": "n"}]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_update_batch_statement_uses_collision_proof_bind_names(backend: str) -> None:
+    from sqlalchemy.dialects import sqlite as sqlite_dialect
+
+    sink = _make_sink(backend, update_columns=("title", "note"))
+    statement, template = sink._update_batch_statement(_policy_table(), ("title", "note"))
+    compiled = str(statement.compile(dialect=sqlite_dialect.dialect()))
+    # Keys and values bind onto prefixed names that never equal column names,
+    # so executemany parameter dictionaries cannot leak into SET (B2).
+    assert set(template) == {"_onestep_key_0", "_onestep_value_0", "_onestep_value_1"}
+    assert compiled.count("=") >= 3
+    row = {"id": 7, "title": "t", "note": None}
+    projected = {name: row[column] for name, column in template.items()}
+    assert projected == {"_onestep_key_0": 7, "_onestep_value_0": "t", "_onestep_value_1": None}
+    # A stray same-named key in the source row cannot enter the projection.
+    assert "title" not in projected and "id" not in projected
+
+
+def test_batch_bind_names_rotate_prefix_on_collision() -> None:
+    columns = ["id", "title", "_onestep_value_0"]
+    names = shared_policy.TableSinkUpdatePolicy._batch_bind_names(columns, "_onestep_value")
+    assert set(names.values()).isdisjoint(columns)
+    assert len(set(names.values())) == len(columns)
+
+
+def test_update_batch_statement_renders_identical_sql_on_all_backends() -> None:
+    from sqlalchemy.dialects import sqlite as sqlite_dialect
+
+    table = _policy_table()
+    rendered = {}
+    for backend in BACKENDS:
+        sink = _make_sink(
+            backend,
+            update_columns=(
+                "title",
+                {"name": "note", "policy": "skip_null"},
+                {"name": "meta", "policy": "backfill"},
+            ),
+        )
+        statement, _ = sink._update_batch_statement(table, ("title", "note", "meta"))
+        rendered[backend] = str(statement.compile(dialect=sqlite_dialect.dialect()))
+    assert rendered["mysql"] == rendered["postgres"] == rendered["sqlite"]
+    compiled = rendered["mysql"]
+    assert "CASE" in compiled  # skip_null -> per-row runtime guard
+    assert "coalesce" in compiled.lower()  # backfill
+
+
+class _EngineDialectDouble:
+    def __init__(self, name: str) -> None:
+        self.dialect = type("Dialect", (), {"name": name})()
+
+
+def _chunking_sink(backend: str, *, batch_size: int, engine_dialect: str | None):
+    kwargs = {"batch_size": batch_size}
+    if engine_dialect is None:
+        kwargs["connector"] = _SinkHarness()
+    else:
+        kwargs["connector"] = type("C", (), {"engine": _EngineDialectDouble(engine_dialect)})()
+    return _make_sink(backend, **kwargs)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_split_by_configured_batch_size(backend: str) -> None:
+    sink = _chunking_sink(backend, batch_size=2, engine_dialect=None)
+    rows = [{"id": i, "title": "t"} for i in range(5)]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_clamp_sqlite_parameter_ceiling(backend: str) -> None:
+    # 999 portable SQLITE_MAX_VARIABLE_NUMBER / 4 columns -> 249 rows max.
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="sqlite")
+    rows = [{"id": i, "title": "t", "note": "n", "meta": None} for i in range(600)]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [249, 249, 102]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_do_not_clamp_non_sqlite_engines(backend: str) -> None:
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")
+    rows = [{"id": i, "title": "t", "note": "n", "meta": None} for i in range(600)]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [600]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_size_must_be_a_positive_integer(backend: str) -> None:
+    sink_cls = _backend_sink_cls(backend)
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        sink_cls(
+            connector=_SinkHarness(),
+            table="records",
+            mode="insert",
+            keys=(),
+            batch_size=0,
+        )
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        sink_cls(
+            connector=_SinkHarness(),
+            table="records",
+            mode="insert",
+            keys=(),
+            batch_size=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # 4. Shared default incremental state-key.
 # ---------------------------------------------------------------------------
 

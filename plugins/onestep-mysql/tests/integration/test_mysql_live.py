@@ -570,3 +570,124 @@ def test_mysql_table_sink_upsert_without_unique_index_fails_live():
         engine.dispose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_batch_writes_live():
+    """Batch payloads on a real server: multi-row upsert (the 8.0.20+ alias
+    form the driver only renders against a live connection), chunked
+    statements in one transaction, replay idempotence, per-row policies and
+    executemany update (issue #189)."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_sink_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "device_key VARCHAR(64) NOT NULL, "
+                    "payload VARCHAR(255), "
+                    "status VARCHAR(32), "
+                    "attempts INT NOT NULL DEFAULT 0, "
+                    "updated_at DATETIME(6) NULL, "
+                    "UNIQUE KEY uq_device_key (device_key))"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        upsert = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("device_key",),
+            update_columns=(
+                {"name": "payload", "policy": "backfill"},
+                {"name": "status", "policy": "skip_null"},
+            ),
+            update_expr={"updated_at": "CURRENT_TIMESTAMP(6)"},
+            batch_size=40,
+        )
+
+        rows = [
+            {"device_key": f"dev-{i:03d}", "payload": f"p{i}", "status": None}
+            for i in range(300)
+        ]
+        # 300 rows / batch_size 40 -> 8 chunked multi-row statements.
+        await upsert.send(Envelope(body=rows))
+        # Replay the same batch: upsert must stay idempotent.
+        await upsert.send(Envelope(body=rows))
+
+        with engine.connect() as conn:
+            total, distinct = conn.execute(
+                sa.text(
+                    f"SELECT COUNT(*), COUNT(DISTINCT device_key) FROM {table_name}"
+                )
+            ).one()
+
+        assert (total, distinct) == (300, 300)
+
+        # Second batch: backfill keeps existing payloads, skip_null keeps
+        # NULL statuses untouched, fresh keys insert.
+        mixed = [
+            {"device_key": "dev-000", "payload": None, "status": "active"},
+            {"device_key": "dev-001", "payload": None, "status": None},
+            {"device_key": "dev-999", "payload": "fresh", "status": "new"},
+        ]
+        await upsert.send(Envelope(body=mixed))
+        with engine.connect() as conn:
+            rows_by_key = {
+                key: (payload, status)
+                for key, payload, status in conn.execute(
+                    sa.text(
+                        f"SELECT device_key, payload, status FROM {table_name} "
+                        "WHERE device_key IN ('dev-000', 'dev-001', 'dev-999')"
+                    )
+                ).all()
+            }
+        assert rows_by_key["dev-000"] == ("p0", "active")  # backfill kept, skip_null overwrote
+        assert rows_by_key["dev-001"] == ("p1", None)  # backfill kept, skip_null kept NULL
+        assert rows_by_key["dev-999"] == ("fresh", "new")
+
+        update = db.table_sink(
+            table=table_name,
+            mode="update",
+            keys=("device_key",),
+            update_columns=("status",),
+            batch_size=50,
+        )
+        await update.send(
+            Envelope(
+                body=[
+                    {"device_key": f"dev-{i:03d}", "status": "synced"} for i in range(100)
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            synced = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE status = 'synced'")
+            ).scalar()
+        assert synced == 100
+
+        # A rejected batch (duplicate keys) writes nothing.
+        with pytest.raises(ConnectorOperationError):
+            await upsert.send(
+                Envelope(
+                    body=[
+                        {"device_key": "dup", "payload": "a", "status": None},
+                        {"device_key": "dup", "payload": "b", "status": None},
+                    ]
+                )
+            )
+        with engine.connect() as conn:
+            dups = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE device_key = 'dup'")
+            ).scalar()
+        assert dups == 0
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())

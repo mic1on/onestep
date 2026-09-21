@@ -338,3 +338,132 @@ def test_serialize_json_never_skips_coercion() -> None:
 
     assert coerced["tags"] == payload["tags"]
     assert isinstance(coerced["tags"], list)
+
+
+# -- batch payload tests (issue #189) --
+
+try:
+    from sqlalchemy.dialects import postgresql as postgresql_dialect
+except ImportError:  # pragma: no cover - optional deps
+    postgresql_dialect = None
+
+
+class _FakePostgresEngine:
+    dialect = postgresql_dialect.dialect()
+
+
+class _FakePostgresConnector:
+    engine = _FakePostgresEngine()
+
+    def _table(self, table_name: str):
+        return _FakeConnector()._table(table_name)
+
+
+def _pg_sink(**kwargs) -> PostgresTableSink:
+    options: dict[str, Any] = {
+        "connector": _FakePostgresConnector(),  # type: ignore[arg-type]
+        "table": "users",
+        "mode": "upsert",
+        "keys": ("id",),
+        "update_columns": ("name", "email"),
+    }
+    options.update(kwargs)
+    return PostgresTableSink(**options)
+
+
+def _pg_rows() -> list[dict[str, Any]]:
+    return [
+        {"id": 1, "name": "alice", "email": "a@x.com"},
+        {"id": 2, "name": "bob", "email": "b@x.com"},
+    ]
+
+
+def test_batch_insert_uses_executemany() -> None:
+    sink = _pg_sink(mode="insert", keys=(), update_columns=None)
+    statements = sink._build_batch_statements(_pg_rows(), _table(), ())
+    assert len(statements) == 1
+    statement, parameters = statements[0]
+    assert parameters == _pg_rows()  # executemany, not baked-in literals
+    sql = str(statement.compile(dialect=postgresql_dialect.dialect()))
+    assert sql.startswith("INSERT INTO users")
+    assert sql.count("%(id)s") == 1  # one statement, per-row binds
+
+
+def test_batch_upsert_uses_executemany_on_conflict() -> None:
+    sink = _pg_sink()
+    statement, parameters = sink._build_batch_statements(
+        _pg_rows(), _table(), ("name", "email")
+    )[0]
+    assert parameters == _pg_rows()
+    sql = str(statement.compile(dialect=postgresql_dialect.dialect()))
+    assert "ON CONFLICT (id) DO UPDATE" in sql
+    assert "name = excluded.name" in sql
+    assert "email = excluded.email" in sql
+
+
+def test_batch_upsert_skip_null_renders_runtime_case() -> None:
+    sink = _pg_sink(
+        update_columns=({"name": "name", "policy": "skip_null"}, "email")
+    )
+    statement, _ = sink._build_batch_statements(
+        _pg_rows(), _table(), ("name", "email")
+    )[0]
+    sql = str(statement.compile(dialect=postgresql_dialect.dialect()))
+    assert "CASE WHEN (excluded.name IS NULL)" in sql
+    assert "email = excluded.email" in sql
+
+
+def test_batch_upsert_backfill_renders_coalesce() -> None:
+    sink = _pg_sink(
+        update_columns=({"name": "name", "policy": "backfill"},)
+    )
+    statement, _ = sink._build_batch_statements(
+        _pg_rows(), _table(), ("name",)
+    )[0]
+    sql = str(statement.compile(dialect=postgresql_dialect.dialect()))
+    assert "coalesce(users.name, excluded.name)" in sql
+
+
+def test_batch_update_uses_executemany_with_projected_params() -> None:
+    sink = _pg_sink(mode="update")
+    statement, parameters = sink._build_batch_statements(
+        _pg_rows(), _table(), ("name", "email")
+    )[0]
+    assert parameters == [
+        {"_onestep_key_0": 1, "_onestep_value_0": "alice", "_onestep_value_1": "a@x.com"},
+        {"_onestep_key_0": 2, "_onestep_value_0": "bob", "_onestep_value_1": "b@x.com"},
+    ]
+    sql = str(statement.compile(dialect=postgresql_dialect.dialect()))
+    assert sql.startswith("UPDATE users")
+    assert "users.id = " in sql
+
+
+def test_batch_chunking_follows_batch_size() -> None:
+    rows = [{"id": i, "name": f"n{i}", "email": f"e{i}@x.com"} for i in range(5)]
+    sink = _pg_sink(batch_size=2)
+    statements = sink._build_batch_statements(rows, _table(), ("name", "email"))
+    assert len(statements) == 3  # 2 + 2 + 1 executemany calls
+
+
+def test_batch_size_validation() -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _pg_sink(batch_size=0)
+
+
+def test_send_dispatches_list_payload_to_batch_path() -> None:
+    from unittest import mock
+
+    from onestep.envelope import Envelope
+
+    sink = _pg_sink(mode="insert", keys=(), update_columns=None)
+    with mock.patch.object(sink, "_send_batch", new_callable=mock.AsyncMock) as batch:
+        asyncio.run(sink.send(Envelope(body=_pg_rows())))
+    batch.assert_awaited_once_with(_pg_rows())
+
+
+def test_send_rejects_scalar_payload() -> None:
+    from onestep.envelope import Envelope
+
+    sink = _pg_sink(mode="insert", keys=(), update_columns=None)
+    with pytest.raises(TypeError, match="mapping or list-of-mapping"):
+        asyncio.run(sink.send(Envelope(body="scalar")))

@@ -121,6 +121,46 @@ carries a regression test.
 - Caches are in-process and not persisted; deletion is not observed — a stale
   `record_id` surfaces as a write error and is resolved by restarting the task.
 
+## onestep-sql 0.6.0
+
+Batch writes for every table sink (issue #189).
+
+- **`*_table_sink` now accepts a list/tuple of row mappings** in addition to a
+  single mapping, so one `emit` writes a whole batch in one transaction.
+  A handler that returns a list of rows (for example `http_fetcher.fetch_rows()`
+  or a paged API read) produces one envelope and one round trip per chunk
+  instead of one statement and one transaction per row. The single-mapping path
+  is untouched.
+- **New `batch_size` field (default 1000)** caps the rows per statement.
+  Rows are split into chunks that all execute inside the *same* transaction, so
+  a failure rolls the whole batch back and an at-least-once retry can never
+  leave a partial write. SQLite additionally clamps chunks to its portable
+  parameter ceiling; MySQL and PostgreSQL run unlimited chunks.
+- **Dialect-specific batch paths:** MySQL renders multi-row
+  `INSERT ... VALUES (...),(...) AS new ON DUPLICATE KEY UPDATE` (the
+  `new.col` alias form on 8.0.20+), PostgreSQL and SQLite use per-row
+  `ON CONFLICT ... DO UPDATE` executemany, and `mode: update` uses bindparam
+  executemany everywhere (SQLAlchemy cannot render multi-row `UPDATE`).
+- **Payload-shape violations are rejected before any write** with
+  `ConnectorOperationError(kind=PERMANENT)`: a non-mapping element, rows whose
+  column sets differ, an unhashable key value, and — for `upsert` — two rows
+  with the same keys in one batch. The last one matters because MySQL/SQLite
+  would silently apply last-wins while PostgreSQL fails the statement with
+  `cannot affect row a second time`; the batch is now refused deterministically
+  with the offending row index.
+- **Per-row policies keep their single-row semantics in batch mode:**
+  `skip_null` becomes a shared `CASE WHEN <new value> IS NULL THEN <column>
+  ELSE <new value> END` so a NULL never overwrites an existing value, and rows
+  whose update columns are *all* filtered by `skip_null` are dropped from the
+  batch instead of being inserted. `backfill` keeps its `coalesce(column, new)`
+  form, `update_expr` renders unchanged, and `update_columns` is intersected
+  with the payload columns so a column absent from the payload is never written
+  as NULL.
+- **`mode: update` batch parameters are projected explicitly** onto prefixed
+  bind names, so a same-named table column present in the payload can no longer
+  leak into the `SET` clause past the `update_columns` whitelist.
+- Empty lists are a no-op (no `INSERT ... VALUES ()` ghost row).
+
 ## onestep-sql 0.5.0
 
 Reliability fixes for silent data loss, plus single-transaction table-queue
