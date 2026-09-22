@@ -10,6 +10,64 @@ tracked execution 结果预检：自动 emit 之前先校验 handler 返回值�
 
 - 边界说明：该预检不提供跨 sink 与 execution 状态表的原子事务，也不能撤回 handler 或 hook 内主动调用 `ctx.emit()` 等已经发生的副作用。成功写入后发生网络、取消或确认错误仍可能重放，下游仍需幂等。
 
+## onestep-sql 0.7.0
+
+Hardens the batch table-sink path added in 0.6.0: batch-local uniqueness is now
+checked with the database's own index semantics, and MySQL packet limits are
+measured on the encoded query instead of estimated.
+
+- **Batch-local uniqueness validation uses real index semantics**
+  (`_shared/batch_unique.py`). The 0.6.0 check compared payload values in Python,
+  which cannot see collation, MySQL prefix indexes, partial-index predicates or
+  PostgreSQL `NULLS NOT DISTINCT`. A connection-scoped temporary table now
+  reproduces the reflected column unique indexes so the database itself decides
+  conflicts; exact duplicate keys are still rejected cheaply in memory first.
+  The check spans the whole `send` and cannot be bypassed by lowering
+  `batch_size`. Creating the temporary table needs `CREATE TEMPORARY TABLES`
+  (MySQL) or `TEMP` (PostgreSQL) on the run account, and fails before the target
+  table is written rather than falling back to an incomplete Python comparison.
+  The guarantee covers reflected column unique indexes, index columns present in
+  the payload, and partial indexes whose predicate inputs are available; a
+  partial index missing a required predicate field refuses the batch instead of
+  guessing column defaults. Expression/functional indexes, non-reflected
+  indexes, server-generated values and unique columns omitted from the payload
+  remain the database's responsibility.
+
+- **MySQL packet limits are measured, not estimated** (`mysql/batch_packet.py`).
+  The fixed 4 MiB chunking target from 0.6.0 is now only a starting point: the
+  connection's `@@SESSION.max_allowed_packet` is read and the actual encoded
+  query — after SQLAlchemy type processing (including JSON) and this
+  connection's driver encoding and escaping, plus the `COM_QUERY` byte — is
+  measured before sending. An over-limit multi-row statement is split further; a
+  single row that still exceeds the limit raises a `PERMANENT` connector error
+  and rolls back the preceding chunks. Exceeding the packet limit kills the
+  connection (error 2013), which the resilience table classifies as retryable
+  even though replaying the same payload can never succeed, so failing
+  permanently is the correct classification.
+
+- **Batch grouping keeps per-row policies single-row-equivalent.** Only
+  adjacent rows with the same update-column and null sets merge into one
+  statement, so duplicate update keys keep their input order and columns absent
+  from the update set no longer fire `UPDATE OF column` triggers. `skip_null`
+  decides from the input Python `None` rather than from how the driver encodes
+  the value, and `mode: update` uses `IS NULL` for NULL keys with bind
+  parameters carrying the target column type.
+
+- **SQLite default-value rows keep their row count.** An all-defaults payload
+  such as `[{}, {}, {}]` now executes three `DEFAULT VALUES` statements through
+  executemany instead of collapsing the input.
+
+- **Tracked-execution results are validated before automatic emit** (#225). The
+  SQL execution state machine exposes an optional, side-effect-free
+  `validate_result()` that reuses the completion encoder and `max_result_bytes`
+  limit, and the delivery exposes it to the executor as
+  `validate_execution_result()`. A result that cannot be encoded or exceeds the
+  limit now fails at the `result_validation` stage without calling any automatic
+  emit sink; completion still re-validates independently.
+
+- Documents the resulting semantics and permission requirements in
+  `docs/guide/sql-batch-correctness.md`.
+
 ## onestep 1.14.0
 
 控制平面可靠性版本：WebSocket 路径的数据库访问原生异步化、实例连通性通知稳定化，以及事件循环与连接池可观测性基线。
