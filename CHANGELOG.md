@@ -2,50 +2,23 @@
 
 ## onestep 1.14.0
 
-Control-plane reliability release: native-async database access on the
-WebSocket paths, stabilised instance-connectivity notifications, and a
-baseline of event-loop and connection-pool observability.
+控制平面可靠性版本：WebSocket 路径的数据库访问原生异步化、实例连通性通知稳定化，以及事件循环与连接池可观测性基线。
 
-- Fixes runtime identity locks after process termination and container PID
-  reuse (#187). OS file locks replace PID liveness checks; the lock file and
-  the existing identity/sequences are retained. Stop old workers before
-  upgrading a shared state directory. See `docs/stable-instance-identity.md`
-  for upgrade and rollback instructions.
+- 修复进程终止与容器 PID 复用后的运行时身份锁（#187）：改用 OS 文件锁替代 PID 存活检查；保留锁文件与既有 identity/序列。升级共享状态目录前先停旧 worker。升级与回滚说明见 `docs/stable-instance-identity.md`。
 
-- Makes the agent and worker-agent WebSocket database access native-async
-  (#192, #206, #212, #214). Every message now runs as one short-transaction
-  work unit on the async engine, so a slow query yields to the event loop
-  instead of freezing all connected agents, and the `hello` handshake commits
-  its session atomically (an exception path can no longer leak an active
-  session).
+- Agent 与 worker-agent WebSocket 的数据库访问原生异步化（#192、#206、#212、#214）：每条消息作为异步引擎上的一个短事务工作单元运行，慢查询让出事件循环而不是冻结所有已连接 agent；`hello` 握手原子提交会话（异常路径不再泄漏 active session）。
 
-- Stabilises instance-connectivity notifications (#196, #209): a state change
-  is only confirmed after it stays stable for a damping window, and flap
-  damping suppresses the rapid offline/online oscillations that previously
-  produced notification storms. Digests are sent by final state, so an
-  instance that stayed offline for the whole window no longer reports a
-  recovery it never had. The default damping window is now
-  `max(configured, 2 x (detect + confirm intervals))` — deployments that
-  relied on the previous default will see fewer, later notifications.
+- 实例连通性通知稳定化（#196、#209）：状态变化须在稳定窗口内保持不变才确认通知；抖动抑制压掉此前会造成通知风暴的快速上下线振荡。摘要按最终状态发送——整个窗口都离线的实例不会再报告一次它从未发生过的「恢复」。默认抖动窗口调整为 `max(配置值, 2 × (检测 + 确认间隔))`——依赖旧默认值的部署会看到更少、更晚的通知。
 
-- Wires the observability baseline into the application (#197, #213):
-  event-loop lag sampling starts and stops with the app lifespan (with a
-  `/metrics` fallback when it is not running), and the synchronous engine
-  reports connection-pool checkout waits.
+- 可观测性基线接入应用本体（#197、#213）：事件循环延迟采样随应用 lifespan 启停（未运行时由 `/metrics` 兜底），同步引擎上报连接池 checkout 等待。
 
-- Hardens the work-agent connection lifecycle (#194, #195, #201, #202, #205):
-  the heartbeat task is supervised (a failed heartbeat no longer silently
-  kills liveness), reconnect backoff uses Full Jitter to avoid reconnect
-  stampedes, and after a reconnect the agent actively requests a topology
-  re-send instead of waiting for the control plane to notice.
+- 加固 work-agent 连接生命周期（#194、#195、#201、#202、#205）：心跳任务受监督（心跳失败不再静默地杀死存活判定）；重连退避采用 Full Jitter 避免重连踩踏；重连成功后 agent 主动请求补发拓扑，不再被动等待控制平面发现。
 
-- Adds a read-only `session_generation` property to the reporter plugin (#211).
+- reporter 插件新增只读属性 `session_generation`（#211）。
 
-- Upgrade note: this release ships one new Alembic migration (202607250001,
-  adds nullable connectivity-damping columns). Run `alembic upgrade head`
-  before restarting; old containers stay compatible during a rolling deploy.
+- 升级提示：本版本包含一个新的 Alembic 迁移（202607250001，新增可空的连通性抑制列）。重启前先执行 `alembic upgrade head`；滚动部署期间旧容器保持兼容。
 
-- Refactors the internal import graph with no user-visible behaviour change.
+- 重构内部导入图，无用户可见行为变化。
 
 ## onestep-feishu-bitable 0.6.1
 
