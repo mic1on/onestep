@@ -468,7 +468,7 @@ def test_table_sink_batch_upsert_matches_single_row_semantics(tmp_path: Path) ->
         ]
         counter = _statement_counter(connector.engine)
         await sink.send(Envelope(body=rows))
-        assert len(counter) == 2  # batch_size=2 -> two chunked statements
+        assert len(counter) == 3  # alternating masks stay in input order
         await sink.send(Envelope(body=rows))  # replay is idempotent
         async with connector.engine.begin() as conn:
             out = {

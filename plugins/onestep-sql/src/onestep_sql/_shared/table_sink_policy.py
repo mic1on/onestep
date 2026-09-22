@@ -29,7 +29,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
+from contextlib import asynccontextmanager
+from itertools import groupby
 from typing import Any, ClassVar, Iterator
+
+from .batch_unique import exact_conflicts, sqlite_unique_ddl, validate_unique_rows
 
 from onestep.resilience import (
     ConnectorErrorKind,
@@ -46,12 +50,7 @@ except ImportError:  # pragma: no cover - exercised when optional deps are missi
 
 _UPDATE_COLUMN_POLICIES = frozenset({"overwrite", "skip_null", "backfill"})
 
-#: Conservative per-statement byte budget for MySQL batches. ``max_allowed_packet``
-#: defaults to 64MB on MySQL 8 but is commonly lowered (4MB was the MySQL 5.7
-#: default and several managed services keep it), and exceeding it kills the
-#: connection with a retryable-looking error. 4MB keeps a chunk well inside even
-#: a small server configuration while still batching thousands of ordinary rows;
-#: operators with large payloads lower ``batch_size`` or raise the server limit.
+#: Soft initial MySQL chunk target; actual encoded queries are checked at execution.
 _MYSQL_BATCH_BYTE_BUDGET = 4 * 1024 * 1024
 
 
@@ -288,8 +287,8 @@ class TableSinkUpdatePolicy:
     # * same-batch duplicate upsert keys are rejected: MySQL/SQLite would
     #   silently apply last-wins while PostgreSQL raises
     #   ``cannot affect row a second time``;
-    # * ``skip_null`` becomes a shared ``CASE WHEN <ref> IS NULL THEN col
-    #   ELSE <ref> END`` so NULL payloads keep existing values per row;
+    # * ``skip_null`` omits SET columns before type binding; adjacent rows
+    #   with the same update mask share a statement, preserving input order;
     #   rows whose update columns are *all* filtered are removed from the
     #   batch entirely, mirroring the single-row "skip the write" path;
     # * ``update`` mode uses bindparam executemany with names that can
@@ -399,24 +398,12 @@ class TableSinkUpdatePolicy:
                 )
 
         if self.mode == "upsert":
-            seen_keys: set[tuple[Any, ...]] = set()
             for index, row in enumerate(prepared):
-                key_value = tuple(row[key] for key in self.keys)
                 try:
-                    duplicate = key_value in seen_keys
+                    hash(tuple(row[key] for key in self.keys))
                 except TypeError:
-                    raise self._batch_payload_error(
-                        f"batch item {index} has an unhashable key value {key_value!r}"
-                    ) from None
-                if duplicate:
-                    raise self._batch_payload_error(
-                        f"batch item {index} duplicates earlier keys {key_value!r}; "
-                        "same-statement upserts diverge across dialects "
-                        "(MySQL/SQLite apply last-wins, PostgreSQL fails). "
-                        "Deduplicate upstream or split the batch."
-                    )
-                seen_keys.add(key_value)
-            self._reject_secondary_unique_conflicts(prepared, table)
+                    raise self._batch_payload_error(f"batch item {index} has an unhashable key value") from None
+            exact_conflicts(self, prepared, table)
 
         skipped = 0
         if self.mode in {"upsert", "update"} and not self.update_expr:
@@ -433,51 +420,6 @@ class TableSinkUpdatePolicy:
                     kept.append(row)
             prepared = kept
         return prepared, skipped, candidates
-
-    def _reject_secondary_unique_conflicts(
-        self, rows: Sequence[Mapping[str, Any]], table: sa.Table
-    ) -> None:
-        """Refuse a batch whose rows collide on a *second* unique key.
-
-        ``INSERT ... ON DUPLICATE KEY UPDATE`` (MySQL/SQLite semantics) takes
-        the update branch for **any** unique index, not only the declared
-        ``keys``. Two rows that differ in ``keys`` but share a value of another
-        unique column therefore overwrite each other silently on MySQL/SQLite,
-        while PostgreSQL raises ``cannot affect row a second time`` — the same
-        dialect divergence the ``keys`` check removes, reached through a
-        different index. The feasibility review reproduced exactly this
-        (``PRIMARY KEY(id)`` + ``UNIQUE(email)``, ``keys=("id",)``: MySQL kept
-        only the second row, PostgreSQL failed).
-
-        Every unique column set that is *fully present in the payload* and
-        differs from ``keys`` is checked; a set the payload does not carry
-        cannot collide within this batch. The check is skipped when the payload
-        is a single row (no intra-batch collision is possible).
-        """
-        if len(rows) < 2:
-            return
-        payload_columns = frozenset(rows[0])
-        key_set = frozenset(self.keys)
-        for label, columns in _unique_column_sets(table):
-            column_set = frozenset(columns)
-            if column_set == key_set or not column_set <= payload_columns:
-                continue
-            seen: set[tuple[Any, ...]] = set()
-            for index, row in enumerate(rows):
-                value = tuple(row[column] for column in columns)
-                try:
-                    duplicate = value in seen
-                except TypeError:
-                    continue
-                if duplicate:
-                    declared = ", ".join(columns)
-                    raise self._batch_payload_error(
-                        f"batch item {index} collides with an earlier row on {label} "
-                        f"({declared})={value!r}. MySQL/SQLite would silently keep the "
-                        "last row while PostgreSQL fails the statement, so the batch "
-                        "is refused. Deduplicate upstream or split the batch."
-                    )
-                seen.add(value)
 
     def _upsert_batch_set(
         self,
@@ -496,9 +438,7 @@ class TableSinkUpdatePolicy:
             policy = self.column_policies.get(column, "overwrite")
             target = table.columns[column]
             new_value = row_ref[column]
-            if policy == "skip_null":
-                set_[column] = sa.case((new_value.is_(None), target), else_=new_value)
-            elif policy == "backfill":
+            if policy == "backfill":
                 set_[column] = sa.func.coalesce(target, new_value)
             else:
                 set_[column] = new_value
@@ -507,7 +447,9 @@ class TableSinkUpdatePolicy:
         return set_
 
     @staticmethod
-    def _batch_bind_names(columns: Sequence[str], prefix: str) -> dict[str, str]:
+    def _batch_bind_names(
+        columns: Sequence[str], prefix: str, *, reserved: Sequence[str] = ()
+    ) -> dict[str, str]:
         """Map column → unique bindparam name that can never equal a column name.
 
         Bindparam names matching a column of the same statement are reserved
@@ -515,7 +457,7 @@ class TableSinkUpdatePolicy:
         leak extra same-named keys into SET, so batch update remaps every
         column onto a prefixed, collision-checked name.
         """
-        used = set(columns)
+        used = set(columns) | set(reserved)
         names: dict[str, str] = {}
         stem = prefix
         while any(f"{stem}_{index}" in used for index in range(len(columns))):
@@ -525,26 +467,31 @@ class TableSinkUpdatePolicy:
         return names
 
     def _update_batch_statement(
-        self, table: sa.Table, candidates: Sequence[str]
+        self, table: sa.Table, candidates: Sequence[str], *, null_keys: Sequence[str] = ()
     ) -> tuple[Any, dict[str, Any]]:
         """Build the executemany UPDATE statement plus its row projector.
 
         Returns ``(statement, parameter_template)`` where the template maps
         bindparam name → source column for explicit per-row projection.
         """
-        key_names = self._batch_bind_names(self.keys, "_onestep_key")
-        column_names = self._batch_bind_names(candidates, "_onestep_value")
+        key_names = self._batch_bind_names(
+            [key for key in self.keys if key not in null_keys],
+            "_onestep_key", reserved=tuple(table.columns.keys()),
+        )
+        column_names = self._batch_bind_names(
+            candidates, "_onestep_value", reserved=tuple(table.columns.keys()),
+        )
         conditions = [
-            table.columns[key] == sa.bindparam(key_names[key]) for key in self.keys
+            table.columns[key].is_(None) if key in null_keys else
+            table.columns[key] == sa.bindparam(key_names[key], type_=table.columns[key].type)
+            for key in self.keys
         ]
         values: dict[str, Any] = {}
         for column in candidates:
             policy = self.column_policies.get(column, "overwrite")
             target = table.columns[column]
-            new_value = sa.bindparam(column_names[column])
-            if policy == "skip_null":
-                values[column] = sa.case((new_value.is_(None), target), else_=new_value)
-            elif policy == "backfill":
+            new_value = sa.bindparam(column_names[column], type_=target.type)
+            if policy == "backfill":
                 values[column] = sa.func.coalesce(target, new_value)
             else:
                 values[column] = new_value
@@ -552,11 +499,31 @@ class TableSinkUpdatePolicy:
             values[column] = sa.literal_column(expr)
         statement = sa.update(table).where(sa.and_(*conditions)).values(**values)
         # bindparam name -> source column, for explicit per-row projection.
-        parameter_template = {
-            name: column
-            for column, name in {**key_names, **column_names}.items()
-        }
+        parameter_template = {name: column for column, name in key_names.items()}
+        parameter_template.update({name: column for column, name in column_names.items()})
         return statement, parameter_template
+
+    def _batch_groups(
+        self, rows: Sequence[Mapping[str, Any]], candidates: Sequence[str]
+    ) -> Iterator[tuple[list[Mapping[str, Any]], tuple[str, ...], tuple[str, ...]]]:
+        """Group only adjacent compatible rows, preserving input order.
+
+        Decide whether to skip a value before JSON/driver binding turns None
+        into a database value. Omit that column from SET entirely, as the
+        single-row path does (including column-specific trigger semantics).
+        NULL update keys likewise need an IS NULL predicate, not an = bind.
+        """
+        def shape(row: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+            columns = tuple(
+                column for column in candidates
+                if not (row[column] is None and self.column_policies.get(column) == "skip_null")
+            )
+            nulls = tuple(key for key in self.keys if row[key] is None) if self.mode == "update" else ()
+            return columns, nulls
+
+        for (columns, nulls), group in groupby(rows, key=shape):
+            for chunk in self._batch_chunks(list(group)):
+                yield chunk, columns, nulls
 
     def _batch_row_limit(self, column_count: int) -> int | None:
         """Hard per-statement row ceiling for the engine's dialect, ``None`` = unlimited.
@@ -577,23 +544,9 @@ class TableSinkUpdatePolicy:
         return None
 
     def _batch_byte_budget(self) -> int | None:
-        """Per-statement byte ceiling for dialects whose limit is a packet size.
-
-        MySQL aborts an oversized statement by **killing the connection**
-        (error 2013), which the resilience table classifies as ``DISCONNECTED``
-        — i.e. *retryable*, even though replaying the same batch can never
-        succeed. The feasibility review measured exactly that: a 1000×70KB
-        batch against the default 64MB ``max_allowed_packet`` produced a
-        retryable ``disconnected`` error on every attempt while re-serializing
-        70MB each time. There is no cheap way to ask the server for the packet
-        limit from the sink (it needs a live round trip and can change at
-        runtime), so the batch path refuses to *guess*: it caps the estimated
-        statement size well below the documented default and fails the batch
-        with PERMANENT when even a single row exceeds it, telling the operator
-        to lower ``batch_size``.
-
-        PostgreSQL and SQLite statements are not packet-bound this way (they
-        go through executemany pipelines), so they have no byte budget.
+        """Soft chunk-size target; the MySQL executor enforces the actual
+        session limit after type conversion, connection encoding and escaping.
+        A single row may exceed this estimate target but must fit that limit.
         """
         sync_engine = getattr(self.connector, "engine", None)
         if sync_engine is None:
@@ -605,13 +558,12 @@ class TableSinkUpdatePolicy:
 
     @staticmethod
     def _estimate_row_bytes(row: Mapping[str, Any]) -> int:
-        """Conservative per-row wire-size estimate for the byte budget.
+        """Approximate per-row size for the soft chunk target.
 
         Values are counted at their UTF-8 length plus a fixed per-column
         overhead covering quoting, escaping and separators. Escaping can
-        double a string's size (``max_allowed_packet`` counts the escaped
-        bytes), so the estimate deliberately over-counts rather than
-        under-counts.
+        double a string's size. Native JSON and custom processors can expand
+        further, so this estimate is not a hard packet-size guarantee.
         """
         total = 0
         for value in row.values():
@@ -681,18 +633,27 @@ class TableSinkUpdatePolicy:
             )
         if not prepared:
             return
-        statements = self._build_batch_statements(prepared, table, candidates)
-        matched_rows = 0
         async with self.connector.engine.begin() as conn:
-            for statement, parameters in statements:
-                if parameters is None:
-                    result = await conn.execute(statement)
-                else:
-                    result = await conn.execute(statement, parameters)
-                matched_rows += result.rowcount or 0
+            async with self._batch_scope(conn):
+                await validate_unique_rows(self, conn, prepared, table)
+                matched_rows = await self._execute_batch(conn, prepared, table, candidates)
         if self.mode == "update" and matched_rows == 0:
             logger.info(
                 "%s batch update matched no rows or values unchanged (%d row(s))",
                 self.name,
                 len(prepared),
             )
+
+    async def _batch_unique_ddl(self, conn, table, shadow, rules):
+        return await sqlite_unique_ddl(conn, table, shadow, rules)
+
+    @asynccontextmanager
+    async def _batch_scope(self, conn):
+        yield
+
+    async def _execute_batch(self, conn, rows, table, candidates) -> int:
+        matched = 0
+        for statement, parameters in self._build_batch_statements(rows, table, candidates):
+            result = await conn.execute(statement) if parameters is None else await conn.execute(statement, parameters)
+            matched += result.rowcount or 0
+        return matched

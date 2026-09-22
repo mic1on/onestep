@@ -829,11 +829,14 @@ class TableSink(TableSinkUpdatePolicy, Sink):
         sync_engine = getattr(self.connector.engine, "sync_engine", self.connector.engine)
         dialect = sync_engine.dialect.name
         statements: list[tuple[Any, list[dict[str, Any]] | None]] = []
-        for chunk in self._batch_chunks(rows):
+        for chunk, columns, null_keys in self._batch_groups(rows, candidates):
             if self.mode == "insert":
-                statements.append((sa.insert(table).values(chunk), None))
+                if not chunk[0]:
+                    statements.append((sa.insert(table), [dict(row) for row in chunk]))
+                else:
+                    statements.append((sa.insert(table).values(chunk), None))
             elif self.mode == "update":
-                statement, parameter_template = self._update_batch_statement(table, candidates)
+                statement, parameter_template = self._update_batch_statement(table, columns, null_keys=null_keys)
                 statements.append(
                     (
                         statement,
@@ -847,13 +850,13 @@ class TableSink(TableSinkUpdatePolicy, Sink):
                 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
                 stmt = mysql_insert(table).values(chunk)
-                set_ = self._upsert_batch_set(table, stmt.inserted, candidates)
+                set_ = self._upsert_batch_set(table, stmt.inserted, columns)
                 statements.append((stmt.on_duplicate_key_update(**set_), None))
             else:
                 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
                 stmt = sqlite_insert(table).values(chunk)
-                set_ = self._upsert_batch_set(table, stmt.excluded, candidates)
+                set_ = self._upsert_batch_set(table, stmt.excluded, columns)
                 statements.append(
                     (
                         stmt.on_conflict_do_update(index_elements=list(self.keys), set_=set_),

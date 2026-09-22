@@ -1195,7 +1195,7 @@ def test_prepare_batch_rows_drops_fully_skip_null_filtered_rows(backend: str) ->
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_prepare_batch_rows_keeps_partially_skipped_rows(backend: str) -> None:
     # Only one candidate column is null under skip_null; the other survives,
-    # so the row stays in the batch (the CASE keeps the null column's value).
+    # so the row stays in the batch (the SET mask omits the null column).
     sink = _make_sink(
         backend,
         update_columns=(
@@ -1253,7 +1253,7 @@ def test_update_batch_statement_renders_identical_sql_on_all_backends() -> None:
         rendered[backend] = str(statement.compile(dialect=sqlite_dialect.dialect()))
     assert rendered["mysql"] == rendered["postgres"] == rendered["sqlite"]
     compiled = rendered["mysql"]
-    assert "CASE" in compiled  # skip_null -> per-row runtime guard
+    assert "CASE" not in compiled  # skip_null masks are decided before binding
     assert "coalesce" in compiled.lower()  # backfill
 
 
@@ -1652,6 +1652,7 @@ def test_shared_package_exports_only_the_shared_modules() -> None:
     assert names == {
         "state_sqlalchemy",
         "table_sink_policy",
+        "batch_unique",
         "table_queue_lint",
         "state_keys",
         "resilience",

@@ -83,3 +83,7 @@ PostgreSQL backend it provides at-least-once semantics and cooperative
 cancellation only; external side effects must stay idempotent on
 `execution_id`, and `result()` neither polls nor waits. Full deployment guide:
 `docs/broker/mysql-execution.md`.
+
+Batch table-sink semantics, temporary-table permission requirements and
+packet-size handling are documented in
+[SQL batch correctness](../../docs/guide/sql-batch-correctness.md).
