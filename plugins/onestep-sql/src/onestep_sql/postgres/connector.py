@@ -807,6 +807,13 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
             )
         return sa.insert(table).values(**payload)
 
+    async def _batch_unique_ddl(self, conn, table, shadow, rules):
+        if conn.dialect.name == "sqlite":
+            return await super()._batch_unique_ddl(conn, table, shadow, rules)
+        from .batch_unique import unique_ddl
+
+        return unique_ddl(conn, table, shadow, rules)
+
     def _build_batch_statements(
         self,
         rows: Sequence[Mapping[str, Any]],
@@ -815,14 +822,14 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
     ) -> list[tuple[Any, list[dict[str, Any]] | None]]:
         dialect = self.connector.engine.dialect.name
         statements: list[tuple[Any, list[dict[str, Any]] | None]] = []
-        for chunk in self._batch_chunks(rows):
+        for chunk, columns, null_keys in self._batch_groups(rows, candidates):
             if self.mode == "insert":
                 # Executemany insert: SQLAlchemy's insertmanyvalues renders
                 # multi-row VALUES (and splits at its own parameter budget),
                 # so no dialect row limit applies here.
                 statements.append((sa.insert(table), [dict(row) for row in chunk]))
             elif self.mode == "update":
-                statement, parameter_template = self._update_batch_statement(table, candidates)
+                statement, parameter_template = self._update_batch_statement(table, columns, null_keys=null_keys)
                 statements.append(
                     (
                         statement,
@@ -836,7 +843,7 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
                 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 
                 insert_stmt = postgres_insert(table)
-                set_ = self._upsert_batch_set(table, insert_stmt.excluded, candidates)
+                set_ = self._upsert_batch_set(table, insert_stmt.excluded, columns)
                 statement = insert_stmt.on_conflict_do_update(
                     index_elements=list(self.keys), set_=set_
                 )
@@ -847,7 +854,7 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
                 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
                 stmt = sqlite_insert(table).values(chunk)
-                set_ = self._upsert_batch_set(table, stmt.excluded, candidates)
+                set_ = self._upsert_batch_set(table, stmt.excluded, columns)
                 statements.append(
                     (
                         stmt.on_conflict_do_update(index_elements=list(self.keys), set_=set_),

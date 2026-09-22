@@ -401,7 +401,7 @@ def test_batch_upsert_uses_executemany_on_conflict() -> None:
     assert "email = excluded.email" in sql
 
 
-def test_batch_upsert_skip_null_renders_runtime_case() -> None:
+def test_batch_upsert_non_null_skip_value_uses_typed_row_reference() -> None:
     sink = _pg_sink(
         update_columns=({"name": "name", "policy": "skip_null"}, "email")
     )
@@ -409,7 +409,7 @@ def test_batch_upsert_skip_null_renders_runtime_case() -> None:
         _pg_rows(), _table(), ("name", "email")
     )[0]
     sql = str(statement.compile(dialect=postgresql_dialect.dialect()))
-    assert "CASE WHEN (excluded.name IS NULL)" in sql
+    assert "name = excluded.name" in sql
     assert "email = excluded.email" in sql
 
 

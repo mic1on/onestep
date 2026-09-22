@@ -738,7 +738,7 @@ def test_batch_upsert_renders_alias_form_on_modern_mysql() -> None:
     assert "inserted." not in update_clause
 
 
-def test_batch_upsert_skip_null_renders_runtime_case() -> None:
+def test_batch_upsert_non_null_skip_value_uses_typed_row_reference() -> None:
     sink = _batch_sink(
         update_columns=({"name": "title", "policy": "skip_null"}, "content")
     )
@@ -746,7 +746,7 @@ def test_batch_upsert_skip_null_renders_runtime_case() -> None:
         _batch_rows(), _candidate_table(), ("title", "content")
     )[0]
     update_clause = _update_clause(_compile(statement))
-    assert "CASE WHEN (VALUES(title) IS NULL)" in update_clause
+    assert "title = VALUES(title)" in update_clause
     assert "content = VALUES(content)" in update_clause
 
 
