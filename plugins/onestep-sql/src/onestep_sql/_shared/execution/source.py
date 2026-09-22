@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Callable, ClassVar, Generic, TypeVar
@@ -390,6 +391,14 @@ class ExecutionDeliveryBase(Delivery, Generic[TSource]):
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+    async def validate_execution_result(self, result: Any) -> None:
+        """Preflight deterministic result errors before automatic emit."""
+        validate = getattr(self.source.backend, "validate_result", None)
+        if callable(validate):
+            pending = validate(result)
+            if inspect.isawaitable(pending):
+                await pending
 
     async def complete_execution(self, completion: ExecutionCompletion) -> None:
         if self._completed:

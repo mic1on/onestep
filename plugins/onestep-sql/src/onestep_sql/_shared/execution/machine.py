@@ -424,6 +424,20 @@ class ExecutionStateMachine(LeasedExecutionBackend):
         except CaptureEncodingError as exc:
             raise ExecutionEncodingError(f"cannot encode execution {field}: {exc}") from exc
 
+    def _encode_result(self, result: Any) -> Any:
+        encoded = self._encode_value(result, "result")
+        if self._encoded_size(encoded) > self.max_result_bytes:
+            raise ExecutionEncodingError("execution result exceeds the configured limit")
+        return encoded
+
+    def validate_result(self, result: Any) -> None:
+        """Optional preflight, using exactly the completion encoding/limit.
+
+        Does not write state or stop the lease heartbeat. Completion still
+        validates independently for direct clients and post-preflight changes.
+        """
+        self._encode_result(result)
+
     @staticmethod
     def _encoded_size(value: Any) -> int:
         return len(
@@ -962,11 +976,7 @@ class ExecutionStateMachine(LeasedExecutionBackend):
                 and current["status"] == ExecutionStatus.CANCEL_REQUESTED.value
             )
             if completion.status is ExecutionStatus.SUCCEEDED and not cancel_won:
-                encoded_result = self._encode_value(completion.result, "result")
-                if self._encoded_size(encoded_result) > self.max_result_bytes:
-                    raise ExecutionEncodingError(
-                        "execution result exceeds the configured limit"
-                    )
+                encoded_result = self._encode_result(completion.result)
             effective_status = (
                 ExecutionStatus.CANCELLED if cancel_won else completion.status
             )

@@ -132,6 +132,7 @@ class DeliveryExecutor:
             )
             await self.checkpoint(active_stage, "completed", {})
 
+            prepared = []
             if outcome.handler_result is not None and self.task.emit_targets:
                 active_stage = "route"
                 await self.checkpoint(active_stage, "entered", {})
@@ -157,10 +158,19 @@ class DeliveryExecutor:
                     outcome.handler_result,
                 )
                 await self.checkpoint(active_stage, "completed", {})
-                for sink, emitted in prepared:
-                    active_stage = "sink"
-                    await self._sink_dispatcher(sink, emitted, "emit")
-                    outcome.sinks_succeeded.append(self._sink_name(sink))
+            # Validate the final handler result after hooks/transforms and
+            # before the first automatic emit. This is an optional capability,
+            # so third-party managed deliveries keep their existing contract.
+            if self.apply_delivery_actions:
+                managed = self._managed_delivery(delivery)
+                validate = getattr(managed, "validate_execution_result", None)
+                if callable(validate):
+                    active_stage = "result_validation"
+                    await validate(outcome.handler_result)
+            for sink, emitted in prepared:
+                active_stage = "sink"
+                await self._sink_dispatcher(sink, emitted, "emit")
+                outcome.sinks_succeeded.append(self._sink_name(sink))
 
             active_stage = "ack"
             outcome.delivery_action = DeliveryAction.ACK
