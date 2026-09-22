@@ -331,6 +331,14 @@ class LeasedExecutionBackend(ExecutionBackend, Protocol):
 
 @runtime_checkable
 class ManagedExecutionDelivery(Protocol):
+    """Delivery whose result is persisted with its completion.
+
+    Implementations may additionally expose async
+    ``validate_execution_result(result)``. The executor calls this optional,
+    side-effect-free preflight before automatic emit. It is intentionally not
+    a protocol member, preserving structural compatibility with older plugins.
+    Completion must still validate its result independently.
+    """
     execution_id: UUID
     attempt_id: UUID
     cancel_requested: bool

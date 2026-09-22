@@ -726,3 +726,20 @@ ORDER BY attempt_no;
 5. 如果恢复到新版本，先执行 smoke test，再重新放开业务提交。
 
 旧版本 worker 不会处理新 execution 表中的任务，因此回滚期间不要让新 execution 继续进入数据库，除非已经准备了对应的新版本 worker。
+
+
+### 自动 emit 前的结果校验
+
+SQL tracked execution（PostgreSQL 和 MySQL）在 handler、成功 hook 和 emit
+transform 完成后、第一次自动 emit 之前，使用与完成确认相同的编码器和
+`max_result_bytes` 限制预检 handler 的返回值。返回值无法编码或超限时，
+失败阶段为 `result_validation`，本次不会调用任何自动 emit sink；重试仍由任务的
+retry policy 决定。缩小 transform 输出不会降低持久化 handler result 的大小。
+
+完成确认仍会重新校验，以覆盖直接调用 backend 的客户端以及预检后的值变更。
+自定义 managed delivery 可实现可选的异步 `validate_execution_result(result)`；
+没有该方法的已有 delivery 保持兼容。
+
+此校验不提供跨 sink 与 execution 状态表的原子事务，也不能撤回 handler/hook
+内主动调用 `ctx.emit()` 等已发生的副作用。成功写入后发生网络、取消或确认错误
+仍可能重放；下游仍需幂等。
