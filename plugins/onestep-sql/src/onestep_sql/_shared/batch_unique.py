@@ -163,10 +163,22 @@ async def validate_unique_rows(sink, conn, rows, table):
                 created = True
             insert = shadow.insert()
             for chunk in sink._batch_chunks(rows):
-                # One row per execution avoids driver-specific executemany
-                # rewrites and packet/parameter limits in this validation path.
-                for row in chunk:
-                    await conn.execute(insert, {col: row[col] for col in used})
+                # One executemany per chunk, not one execution per row: the
+                # shadow table has no defaults, sequences, triggers or target
+                # data, so both spellings insert the same values and let the
+                # database decide conflicts, but the row-at-a-time form costs
+                # one network round trip per row (a 2216-row batch spent 136s
+                # on a 61ms link against 0.5s here; issue #228).
+                #
+                # Pass a list of parameter dicts rather than one statement with
+                # inline ``VALUES``: MySQL's packet guard measures an
+                # executemany one row at a time, but an inline multi-row
+                # statement as a whole. The guard raises a PERMANENT error
+                # instead of splitting, so the inline spelling would reject
+                # batches whose real write path succeeds by splitting.
+                await conn.execute(
+                    insert, [{col: row[col] for col in used} for row in chunk]
+                )
             await execute_ddl(drop)
             created = False
     except sa.exc.IntegrityError as exc:

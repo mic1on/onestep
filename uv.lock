@@ -2243,7 +2243,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-sql"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "plugins/onestep-sql" }
 dependencies = [
     { name = "aiosqlite" },

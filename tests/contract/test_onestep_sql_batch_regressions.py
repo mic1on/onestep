@@ -318,6 +318,57 @@ async def test_later_chunk_failure_rolls_back_after_unique_validation(database):
 
 
 @pytest.mark.asyncio
+async def test_unique_validation_costs_chunks_not_rows(database):
+    """#228: the shadow-table preflight must not spend one round trip per row.
+
+    The check runs in the database, so it cannot be bypassed — but filling the
+    temporary table one row per execution made a 2216-row string-key batch wait
+    2216 round trips (136s on a 61ms link). String keys never reach the integer
+    fast path, so this is the common case for business-key upserts.
+
+    Asserting on the statement count keeps the regression deterministic: it is
+    independent of link latency and machine speed, unlike a wall-clock bound.
+    """
+    table = table_for(
+        database,
+        sa.Column("device_key", sa.String(64), primary_key=True),
+        sa.Column("v", sa.Integer),
+    )
+    await setup(database, table)
+    sink = database[1].table_sink(
+        table=table.name, mode="upsert", keys=("device_key",), batch_size=1000
+    )
+
+    inserts: list[tuple[bool, str]] = []
+
+    def _listen(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("INSERT"):
+            inserts.append((executemany, statement))
+
+    engine = database[1].engine
+    sa.event.listen(engine.sync_engine, "before_cursor_execute", _listen)
+    try:
+        rows = [{"device_key": f"2408600{i:05d}", "v": i} for i in range(60)]
+        await sink.send(Envelope(body=rows))
+    finally:
+        sa.event.remove(engine.sync_engine, "before_cursor_execute", _listen)
+
+    shadow = [item for item in inserts if "_onestep_batch_" in item[1]]
+    # One executemany fills the whole shadow table; the row-at-a-time form
+    # would issue one INSERT per row and fail this assertion.
+    assert len(shadow) == 1, f"{len(shadow)} shadow INSERTs for 60 rows"
+    # The merged form must stay an executemany: an inline multi-row VALUES is
+    # measured whole by MySQL's packet guard, which raises PERMANENT instead of
+    # splitting, turning a slow batch into a rejected one.
+    assert shadow[0][0], "the shadow insert must use executemany, not inline VALUES"
+    async with engine.connect() as conn:
+        written = (
+            await conn.execute(sa.select(sa.func.count()).select_from(table))
+        ).scalar_one()
+    assert written == 60
+
+
+@pytest.mark.asyncio
 async def test_mysql_encoded_packet_split_and_single_row_rejection(database):
     if (
         database[0] != "mysql"
