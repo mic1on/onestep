@@ -1,5 +1,15 @@
 # Changelog
 
+## onestep 1.15.0
+
+tracked execution 结果预检：自动 emit 之前先校验 handler 返回值，避免把确定性失败放大成重复写入。
+
+- 修复确定性结果失败发生在自动 emit 之后的问题（#225）。SQL tracked execution 现在在 handler、成功 hook 与 emit transform 完成后、第一次自动 emit 之前，使用与完成确认完全相同的编码器和 `max_result_bytes` 上限预检 handler 返回值；返回值无法编码或超限时失败阶段为 `result_validation`，本次不会调用任何自动 emit sink，是否重试仍由任务的 retry policy 决定。此前这类失败要到完成确认才暴露，于是每一次重试尝试都会先把 sink 写一遍——把本可避免的重复写入放大到最大重试次数。缩小 transform 输出不会降低持久化 handler result 的大小，因此预检针对的是落库结果本身。
+
+- `ManagedExecutionDelivery` 新增可选的异步 `validate_execution_result(result)` 预检能力（刻意不作为 Protocol 成员，保持结构兼容）：未实现该方法的既有第三方 managed delivery 契约与行为完全不变。完成确认仍会独立重新校验，以覆盖直接调用 backend 的客户端以及预检之后发生的值变更。
+
+- 边界说明：该预检不提供跨 sink 与 execution 状态表的原子事务，也不能撤回 handler 或 hook 内主动调用 `ctx.emit()` 等已经发生的副作用。成功写入后发生网络、取消或确认错误仍可能重放，下游仍需幂等。
+
 ## onestep 1.14.0
 
 控制平面可靠性版本：WebSocket 路径的数据库访问原生异步化、实例连通性通知稳定化，以及事件循环与连接池可观测性基线。
