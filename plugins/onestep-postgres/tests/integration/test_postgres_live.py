@@ -5,6 +5,8 @@ from unittest import mock
 
 import pytest
 import sqlalchemy as sa
+from onestep.envelope import Envelope
+from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
 from onestep_postgres import PostgresConnector
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -338,6 +340,186 @@ def test_postgres_table_queue_complete_midtransaction_failure_rolls_back_live():
 
         await db.close()
         metadata.drop_all(engine)
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_postgres_table_sink_batch_writes_live():
+    """Batch payloads on a real server: executemany upsert (psycopg3
+    pipeline), chunked calls in one transaction, replay idempotence,
+    per-row policies and executemany update (issue #189)."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_sink_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "device_key VARCHAR(64) PRIMARY KEY, "
+                    "payload VARCHAR(255), "
+                    "status VARCHAR(32))"
+                )
+            )
+
+        db = PostgresConnector(os.environ["ONESTEP_POSTGRES_DSN"])
+        upsert = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("device_key",),
+            update_columns=(
+                {"name": "payload", "policy": "backfill"},
+                {"name": "status", "policy": "skip_null"},
+            ),
+            batch_size=40,
+        )
+
+        rows = [
+            {"device_key": f"dev-{i:03d}", "payload": f"p{i}", "status": None}
+            for i in range(300)
+        ]
+        await upsert.send(Envelope(body=rows))
+        # Replay the same batch: upsert must stay idempotent.
+        await upsert.send(Envelope(body=rows))
+
+        with engine.connect() as conn:
+            total, distinct = conn.execute(
+                sa.text(
+                    f"SELECT COUNT(*), COUNT(DISTINCT device_key) FROM {table_name}"
+                )
+            ).one()
+        assert (total, distinct) == (300, 300)
+
+        # Second batch: backfill keeps existing payloads, skip_null keeps
+        # NULL statuses untouched, fresh keys insert.
+        mixed = [
+            {"device_key": "dev-000", "payload": None, "status": "active"},
+            {"device_key": "dev-001", "payload": None, "status": None},
+            {"device_key": "dev-999", "payload": "fresh", "status": "new"},
+        ]
+        await upsert.send(Envelope(body=mixed))
+        with engine.connect() as conn:
+            rows_by_key = {
+                key: (payload, status)
+                for key, payload, status in conn.execute(
+                    sa.text(
+                        f"SELECT device_key, payload, status FROM {table_name} "
+                        "WHERE device_key IN ('dev-000', 'dev-001', 'dev-999')"
+                    )
+                ).all()
+            }
+        assert rows_by_key["dev-000"] == ("p0", "active")
+        assert rows_by_key["dev-001"] == ("p1", None)
+        assert rows_by_key["dev-999"] == ("fresh", "new")
+
+        update = db.table_sink(
+            table=table_name,
+            mode="update",
+            keys=("device_key",),
+            update_columns=("status",),
+            batch_size=50,
+        )
+        await update.send(
+            Envelope(
+                body=[
+                    {"device_key": f"dev-{i:03d}", "status": "synced"} for i in range(100)
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            synced = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE status = 'synced'")
+            ).scalar()
+        assert synced == 100
+
+        # A rejected batch (duplicate keys) writes nothing — PostgreSQL
+        # would otherwise fail mid-statement with "cannot affect row a
+        # second time", so the pre-write rejection keeps it deterministic.
+        with pytest.raises(ConnectorOperationError):
+            await upsert.send(
+                Envelope(
+                    body=[
+                        {"device_key": "dup", "payload": "a", "status": None},
+                        {"device_key": "dup", "payload": "b", "status": None},
+                    ]
+                )
+            )
+        with engine.connect() as conn:
+            dups = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE device_key = 'dup'")
+            ).scalar()
+        assert dups == 0
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_postgres_table_sink_batch_rejects_secondary_unique_conflict_live():
+    """Review P2 on PostgreSQL: the same batch MySQL used to last-wins must be
+    refused deterministically here too (PostgreSQL raises UniqueViolation
+    otherwise), keeping the two backends observably identical."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_uq2_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "id INT PRIMARY KEY, "
+                    "email VARCHAR(64), "
+                    "note VARCHAR(64), "
+                    "CONSTRAINT uq_email UNIQUE (email))"
+                )
+            )
+
+        db = PostgresConnector(os.environ["ONESTEP_POSTGRES_DSN"])
+        sink = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("id",),
+            update_columns=("email", "note"),
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await sink.send(
+                Envelope(
+                    body=[
+                        {"id": 1, "email": "same@x.com", "note": "first"},
+                        {"id": 2, "email": "same@x.com", "note": "second"},
+                    ]
+                )
+            )
+        assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 0
+
+        await sink.send(
+            Envelope(
+                body=[
+                    {"id": 1, "email": "a@x.com", "note": "first"},
+                    {"id": 2, "email": "b@x.com", "note": "second"},
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 2
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
         engine.dispose()
 
     asyncio.run(scenario())

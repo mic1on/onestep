@@ -672,3 +672,130 @@ def test_update_mode_logs_when_no_rows_matched(caplog) -> None:
         asyncio.run(sink._send(_payload()))
 
     assert any("matched no rows" in record.getMessage() for record in caplog.records)
+
+
+# -- batch payload tests (issue #189) --
+
+
+def _batch_sink(**kwargs) -> TableSink:
+    options: dict[str, Any] = {
+        "connector": _FakeConnector(),  # type: ignore[arg-type]
+        "table": "v2_clean_article_candidate",
+        "mode": "upsert",
+        "keys": ("article_identity",),
+        "update_columns": ("title", "content"),
+    }
+    options.update(kwargs)
+    return TableSink(**options)
+
+
+def _batch_rows() -> list[dict[str, Any]]:
+    return [
+        {"article_identity": "a-1", "title": "t1", "content": "c1"},
+        {"article_identity": "a-2", "title": "t2", "content": "c2"},
+    ]
+
+
+def test_batch_insert_renders_multi_row_values() -> None:
+    sink = _batch_sink(mode="insert", keys=(), update_columns=None)
+    statements = sink._build_batch_statements(
+        _batch_rows(), _candidate_table(), ()
+    )
+    assert len(statements) == 1
+    statement, parameters = statements[0]
+    assert parameters is None
+    sql = _compile(statement)
+    assert sql.count("VALUES") == 1
+    assert sql.count("), (") == 1  # two rows in one VALUES list
+
+
+def test_batch_upsert_references_inserted_values_from_same_statement() -> None:
+    sink = _batch_sink()
+    statement, parameters = sink._build_batch_statements(
+        _batch_rows(), _candidate_table(), ("title", "content")
+    )[0]
+    assert parameters is None
+    sql = _compile(statement)
+    update_clause = _update_clause(sql)
+    # Same-instance inserted refs: VALUES(col) per column, and the update
+    # side never references a foreign alias (the 1054 trap).
+    assert "title = VALUES(title)" in update_clause
+    assert "content = VALUES(content)" in update_clause
+
+
+def test_batch_upsert_renders_alias_form_on_modern_mysql() -> None:
+    dialect = mysql_dialect.dialect()
+    # What a real 8.0.20+ connection configures in MySQLDialect.__init__.
+    dialect._requires_alias_for_on_duplicate_key = True
+    sink = _batch_sink()
+    statement, _ = sink._build_batch_statements(
+        _batch_rows(), _candidate_table(), ("title", "content")
+    )[0]
+    sql = str(statement.compile(dialect=dialect))
+    assert "AS new" in sql
+    update_clause = _update_clause(sql)
+    assert "title = new.title" in update_clause
+    assert "inserted." not in update_clause
+
+
+def test_batch_upsert_skip_null_renders_runtime_case() -> None:
+    sink = _batch_sink(
+        update_columns=({"name": "title", "policy": "skip_null"}, "content")
+    )
+    statement, _ = sink._build_batch_statements(
+        _batch_rows(), _candidate_table(), ("title", "content")
+    )[0]
+    update_clause = _update_clause(_compile(statement))
+    assert "CASE WHEN (VALUES(title) IS NULL)" in update_clause
+    assert "content = VALUES(content)" in update_clause
+
+
+def test_batch_update_uses_executemany_with_projected_params() -> None:
+    sink = _batch_sink(mode="update")
+    statement, parameters = sink._build_batch_statements(
+        _batch_rows(), _candidate_table(), ("title", "content")
+    )[0]
+    assert parameters is not None
+    assert parameters == [
+        {"_onestep_key_0": "a-1", "_onestep_value_0": "t1", "_onestep_value_1": "c1"},
+        {"_onestep_key_0": "a-2", "_onestep_value_0": "t2", "_onestep_value_1": "c2"},
+    ]
+    sql = _compile(statement)
+    assert sql.startswith("UPDATE")
+    assert "article_identity" in sql
+
+
+def test_batch_chunking_follows_batch_size() -> None:
+    rows = [
+        {"article_identity": f"a-{i}", "title": f"t{i}", "content": f"c{i}"}
+        for i in range(5)
+    ]
+    sink = _batch_sink(batch_size=2)
+    statements = sink._build_batch_statements(rows, _candidate_table(), ("title", "content"))
+    assert len(statements) == 3  # 2 + 2 + 1 chunks, one statement each
+
+
+def test_batch_size_validation() -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _batch_sink(batch_size=0)
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _batch_sink(batch_size=True)
+
+
+def test_send_dispatches_list_payload_to_batch_path() -> None:
+    from unittest import mock
+
+    from onestep.envelope import Envelope
+
+    sink = _batch_sink(mode="insert", keys=(), update_columns=None)
+    with mock.patch.object(sink, "_send_batch", new_callable=mock.AsyncMock) as batch:
+        asyncio.run(sink.send(Envelope(body=_batch_rows())))
+    batch.assert_awaited_once_with(_batch_rows())
+
+
+def test_send_rejects_scalar_payload() -> None:
+    from onestep.envelope import Envelope
+
+    sink = _batch_sink(mode="insert", keys=(), update_columns=None)
+    with pytest.raises(TypeError, match="mapping or list-of-mapping"):
+        asyncio.run(sink.send(Envelope(body="scalar")))

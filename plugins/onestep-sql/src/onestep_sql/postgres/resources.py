@@ -31,7 +31,7 @@ _POSTGRES_INCREMENTAL_FIELDS = frozenset(
 _POSTGRES_TABLE_SINK_FIELDS = frozenset(
     {
         "type", "connector", "table", "mode", "keys",
-        "update_columns", "update_expr", "serialize_json",
+        "update_columns", "update_expr", "serialize_json", "batch_size",
     }
 )
 _POSTGRES_EXECUTION_SOURCE_FIELDS = frozenset(
@@ -147,8 +147,9 @@ _POSTGRES_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("update_columns", "json"),
         ResourceCatalogField("update_expr", "mapping"),
         ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
+        ResourceCatalogField("batch_size", "integer", default=1000),
     ),
-    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json"),
+    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json", "batch_size"),
 )
 _POSTGRES_EXECUTION_SOURCE_CATALOG = ResourceCatalogEntry(
     type="postgres_execution_source",
@@ -329,6 +330,7 @@ def _build_postgres_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any
         if update_expr is not None
         else None,
         serialize_json=spec.get("serialize_json", "auto"),
+        batch_size=spec.get("batch_size", 1000),
     )
 
 

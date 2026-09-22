@@ -134,6 +134,64 @@ carries a regression test.
 - Caches are in-process and not persisted; deletion is not observed — a stale
   `record_id` surfaces as a write error and is resolved by restarting the task.
 
+## onestep-sql 0.6.0
+
+Batch writes for every table sink (issue #189).
+
+- **`*_table_sink` now accepts a list/tuple of row mappings** in addition to a
+  single mapping, so one `emit` writes a whole batch in one transaction.
+  A handler that returns a list of rows (for example `http_fetcher.fetch_rows()`
+  or a paged API read) produces one envelope and one round trip per chunk
+  instead of one statement and one transaction per row. The single-mapping path
+  is untouched.
+- **New `batch_size` field (default 1000)** caps the rows per statement.
+  Rows are split into chunks that all execute inside the *same* transaction, so
+  a failure rolls the whole batch back and an at-least-once retry can never
+  leave a partial write. SQLite additionally clamps chunks to its portable
+  parameter ceiling, and MySQL chunks are capped by an estimated 4MB statement
+  budget: exceeding `max_allowed_packet` does not return a clean error, it
+  **kills the connection** (error 2013), which the resilience table classifies
+  as `DISCONNECTED` — i.e. retryable, even though replaying the same batch can
+  never succeed. Operators with large payloads raise the server limit instead.
+- **Dialect-specific batch paths:** MySQL renders multi-row
+  `INSERT ... VALUES (...),(...) AS new ON DUPLICATE KEY UPDATE` (the
+  `new.col` alias form on 8.0.20+), PostgreSQL and SQLite use per-row
+  `ON CONFLICT ... DO UPDATE` executemany, and `mode: update` uses bindparam
+  executemany everywhere (SQLAlchemy cannot render multi-row `UPDATE`).
+- **Payload-shape violations are rejected before any write** with
+  `ConnectorOperationError(kind=PERMANENT)`: a non-mapping element, rows whose
+  column sets differ, an unhashable key value, a column not present on the
+  target table, and — for `upsert` — two rows that collide on the declared
+  `keys` **or on any other unique index the payload carries**.
+  - The `keys` case matters because MySQL/SQLite would silently apply
+    last-wins while PostgreSQL fails with `cannot affect row a second time`.
+  - The secondary-unique-index case is the same divergence reached through a
+    different index: with `PRIMARY KEY(id)` + `UNIQUE(email)` and
+    `keys=("id",)`, two rows sharing an email overwrote each other on
+    MySQL/SQLite while PostgreSQL raised `UniqueViolation`. Both are now
+    refused deterministically with the offending row index. Note this makes
+    the batch path *stricter* than the single-mapping path, which still leaves
+    secondary-index collisions to the database.
+  - An unknown column previously produced three different outcomes for one
+    mistake — a bare `CompileError` (MySQL/SQLite), a **silently dropped key
+    with a successful write** (PostgreSQL executemany), or a bare `KeyError`
+    from the batch `SET` derivation that bypassed connector error
+    classification. All now raise `PERMANENT`. A payload column excluded by
+    the `update_columns` whitelist stays tolerated in `mode: update`, exactly
+    as the single-mapping path tolerates it.
+- **Per-row policies keep their single-row semantics in batch mode:**
+  `skip_null` becomes a shared `CASE WHEN <new value> IS NULL THEN <column>
+  ELSE <new value> END` so a NULL never overwrites an existing value, and rows
+  whose update columns are *all* filtered by `skip_null` are dropped from the
+  batch instead of being inserted. `backfill` keeps its `coalesce(column, new)`
+  form, `update_expr` renders unchanged, and `update_columns` is intersected
+  with the payload columns so a column absent from the payload is never written
+  as NULL.
+- **`mode: update` batch parameters are projected explicitly** onto prefixed
+  bind names, so a same-named table column present in the payload can no longer
+  leak into the `SET` clause past the `update_columns` whitelist.
+- Empty lists are a no-op (no `INSERT ... VALUES ()` ghost row).
+
 ## onestep-sql 0.5.0
 
 Reliability fixes for silent data loss, plus single-transaction table-queue
@@ -346,6 +404,14 @@ project scaffolding.
   retired and replaced by dual-backend contract tests
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
+
+## onestep-control-plane 0.1.3
+
+- **Table-sink topology now reports `batch_size`.** `batch_size` was added to
+  the SQL table sinks' `topology_fields` (onestep-sql 0.6.0), but the reporter's
+  `TableSink` branch never emitted it, so the control-plane detail view showed
+  "not reported" for every table sink. The branch also now matches
+  `PostgresTableSink`, which previously fell through to an empty config.
 
 ## onestep-control-plane 0.1.2
 

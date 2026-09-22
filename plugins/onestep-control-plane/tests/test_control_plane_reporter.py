@@ -947,6 +947,36 @@ def test_reporter_config_from_env_allows_minimal_overrides(monkeypatch) -> None:
     assert config.environment == "prod"
 
 
+def test_reporter_reports_table_sink_batch_size() -> None:
+    """Review P5: ``batch_size`` is in the sink's ``topology_fields``, so the
+    control-plane detail view renders it — an unreported value shows as
+    "not reported" for every table sink."""
+    recorder = SenderRecorder()
+    app = OneStepApp("billing-sync")
+    sink = TableSink(
+        table="articles",
+        mode="upsert",
+        keys=("id",),
+        update_columns=("title",),
+    )
+    sink.batch_size = 250  # the real onestep-sql sinks always carry this
+
+    @app.task(source=MemoryQueue("incoming"), emit=sink)
+    async def sync_articles(ctx, payload):
+        return payload
+
+    reporter = ControlPlaneReporter(_make_config(), sender=recorder)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await reporter.send_sync_now()
+
+    asyncio.run(scenario())
+    payload = next(payload for channel, payload in recorder.calls if channel == "sync")
+    config = payload["app"]["tasks"][0]["emit"][0]["config"]
+    assert config["batch_size"] == 250
+
+
 def test_reporter_dedupes_unchanged_topology_within_a_session() -> None:
     recorder = SenderRecorder()
     app = OneStepApp("billing-sync")
