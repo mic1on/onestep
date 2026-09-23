@@ -1,0 +1,3006 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onestep.code05.com/schema/v1alpha1.json",
+  "title": "onestep/v1alpha1 App",
+  "description": "YAML task definition for the onestep async task runtime. Generated from the installed resource catalog and strict field contracts.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema self-reference. Documentation only; never affects runtime."
+    },
+    "apiVersion": {
+      "const": "onestep/v1alpha1"
+    },
+    "kind": {
+      "const": "App"
+    },
+    "app": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "shutdown_timeout_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "config": {
+          "type": "object"
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of a resource defined in this document."
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "string"
+            },
+            "format": {
+              "enum": [
+                "text",
+                "json"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "env_file": {
+          "type": "string"
+        },
+        "strict_env": {
+          "type": "boolean"
+        },
+        "failure_capture": {
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "terminal",
+                "all"
+              ]
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "redact_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "directory"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "reporter": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object"
+        }
+      ],
+      "description": "Control-plane reporter; disabled by default."
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "connectors": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "sinks": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "oneOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Importable reference, e.g. package.module:function."
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Python callable executed for each delivery."
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "Importable reference, e.g. package.module:function."
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "Python callable executed for each delivery."
+              }
+            }
+          ]
+        },
+        "shutdown": {
+          "oneOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Importable reference, e.g. package.module:function."
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Python callable executed for each delivery."
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "Importable reference, e.g. package.module:function."
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "Python callable executed for each delivery."
+              }
+            }
+          ]
+        },
+        "startup": {
+          "oneOf": [
+            {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Importable reference, e.g. package.module:function."
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Python callable executed for each delivery."
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "description": "Importable reference, e.g. package.module:function."
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                ],
+                "description": "Python callable executed for each delivery."
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "name": {
+      "description": "Legacy top-level field; prefer 'app'."
+    },
+    "shutdown_timeout_s": {
+      "description": "Legacy top-level field; prefer 'app'."
+    },
+    "config": {
+      "description": "Legacy top-level field; prefer 'app'."
+    },
+    "state": {
+      "description": "Legacy top-level field; prefer 'app'."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "resource_cf_queue": {
+      "type": "object",
+      "title": "Cloudflare Queue",
+      "properties": {
+        "type": {
+          "const": "cf_queue",
+          "description": "Cloudflare Queue"
+        },
+        "ack_batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "ack_flush_interval_s": {
+          "type": "number",
+          "default": 0.5
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 5
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "name": {
+          "type": "string"
+        },
+        "on_fail": {
+          "type": "string",
+          "default": "leave",
+          "enum": [
+            "leave",
+            "retry",
+            "ack"
+          ]
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "queue_id": {
+          "type": "string"
+        },
+        "visibility_timeout_ms": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_cf_queues": {
+      "type": "object",
+      "title": "Cloudflare Queues",
+      "properties": {
+        "type": {
+          "const": "cf_queues",
+          "description": "Cloudflare Queues"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "api_token": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "timeout_s": {
+          "type": "number",
+          "default": 10.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_clickhouse": {
+      "type": "object",
+      "title": "ClickHouse",
+      "properties": {
+        "type": {
+          "const": "clickhouse",
+          "description": "ClickHouse"
+        },
+        "client_options": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "dsn": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_clickhouse_table_sink": {
+      "type": "object",
+      "title": "ClickHouse Table Sink",
+      "properties": {
+        "type": {
+          "const": "clickhouse_table_sink",
+          "description": "ClickHouse Table Sink"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "settings": {
+          "type": "object"
+        },
+        "table": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_cron": {
+      "type": "object",
+      "title": "Cron",
+      "properties": {
+        "type": {
+          "const": "cron",
+          "description": "Cron"
+        },
+        "expression": {
+          "type": "string"
+        },
+        "immediate": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_queued_runs": {
+          "type": "integer",
+          "default": 1000
+        },
+        "name": {
+          "type": "string"
+        },
+        "overlap": {
+          "type": "string",
+          "default": "allow",
+          "enum": [
+            "allow",
+            "skip"
+          ]
+        },
+        "payload": {},
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "timezone": {},
+        "timezone_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_elasticsearch": {
+      "type": "object",
+      "title": "Elasticsearch / OpenSearch",
+      "properties": {
+        "type": {
+          "const": "elasticsearch",
+          "description": "Elasticsearch / OpenSearch"
+        },
+        "api_key": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "bearer_token": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "ca_certs": {
+          "type": "string"
+        },
+        "client_cert": {
+          "type": "string"
+        },
+        "client_key": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "distribution": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "elasticsearch",
+            "opensearch"
+          ]
+        },
+        "headers": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "password": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "request_timeout_s": {
+          "type": "number",
+          "default": 10.0
+        },
+        "username": {
+          "type": "string"
+        },
+        "verify_certs": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_elasticsearch_bulk_sink": {
+      "type": "object",
+      "title": "Elasticsearch Bulk Sink",
+      "properties": {
+        "type": {
+          "const": "elasticsearch_bulk_sink",
+          "description": "Elasticsearch Bulk Sink"
+        },
+        "chunk_size": {
+          "type": "integer",
+          "default": 500
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "id_field": {
+          "type": "string"
+        },
+        "index": {
+          "type": "string"
+        },
+        "max_chunk_bytes": {
+          "type": "integer",
+          "default": 5000000
+        },
+        "operation": {
+          "type": "string",
+          "default": "index",
+          "enum": [
+            "index",
+            "create"
+          ]
+        },
+        "pipeline": {
+          "type": "string"
+        },
+        "refresh": {
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_feishu_bitable": {
+      "type": "object",
+      "title": "Feishu Bitable",
+      "properties": {
+        "type": {
+          "const": "feishu_bitable",
+          "description": "Feishu Bitable"
+        },
+        "app_id": {
+          "type": "string"
+        },
+        "app_secret": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "base_url": {
+          "type": "string",
+          "default": "https://open.feishu.cn"
+        },
+        "timeout_s": {
+          "type": "number",
+          "default": 10.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_feishu_bitable_incremental": {
+      "type": "object",
+      "title": "Feishu Bitable Incremental",
+      "properties": {
+        "type": {
+          "const": "feishu_bitable_incremental",
+          "description": "Feishu Bitable Incremental"
+        },
+        "app_token": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "cursor_field": {
+          "type": "string"
+        },
+        "fallback_scan_page_limit": {
+          "type": "integer",
+          "default": 100
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        },
+        "table_id": {
+          "type": "string"
+        },
+        "user_id_type": {
+          "type": "string",
+          "enum": [
+            "open_id",
+            "union_id",
+            "user_id"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_feishu_bitable_table_sink": {
+      "type": "object",
+      "title": "Feishu Bitable Table Sink",
+      "properties": {
+        "type": {
+          "const": "feishu_bitable_table_sink",
+          "description": "Feishu Bitable Table Sink"
+        },
+        "ambiguous_write_max_rounds": {
+          "type": "integer",
+          "default": 3
+        },
+        "app_token": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1
+        },
+        "close_drain_max_rounds": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "flush_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "insert_index_max_pages": {
+          "type": "integer",
+          "default": 200
+        },
+        "insert_index_page_size": {
+          "type": "integer",
+          "default": 500
+        },
+        "insert_index_skip_verification": {
+          "type": "boolean",
+          "default": false
+        },
+        "insert_key_index": {
+          "type": "boolean",
+          "default": false
+        },
+        "match_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string",
+          "default": "upsert",
+          "enum": [
+            "upsert",
+            "create",
+            "update",
+            "insert"
+          ]
+        },
+        "relations": {
+          "type": "object"
+        },
+        "table_id": {
+          "type": "string"
+        },
+        "user_id_type": {
+          "type": "string",
+          "enum": [
+            "open_id",
+            "union_id",
+            "user_id"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_http_fetcher": {
+      "type": "object",
+      "title": "HTTP Fetcher",
+      "properties": {
+        "type": {
+          "const": "http_fetcher",
+          "description": "HTTP Fetcher"
+        },
+        "body": {
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "method": {
+          "type": "string",
+          "default": "GET",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "rows": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "success_statuses": {},
+        "timeout_s": {
+          "type": "number",
+          "default": 5.0
+        },
+        "url": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_http_sink": {
+      "type": "object",
+      "title": "HTTP Sink",
+      "properties": {
+        "type": {
+          "const": "http_sink",
+          "description": "HTTP Sink"
+        },
+        "body": {
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "method": {
+          "type": "string",
+          "default": "POST",
+          "enum": [
+            "POST",
+            "PUT",
+            "PATCH",
+            "GET",
+            "DELETE"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "success_statuses": {},
+        "timeout_s": {
+          "type": "number",
+          "default": 5.0
+        },
+        "url": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_interval": {
+      "type": "object",
+      "title": "Interval",
+      "properties": {
+        "type": {
+          "const": "interval",
+          "description": "Interval"
+        },
+        "days": {
+          "type": "number",
+          "default": 0
+        },
+        "hours": {
+          "type": "number",
+          "default": 0
+        },
+        "immediate": {
+          "type": "boolean",
+          "default": false
+        },
+        "max_queued_runs": {
+          "type": "integer",
+          "default": 1000
+        },
+        "minutes": {
+          "type": "number",
+          "default": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "overlap": {
+          "type": "string",
+          "default": "allow",
+          "enum": [
+            "allow",
+            "skip"
+          ]
+        },
+        "payload": {},
+        "poll_interval_s": {
+          "type": "number"
+        },
+        "seconds": {
+          "type": "number",
+          "default": 0
+        },
+        "timezone": {},
+        "timezone_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_kafka": {
+      "type": "object",
+      "title": "Kafka",
+      "properties": {
+        "type": {
+          "const": "kafka",
+          "description": "Kafka"
+        },
+        "bootstrap_servers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_kafka_topic": {
+      "type": "object",
+      "title": "Kafka Topic",
+      "properties": {
+        "type": {
+          "const": "kafka_topic",
+          "description": "Kafka Topic"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "consumer_options": {
+          "type": "object"
+        },
+        "group_id": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "object"
+        },
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "poll_timeout_ms": {
+          "type": "integer",
+          "default": 1000
+        },
+        "producer_options": {
+          "type": "object"
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_memory": {
+      "type": "object",
+      "title": "Memory Queue",
+      "properties": {
+        "type": {
+          "const": "memory",
+          "description": "Memory Queue"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "maxsize": {
+          "type": "integer",
+          "default": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 0.1
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mongodb": {
+      "type": "object",
+      "title": "MongoDB",
+      "properties": {
+        "type": {
+          "const": "mongodb",
+          "description": "MongoDB"
+        },
+        "client_options": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "database": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mongodb_change_stream": {
+      "type": "object",
+      "title": "MongoDB Change Stream",
+      "properties": {
+        "type": {
+          "const": "mongodb_change_stream",
+          "description": "MongoDB Change Stream"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "collection": {
+          "type": "string"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "full_document": {
+          "type": "string",
+          "default": "updateLookup",
+          "enum": [
+            "default",
+            "updateLookup",
+            "whenAvailable",
+            "required"
+          ]
+        },
+        "max_await_time_ms": {
+          "type": "integer",
+          "default": 1000
+        },
+        "pipeline": {},
+        "poll_interval_s": {
+          "type": "number",
+          "default": 0.1
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mongodb_collection_sink": {
+      "type": "object",
+      "title": "MongoDB Collection Sink",
+      "properties": {
+        "type": {
+          "const": "mongodb_collection_sink",
+          "description": "MongoDB Collection Sink"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "collection": {
+          "type": "string"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string",
+          "default": "insert",
+          "enum": [
+            "insert",
+            "upsert"
+          ]
+        },
+        "ordered": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mongodb_polling": {
+      "type": "object",
+      "title": "MongoDB Polling",
+      "properties": {
+        "type": {
+          "const": "mongodb_polling",
+          "description": "MongoDB Polling"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "collection": {
+          "type": "string"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "cursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "_id"
+          ]
+        },
+        "filter": {
+          "type": "object"
+        },
+        "initial_cursor": {},
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "projection": {
+          "type": "object"
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql": {
+      "type": "object",
+      "title": "MySQL",
+      "properties": {
+        "type": {
+          "const": "mysql",
+          "description": "MySQL"
+        },
+        "dsn": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "engine_options": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_binlog": {
+      "type": "object",
+      "title": "MySQL Binlog",
+      "properties": {
+        "type": {
+          "const": "mysql_binlog",
+          "description": "MySQL Binlog"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "blocking": {
+          "type": "boolean",
+          "default": false
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "insert",
+            "update",
+            "delete"
+          ]
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "schemas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "server_id": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_cursor_store": {
+      "type": "object",
+      "title": "MySQL Cursor Store",
+      "properties": {
+        "type": {
+          "const": "mysql_cursor_store",
+          "description": "MySQL Cursor Store"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key_column": {
+          "type": "string",
+          "default": "cursor_key"
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_cursor"
+        },
+        "updated_at_column": {
+          "type": "string",
+          "default": "updated_at"
+        },
+        "value_column": {
+          "type": "string",
+          "default": "cursor_value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_execution_source": {
+      "type": "object",
+      "title": "MySQL Execution Source",
+      "properties": {
+        "type": {
+          "const": "mysql_execution_source",
+          "description": "MySQL Execution Source"
+        },
+        "attempts_table": {
+          "type": "string",
+          "default": "onestep_execution_attempts"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "heartbeat_interval_s": {
+          "type": "number",
+          "default": 30.0
+        },
+        "lease_duration_s": {
+          "type": "number",
+          "default": 90.0
+        },
+        "max_metadata_bytes": {
+          "type": "integer",
+          "default": 65536
+        },
+        "max_payload_bytes": {
+          "type": "integer",
+          "default": 1048576
+        },
+        "max_result_bytes": {
+          "type": "integer",
+          "default": 1048576
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "reclaim_batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_executions"
+        },
+        "task_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "worker_id": {
+          "type": "string",
+          "default": "onestep-worker"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_incremental": {
+      "type": "object",
+      "title": "MySQL Incremental",
+      "properties": {
+        "type": {
+          "const": "mysql_incremental",
+          "description": "MySQL Incremental"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "cursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "prefetch": {
+          "type": "boolean",
+          "default": false
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_state_store": {
+      "type": "object",
+      "title": "MySQL State Store",
+      "properties": {
+        "type": {
+          "const": "mysql_state_store",
+          "description": "MySQL State Store"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key_column": {
+          "type": "string",
+          "default": "state_key"
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_state"
+        },
+        "updated_at_column": {
+          "type": "string",
+          "default": "updated_at"
+        },
+        "value_column": {
+          "type": "string",
+          "default": "state_value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_table_queue": {
+      "type": "object",
+      "title": "MySQL Table Queue",
+      "properties": {
+        "type": {
+          "const": "mysql_table_queue",
+          "description": "MySQL Table Queue"
+        },
+        "ack": {
+          "type": "object"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "claim": {
+          "type": "object"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key": {
+          "type": "string"
+        },
+        "nack": {
+          "type": "object"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "table": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_mysql_table_sink": {
+      "type": "object",
+      "title": "MySQL Table Sink",
+      "properties": {
+        "type": {
+          "const": "mysql_table_sink",
+          "description": "MySQL Table Sink"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string",
+          "default": "insert",
+          "enum": [
+            "insert",
+            "upsert",
+            "update"
+          ]
+        },
+        "serialize_json": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ]
+        },
+        "table": {
+          "type": "string"
+        },
+        "update_columns": {},
+        "update_expr": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres": {
+      "type": "object",
+      "title": "Postgres",
+      "properties": {
+        "type": {
+          "const": "postgres",
+          "description": "Postgres"
+        },
+        "dsn": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "engine_options": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres_cursor_store": {
+      "type": "object",
+      "title": "Postgres Cursor Store",
+      "properties": {
+        "type": {
+          "const": "postgres_cursor_store",
+          "description": "Postgres Cursor Store"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key_column": {
+          "type": "string",
+          "default": "cursor_key"
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_cursor"
+        },
+        "updated_at_column": {
+          "type": "string",
+          "default": "updated_at"
+        },
+        "value_column": {
+          "type": "string",
+          "default": "cursor_value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres_execution_source": {
+      "type": "object",
+      "title": "Postgres Execution Source",
+      "properties": {
+        "type": {
+          "const": "postgres_execution_source",
+          "description": "Postgres Execution Source"
+        },
+        "attempts_table": {
+          "type": "string",
+          "default": "onestep_execution_attempts"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "heartbeat_interval_s": {
+          "type": "number",
+          "default": 30.0
+        },
+        "lease_duration_s": {
+          "type": "number",
+          "default": 90.0
+        },
+        "max_metadata_bytes": {
+          "type": "integer",
+          "default": 65536
+        },
+        "max_payload_bytes": {
+          "type": "integer",
+          "default": 1048576
+        },
+        "max_result_bytes": {
+          "type": "integer",
+          "default": 1048576
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "reclaim_batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_executions"
+        },
+        "task_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "worker_id": {
+          "type": "string",
+          "default": "onestep-worker"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres_incremental": {
+      "type": "object",
+      "title": "Postgres Incremental",
+      "properties": {
+        "type": {
+          "const": "postgres_incremental",
+          "description": "Postgres Incremental"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "cursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres_state_store": {
+      "type": "object",
+      "title": "Postgres State Store",
+      "properties": {
+        "type": {
+          "const": "postgres_state_store",
+          "description": "Postgres State Store"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key_column": {
+          "type": "string",
+          "default": "state_key"
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_state"
+        },
+        "updated_at_column": {
+          "type": "string",
+          "default": "updated_at"
+        },
+        "value_column": {
+          "type": "string",
+          "default": "state_value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres_table_queue": {
+      "type": "object",
+      "title": "Postgres Table Queue",
+      "properties": {
+        "type": {
+          "const": "postgres_table_queue",
+          "description": "Postgres Table Queue"
+        },
+        "ack": {
+          "type": "object"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "claim": {
+          "type": "object"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key": {
+          "type": "string"
+        },
+        "nack": {
+          "type": "object"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "table": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_postgres_table_sink": {
+      "type": "object",
+      "title": "Postgres Table Sink",
+      "properties": {
+        "type": {
+          "const": "postgres_table_sink",
+          "description": "Postgres Table Sink"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string",
+          "default": "insert",
+          "enum": [
+            "insert",
+            "upsert",
+            "update"
+          ]
+        },
+        "serialize_json": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ]
+        },
+        "table": {
+          "type": "string"
+        },
+        "update_columns": {},
+        "update_expr": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_rabbitmq": {
+      "type": "object",
+      "title": "RabbitMQ",
+      "properties": {
+        "type": {
+          "const": "rabbitmq",
+          "description": "RabbitMQ"
+        },
+        "options": {
+          "type": "object"
+        },
+        "url": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_rabbitmq_queue": {
+      "type": "object",
+      "title": "RabbitMQ Queue",
+      "properties": {
+        "type": {
+          "const": "rabbitmq_queue",
+          "description": "RabbitMQ Queue"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "auto_delete": {
+          "type": "boolean",
+          "default": false
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "bind": {
+          "type": "boolean",
+          "default": true
+        },
+        "bind_arguments": {
+          "type": "object"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "durable": {
+          "type": "boolean",
+          "default": true
+        },
+        "exchange": {
+          "type": "string"
+        },
+        "exchange_arguments": {
+          "type": "object"
+        },
+        "exchange_auto_delete": {
+          "type": "boolean",
+          "default": false
+        },
+        "exchange_durable": {
+          "type": "boolean"
+        },
+        "exchange_type": {
+          "type": "string",
+          "default": "direct"
+        },
+        "exclusive": {
+          "type": "boolean",
+          "default": false
+        },
+        "name": {
+          "type": "string"
+        },
+        "persistent": {
+          "type": "boolean",
+          "default": true
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "prefetch": {
+          "type": "integer",
+          "default": 100
+        },
+        "publisher_confirms": {
+          "type": "boolean",
+          "default": true
+        },
+        "queue": {
+          "type": "string"
+        },
+        "routing_key": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_redis": {
+      "type": "object",
+      "title": "Redis",
+      "properties": {
+        "type": {
+          "const": "redis",
+          "description": "Redis"
+        },
+        "options": {
+          "type": "object"
+        },
+        "url": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_redis_stream": {
+      "type": "object",
+      "title": "Redis Stream",
+      "properties": {
+        "type": {
+          "const": "redis_stream",
+          "description": "Redis Stream"
+        },
+        "approximate_trim": {
+          "type": "boolean",
+          "default": true
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "block_ms": {
+          "type": "integer"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "consumer": {
+          "type": "string"
+        },
+        "create_group": {
+          "type": "boolean",
+          "default": true
+        },
+        "group": {
+          "type": "string",
+          "default": "onestep"
+        },
+        "maxlen": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "start_id": {
+          "type": "string",
+          "default": "$"
+        },
+        "stream": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sns": {
+      "type": "object",
+      "title": "Amazon SNS",
+      "properties": {
+        "type": {
+          "const": "sns",
+          "description": "Amazon SNS"
+        },
+        "options": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "region_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sns_topic": {
+      "type": "object",
+      "title": "SNS Topic",
+      "properties": {
+        "type": {
+          "const": "sns_topic",
+          "description": "SNS Topic"
+        },
+        "arn": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "deduplication_id_factory": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "message_attributes": {
+          "type": "object"
+        },
+        "message_group_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "retry_delay_s": {
+          "type": "number",
+          "default": 5.0
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqlite": {
+      "type": "object",
+      "title": "SQLite",
+      "properties": {
+        "type": {
+          "const": "sqlite",
+          "description": "SQLite"
+        },
+        "dsn": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "engine_options": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqlite_cursor_store": {
+      "type": "object",
+      "title": "SQLite Cursor Store",
+      "properties": {
+        "type": {
+          "const": "sqlite_cursor_store",
+          "description": "SQLite Cursor Store"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key_column": {
+          "type": "string",
+          "default": "cursor_key"
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_cursor"
+        },
+        "updated_at_column": {
+          "type": "string",
+          "default": "updated_at"
+        },
+        "value_column": {
+          "type": "string",
+          "default": "cursor_value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqlite_incremental": {
+      "type": "object",
+      "title": "SQLite Incremental",
+      "properties": {
+        "type": {
+          "const": "sqlite_incremental",
+          "description": "SQLite Incremental"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "cursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "key": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "state": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "state_key": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqlite_state_store": {
+      "type": "object",
+      "title": "SQLite State Store",
+      "properties": {
+        "type": {
+          "const": "sqlite_state_store",
+          "description": "SQLite State Store"
+        },
+        "auto_create": {
+          "type": "boolean",
+          "default": true
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key_column": {
+          "type": "string",
+          "default": "state_key"
+        },
+        "table": {
+          "type": "string",
+          "default": "onestep_state"
+        },
+        "updated_at_column": {
+          "type": "string",
+          "default": "updated_at"
+        },
+        "value_column": {
+          "type": "string",
+          "default": "state_value"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqlite_table_queue": {
+      "type": "object",
+      "title": "SQLite Table Queue",
+      "properties": {
+        "type": {
+          "const": "sqlite_table_queue",
+          "description": "SQLite Table Queue"
+        },
+        "ack": {
+          "type": "object"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "claim": {
+          "type": "object"
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "key": {
+          "type": "string"
+        },
+        "nack": {
+          "type": "object"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 1.0
+        },
+        "table": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqlite_table_sink": {
+      "type": "object",
+      "title": "SQLite Table Sink",
+      "properties": {
+        "type": {
+          "const": "sqlite_table_sink",
+          "description": "SQLite Table Sink"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1000
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "type": "string",
+          "default": "insert",
+          "enum": [
+            "insert",
+            "upsert",
+            "update"
+          ]
+        },
+        "serialize_json": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ]
+        },
+        "table": {
+          "type": "string"
+        },
+        "update_columns": {},
+        "update_expr": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqs": {
+      "type": "object",
+      "title": "Amazon SQS",
+      "properties": {
+        "type": {
+          "const": "sqs",
+          "description": "Amazon SQS"
+        },
+        "options": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "region_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_sqs_queue": {
+      "type": "object",
+      "title": "SQS Queue",
+      "properties": {
+        "type": {
+          "const": "sqs_queue",
+          "description": "SQS Queue"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 10
+        },
+        "connector": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "deduplication_id_factory": {
+          "type": "string",
+          "description": "Name of another resource in this document."
+        },
+        "delete_batch_size": {
+          "type": "integer",
+          "default": 10
+        },
+        "delete_flush_interval_s": {
+          "type": "number",
+          "default": 0.5
+        },
+        "heartbeat_interval_s": {
+          "type": "number"
+        },
+        "heartbeat_visibility_timeout": {
+          "type": "integer"
+        },
+        "message_group_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "on_fail": {
+          "type": "string",
+          "default": "leave",
+          "enum": [
+            "leave",
+            "release"
+          ]
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 0.0
+        },
+        "url": {
+          "type": "string",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "visibility_timeout": {
+          "type": "integer"
+        },
+        "wait_time_s": {
+          "type": "integer",
+          "default": 20
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource_webhook": {
+      "type": "object",
+      "title": "Webhook",
+      "properties": {
+        "type": {
+          "const": "webhook",
+          "description": "Webhook"
+        },
+        "auth": {
+          "type": "object",
+          "description": "Secret value; prefer an environment variable reference."
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 100
+        },
+        "host": {
+          "type": "string",
+          "default": "127.0.0.1"
+        },
+        "max_body_bytes": {
+          "type": "integer",
+          "default": 1048576
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "POST"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "parser": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "json",
+            "text",
+            "bytes"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "poll_interval_s": {
+          "type": "number",
+          "default": 0.1
+        },
+        "port": {
+          "type": "integer",
+          "default": 8080
+        },
+        "queue_maxsize": {
+          "type": "integer",
+          "default": 1000
+        },
+        "read_timeout_s": {
+          "type": "number",
+          "default": 5.0
+        },
+        "response": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resource": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/resource_cf_queue"
+        },
+        {
+          "$ref": "#/$defs/resource_cf_queues"
+        },
+        {
+          "$ref": "#/$defs/resource_clickhouse"
+        },
+        {
+          "$ref": "#/$defs/resource_clickhouse_table_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_cron"
+        },
+        {
+          "$ref": "#/$defs/resource_elasticsearch"
+        },
+        {
+          "$ref": "#/$defs/resource_elasticsearch_bulk_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_feishu_bitable"
+        },
+        {
+          "$ref": "#/$defs/resource_feishu_bitable_incremental"
+        },
+        {
+          "$ref": "#/$defs/resource_feishu_bitable_table_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_http_fetcher"
+        },
+        {
+          "$ref": "#/$defs/resource_http_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_interval"
+        },
+        {
+          "$ref": "#/$defs/resource_kafka"
+        },
+        {
+          "$ref": "#/$defs/resource_kafka_topic"
+        },
+        {
+          "$ref": "#/$defs/resource_memory"
+        },
+        {
+          "$ref": "#/$defs/resource_mongodb"
+        },
+        {
+          "$ref": "#/$defs/resource_mongodb_change_stream"
+        },
+        {
+          "$ref": "#/$defs/resource_mongodb_collection_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_mongodb_polling"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_binlog"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_cursor_store"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_execution_source"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_incremental"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_state_store"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_table_queue"
+        },
+        {
+          "$ref": "#/$defs/resource_mysql_table_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres_cursor_store"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres_execution_source"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres_incremental"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres_state_store"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres_table_queue"
+        },
+        {
+          "$ref": "#/$defs/resource_postgres_table_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_rabbitmq"
+        },
+        {
+          "$ref": "#/$defs/resource_rabbitmq_queue"
+        },
+        {
+          "$ref": "#/$defs/resource_redis"
+        },
+        {
+          "$ref": "#/$defs/resource_redis_stream"
+        },
+        {
+          "$ref": "#/$defs/resource_sns"
+        },
+        {
+          "$ref": "#/$defs/resource_sns_topic"
+        },
+        {
+          "$ref": "#/$defs/resource_sqlite"
+        },
+        {
+          "$ref": "#/$defs/resource_sqlite_cursor_store"
+        },
+        {
+          "$ref": "#/$defs/resource_sqlite_incremental"
+        },
+        {
+          "$ref": "#/$defs/resource_sqlite_state_store"
+        },
+        {
+          "$ref": "#/$defs/resource_sqlite_table_queue"
+        },
+        {
+          "$ref": "#/$defs/resource_sqlite_table_sink"
+        },
+        {
+          "$ref": "#/$defs/resource_sqs"
+        },
+        {
+          "$ref": "#/$defs/resource_sqs_queue"
+        },
+        {
+          "$ref": "#/$defs/resource_webhook"
+        }
+      ]
+    },
+    "task": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "Name of a resource defined in this document."
+        },
+        "emit": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/emitBinding"
+                  }
+                ]
+              }
+            },
+            {
+              "$ref": "#/$defs/emitBinding"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "when": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "Importable reference, e.g. package.module:function."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "ref"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ],
+                  "description": "Python callable executed for each delivery."
+                },
+                "then": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "$ref": "#/$defs/emitBinding"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "$ref": "#/$defs/emitBinding"
+                    }
+                  ]
+                },
+                "otherwise": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "$ref": "#/$defs/emitBinding"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "$ref": "#/$defs/emitBinding"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "when",
+                "then"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Sink, emit binding, or conditional route."
+        },
+        "dead_letter": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Name of a resource defined in this document."
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "Name of a resource defined in this document."
+              }
+            }
+          ]
+        },
+        "config": {
+          "type": "object"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "handler": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Importable reference, e.g. package.module:function."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "ref"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Python callable executed for each delivery."
+        },
+        "hooks": {
+          "type": "object",
+          "properties": {
+            "after_success": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "Importable reference, e.g. package.module:function."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "ref"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ],
+                  "description": "Python callable executed for each delivery."
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": "Importable reference, e.g. package.module:function."
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Python callable executed for each delivery."
+                  }
+                }
+              ]
+            },
+            "before": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "Importable reference, e.g. package.module:function."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "ref"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ],
+                  "description": "Python callable executed for each delivery."
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": "Importable reference, e.g. package.module:function."
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Python callable executed for each delivery."
+                  }
+                }
+              ]
+            },
+            "on_failure": {
+              "oneOf": [
+                {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "description": "Importable reference, e.g. package.module:function."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "ref"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ],
+                  "description": "Python callable executed for each delivery."
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": "Importable reference, e.g. package.module:function."
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "Python callable executed for each delivery."
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeout_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "retry": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": true
+            }
+          ],
+          "description": "Retry policy name or mapping; strict validation checks per-type fields."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "handler"
+          ]
+        },
+        {
+          "required": [
+            "emit"
+          ]
+        }
+      ]
+    },
+    "emitBinding": {
+      "type": "object",
+      "properties": {
+        "sink": {
+          "type": "string",
+          "description": "Name of a resource defined in this document."
+        },
+        "transform": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Importable reference, e.g. package.module:function."
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "ref"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Python callable executed for each delivery."
+        }
+      },
+      "required": [
+        "sink"
+      ],
+      "additionalProperties": false
+    },
+    "handler": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Importable reference, e.g. package.module:function."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Python callable executed for each delivery."
+    }
+  }
+}

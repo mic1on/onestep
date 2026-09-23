@@ -30,3 +30,14 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `src/onestep/runtime/task_ops.py` `TaskOperations(app)` owns dead-letter replay/discard, one-shot manual run, capability probes (`supports_*_commands`, `_task_supports_*`), and `_SyntheticManualRunDelivery`.
 - `src/onestep/runtime/event_hub.py` `EventHub(app)` owns startup/shutdown hooks, event handlers, `emit_event`, and structured event logging.
 - Facade keeps read-only `_runners`/`_runner_tasks`/`_resources` properties and an `_install_signal_handlers()` passthrough because `tests/contract/test_runtime_contract.py` reads them directly. `serve()`/`request_drain()`/`request_task_pause()`/`request_shutdown()` and `**app.describe()` structures are byte-for-byte unchanged.
+
+## Machine-readable CLI contracts (AI-friendly surface)
+
+- `src/onestep/schema.py` **derives** the `onestep/v1alpha1` JSON Schema from the `_STRICT_*` field sets in `config.py` plus the live resource catalog. Published copy: `docs/public/schema/v1alpha1.json` (served at the `$id` `https://onestep.code05.com/schema/v1alpha1.json`). Regenerate with `onestep schema --out docs/public/schema/v1alpha1.json`; `tests/contract/test_app_schema.py` fails if the copy is stale.
+- The schema uses `handler.allowed_fields`, **not** catalog `fields`/`required`. The catalog is a superset: it advertises `host`/`username`/`password` for `mysql`/`postgres`/`rabbitmq`/`redis` and marks `dsn`/`path` required, but strict validation rejects those fields and accepts their absence. Building the schema from the catalog would reject valid configs.
+- `$schema` is a permitted top-level YAML key (documentation-only, validated as a non-empty string).
+- `check --strict --json` collects **all** problems via `collect_app_config_issues` → `AppConfigValidationError` (each issue has `path`/`message`/`kind`). The human path stays fail-fast: `validate_app_config` raises the original exception type/message, and `tests/contract/test_config_validation_issues.py` pins the first collected issue to the fail-fast message. Many tests in `tests/test_cli.py` assert exact error text — do not change the default messages.
+- `--json` output carries `schema`/`version`: `onestep/check-summary`, `onestep/cli-error`, plus the pre-existing `onestep/diagnostic-result` / `onestep/connectivity-result`. Failures print a JSON error envelope on stdout *and* the human line on stderr.
+- Exit codes: `0` success, `1` runtime failure (`run` raised, `check --connect` probe failed), `2` invalid input/config (strict validation, load failure, bad args). Documented in `docs/guide/ai-interfaces.md`.
+- `_normalize_argv` in `cli.py` allowlists subcommand names; a new subcommand must be added there or it is rewritten to `run <name>`.
+- Adding a test dependency means updating `uv.lock` (`uv lock`); `jsonschema` is test-only and validates the schema in `tests/contract/test_app_schema.py`.
