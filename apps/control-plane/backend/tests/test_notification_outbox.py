@@ -1067,3 +1067,86 @@ def test_outbox_worker_runs_in_local_mode(monkeypatch) -> None:
             engine.dispose()
 
     asyncio.run(scenario())
+
+
+def _delivery_counts() -> dict[str, int]:
+    """Current delivery-attempt counter series.
+
+    The counters are process-global, exactly like every other Prometheus counter in
+    this process, so these tests compare a before/after delta rather than an
+    absolute value -- an absolute assertion would depend on which other test ran
+    first.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    return dict(
+        obs.event_counter_snapshot()["onestep_control_plane_notification_deliveries_total"]
+    )
+
+
+def test_outbox_drain_counts_each_delivery_attempt_outcome(
+    db_session, async_db, monkeypatch
+) -> None:
+    """Every real HTTP attempt increments the delivery counter exactly once.
+
+    This is the emitting side of ``OneStepControlPlaneNotificationDeliveryFailures``
+    (``increase(onestep_control_plane_notification_deliveries_total{status="failed"}[15m]) > 0``).
+    The distinction that matters: a transient failure is re-queued by the outbox, so
+    the row is not terminal -- but the *attempt* did fail and must be counted, or the
+    alert would stay silent through a sustained webhook outage that never exhausts
+    its retries.
+    """
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    after_first = _delivery_counts()
+    assert after_first["failed"] == before["failed"] + 1
+    assert after_first["succeeded"] == before["succeeded"]
+
+    # A second attempt counts again: the metric counts attempts, not channels.
+    assert drain_notification_outbox(db_session, now=_utcnow() + timedelta(hours=1)) == 1
+    assert _delivery_counts()["failed"] == before["failed"] + 2
+
+
+def test_outbox_drain_counts_a_successful_delivery_as_succeeded(
+    db_session, async_db, monkeypatch
+) -> None:
+    """A successful attempt lands in the ``succeeded`` series, not ``failed``."""
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def ok_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "succeeded"
+        delivery.response_status_code = 200
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        ok_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+
+    after = _delivery_counts()
+    assert after["succeeded"] == before["succeeded"] + 1
+    assert after["failed"] == before["failed"]

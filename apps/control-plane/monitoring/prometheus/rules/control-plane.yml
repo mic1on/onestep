@@ -76,3 +76,102 @@ groups:
           summary: Notification delivery failures detected
           description: Notification webhook deliveries have failed in the last 15 minutes.
           runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationdeliveryfailures
+
+  - name: onestep-control-plane-latency
+    rules:
+      # These read the series emitted directly by the control plane's own /metrics
+      # endpoint (the #197 baseline plus the scrape-time pool occupancy sampling),
+      # so they need no external exporter. Thresholds are the ones the latency
+      # diagnostics runbook already documents as the "sustained" signal, kept in
+      # sync with docs/runbooks/control-plane-latency-diagnostics.md section 6.
+      - alert: OneStepControlPlaneEventLoopBlocked
+        expr: onestep_control_plane_event_loop_lag_p95_seconds > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane event loop is blocked
+          description: >-
+            p95 event-loop lag has exceeded 200 ms for 10 minutes. Synchronous work
+            is running on the loop. Follow the latency diagnostics runbook to tell
+            this apart from pool wait and a slow database.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplaneeventloopblocked
+
+      - alert: OneStepControlPlaneEventLoopLagSamplerDead
+        expr: onestep_control_plane_event_loop_lag_sampler_running == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane event-loop lag sampler is not running
+          description: >-
+            The lag sampler task is not alive, so every lag gauge is stale. This means
+            "no data", NOT "no lag" -- treat a quiet lag graph as unproven until this
+            clears.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplaneeventlooplagsamplerdead
+
+      - alert: OneStepControlPlaneDbPoolSaturated
+        expr: |
+          onestep_control_plane_db_pool_checked_out
+            / clamp_min(onestep_control_plane_db_pool_size, 1) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane database pool is saturated
+          description: >-
+            More than 90% of the database connection pool has been checked out for 10
+            minutes. Check for leaked sessions (a checkout with no matching checkin)
+            before raising pool_size.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanedbpoolsaturated
+
+      - alert: OneStepControlPlaneDbPoolWaitSlow
+        expr: |
+          sum(increase(onestep_control_plane_db_pool_wait_slow_total[15m]))
+            / clamp_min(sum(increase(onestep_control_plane_db_pool_checkouts_total[15m])), 1)
+            > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane database checkout waits are slow
+          description: >-
+            More than 10% of pool checkouts waited at least 100 ms over the last 15
+            minutes. Use the occupancy gauges to separate slot contention from slow
+            connection setup.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanedbpoolwaitslow
+
+      - alert: OneStepControlPlaneScanFailing
+        expr: increase(onestep_control_plane_scan_failures_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: A control-plane background scan is failing
+          description: >-
+            A background scan has raised within the last 15 minutes. Missed starts and
+            instance connectivity are detected by these scans, so a failing scan means
+            those alerts are not being evaluated at all.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanescanfailing
+
+      - alert: OneStepControlPlaneScanSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, scan) (rate(onestep_control_plane_scan_duration_seconds_bucket[15m]))
+          ) > 5
+        for: 15m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: A control-plane background scan is running slowly
+          description: >-
+            p95 duration of a background scan has exceeded 5 seconds for 15 minutes.
+            The scan holds a database transaction, so a slow scan delays detection.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanescanslow

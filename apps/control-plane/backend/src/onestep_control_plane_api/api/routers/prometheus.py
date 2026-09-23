@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -15,7 +16,11 @@ from sqlalchemy.orm import Session
 from onestep_control_plane_api.api.security import require_ingest_token
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import Service, TaskCustomMetricWindow, TaskMetricWindow
-from onestep_control_plane_api.db.session import ensure_sync_engine_instrumented, get_db_session
+from onestep_control_plane_api.db.session import (
+    SYNC_POOL_METRIC_NAME,
+    ensure_sync_engine_instrumented,
+    get_db_session,
+)
 from onestep_control_plane_api.ops.observability import (
     CounterSample,
     GaugeSample,
@@ -23,9 +28,12 @@ from onestep_control_plane_api.ops.observability import (
     ObservabilitySnapshot,
     collect_prometheus_snapshot,
     ensure_event_loop_lag_sampler_started,
+    refresh_pool_occupancy,
 )
 
 PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+logger = logging.getLogger("onestep_control_plane_api.api.routers.prometheus")
 
 router = APIRouter(tags=["prometheus"], dependencies=[Depends(require_ingest_token)])
 
@@ -140,7 +148,32 @@ def _compose_prometheus_metrics(db_body: str) -> str:
     are rendered fresh on every scrape.
     """
 
+    _sample_pool_occupancy()
     return db_body + build_observability_metrics()
+
+
+def _sample_pool_occupancy() -> None:
+    """Refresh the pool occupancy gauges at scrape time.
+
+    The occupancy gauges (``db_pool_checked_out`` / ``checked_in`` / ``overflow`` /
+    ``size``) are documented as sampled on demand "so the gauge agrees with the pool
+    at read time", but nothing in production ever called
+    :func:`refresh_pool_occupancy`, so those series were never emitted and
+    ``onestep_control_plane_db_pool_checked_out / db_pool_size`` -- the saturation
+    signal in the latency runbook -- had no data to alert on.
+
+    Sampling on the scrape path is what the module docstring specifies and keeps the
+    value honest: it reflects the pool at read time rather than at some earlier
+    background tick. It costs four attribute reads per pool and is observation only,
+    so a failure here must never fail the scrape.
+    """
+
+    try:
+        from onestep_control_plane_api.db import session as db_session_module
+
+        refresh_pool_occupancy(db_session_module.engine, name=SYNC_POOL_METRIC_NAME)
+    except Exception:  # pragma: no cover - defensive, see docstring
+        logger.warning("could not sample pool occupancy", exc_info=True)
 
 
 def _build_prometheus_metrics(db: Session) -> str:

@@ -50,6 +50,23 @@ Measurements, units, sampling strategy and overhead
 * Per-measurement overhead: two ``perf_counter()`` calls, one lock acquisition
   and one O(1) bucket increment per scan run.
 
+**event counters** -- unit: **count** (events).
+
+* Sampling strategy: every event is counted at the moment it happens, with no
+  background sampler. Three families exist, all of which back a shipped
+  Prometheus alert that previously had no emitting code:
+  :func:`record_ui_stream_disconnect`,
+  :func:`record_agent_command_outcome` and
+  :func:`record_notification_delivery_outcome`. Zero-valued series are emitted
+  for every declared label value, so a rule's denominator exists from process
+  start instead of reporting "no data".
+* Per-measurement overhead: one lock acquisition and one dict increment.
+* Naming caveat, stated plainly because the metric name is the contract: the
+  console event stream is **server-sent events** (``GET /api/v1/ui/stream``), not
+  a websocket. ``onestep_control_plane_ui_ws_disconnects_total`` keeps its
+  historical ``ws`` spelling because the alert rule and the runbook are written
+  against that name; it counts SSE subscriber teardowns.
+
 All sampling configuration lives in module-level constants below (see
 ``DEFAULT_*``). Issue #197 must land independently of #192/#193 and must not
 collide with ``core/settings.py`` (owned by another task in the same batch), so
@@ -64,7 +81,10 @@ Cardinality and privacy contract
   into Prometheus labels, so a reconnect storm cannot create unbounded series.
 * Metric labels are bounded by construction: pool labels are a pool class name
   plus a sanitized pool name, scan labels come from a registered allowlist
-  (:data:`KNOWN_SCAN_NAMES`) and fall back to ``"other"``.
+  (:data:`KNOWN_SCAN_NAMES`) and fall back to ``"other"``, and event counters
+  accept only their declared label values (see
+  :data:`AGENT_COMMAND_OUTCOME_STATUSES` and friends), also falling back to
+  ``"other"``.
 * Credentials are scrubbed before logging, with one rule that matters more than
   the rest: a value whose **field name** matches
   :data:`SENSITIVE_FIELD_PATTERN` is dropped no matter what it contains, at any
@@ -117,6 +137,7 @@ from typing import Any
 from uuid import UUID
 
 __all__ = [
+    "AGENT_COMMAND_OUTCOME_STATUSES",
     "DEFAULT_ENGINE_NAME",
     "DEFAULT_EVENT_LOOP_LAG_INTERVAL_S",
     "DEFAULT_EVENT_LOOP_LAG_WINDOW_SIZE",
@@ -126,6 +147,7 @@ __all__ = [
     "DEFAULT_SCAN_DURATION_BUCKETS_S",
     "DEFAULT_SCAN_SLOW_THRESHOLD_S",
     "KNOWN_SCAN_NAMES",
+    "NOTIFICATION_DELIVERY_OUTCOMES",
     "CounterSample",
     "EventLoopLagSampler",
     "EventLoopLagSnapshot",
@@ -135,16 +157,21 @@ __all__ = [
     "PoolOccupancySnapshot",
     "REDACTED",
     "ScanTiming",
+    "UI_STREAM_DISCONNECT_REASONS",
     "ascan_duration_timer",
     "collect_prometheus_snapshot",
     "emit_structured_log",
     "ensure_engine_instrumented",
     "ensure_event_loop_lag_sampler_started",
+    "event_counter_snapshot",
     "get_event_loop_lag_sampler",
     "instrument_engine",
     "log_ws_lifecycle",
     "normalize_scan_name",
+    "record_agent_command_outcome",
+    "record_notification_delivery_outcome",
     "record_pool_wait",
+    "record_ui_stream_disconnect",
     "refresh_pool_occupancy",
     "register_scan_name",
     "reset_observability_state",
@@ -1074,6 +1101,137 @@ async def ascan_duration_timer(
 
 
 # --------------------------------------------------------------------------------------
+# Event counters (issue #197 follow-up: emit the series three shipped alerts need)
+#
+# Three Prometheus rules in monitoring/prometheus/rules/control-plane.yml referenced
+# series that no code emitted, so they could never fire. Each counter below is the
+# emitting side of one of those rules, and each keeps its label set BOUNDED BY
+# CONSTRUCTION: the values are declared here and anything unrecognised collapses onto
+# UNKNOWN_LABEL_VALUE, exactly like scan names. Identity never reaches a label.
+# --------------------------------------------------------------------------------------
+
+#: Label values for ``onestep_control_plane_ui_ws_disconnects_total``. The console
+#: event stream is SSE, not a websocket; the metric keeps its historical name.
+UI_STREAM_DISCONNECT_REASONS: tuple[str, ...] = ("client_closed", "error")
+
+#: Label values for ``onestep_control_plane_agent_commands_total``. ``status`` is the
+#: terminal command status, matching the vocabulary the alert's regex selects on.
+AGENT_COMMAND_OUTCOME_STATUSES: tuple[str, ...] = (
+    "succeeded",
+    "failed",
+    "timeout",
+    "cancelled",
+    "rejected",
+    "expired",
+)
+
+#: Label values for ``onestep_control_plane_notification_deliveries_total``.
+NOTIFICATION_DELIVERY_OUTCOMES: tuple[str, ...] = ("succeeded", "failed")
+
+#: Counter state: family name -> label value -> count. Seeded with every declared
+#: label value at 0 so a rule's denominator exists before the first event.
+_EVENT_COUNTERS: dict[str, dict[str, int]] = {
+    "onestep_control_plane_ui_ws_disconnects_total": {
+        value: 0 for value in UI_STREAM_DISCONNECT_REASONS
+    },
+    "onestep_control_plane_agent_commands_total": {
+        value: 0 for value in AGENT_COMMAND_OUTCOME_STATUSES
+    },
+    "onestep_control_plane_notification_deliveries_total": {
+        value: 0 for value in NOTIFICATION_DELIVERY_OUTCOMES
+    },
+}
+
+#: The single label name each counter family carries.
+_EVENT_COUNTER_LABEL: dict[str, str] = {
+    "onestep_control_plane_ui_ws_disconnects_total": "reason",
+    "onestep_control_plane_agent_commands_total": "status",
+    "onestep_control_plane_notification_deliveries_total": "status",
+}
+
+_EVENT_COUNTER_HELP: dict[str, str] = {
+    "onestep_control_plane_ui_ws_disconnects_total": (
+        "Console event-stream (SSE) subscriber teardowns observed by this process."
+    ),
+    "onestep_control_plane_agent_commands_total": (
+        "Agent commands that reached a terminal status, by status."
+    ),
+    "onestep_control_plane_notification_deliveries_total": (
+        "Notification webhook delivery attempts, by outcome."
+    ),
+}
+
+
+def _increment_event_counter(family: str, label_value: str | None) -> str:
+    """Increment one bounded counter series and return the label actually used.
+
+    An unrecognised value collapses onto ``"other"`` instead of creating a new
+    series, so a caller cannot make label cardinality grow. Returns the effective
+    label so callers can assert on what was recorded.
+    """
+
+    declared = _EVENT_COUNTERS[family]
+    effective = label_value if label_value in declared else UNKNOWN_LABEL_VALUE
+    with _LOCK:
+        # ``setdefault`` covers "other" and any value registered after import.
+        counts = _EVENT_COUNTERS[family]
+        counts[effective] = counts.get(effective, 0) + 1
+    return effective
+
+
+def record_ui_stream_disconnect(reason: str | None = None) -> str:
+    """Count one console event-stream subscriber teardown.
+
+    ``reason`` should be ``"client_closed"`` for an observed client disconnect and
+    ``"error"`` when the stream ended by raising; anything else is counted as
+    ``"other"``. Backs ``OneStepControlPlaneUiWsDisconnectSpike``.
+    """
+
+    return _increment_event_counter(
+        "onestep_control_plane_ui_ws_disconnects_total",
+        (reason or "").strip().lower() or None,
+    )
+
+
+def record_agent_command_outcome(status: str | None) -> str:
+    """Count one agent command reaching a terminal status.
+
+    Only terminal statuses belong here: ``pending``/``dispatched``/``accepted`` are
+    in-flight states, and counting them would inflate the alert's denominator with
+    work that has not finished. Non-terminal or unrecognised values collapse to
+    ``"other"``, which the alert's regex deliberately does not select. Backs
+    ``OneStepControlPlaneCommandFailureRateHigh``.
+    """
+
+    return _increment_event_counter(
+        "onestep_control_plane_agent_commands_total",
+        (status or "").strip().lower() or None,
+    )
+
+
+def record_notification_delivery_outcome(status: str | None) -> str:
+    """Count one webhook delivery attempt outcome.
+
+    ``status`` is the delivery status after the HTTP attempt: ``"succeeded"`` or
+    ``"failed"``. Retries are counted individually -- the alert asks whether
+    deliveries are failing, not whether a channel is ultimately reachable. Backs
+    ``OneStepControlPlaneNotificationDeliveryFailures``.
+    """
+
+    return _increment_event_counter(
+        "onestep_control_plane_notification_deliveries_total",
+        (status or "").strip().lower() or None,
+    )
+
+
+def event_counter_snapshot() -> dict[str, dict[str, int]]:
+    """Return a copy of every event counter series (tests and diagnostics)."""
+
+    with _LOCK:
+        return {family: dict(counts) for family, counts in _EVENT_COUNTERS.items()}
+
+
+# --------------------------------------------------------------------------------------
 # Prometheus snapshot
 # --------------------------------------------------------------------------------------
 
@@ -1296,6 +1454,23 @@ def collect_prometheus_snapshot() -> ObservabilitySnapshot:
             )
         )
 
+    # Event counters. Every declared label value is emitted, including zeros, so a
+    # ratio alert has a denominator from process start rather than "no data".
+    with _LOCK:
+        event_counters = {
+            family: dict(counts) for family, counts in _EVENT_COUNTERS.items()
+        }
+    counters.extend(
+        CounterSample(
+            name=family,
+            help_text=_EVENT_COUNTER_HELP[family],
+            value=float(count),
+            labels=((_EVENT_COUNTER_LABEL[family], label_value),),
+        )
+        for family in sorted(event_counters)
+        for label_value, count in sorted(event_counters[family].items())
+    )
+
     return ObservabilitySnapshot(
         gauges=tuple(gauges),
         counters=tuple(counters),
@@ -1317,3 +1492,18 @@ def reset_observability_state() -> None:
         _pool_bindings.clear()
         _pool_wait_states.clear()
         _scan_states.clear()
+        # Re-seed the declared zero series rather than emptying the families: a
+        # reset must restore the state a fresh process starts in, and a fresh
+        # process emits zeros so ratio alerts have a denominator.
+        for family, declared in (
+            ("onestep_control_plane_ui_ws_disconnects_total", UI_STREAM_DISCONNECT_REASONS),
+            (
+                "onestep_control_plane_agent_commands_total",
+                AGENT_COMMAND_OUTCOME_STATUSES,
+            ),
+            (
+                "onestep_control_plane_notification_deliveries_total",
+                NOTIFICATION_DELIVERY_OUTCOMES,
+            ),
+        ):
+            _EVENT_COUNTERS[family] = {value: 0 for value in declared}

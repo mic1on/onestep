@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
+import sqlalchemy as sa
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_metrics_request
 from onestep_control_plane_api.api.routers.prometheus import (
+    build_observability_metrics,
     build_prometheus_metrics,
     reset_prometheus_metrics_cache,
 )
@@ -183,7 +185,22 @@ def test_prometheus_metrics_keeps_custom_metric_kinds_separate(
 
 
 def test_prometheus_metrics_reuses_cached_response(db_session, async_db, monkeypatch) -> None:
+    """The database-derived body is cached; only the observability section is fresh.
+
+    ``_compose_prometheus_metrics`` documents this split: the aggregation queries are
+    cached for ``prometheus_cache_ttl_s``, while the process-local samples are rendered
+    on every scrape so they cannot go stale behind that cache. The observability
+    section is stubbed out here, which is what makes ``first == second`` a statement
+    about the CACHED body rather than about per-scrape timestamps
+    (``db_pool_occupancy_timestamp_seconds`` moves on every scrape by design). The
+    statement counter is the real cache assertion.
+    """
+
     monkeypatch.setattr(settings, "prometheus_cache_ttl_s", 60.0)
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.routers.prometheus.build_observability_metrics",
+        lambda: "",
+    )
     reset_prometheus_metrics_cache()
     ingest_metrics(db_session, _metrics_payload(suffix="30", succeeded=118, failed=2, inflight=2))
 
@@ -207,3 +224,146 @@ def test_prometheus_metrics_reuses_cached_response(db_session, async_db, monkeyp
     assert first == second
     assert count_after_first_scrape > 0
     assert statement_count == count_after_first_scrape
+
+
+def test_prometheus_scrape_samples_pool_occupancy(db_session, monkeypatch) -> None:
+    """A scrape refreshes the occupancy gauges, which nothing else ever did.
+
+    ``refresh_pool_occupancy`` is documented as sampled on demand so the gauge agrees
+    with the pool at read time, but before this wiring no production caller existed:
+    the series were never emitted, so the saturation signal
+    ``db_pool_checked_out / db_pool_size`` from the latency runbook had no data and no
+    alert could be built on it.
+    """
+
+    monkeypatch.setattr(settings, "prometheus_cache_ttl_s", 0.0)
+    reset_prometheus_metrics_cache()
+
+    body = build_prometheus_metrics(db_session)
+
+    assert "onestep_control_plane_db_pool_checked_out{" in body
+    assert "onestep_control_plane_db_pool_size{" in body
+    assert "onestep_control_plane_db_pool_occupancy_timestamp_seconds{" in body
+
+
+# --------------------------------------------------------------------------------------
+# Alert-rule / emitter agreement
+# --------------------------------------------------------------------------------------
+
+
+def test_every_alert_rule_metric_is_emitted_by_the_exporter() -> None:
+    """No rule may reference a series the control plane does not emit.
+
+    This is the regression guard for the defect that motivated the counter wiring:
+    ``monitoring/prometheus/rules/control-plane.yml`` referenced
+    ``onestep_control_plane_ui_ws_disconnects_total``,
+    ``onestep_control_plane_agent_commands_total`` and
+    ``onestep_control_plane_notification_deliveries_total``, but no code emitted
+    them, so three shipped alerts could never fire and nothing failed when that was
+    true. A rule is a promise that a series exists; this test checks the promise
+    against the exporter's own output.
+
+    Scope note: only series under the ``onestep_control_plane_`` prefix are checked.
+    The availability rules legitimately read series from other systems
+    (``up``, ``probe_success``, ``pg_up``), which this exporter must NOT emit.
+    """
+
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    rules_path = (
+        Path(__file__).resolve().parents[2]
+        / "monitoring"
+        / "prometheus"
+        / "rules"
+        / "control-plane.yml"
+    )
+    assert rules_path.exists(), f"alert rules not found at {rules_path}"
+    document = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
+
+    # Every onestep_control_plane_* identifier appearing in an expression.
+    referenced: set[str] = set()
+    for group in document["groups"]:
+        for rule in group["rules"]:
+            for name in re.findall(r"\bonestep_control_plane_[a-z0-9_]+", rule["expr"]):
+                # Histogram rules read the _bucket suffix; the family is the emitter's
+                # name, so normalize it back.
+                referenced.add(name.removesuffix("_bucket"))
+
+    assert referenced, "no onestep_control_plane_* series referenced by any rule"
+
+    # Drive every documented emitter so the check asks "can the exporter emit this
+    # series at all?" rather than "did it happen to be non-empty in a fresh
+    # process?". Several families are legitimately absent until their first
+    # observation (the lag gauges need a sample, the scan families need a scan run,
+    # occupancy needs a scrape-time refresh), so an empty fresh process would prove
+    # nothing about whether the code path exists.
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.get_event_loop_lag_sampler().record_sample(0.01)
+    with obs.scan_duration_timer("notification_missed_start"):
+        pass
+    obs.record_pool_wait(0.02, pool_class="QueuePool", pool_name="alert_rule_pool")
+    obs.record_agent_command_outcome("failed")
+    obs.record_notification_delivery_outcome("failed")
+    obs.record_ui_stream_disconnect("error")
+
+    # Occupancy is sampled on the scrape path, so exercise that real path.
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        obs.refresh_pool_occupancy(engine, name="alert_rule_pool")
+        body = build_observability_metrics()
+    finally:
+        engine.dispose()
+
+    emitted = set(re.findall(r"^# TYPE ([a-z0-9_]+) ", body, re.MULTILINE))
+
+    missing = sorted(referenced - emitted)
+    assert missing == [], (
+        "alert rules reference series the exporter never emits, so those alerts can "
+        f"never fire: {missing}"
+    )
+
+
+def test_every_alert_rule_runbook_anchor_resolves() -> None:
+    """Every rule's ``runbook`` link must point at a heading that exists.
+
+    A broken anchor sends an operator to the top of the runbook mid-incident. This
+    is cheap to check and easy to break: the anchor is a GitHub heading slug, so
+    renaming a heading silently invalidates every link to it.
+    """
+
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    docs_dir = Path(__file__).resolve().parents[2] / "docs"
+    rules_path = docs_dir.parent / "monitoring" / "prometheus" / "rules" / "control-plane.yml"
+    document = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
+
+    def slug(heading: str) -> str:
+        lowered = heading.strip().lower()
+        return re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", lowered))
+
+    checked = 0
+    for group in document["groups"]:
+        for rule in group["rules"]:
+            target = rule["annotations"].get("runbook")
+            assert target, f"{rule['alert']} has no runbook annotation"
+            relative, _, anchor = target.partition("#")
+            path = docs_dir / relative.removeprefix("docs/")
+            assert path.exists(), f"{rule['alert']} points at a missing file: {relative}"
+
+            headings = {
+                slug(match.group(1))
+                for match in re.finditer(r"^#{1,6}\s+(.*)$", path.read_text(encoding="utf-8"), re.M)
+            }
+            assert anchor in headings, (
+                f"{rule['alert']} links to #{anchor}, which is not a heading in {relative}"
+            )
+            checked += 1
+
+    assert checked == sum(len(group["rules"]) for group in document["groups"])

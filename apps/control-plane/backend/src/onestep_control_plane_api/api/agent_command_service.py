@@ -28,6 +28,7 @@ from onestep_control_plane_api.api.schemas import (
 )
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import AgentCommand, AgentSession, Instance, Service
+from onestep_control_plane_api.ops.observability import record_agent_command_outcome
 
 REDISPATCHABLE_COMMAND_STATUSES = frozenset({"pending", "dispatched"})
 RECONCILABLE_COMMAND_STATUSES = frozenset({"pending", "dispatched", "accepted"})
@@ -248,6 +249,7 @@ def _mark_command_rejected_without_delivery(
     command.updated_at = rejected_at
     db.commit()
     db.refresh(command)
+    record_agent_command_outcome(command.status)
     return command
 
 
@@ -400,6 +402,7 @@ def expire_stale_commands(
         filters.append(AgentCommand.service_id == service_id)
 
     stale_count = 0
+    terminal_statuses: list[str] = []
     for command in db.query(AgentCommand).filter(*filters).all():
         deadline = _command_deadline(command)
         if deadline > as_of:
@@ -424,6 +427,7 @@ def expire_stale_commands(
         command.finished_at = deadline
         command.updated_at = as_of
         stale_count += 1
+        terminal_statuses.append(command.status)
 
     # Commit only when the caller owns the transaction. The synchronous read
     # paths rely on this default to persist the expiry writes. A caller that
@@ -434,6 +438,11 @@ def expire_stale_commands(
     # would leak past every cleanup path.
     if commit and stale_count:
         db.commit()
+    # Counted after the commit, never before: a counter that moves on a rolled-back
+    # expiry would report failures that never happened. With ``commit=False`` the
+    # caller owns the transaction and is contracted to commit it.
+    for terminal_status in terminal_statuses:
+        record_agent_command_outcome(terminal_status)
     return stale_count
 
 
@@ -632,6 +641,7 @@ async def reject_redelivery_for_unsupported_capability_async(
     )
     command.updated_at = rejected_at
     await session.commit()
+    record_agent_command_outcome(command.status)
 
 
 def build_command_message(
@@ -745,6 +755,10 @@ async def apply_command_ack(
         command.error_code = error_code
         command.error_message = error_message
     await session.commit()
+    if ack_status != "accepted":
+        # A rejected ack is terminal; an accepted ack is in-flight and is counted
+        # only when its result arrives.
+        record_agent_command_outcome(command.status)
     return "ok"
 
 
@@ -791,6 +805,9 @@ async def apply_command_result(
         command.acked_at = received_at
     command.updated_at = received_at
     await session.commit()
+    # The duplicate check above guarantees this is the first terminal result for
+    # this command, so one command is counted exactly once.
+    record_agent_command_outcome(command.status)
     return "ok"
 
 

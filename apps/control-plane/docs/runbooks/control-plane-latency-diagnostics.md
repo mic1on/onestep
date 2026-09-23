@@ -35,6 +35,9 @@ no new agent, no new exporter, no new platform.
 | `onestep_control_plane_scan_duration_seconds` | histogram | seconds | Duration of one background scan run. |
 | `onestep_control_plane_scan_runs_total` | counter | count | Scan runs observed. |
 | `onestep_control_plane_scan_failures_total` | counter | count | Scan runs that raised. |
+| `onestep_control_plane_ui_ws_disconnects_total` | counter | count | Console SSE stream teardowns, by `reason` (`client_closed` / `error`). |
+| `onestep_control_plane_agent_commands_total` | counter | count | Agent commands reaching a terminal status, by `status`. |
+| `onestep_control_plane_notification_deliveries_total` | counter | count | Webhook delivery attempts, by `status`. |
 
 Structured log events (identity is correlated here, never in labels):
 
@@ -56,6 +59,22 @@ metric timestamps can be put on one clock.
 > `name="default"` while the notification scanner instruments the async pool
 > under `name="async"`. The pool histogram and the lag gauges are therefore
 > populated from process start, without waiting for a scrape.
+>
+> The pool **occupancy** gauges are sampled on the scrape path
+> (`/metrics` → `_sample_pool_occupancy` → `refresh_pool_occupancy`), which is
+> what the "sampled on demand so the gauge agrees with the pool at read time"
+> design in the module docstring requires. Before that call existed the occupancy
+> series were never emitted at all, so the saturation signal in section 6 had no
+> data.
+>
+> The three alert counters (`ui_ws_disconnects_total`, `agent_commands_total`,
+> `notification_deliveries_total`) are emitted from the production paths that
+> observe those events, and the rules in
+> `monitoring/prometheus/rules/control-plane.yml` are checked against the
+> exporter's real output by
+> `backend/tests/test_prometheus_exporter.py`. The latency alerts in that file
+> read the families in the table below, so no external exporter or metrics
+> pipeline is needed.
 
 ## 2. Reproducible diagnostic session
 
@@ -287,10 +306,11 @@ each one limits what the evidence can prove.
     whichever was sampled last. Give each engine a distinct `name` when running
     more than one, otherwise a busy engine can be hidden behind a quiet one.
 15. **Gauge staleness.** `db_pool_occupancy_timestamp_seconds` tells you when the
-    occupancy gauges were last refreshed. If that timestamp stops advancing, the
-    occupancy numbers are stale — check that something still calls
-    `refresh_pool_occupancy` (only the follow-up wiring PR will do so
-    periodically in production).
+    occupancy gauges were last refreshed. Occupancy is sampled on the scrape path
+    (`/metrics` → `_sample_pool_occupancy`), so the timestamp should advance with
+    every scrape. If it stops advancing, the scrape itself is failing or
+    `refresh_pool_occupancy` is raising — check the control plane logs for
+    "could not sample pool occupancy".
 16. **The log scrubber is name- and shape-based, and that is a real limit.**
     `build_log_fields` redacts a value in two cases only: its **field name**
     matches `SENSITIVE_FIELD_PATTERN` (token, authorization, password,
