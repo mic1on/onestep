@@ -473,7 +473,7 @@ project scaffolding.
   serves `/metrics` and a `/healthz` probe (runtime + per-source liveness,
   usable as a K8s liveness/readiness endpoint) from a tiny asyncio HTTP
   server coexisting with webhook sources. A ready-made monitoring stack
-  lives in `examples/prometheus/` (onestep + Prometheus + Grafana with a
+  lives in `example/prometheus/` (onestep + Prometheus + Grafana with a
   provisioned dashboard).
 
 - Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that

@@ -1,7 +1,7 @@
 # onestep + Prometheus + Grafana monitoring stack (issue #153 MVP)
 #
 # Usage:
-#   cd examples/prometheus
+#   cd example/prometheus
 #   docker compose up -d
 #   # Grafana:    http://localhost:3300  (anonymous admin, dashboard preloaded)
 #   # Prometheus: http://localhost:9090
