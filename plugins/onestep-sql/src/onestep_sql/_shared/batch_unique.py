@@ -163,10 +163,14 @@ async def validate_unique_rows(sink, conn, rows, table):
                 created = True
             insert = shadow.insert()
             for chunk in sink._batch_chunks(rows):
-                # One row per execution avoids driver-specific executemany
-                # rewrites and packet/parameter limits in this validation path.
-                for row in chunk:
-                    await conn.execute(insert, {col: row[col] for col in used})
+                # One driver call per chunk avoids row-at-a-time awaits. The
+                # driver may split it further; MySQL's packet guard bounds
+                # asyncmy's merged SQL by the real connection packet limit.
+                # All chunks share this indexed table, so conflicts across
+                # either logical chunks or driver sub-batches still fail.
+                await conn.execute(
+                    insert, [{col: row[col] for col in used} for row in chunk]
+                )
             await execute_ddl(drop)
             created = False
     except sa.exc.IntegrityError as exc:
@@ -174,7 +178,9 @@ async def validate_unique_rows(sink, conn, rows, table):
             "batch rows collide under the database's unique-index rules; deduplicate upstream"
         ) from exc
     finally:
-        if created and not transactional_ddl:
+        # A lost MySQL session already drops its temporary tables. Trying to
+        # reconnect inside the failed transaction masks the connection error.
+        if created and not transactional_ddl and not conn.invalidated:
             await execute_ddl(drop)
 
 

@@ -260,6 +260,13 @@ jobs:
           uv run --all-packages python -m pytest -q -m integration plugins/onestep-mysql/tests/integration/test_mysql_execution_live.py plugins/onestep-mysql/tests/integration/test_mysql_execution_source_live.py
           uv run --all-packages python -m pytest -q -m integration plugins/onestep-mysql/tests/integration/test_mysql_live.py -k "table_sink"
 
+      - name: Run batch correctness and packet-limit regressions
+        env:
+          # The service is isolated; each test restores the global value and
+          # reconnects so its SESSION max_allowed_packet reflects that value.
+          ONESTEP_TEST_ALLOW_GLOBAL_MYSQL_SETTINGS: "1"
+        run: uv run --all-packages python -m pytest -q tests/contract/test_onestep_sql_batch_regressions.py
+
   publish-pypi:
     name: Publish plugin to PyPI
     runs-on: ubuntu-latest

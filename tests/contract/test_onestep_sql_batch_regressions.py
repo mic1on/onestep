@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from uuid import uuid4
 
@@ -61,6 +62,35 @@ async def contents(database, table):
                 await conn.execute(sa.select(table).order_by(table.c.id))
             ).mappings()
         ]
+
+
+@asynccontextmanager
+async def mysql_packet_limit(database, limit):
+    if (
+        database[0] != "mysql"
+        or os.getenv("ONESTEP_TEST_ALLOW_GLOBAL_MYSQL_SETTINGS") != "1"
+    ):
+        pytest.skip("requires explicitly opted-in isolated MySQL server")
+    engine = database[1].engine
+    async with engine.begin() as conn:
+        original = (
+            await conn.exec_driver_sql("SELECT @@GLOBAL.max_allowed_packet")
+        ).scalar_one()
+        await conn.exec_driver_sql(f"SET GLOBAL max_allowed_packet = {int(limit)}")
+    try:
+        await engine.dispose()  # session limit is fixed at connect time
+        async with engine.connect() as conn:
+            actual = (
+                await conn.exec_driver_sql("SELECT @@SESSION.max_allowed_packet")
+            ).scalar_one()
+            assert actual == limit
+        yield
+    finally:
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql(
+                f"SET GLOBAL max_allowed_packet = {int(original)}"
+            )
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -172,7 +202,8 @@ async def test_alternating_masks_preserve_repeated_key_order(database):
 
 
 @pytest.mark.asyncio
-async def test_unique_nulls_remain_distinct(database):
+@pytest.mark.parametrize("batch_size", [1, 50])
+async def test_unique_nulls_remain_distinct(database, batch_size):
     table = table_for(
         database,
         sa.Column("id", sa.Integer, primary_key=True),
@@ -180,14 +211,15 @@ async def test_unique_nulls_remain_distinct(database):
     )
     await setup(database, table)
     sink = database[1].table_sink(
-        table=table.name, mode="upsert", keys=("id",), batch_size=1
+        table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
     )
     await sink.send(Envelope(body=[{"id": 1, "email": None}, {"id": 2, "email": None}]))
     assert len(await contents(database, table)) == 2
 
 
 @pytest.mark.asyncio
-async def test_partial_unique_index_evaluates_its_predicate(database):
+@pytest.mark.parametrize("batch_size", [1, 50])
+async def test_partial_unique_index_evaluates_its_predicate(database, batch_size):
     if database[0] == "mysql":
         pytest.skip("MySQL has no partial indexes")
     table = table_for(
@@ -205,7 +237,7 @@ async def test_partial_unique_index_evaluates_its_predicate(database):
     )
     await setup(database, table)
     sink = database[1].table_sink(
-        table=table.name, mode="upsert", keys=("id",), batch_size=1
+        table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
     )
     await sink.send(
         Envelope(
@@ -229,7 +261,8 @@ async def test_partial_unique_index_evaluates_its_predicate(database):
 
 
 @pytest.mark.asyncio
-async def test_collation_conflict_rejected_across_chunks(database):
+@pytest.mark.parametrize("batch_size", [1, 50])
+async def test_collation_conflict_rejected_across_chunks(database, batch_size):
     if database[0] == "postgres":
         pytest.skip("PostgreSQL NULL/predicate rules are covered separately")
     collation = "NOCASE" if database[0] == "sqlite" else "utf8mb4_0900_ai_ci"
@@ -240,7 +273,7 @@ async def test_collation_conflict_rejected_across_chunks(database):
     )
     await setup(database, table)
     sink = database[1].table_sink(
-        table=table.name, mode="upsert", keys=("id",), batch_size=1
+        table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
     )
     with pytest.raises(ConnectorOperationError) as error:
         await sink.send(
@@ -318,20 +351,195 @@ async def test_later_chunk_failure_rolls_back_after_unique_validation(database):
 
 
 @pytest.mark.asyncio
-async def test_mysql_encoded_packet_split_and_single_row_rejection(database):
-    if (
-        database[0] != "mysql"
-        or os.getenv("ONESTEP_TEST_ALLOW_GLOBAL_MYSQL_SETTINGS") != "1"
-    ):
-        pytest.skip("requires explicitly opted-in isolated MySQL server")
-    connector = database[1]
-    async with connector.engine.begin() as conn:
-        original = (
-            await conn.exec_driver_sql("SELECT @@GLOBAL.max_allowed_packet")
-        ).scalar_one()
-        await conn.exec_driver_sql("SET GLOBAL max_allowed_packet = 4194304")
-    await connector.engine.dispose()  # session limit is fixed at connect time
+@pytest.mark.parametrize("batch_size", [20, 1000])
+async def test_unique_validation_costs_chunks_not_rows(database, batch_size):
+    """#228: issue driver calls per chunk, not per row.
+
+    This counts SQLAlchemy executions before driver rewriting. The driver can
+    split one executemany into multiple commands; live packet-limit tests below
+    check that these commands remain safe against the real server limit.
+    """
+    table = table_for(
+        database,
+        sa.Column("device_key", sa.String(64), primary_key=True),
+        sa.Column("v", sa.Integer),
+    )
+    await setup(database, table)
+    sink = database[1].table_sink(
+        table=table.name, mode="upsert", keys=("device_key",), batch_size=batch_size
+    )
+
+    inserts: list[tuple[bool, str]] = []
+
+    def _listen(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("INSERT"):
+            inserts.append((executemany, statement))
+
+    engine = database[1].engine
+    sa.event.listen(engine.sync_engine, "before_cursor_execute", _listen)
     try:
+        rows = [{"device_key": f"2408600{i:05d}", "v": i} for i in range(60)]
+        await sink.send(Envelope(body=rows))
+    finally:
+        sa.event.remove(engine.sync_engine, "before_cursor_execute", _listen)
+
+    shadow = [item for item in inserts if "_onestep_batch_" in item[1]]
+    expected = (len(rows) + batch_size - 1) // batch_size
+    assert len(shadow) == expected, f"{len(shadow)} shadow executions for 60 rows"
+    assert all(item[0] for item in shadow), "use the driver's bounded executemany"
+    async with engine.connect() as conn:
+        written = (
+            await conn.execute(sa.select(sa.func.count()).select_from(table))
+        ).scalar_one()
+    assert written == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "suffix", ["x" * 192, "中'\\\x00" * 40], ids=["ascii", "escaped_utf8"]
+)
+async def test_mysql_unique_validation_splits_merged_packets(database, suffix):
+    # Above the default 16KiB net_buffer_length: a nominal 1KiB limit does not
+    # reliably exercise the server's packet rejection boundary.
+    async with mysql_packet_limit(database, 32768):
+        table = table_for(
+            database,
+            sa.Column("id", sa.String(200), primary_key=True),
+            sa.Column("v", sa.Integer),
+            mysql_charset="utf8mb4",
+            mysql_collate="utf8mb4_0900_ai_ci",
+        )
+        await setup(database, table)
+        connector = database[1]
+        sink = connector.table_sink(
+            table=table.name, mode="upsert", keys=("id",), batch_size=1000
+        )
+        rows = [{"id": f"key{i:05d}" + suffix, "v": i} for i in range(300)]
+        async with connector.engine.connect() as conn:
+            connection_id = (
+                await conn.exec_driver_sql("SELECT CONNECTION_ID()")
+            ).scalar_one()
+        # Every row fits, but the driver's default merged INSERT exceeds 32KiB.
+        await sink.send(Envelope(body=rows))
+        assert await contents(database, table) == rows
+
+        # Database-only equality must still reject a conflict between driver
+        # sub-batches belonging to the same logical chunk.
+        conflicts = [{**row, "v": -1} for row in rows]
+        conflicts[-1]["id"] = rows[0]["id"].upper()
+        with pytest.raises(ConnectorOperationError) as error:
+            await sink.send(Envelope(body=conflicts))
+        assert error.value.kind is ConnectorErrorKind.PERMANENT
+        assert await contents(database, table) == rows
+        await sink.send(Envelope(body=rows))
+        async with connector.engine.connect() as conn:
+            assert (
+                await conn.exec_driver_sql("SELECT CONNECTION_ID()")
+            ).scalar_one() == connection_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("packet_size", [32767, 32768, 32769])
+async def test_mysql_packet_guard_checks_exact_boundary(database, packet_size):
+    from onestep_sql.mysql.batch_packet import packet_guard
+
+    async with mysql_packet_limit(database, 32768):
+        connector = database[1]
+        sink = connector.table_sink(table="unused", mode="insert")
+        value = "x" * (packet_size - len("SELECT '' AS v") - 1)
+        statement = f"SELECT '{value}' AS v"
+        async with connector.engine.begin() as conn:
+            if packet_size < 32768:
+                async with packet_guard(sink, conn):
+                    assert (await conn.exec_driver_sql(statement)).scalar_one() == value
+            else:
+                with pytest.raises(ConnectorOperationError) as error:
+                    async with packet_guard(sink, conn):
+                        await conn.exec_driver_sql(statement)
+                assert error.value.kind is ConnectorErrorKind.PERMANENT
+            assert (await conn.exec_driver_sql("SELECT 1")).scalar_one() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_size", [1, 1000])
+async def test_mysql_unique_validation_rejects_oversized_row(database, batch_size):
+    async with mysql_packet_limit(database, 32768):
+        table = table_for(
+            database,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("email", sa.Text),
+        )
+        sa.Index("uq_" + table.name, table.c.email, unique=True, mysql_length=32)
+        await setup(database, table)
+        connector = database[1]
+        sink = connector.table_sink(
+            table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
+        )
+        async with connector.engine.connect() as conn:
+            connection_id = (
+                await conn.exec_driver_sql("SELECT CONNECTION_ID()")
+            ).scalar_one()
+        with pytest.raises(ConnectorOperationError) as error:
+            await sink.send(
+                Envelope(
+                    body=[
+                        {"id": 1, "email": "small"},
+                        {"id": 2, "email": "z" * 32768},
+                    ]
+                )
+            )
+        assert error.value.kind is ConnectorErrorKind.PERMANENT
+        assert "max_allowed_packet" in str(error.value)
+        assert await contents(database, table) == []
+        await sink.send(
+            Envelope(body=[{"id": 1, "email": "a"}, {"id": 2, "email": "b"}])
+        )
+        assert len(await contents(database, table)) == 2
+        async with connector.engine.connect() as conn:
+            assert (
+                await conn.exec_driver_sql("SELECT CONNECTION_ID()")
+            ).scalar_one() == connection_id
+
+
+@pytest.mark.asyncio
+async def test_mysql_unique_validation_disconnect_preserves_error(database):
+    if database[0] != "mysql":
+        pytest.skip("MySQL temporary-table cleanup after a lost connection")
+    table = table_for(
+        database,
+        sa.Column("id", sa.String(20), primary_key=True),
+        sa.Column("v", sa.Integer),
+    )
+    await setup(database, table)
+    connector = database[1]
+    sink = connector.table_sink(table=table.name, mode="upsert", keys=("id",))
+
+    def disconnect(conn, cursor, statement, parameters, context, executemany):
+        if (
+            statement.lstrip().upper().startswith("INSERT")
+            and "_onestep_batch_" in statement
+        ):
+            conn.connection.driver_connection.close()
+
+    rows = [{"id": "a", "v": 1}, {"id": "b", "v": 2}]
+    sa.event.listen(connector.engine.sync_engine, "before_cursor_execute", disconnect)
+    try:
+        with pytest.raises(ConnectorOperationError) as error:
+            await sink.send(Envelope(body=rows))
+    finally:
+        sa.event.remove(
+            connector.engine.sync_engine, "before_cursor_execute", disconnect
+        )
+    assert error.value.kind is ConnectorErrorKind.DISCONNECTED
+    assert await contents(database, table) == []
+    await sink.send(Envelope(body=rows))
+    assert await contents(database, table) == rows
+
+
+@pytest.mark.asyncio
+async def test_mysql_encoded_packet_split_and_single_row_rejection(database):
+    connector = database[1]
+    async with mysql_packet_limit(database, 4194304):
         table = table_for(
             database,
             sa.Column("id", sa.Integer, primary_key=True),
@@ -359,12 +567,6 @@ async def test_mysql_encoded_packet_split_and_single_row_rejection(database):
         assert len(await contents(database, table)) == 4  # earlier chunk rolled back
         await sink.send(Envelope(body=[{"id": 7, "data": {"text": "usable"}}]))
         assert len(await contents(database, table)) == 5
-    finally:
-        async with connector.engine.begin() as conn:
-            await conn.exec_driver_sql(
-                f"SET GLOBAL max_allowed_packet = {int(original)}"
-            )
-        await connector.engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -413,7 +615,8 @@ async def test_skip_null_does_not_fire_column_specific_trigger(database):
 
 
 @pytest.mark.asyncio
-async def test_sqlite_collated_primary_key_is_checked(database):
+@pytest.mark.parametrize("batch_size", [1, 50])
+async def test_sqlite_collated_primary_key_is_checked(database, batch_size):
     if database[0] != "sqlite":
         pytest.skip("SQLite reflected PK collation regression")
     table = table_for(
@@ -423,7 +626,7 @@ async def test_sqlite_collated_primary_key_is_checked(database):
     )
     await setup(database, table)
     sink = database[1].table_sink(
-        table=table.name, mode="upsert", keys=("id",), batch_size=1
+        table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
     )
     with pytest.raises(ConnectorOperationError):
         await sink.send(
@@ -433,7 +636,8 @@ async def test_sqlite_collated_primary_key_is_checked(database):
 
 
 @pytest.mark.asyncio
-async def test_mysql_table_default_collation_and_prefix_index(database):
+@pytest.mark.parametrize("batch_size", [1, 50])
+async def test_mysql_table_default_collation_and_prefix_index(database, batch_size):
     if database[0] != "mysql":
         pytest.skip("MySQL table collation and index prefix")
     table = table_for(
@@ -446,7 +650,7 @@ async def test_mysql_table_default_collation_and_prefix_index(database):
     sa.Index("uq_" + table.name, table.c.email, unique=True, mysql_length=3)
     await setup(database, table)
     sink = database[1].table_sink(
-        table=table.name, mode="upsert", keys=("id",), batch_size=1
+        table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
     )
     with pytest.raises(ConnectorOperationError):
         await sink.send(
@@ -458,7 +662,8 @@ async def test_mysql_table_default_collation_and_prefix_index(database):
 
 
 @pytest.mark.asyncio
-async def test_postgres_nondeterministic_collation(database):
+@pytest.mark.parametrize("batch_size", [1, 50])
+async def test_postgres_nondeterministic_collation(database, batch_size):
     if database[0] != "postgres":
         pytest.skip("PostgreSQL ICU collation")
     connector = database[1]
@@ -482,7 +687,7 @@ async def test_postgres_nondeterministic_collation(database):
     try:
         await setup(database, table)
         sink = connector.table_sink(
-            table=table.name, mode="upsert", keys=("id",), batch_size=1
+            table=table.name, mode="upsert", keys=("id",), batch_size=batch_size
         )
         with pytest.raises(ConnectorOperationError):
             await sink.send(
