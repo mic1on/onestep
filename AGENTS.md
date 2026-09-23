@@ -41,3 +41,13 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - Exit codes: `0` success, `1` runtime failure (`run` raised, `check --connect` probe failed), `2` invalid input/config (strict validation, load failure, bad args). Documented in `docs/guide/ai-interfaces.md`.
 - `_normalize_argv` in `cli.py` allowlists subcommand names; a new subcommand must be added there or it is rewritten to `run <name>`.
 - Adding a test dependency means updating `uv.lock` (`uv lock`); `jsonschema` is test-only and validates the schema in `tests/contract/test_app_schema.py`.
+
+## Control-plane alerts and metrics
+
+- Alert rules: `apps/control-plane/monitoring/prometheus/rules/control-plane.yml`; runbooks in `apps/control-plane/docs/runbooks/alerts.md` (one `## Heading` per alert, linked by GitHub heading slug).
+- **A rule is a promise that a series exists.** `backend/tests/test_prometheus_exporter.py::test_every_alert_rule_metric_is_emitted_by_the_exporter` parses the rule file and asserts every `onestep_control_plane_*` series it references is one `/metrics` can emit; a companion test asserts every `runbook:` anchor resolves to a real heading. Both exist because three rules once referenced series no code emitted and nothing failed — add the emitter and the rule together, or CI will tell you.
+- New metric families go in `ops/observability.py` and must keep labels bounded by construction: declare the allowed values, collapse anything unrecognised to `other`. Prefer emitting zero-valued series for declared label values — a ratio alert whose denominator series is absent returns "no data", not 0.
+- Counter state is process-global (correct for Prometheus), so tests assert before/after deltas, not absolute values.
+- `onestep_control_plane_ui_ws_disconnects_total` counts **SSE** teardowns (`GET /api/v1/ui/stream`), not websockets. The name is historical; the rule and dashboard reference it.
+- `refresh_pool_occupancy` is called from the scrape path (`_compose_prometheus_metrics`); the occupancy gauges are scrape-time samples, not background ones.
+- Backend tests must run from `apps/control-plane` (not `backend/`), or `conftest.py` fails to locate `backend/alembic`. `aiosqlite` and `greenlet` are dev deps the DB-backed fixtures need.
