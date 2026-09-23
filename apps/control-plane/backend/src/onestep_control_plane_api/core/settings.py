@@ -44,6 +44,22 @@ class Settings(BaseSettings):
     # suppressed and summarized. Headroom before damping: early flips may be
     # benign, so stay conservative before going quiet.
     instance_connectivity_flap_max_notifications: int = Field(default=3, ge=1)
+    # --- task-failure burst damping ------------------------------------------
+    # Connectivity flips were damped by #196, but task lifecycle events were not:
+    # one root cause (a database outage, a bad deploy) fails every task on every
+    # instance of a service at once, producing one webhook per failure. This
+    # bounds that burst per (channel, service).
+    #
+    # Burst window: failures for one service closer together than this belong to
+    # one burst. The first `task_failure_burst_max_notifications` are sent; later
+    # ones are counted, not sent; one summary reports the withheld count once the
+    # burst goes quiet. Silence therefore never reads as health -- the summary
+    # states how many were suppressed.
+    task_failure_burst_window_s: int = Field(default=60, ge=1)
+    # Failures of one burst that are notified before the rest are suppressed.
+    # Headroom before damping: the first few failures may be independent, so stay
+    # conservative before going quiet.
+    task_failure_burst_max_notifications: int = Field(default=5, ge=1)
     database_url: str = DEFAULT_DATABASE_URL
     ingest_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)
     worker_agent_registration_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list)

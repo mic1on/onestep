@@ -1299,6 +1299,32 @@ class NotificationChannelListResponse(APIModel):
     items: list[NotificationChannelSummary]
 
 
+class NotificationDeliverySummary(APIModel):
+    """One delivery attempt, as shown in the channel's delivery history.
+
+    This is the feedback loop the notification system previously lacked: an operator
+    could configure a channel and never learn whether anything was actually
+    delivered. ``response_status_code`` / ``error_message`` are the real outcome of
+    the HTTP attempt.
+    """
+
+    id: UUID
+    channel_id: UUID | None = None
+    event_type: str
+    service_name: str | None = None
+    service_environment: str | None = None
+    task_name: str | None = None
+    status: str
+    response_status_code: int | None = None
+    error_message: str | None = None
+    created_at: datetime
+    sent_at: datetime | None = None
+
+
+class NotificationDeliveryListResponse(APIModel):
+    items: list[NotificationDeliverySummary]
+
+
 class NotificationServiceOption(APIModel):
     name: str
     environment: Environment
@@ -1329,6 +1355,11 @@ class NotificationTestResponse(APIModel):
     channel_id: UUID
     provider: NotificationProvider
     preview_text: str
+    #: Whether the webhook actually accepted the test. ``status`` only says the
+    #: request was processed; this is the delivery outcome.
+    delivered: bool = False
+    response_status_code: int | None = None
+    error_message: str | None = None
 
 
 class InstanceConnectivityCounts(APIModel):

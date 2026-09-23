@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -1150,3 +1151,170 @@ def test_outbox_drain_counts_a_successful_delivery_as_succeeded(
     after = _delivery_counts()
     assert after["succeeded"] == before["succeeded"] + 1
     assert after["failed"] == before["failed"]
+
+
+# --------------------------------------------------------------------------------------
+# Task-failure burst damping
+# --------------------------------------------------------------------------------------
+#
+# Connectivity flips were damped by #196, but task lifecycle events had no damping:
+# one root cause (a database outage, a bad deploy) fails every task on every instance
+# of a service at once, so a large service produced one webhook per failure. These
+# tests pin the burst contract.
+
+
+def _seed_many_failed_task_events(
+    db: Session,
+    service: Service,
+    instance: Instance,
+    *,
+    count: int,
+    base_minute: int = 5,
+) -> list[TaskEvent]:
+    events: list[TaskEvent] = []
+    for index in range(count):
+        event = TaskEvent(
+            event_id=f"evt-burst-{uuid4().hex[:8]}",
+            service_id=service.id,
+            instance_id=instance.instance_id,
+            task_name=f"task_{index}",
+            kind="failed",
+            occurred_at=datetime(2026, 4, 30, 2, base_minute, index % 60, tzinfo=UTC),
+            attempts=1,
+            duration_ms=100,
+            failure_kind="timeout",
+            exception_type="TimeoutError",
+            message="upstream timeout",
+            meta_json={},
+            received_at=datetime(2026, 4, 30, 2, base_minute, index % 60, tzinfo=UTC),
+        )
+        db.add(event)
+        events.append(event)
+    db.commit()
+    for event in events:
+        db.refresh(event)
+    return events
+
+
+def test_task_failure_burst_is_damped_after_the_configured_maximum(
+    db_session, async_db, monkeypatch
+) -> None:
+    """A burst larger than the maximum produces exactly the maximum deliveries.
+
+    Without damping every failure produced its own webhook, so one root cause on a
+    large service produced a storm proportional to its task count.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 3)
+    monkeypatch.setattr(settings, "task_failure_burst_window_s", 3600)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    events = _seed_many_failed_task_events(db_session, service, instance, count=10)
+
+    dispatch_runtime_task_event_notifications(db_session, task_events=events)
+
+    deliveries = db_session.query(NotificationDelivery).all()
+    assert len(deliveries) == 3, (
+        f"expected the burst to be damped to 3 deliveries, got {len(deliveries)}"
+    )
+
+
+def test_task_failure_burst_summary_reports_the_suppressed_count(
+    db_session, async_db, monkeypatch
+) -> None:
+    """When a damped burst goes quiet, one summary states how many were withheld.
+
+    Silence must never read as health: the summary is what makes the withheld
+    failures visible instead of simply lost.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 2)
+    monkeypatch.setattr(settings, "task_failure_burst_window_s", 60)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+
+    # First burst: 5 failures, 2 delivered, 3 suppressed.
+    first = _seed_many_failed_task_events(db_session, service, instance, count=5, base_minute=5)
+    dispatch_runtime_task_event_notifications(db_session, task_events=first)
+    assert db_session.query(NotificationDelivery).count() == 2
+
+    # A later failure, well outside the window, starts a new burst and first
+    # summarizes the previous one.
+    later = _seed_many_failed_task_events(db_session, service, instance, count=1, base_minute=45)
+    dispatch_runtime_task_event_notifications(db_session, task_events=later)
+
+    summaries = [
+        delivery
+        for delivery in db_session.query(NotificationDelivery).all()
+        if delivery.dedupe_key.endswith(":task_failure_burst")
+    ]
+    assert len(summaries) == 1, "the quiet burst must produce exactly one summary"
+    payload = summaries[0].request_payload_json or {}
+    rendered = json.dumps(payload, ensure_ascii=False)
+    assert "3" in rendered, f"the summary must state the suppressed count: {rendered}"
+
+
+def test_task_failure_burst_state_survives_a_new_session(db_session, async_db, monkeypatch) -> None:
+    """Damping state is persisted, so a restart mid-incident does not reset it.
+
+    This is the reason the state is a table rather than a process-local counter: a
+    restart during an outage would otherwise clear the counter and the storm would
+    resume.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 2)
+    monkeypatch.setattr(settings, "task_failure_burst_window_s", 3600)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+
+    events = _seed_many_failed_task_events(db_session, service, instance, count=6)
+    dispatch_runtime_task_event_notifications(db_session, task_events=events)
+    assert db_session.query(NotificationDelivery).count() == 2
+
+    # A fresh dispatch call (as after a restart) must still see the open burst.
+    more = _seed_many_failed_task_events(db_session, service, instance, count=4, base_minute=20)
+    dispatch_runtime_task_event_notifications(db_session, task_events=more)
+
+    assert db_session.query(NotificationDelivery).count() == 2, (
+        "the persisted burst state must keep damping across a new dispatch"
+    )
+
+
+def test_non_failure_task_events_are_never_damped(db_session, async_db, monkeypatch) -> None:
+    """Burst damping applies only to task_failed, never to started/succeeded.
+
+    started and succeeded are bounded by the scheduler; damping them would hide
+    genuine throughput.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 1)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_succeeded"])
+
+    events: list[TaskEvent] = []
+    for index in range(5):
+        event = TaskEvent(
+            event_id=f"evt-ok-{uuid4().hex[:8]}",
+            service_id=service.id,
+            instance_id=instance.instance_id,
+            task_name="sync_users",
+            kind="succeeded",
+            occurred_at=datetime(2026, 4, 30, 2, 5, index, tzinfo=UTC),
+            attempts=1,
+            duration_ms=10,
+            meta_json={},
+            received_at=datetime(2026, 4, 30, 2, 5, index, tzinfo=UTC),
+        )
+        db_session.add(event)
+        events.append(event)
+    db_session.commit()
+    for event in events:
+        db_session.refresh(event)
+
+    dispatch_runtime_task_event_notifications(db_session, task_events=events)
+
+    assert db_session.query(NotificationDelivery).count() == 5
