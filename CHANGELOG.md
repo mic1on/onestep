@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+面向 AI Agent 与自动化脚本的机器接口：JSON Schema、一次报告全部校验错误、版本化的 `--json` 契约。
+
+- **新增 `onestep schema`**，输出 `onestep/v1alpha1` YAML 的 JSON Schema（`--out` 可写文件）。Schema 从运行时的严格校验契约（`_STRICT_*` 字段集）与已安装连接器目录**派生**，不是手写副本：连接器注册新资源类型或字段后自动包含。发布副本位于 `docs/public/schema/v1alpha1.json`，服务地址即其 `$id`。
+
+- **`$schema` 成为合法顶层键**（仅作文档用途，不影响运行时；严格校验要求它是非空字符串）。此前引用 Schema 会让 `check --strict` 直接失败，使 Schema 无法被采用。
+
+- **`check --strict --json` 一次报告全部校验错误。** 新增 `collect_app_config_issues()` 与 `AppConfigValidationError`，每个问题带 `path`/`message`/`kind`（`unknown_field`、`missing_field`、`invalid_type`、`invalid_value`、`unknown_resource`）。此前严格校验是 fail-fast，一个 YAML 有 N 处错误就要跑 N 轮；现在 Agent 或 CI 一次调用即可拿到完整清单。人类路径保持 fail-fast 且报错文本逐字不变。
+
+- **`--json` 输出补齐 `schema`/`version` 契约。** `check --json` 现在带 `schema: onestep/check-summary`、`version: 1`；失败时在 stdout 输出 `onestep/cli-error` 错误信封（同时保留 stderr 的人类可读行），`build --json`/`catalog --json` 同样适用。此前失败时 stdout 为空，调用方只能正则匹配 stderr 上的散文。
+
+- 明确并文档化退出码语义：`0` 成功、`1` 运行时失败（`run` 抛异常、`check --connect` 探测失败）、`2` 输入或配置无效（严格校验失败、目标加载失败、参数错误）。见 `docs/guide/ai-interfaces.md`。
+
+- 契约测试：`tests/contract/test_app_schema.py` 断言 Schema 与严格校验一致（资源属性取自 `handler.allowed_fields` 而非资源目录 `fields`——目录对 `mysql`/`postgres`/`rabbitmq`/`redis` 展示 `host`/`username`/`password`，但严格校验拒绝它们）、发布副本不漂移、以及在最小安装（未装连接器插件）下跳过而非误报。`tests/contract/test_config_validation_issues.py` 断言收集模式的**首个**问题与 fail-fast 报错逐字一致，防止两条路径漂移。
+
 ## onestep-sql 0.7.1
 
 批内唯一校验改为按块调用驱动，减少逐行等待，并遵守真实包大小限制（#228）。

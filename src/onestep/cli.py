@@ -26,6 +26,14 @@ from .render import render_mermaid
 
 _CLI_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
+# Machine-readable contracts for `check --json`. Versioned like the diagnostics
+# schemas so a consumer can detect a shape change instead of silently misreading
+# a field. Bump SUMMARY_VERSION when a documented key changes meaning or leaves.
+SUMMARY_SCHEMA = "onestep/check-summary"
+SUMMARY_VERSION = 1
+ERROR_SCHEMA = "onestep/cli-error"
+ERROR_VERSION = 1
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run or inspect a OneStepApp target or YAML config")
@@ -227,6 +235,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Filter resources by catalog role",
     )
 
+    schema_parser = subparsers.add_parser(
+        "schema",
+        help="Print the JSON Schema for onestep/v1alpha1 YAML app definitions",
+    )
+    schema_parser.add_argument(
+        "--out",
+        default=None,
+        help="Write the schema to this path instead of stdout",
+    )
+
     task_parser = subparsers.add_parser(
         "task",
         help="Run local task diagnostics",
@@ -289,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         except Exception as exc:
+            if getattr(args, "as_json", False):
+                _print_error_envelope(args.target, exc, command="build")
             print(f"onestep: failed to build {args.target}: {exc}", file=sys.stderr)
             return 2
         _print_build_summary(result, as_json=getattr(args, "as_json", False))
@@ -298,9 +318,28 @@ def main(argv: list[str] | None = None) -> int:
         try:
             entries = load_resource_catalog(role=getattr(args, "role", None))
         except Exception as exc:
+            if getattr(args, "as_json", False):
+                _print_error_envelope("catalog", exc, command="catalog")
             print(f"onestep: failed to load resource catalog: {exc}", file=sys.stderr)
             return 2
         _print_catalog_summary(entries, as_json=getattr(args, "as_json", False))
+        return 0
+
+    if args.command == "schema":
+        from .schema import schema_json
+
+        document = schema_json()
+        out_path = getattr(args, "out", None)
+        if out_path:
+            try:
+                with open(out_path, "w", encoding="utf-8") as handle:
+                    handle.write(document)
+            except OSError as exc:
+                print(f"onestep: failed to write schema to {out_path}: {exc}", file=sys.stderr)
+                return 2
+            print(f"Wrote {out_path}")
+            return 0
+        print(document, end="")
         return 0
 
     _ensure_local_import_paths(args.target)
@@ -311,6 +350,9 @@ def main(argv: list[str] | None = None) -> int:
                 strict=True,
                 env_file=getattr(args, "env_file", None),
                 strict_env=getattr(args, "strict_env", None),
+                # `check --json` is consumed by tooling, so report every strict
+                # problem at once. The default (human) path stays fail-fast.
+                collect_all_issues=getattr(args, "as_json", False),
             )
         elif is_yaml_target(args.target):
             app = load_yaml_app(
@@ -321,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             app = OneStepApp.load(args.target)
     except Exception as exc:
+        if getattr(args, "as_json", False):
+            _print_error_envelope(args.target, exc, command=args.command)
         print(f"onestep: failed to load {args.target}: {exc}", file=sys.stderr)
         return 2
 
@@ -501,6 +545,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str] | None:
         "init",
         "build",
         "catalog",
+        "schema",
         "render",
         "task",
     }:
@@ -520,8 +565,39 @@ def _print_init_summary(result) -> None:
         print(f"Install dependencies: {result.pip_hint}")
 
 
+def _print_error_envelope(target: str, exc: BaseException, *, command: str) -> None:
+    """Emit a machine-readable error document on stdout.
+
+    ``check --json`` previously printed nothing at all on failure, leaving a
+    caller to scrape a human sentence off stderr. This makes the failure path
+    parseable and, when strict validation collected several problems, reports
+    every one of them with its config path.
+    """
+    from .config import AppConfigValidationError, ValidationIssue
+
+    issues: list[ValidationIssue] = list(getattr(exc, "issues", ()) or ())
+    document: dict[str, object] = {
+        "schema": ERROR_SCHEMA,
+        "version": ERROR_VERSION,
+        "command": command,
+        "target": target,
+        "ok": False,
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        },
+    }
+    if issues:
+        document["error"]["issues"] = [issue.to_dict() for issue in issues]  # type: ignore[index]
+    elif isinstance(exc, AppConfigValidationError):  # pragma: no cover - defensive
+        document["error"]["issues"] = []  # type: ignore[index]
+    print(json.dumps(document, indent=2))
+
+
 def _print_summary(target: str, app: OneStepApp, *, as_json: bool) -> None:
     summary = {
+        "schema": SUMMARY_SCHEMA,
+        "version": SUMMARY_VERSION,
         "target": target,
         **app.describe(),
     }

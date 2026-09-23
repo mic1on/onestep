@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from .app import OneStepApp
@@ -61,6 +62,10 @@ _STRICT_KIND = "App"
 _LEGACY_APP_FIELDS = frozenset({"name", "shutdown_timeout_s", "config", "state"})
 _STRICT_TOP_LEVEL_FIELDS = frozenset(
     {
+        # `$schema` is the JSON Schema self-reference used by editors and
+        # language servers. It is documentation-only and never affects runtime
+        # behaviour, but rejecting it made the schema impossible to adopt.
+        "$schema",
         "apiVersion",
         "kind",
         "app",
@@ -321,6 +326,7 @@ def load_yaml_app(
     env_file: str | None = None,
     strict_env: bool | None = None,
     env: Mapping[str, str] | None = None,
+    collect_all_issues: bool = False,
 ) -> OneStepApp:
     logger = logging.getLogger("onestep")
     yaml = _import_yaml()
@@ -388,7 +394,12 @@ def load_yaml_app(
 
     # Expand environment variables in the loaded config
     expanded = _expand_env_vars(loaded, env=env)
-    return load_app_config(expanded, source_path=resolved_path, strict=strict)
+    return load_app_config(
+        expanded,
+        source_path=resolved_path,
+        strict=strict,
+        collect_all_issues=collect_all_issues,
+    )
 
 
 def load_app_config(
@@ -396,10 +407,16 @@ def load_app_config(
     *,
     source_path: str | None = None,
     strict: bool = False,
+    collect_all_issues: bool = False,
 ) -> OneStepApp:
     resource_registry = _ensure_resource_registry_loaded()
     if strict:
-        validate_app_config(config, registry=resource_registry)
+        if collect_all_issues:
+            issues = collect_app_config_issues(config, registry=resource_registry)
+            if issues:
+                raise AppConfigValidationError(issues)
+        else:
+            validate_app_config(config, registry=resource_registry)
     app_section = config.get("app")
     if app_section is None:
         app_name = _require_string(config, "name")
@@ -812,6 +829,7 @@ def _resolve_resource(resources: Mapping[str, Any], name: str) -> Any:
 def validate_app_config(config: Mapping[str, Any], *, registry: ResourceRegistry | None = None) -> None:
     resource_registry = registry or _ensure_resource_registry_loaded()
     _validate_unknown_fields(config, _STRICT_TOP_LEVEL_FIELDS, field="config")
+    _validate_schema_directive(config.get("$schema"))
 
     api_version = config.get("apiVersion")
     kind = config.get("kind")
@@ -849,6 +867,169 @@ def validate_app_config(config: Mapping[str, Any], *, registry: ResourceRegistry
     _validate_tasks(config.get("tasks"))
 
 
+@dataclass(frozen=True)
+class ValidationIssue:
+    """One strict-mode problem, located by its config path.
+
+    ``path`` uses the same dotted/indexed notation as the fail-fast messages
+    (``tasks[0].retry``, ``resources.queue.dsn``) so an agent can go straight to
+    the offending line instead of re-running the CLI per mistake.
+    """
+
+    path: str
+    message: str
+    kind: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"path": self.path, "message": self.message, "kind": self.kind}
+
+
+class AppConfigValidationError(ValueError):
+    """Raised when one or more strict-mode problems were collected."""
+
+    def __init__(self, issues: Sequence[ValidationIssue]) -> None:
+        self.issues = tuple(issues)
+        detail = "; ".join(f"{issue.path}: {issue.message}" for issue in self.issues)
+        super().__init__(f"{len(self.issues)} validation problem(s): {detail}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"issues": [issue.to_dict() for issue in self.issues]}
+
+
+def _classify_issue(exc: BaseException) -> str:
+    if isinstance(exc, KeyError):
+        return "unknown_resource"
+    if isinstance(exc, TypeError):
+        return "invalid_type"
+    message = str(exc)
+    if message.startswith("unsupported fields for"):
+        return "unknown_field"
+    if message.endswith("is required") or "is required in strict mode" in message:
+        return "missing_field"
+    return "invalid_value"
+
+
+def collect_app_config_issues(
+    config: Mapping[str, Any],
+    *,
+    registry: ResourceRegistry | None = None,
+) -> tuple[ValidationIssue, ...]:
+    """Report every strict-mode problem instead of only the first.
+
+    Strict validation is fail-fast: one mistake per CLI run. That is fine for a
+    human fixing one line, but it turns an agent's repair loop into N sequential
+    runs. This walk visits the same units in the same order as
+    :func:`validate_app_config` and records each failure independently, so the
+    first reported issue is identical to the fail-fast exception.
+
+    Units are collected at section/entry granularity (one per resource, one per
+    task): problems *inside* a single entry still surface one at a time, because
+    the underlying validators remain fail-fast.
+    """
+    resource_registry = registry or _ensure_resource_registry_loaded()
+    issues: list[ValidationIssue] = []
+
+    def guard(path: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - collected for the caller
+            issues.append(ValidationIssue(path=path, message=str(exc), kind=_classify_issue(exc)))
+            return False
+        return True
+
+    if not guard("config", _validate_unknown_fields, config, _STRICT_TOP_LEVEL_FIELDS, field="config"):
+        # Later units may still be inspectable; keep going but do not pretend
+        # the config is sound.
+        pass
+    guard("$schema", _validate_schema_directive, config.get("$schema"))
+
+    api_version = config.get("apiVersion")
+    kind = config.get("kind")
+    if api_version is not None or kind is not None:
+        if api_version is None or kind is None:
+            guard(
+                "apiVersion",
+                _raise_value_error,
+                "'apiVersion' and 'kind' must be provided together in strict mode",
+            )
+        else:
+            if api_version != _STRICT_API_VERSION:
+                guard(
+                    "apiVersion",
+                    _raise_value_error,
+                    f"unsupported apiVersion {api_version!r}; expected {_STRICT_API_VERSION!r}",
+                )
+            if kind != _STRICT_KIND:
+                guard("kind", _raise_value_error, f"unsupported kind {kind!r}; expected {_STRICT_KIND!r}")
+
+    app_section = config.get("app")
+    if app_section is not None:
+        if isinstance(app_section, Mapping):
+            guard("app", _validate_unknown_fields, app_section, _STRICT_APP_FIELDS, field="app")
+            guard("app.logging", _validate_app_logging, app_section.get("logging"))
+            guard("app.env_file", _validate_app_env_file, app_section.get("env_file"))
+            guard("app.strict_env", _validate_app_strict_env, app_section.get("strict_env"))
+            raw_failure_capture = app_section.get("failure_capture")
+            if raw_failure_capture is not None:
+                if isinstance(raw_failure_capture, Mapping):
+                    guard("app.failure_capture", FailureCaptureConfig.from_mapping, raw_failure_capture)
+                else:
+                    guard(
+                        "app.failure_capture",
+                        _raise_type_error,
+                        "'app.failure_capture' must be a mapping",
+                    )
+            legacy_fields = sorted(field for field in _LEGACY_APP_FIELDS if field in config)
+            if legacy_fields:
+                guard(
+                    "app",
+                    _raise_value_error,
+                    "strict mode does not allow mixing 'app' with legacy top-level app fields: "
+                    + ", ".join(legacy_fields),
+                )
+        else:
+            guard("app", _raise_type_error, "'app' must be a mapping")
+
+    guard("reporter", _validate_reporter_config, config.get("reporter"))
+
+    for section_name in ("resources", "connectors", "sources", "sinks"):
+        section = config.get(section_name)
+        if section is None:
+            continue
+        if not isinstance(section, Mapping):
+            guard(section_name, _raise_type_error, f"'{section_name}' must be a mapping")
+            continue
+        for name, raw_spec in section.items():
+            guard(
+                f"{section_name}.{name}",
+                _validate_resource_entry,
+                section_name,
+                name,
+                raw_spec,
+                registry=resource_registry,
+            )
+
+    guard("hooks", _validate_hooks_config, config.get("hooks"), field="hooks", allowed=_STRICT_APP_HOOK_FIELDS)
+
+    raw_tasks = config.get("tasks")
+    if raw_tasks is not None:
+        if not isinstance(raw_tasks, Sequence) or isinstance(raw_tasks, (str, bytes)):
+            guard("tasks", _raise_type_error, "'tasks' must be a list")
+        else:
+            for index, raw_task in enumerate(raw_tasks):
+                guard(f"tasks[{index}]", _validate_task_entry, index, raw_task)
+
+    return tuple(issues)
+
+
+def _raise_value_error(message: str) -> None:
+    raise ValueError(message)
+
+
+def _raise_type_error(message: str) -> None:
+    raise TypeError(message)
+
+
 def _validate_resource_sections(config: Mapping[str, Any], *, registry: ResourceRegistry) -> None:
     for section_name in ("resources", "connectors", "sources", "sinks"):
         section = config.get(section_name)
@@ -857,18 +1038,28 @@ def _validate_resource_sections(config: Mapping[str, Any], *, registry: Resource
         if not isinstance(section, Mapping):
             raise TypeError(f"'{section_name}' must be a mapping")
         for name, raw_spec in section.items():
-            if not isinstance(raw_spec, Mapping):
-                raise TypeError(f"'{section_name}.{name}' must be a mapping")
-            field = f"{section_name}.{name}"
-            normalized_type = _normalize_resource_type(_require_string(raw_spec, "type"))
-            handler = registry.get_resource_handler(normalized_type)
-            if handler is None:
-                raise ValueError(f"unsupported resource type {normalized_type!r} for {field}")
-            if handler.allowed_fields is not None:
-                _validate_unknown_fields(raw_spec, handler.allowed_fields, field=field)
-            if handler.validate is not None:
-                context = ResourceValidationContext(name=str(name), type=normalized_type, field=field)
-                handler.validate(context, raw_spec)
+            _validate_resource_entry(section_name, name, raw_spec, registry=registry)
+
+
+def _validate_resource_entry(
+    section_name: str,
+    name: Any,
+    raw_spec: Any,
+    *,
+    registry: ResourceRegistry,
+) -> None:
+    if not isinstance(raw_spec, Mapping):
+        raise TypeError(f"'{section_name}.{name}' must be a mapping")
+    field = f"{section_name}.{name}"
+    normalized_type = _normalize_resource_type(_require_string(raw_spec, "type"))
+    handler = registry.get_resource_handler(normalized_type)
+    if handler is None:
+        raise ValueError(f"unsupported resource type {normalized_type!r} for {field}")
+    if handler.allowed_fields is not None:
+        _validate_unknown_fields(raw_spec, handler.allowed_fields, field=field)
+    if handler.validate is not None:
+        context = ResourceValidationContext(name=str(name), type=normalized_type, field=field)
+        handler.validate(context, raw_spec)
 
 
 def _validate_tasks(raw_tasks: Any) -> None:
@@ -877,21 +1068,25 @@ def _validate_tasks(raw_tasks: Any) -> None:
     if not isinstance(raw_tasks, Sequence) or isinstance(raw_tasks, (str, bytes)):
         raise TypeError("'tasks' must be a list")
     for index, raw_task in enumerate(raw_tasks):
-        if not isinstance(raw_task, Mapping):
-            raise TypeError(f"'tasks[{index}]' must be a mapping")
-        field = f"tasks[{index}]"
-        _validate_unknown_fields(raw_task, _STRICT_TASK_FIELDS, field=field)
-        _validate_emit(raw_task.get("emit"), field=f"{field}.emit")
-        if "handler" in raw_task:
-            _validate_ref_entry(raw_task.get("handler"), field=f"{field}.handler")
-        elif not _task_emit_configured(raw_task.get("emit")):
-            raise ValueError(f"{field} must define either 'handler' or 'emit'")
-        _validate_hooks_config(
-            raw_task.get("hooks"),
-            field=f"{field}.hooks",
-            allowed=_STRICT_TASK_HOOK_FIELDS,
-        )
-        _validate_retry(raw_task.get("retry"), field=f"{field}.retry")
+        _validate_task_entry(index, raw_task)
+
+
+def _validate_task_entry(index: int, raw_task: Any) -> None:
+    if not isinstance(raw_task, Mapping):
+        raise TypeError(f"'tasks[{index}]' must be a mapping")
+    field = f"tasks[{index}]"
+    _validate_unknown_fields(raw_task, _STRICT_TASK_FIELDS, field=field)
+    _validate_emit(raw_task.get("emit"), field=f"{field}.emit")
+    if "handler" in raw_task:
+        _validate_ref_entry(raw_task.get("handler"), field=f"{field}.handler")
+    elif not _task_emit_configured(raw_task.get("emit")):
+        raise ValueError(f"{field} must define either 'handler' or 'emit'")
+    _validate_hooks_config(
+        raw_task.get("hooks"),
+        field=f"{field}.hooks",
+        allowed=_STRICT_TASK_HOOK_FIELDS,
+    )
+    _validate_retry(raw_task.get("retry"), field=f"{field}.retry")
 
 
 def _validate_reporter_config(raw_reporter: Any) -> None:
@@ -1096,6 +1291,20 @@ def _validate_retry(raw_retry: Any, *, field: str) -> None:
         raise TypeError(f"'{field}' must be a string or mapping")
     if normalized not in _STRICT_RETRY_FIELDS:
         raise ValueError(f"unsupported retry type {raw_retry!r}")
+
+
+def _validate_schema_directive(raw_schema: Any) -> None:
+    """Validate the documentation-only ``$schema`` self-reference.
+
+    ``$schema`` is never interpreted at runtime: it exists so editors and
+    language servers can locate the onestep/v1alpha1 JSON Schema. Strict mode
+    only checks that it is a non-empty string, so a stale or unreachable URL
+    can never block a worker from loading.
+    """
+    if raw_schema is None:
+        return
+    if not isinstance(raw_schema, str) or not raw_schema.strip():
+        raise TypeError("'$schema' must be a non-empty string")
 
 
 def _task_emit_configured(raw_emit: Any) -> bool:

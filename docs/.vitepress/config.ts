@@ -75,6 +75,7 @@ export default defineConfig({
           { text: '生产部署', link: '/guide/deploy' },
           { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },
           { text: '迁移到 onestep-sql', link: '/guide/migrate-to-onestep-sql' },
+          { text: 'AI 与自动化接口', link: '/guide/ai-interfaces' },
         ],
       },
       {
