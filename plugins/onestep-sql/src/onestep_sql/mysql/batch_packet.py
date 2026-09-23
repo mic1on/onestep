@@ -24,10 +24,17 @@ async def packet_guard(sink, conn):
     def check_packet(_conn, cursor, statement, parameters, _context, executemany):
         # This event runs AFTER SQLAlchemy's type processors (including JSON),
         # and mogrify uses this connection's escaping/NO_BACKSLASH_ESCAPES mode.
+        if executemany:
+            # asyncmy merges INSERT parameters after this event. Bound its
+            # encoded SQL, not just the individual rows checked below. Reserve
+            # one byte for COM_QUERY and stay strictly below MySQL's limit.
+            cursor._cursor.max_stmt_length = min(
+                cursor._cursor.max_stmt_length, limit - 2
+            )
         for values in parameters if executemany else [parameters]:
             query = cursor._cursor.mogrify(statement, values)
             size = len(query.encode(encoding, "surrogateescape")) + 1  # COM_QUERY
-            if size > limit:
+            if size >= limit:
                 raise _PacketTooLarge(
                     f"encoded query is {size} bytes; max_allowed_packet is {limit}"
                 )
@@ -37,7 +44,7 @@ async def packet_guard(sink, conn):
         yield
     except _PacketTooLarge as exc:
         raise sink._batch_payload_error(
-            f"MySQL batch row exceeds max_allowed_packet ({exc}); reduce the row payload or increase the server limit"
+            f"MySQL batch row does not fit max_allowed_packet ({exc}); reduce the row payload or increase the server limit"
         ) from exc
     finally:
         sa.event.remove(conn.sync_connection, "before_cursor_execute", check_packet)

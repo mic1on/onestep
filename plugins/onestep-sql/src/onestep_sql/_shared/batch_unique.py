@@ -163,19 +163,11 @@ async def validate_unique_rows(sink, conn, rows, table):
                 created = True
             insert = shadow.insert()
             for chunk in sink._batch_chunks(rows):
-                # One executemany per chunk, not one execution per row: the
-                # shadow table has no defaults, sequences, triggers or target
-                # data, so both spellings insert the same values and let the
-                # database decide conflicts, but the row-at-a-time form costs
-                # one network round trip per row (a 2216-row batch spent 136s
-                # on a 61ms link against 0.5s here; issue #228).
-                #
-                # Pass a list of parameter dicts rather than one statement with
-                # inline ``VALUES``: MySQL's packet guard measures an
-                # executemany one row at a time, but an inline multi-row
-                # statement as a whole. The guard raises a PERMANENT error
-                # instead of splitting, so the inline spelling would reject
-                # batches whose real write path succeeds by splitting.
+                # One driver call per chunk avoids row-at-a-time awaits. The
+                # driver may split it further; MySQL's packet guard bounds
+                # asyncmy's merged SQL by the real connection packet limit.
+                # All chunks share this indexed table, so conflicts across
+                # either logical chunks or driver sub-batches still fail.
                 await conn.execute(
                     insert, [{col: row[col] for col in used} for row in chunk]
                 )
@@ -186,7 +178,9 @@ async def validate_unique_rows(sink, conn, rows, table):
             "batch rows collide under the database's unique-index rules; deduplicate upstream"
         ) from exc
     finally:
-        if created and not transactional_ddl:
+        # A lost MySQL session already drops its temporary tables. Trying to
+        # reconnect inside the failed transaction masks the connection error.
+        if created and not transactional_ddl and not conn.invalidated:
             await execute_ddl(drop)
 
 
