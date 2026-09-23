@@ -57,6 +57,9 @@ from onestep_control_plane_api.db.models import (
     TaskDefinition,
     TaskEvent,
 )
+from onestep_control_plane_api.ops.observability import (
+    record_notification_delivery_outcome,
+)
 
 logger = logging.getLogger("onestep_control_plane_api.api.notification_service")
 
@@ -690,7 +693,16 @@ def _apply_delivery_outcome(
     *,
     now: datetime,
 ) -> None:
-    """Map ``_post_webhook`` mutations on ``delivery`` onto outbox retry state."""
+    """Map ``_post_webhook`` mutations on ``delivery`` onto outbox retry state.
+
+    Also counts the attempt outcome, because this is the one place every real
+    HTTP attempt funnels through. The retry mapping below deliberately re-queues a
+    transient failure; the counter still records that attempt as ``failed``,
+    since the alert asks whether deliveries are failing rather than whether a
+    channel is ultimately reachable. Counting here -- and not in
+    ``claim_next_pending_outbox_row``, which can mark a delivery failed without
+    making a request -- keeps one attempt equal to one increment.
+    """
     outbox.last_response_status_code = delivery.response_status_code
     outbox.last_response_body = delivery.response_body
     outbox.last_error = delivery.error_message
@@ -698,7 +710,10 @@ def _apply_delivery_outcome(
     if delivery.status == "succeeded":
         outbox.status = "delivered"
         outbox.next_attempt_at = now
+        record_notification_delivery_outcome("succeeded")
         return
+
+    record_notification_delivery_outcome("failed")
 
     if outbox.attempts >= outbox.max_attempts:
         outbox.status = "permanently_failed"

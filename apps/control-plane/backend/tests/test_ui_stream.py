@@ -70,3 +70,74 @@ def test_ui_stream_requires_console_auth_when_configured(client) -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "authentication required"
+
+
+def test_ui_stream_disconnect_is_counted_when_the_client_goes_away(monkeypatch) -> None:
+    """A completed stream teardown increments the disconnect counter.
+
+    This is the emitting side of ``OneStepControlPlaneUiWsDisconnectSpike``
+    (``increase(onestep_control_plane_ui_ws_disconnects_total[15m]) > 20``). The
+    counter is incremented in the stream generator's ``finally``, which is the one
+    place every exit path funnels through, so a client that simply goes away is
+    counted rather than only a stream that raised.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return True
+
+    async def _drive() -> None:
+        response = await ui_stream(_DisconnectedRequest())
+        try:
+            async for _chunk in response.body_iterator:
+                pass
+        finally:
+            await response.body_iterator.aclose()
+
+    before = dict(
+        obs.event_counter_snapshot()["onestep_control_plane_ui_ws_disconnects_total"]
+    )
+
+    asyncio.run(_drive())
+
+    after = obs.event_counter_snapshot()[
+        "onestep_control_plane_ui_ws_disconnects_total"
+    ]
+    assert after["client_closed"] == before["client_closed"] + 1
+
+
+def test_ui_stream_disconnect_is_counted_as_error_when_the_stream_raises() -> None:
+    """A stream that ends by raising is counted separately from a clean close.
+
+    The reason label is what makes the alert diagnosable: a spike of ``error``
+    teardowns points at the server or the broker, while ``client_closed`` points at
+    clients or a proxy dropping idle connections. The failure is injected through
+    the request object rather than by patching the recorder, so this exercises the
+    production ``except`` branch instead of asserting on a stub.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    class _ExplodingRequest:
+        async def is_disconnected(self) -> bool:
+            raise RuntimeError("transport gone")
+
+    before = dict(
+        obs.event_counter_snapshot()["onestep_control_plane_ui_ws_disconnects_total"]
+    )
+
+    async def _drive() -> None:
+        response = await ui_stream(_ExplodingRequest())
+        with pytest.raises(RuntimeError, match="transport gone"):
+            await anext(response.body_iterator)
+        # The generator is already closed by the raise; the ``finally`` ran with
+        # reason="error" before the exception propagated.
+        await response.body_iterator.aclose()
+
+    asyncio.run(_drive())
+
+    after = obs.event_counter_snapshot()["onestep_control_plane_ui_ws_disconnects_total"]
+    assert after["error"] == before["error"] + 1
+    assert after["client_closed"] == before["client_closed"]

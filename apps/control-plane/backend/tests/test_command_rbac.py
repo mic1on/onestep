@@ -209,3 +209,129 @@ def test_admin_destructive_command_requires_recent_auth(client, db_session) -> N
     assert db_session.scalar(
         select(AgentCommand).where(AgentCommand.instance_id == instance.instance_id)
     ) is None
+
+
+# --------------------------------------------------------------------------------------
+# Agent-command outcome counter: the emitting side of the command failure-rate alert
+# --------------------------------------------------------------------------------------
+
+
+def _command_counts() -> dict[str, int]:
+    """Current command-outcome counter series.
+
+    Process-global, like every Prometheus counter, so assertions compare deltas.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    return dict(obs.event_counter_snapshot()["onestep_control_plane_agent_commands_total"])
+
+
+def _seed_command(db_session, instance: Instance, *, status: str, **kwargs) -> AgentCommand:
+    command = AgentCommand(
+        command_id=f"cmd_{uuid4().hex}",
+        service_id=instance.service_id,
+        instance_id=instance.instance_id,
+        kind="ping",
+        args_json={},
+        timeout_s=kwargs.pop("timeout_s", 60),
+        status=status,
+        created_by="tester",
+        reason="test",
+        source_surface="instance_detail",
+        created_at=kwargs.pop("created_at", datetime(2026, 5, 15, 12, 0, tzinfo=UTC)),
+        updated_at=datetime(2026, 5, 15, 12, 0, tzinfo=UTC),
+        **kwargs,
+    )
+    db_session.add(command)
+    db_session.commit()
+    db_session.refresh(command)
+    return command
+
+
+def test_expired_command_is_counted_as_expired(db_session) -> None:
+    """An unacknowledged command that misses its deadline counts as ``expired``.
+
+    ``OneStepControlPlaneCommandFailureRateHigh`` selects on
+    ``status=~"failed|timeout|cancelled|rejected|expired"``, so expiry must land in
+    that set or a command-delivery outage would not move the alert.
+    """
+
+    from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
+
+    instance = seed_service_and_instance(db_session)
+    _seed_command(
+        db_session,
+        instance,
+        status="pending",
+        created_at=datetime(2026, 5, 15, 12, 0, tzinfo=UTC),
+        timeout_s=60,
+    )
+
+    before = _command_counts()
+    expired = expire_stale_commands(
+        db_session,
+        instance_id=instance.instance_id,
+        as_of=datetime(2026, 5, 15, 12, 30, tzinfo=UTC),
+    )
+
+    assert expired == 1
+    after = _command_counts()
+    assert after["expired"] == before["expired"] + 1
+
+
+def test_acked_command_that_never_reports_counts_as_timeout(db_session) -> None:
+    """An accepted-but-silent command is a distinct failure mode from expiry."""
+
+    from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
+
+    instance = seed_service_and_instance(db_session)
+    _seed_command(
+        db_session,
+        instance,
+        status="accepted",
+        ack_status="accepted",
+        acked_at=datetime(2026, 5, 15, 12, 0, 30, tzinfo=UTC),
+        created_at=datetime(2026, 5, 15, 12, 0, tzinfo=UTC),
+        timeout_s=60,
+    )
+
+    before = _command_counts()
+    assert (
+        expire_stale_commands(
+            db_session,
+            instance_id=instance.instance_id,
+            as_of=datetime(2026, 5, 15, 12, 30, tzinfo=UTC),
+        )
+        == 1
+    )
+
+    after = _command_counts()
+    assert after["timeout"] == before["timeout"] + 1
+    assert after["expired"] == before["expired"]
+
+
+def test_command_that_has_not_missed_its_deadline_is_not_counted(db_session) -> None:
+    """A live command must not be counted: it has no terminal outcome yet."""
+
+    from onestep_control_plane_api.api.agent_command_service import expire_stale_commands
+
+    instance = seed_service_and_instance(db_session)
+    _seed_command(
+        db_session,
+        instance,
+        status="pending",
+        created_at=datetime(2026, 5, 15, 12, 0, tzinfo=UTC),
+        timeout_s=600,
+    )
+
+    before = _command_counts()
+    assert (
+        expire_stale_commands(
+            db_session,
+            instance_id=instance.instance_id,
+            as_of=datetime(2026, 5, 15, 12, 1, tzinfo=UTC),
+        )
+        == 0
+    )
+    assert _command_counts() == before

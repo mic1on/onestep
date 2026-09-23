@@ -1477,3 +1477,176 @@ def test_lifespan_sampler_stop_survives_a_test_client_error(_sqlite_app) -> None
             raise RuntimeError("boom")
 
     assert _sampler().running is False
+
+
+# --------------------------------------------------------------------------------------
+# Event counters: the emitting side of three shipped alert rules
+# --------------------------------------------------------------------------------------
+#
+# These three series are referenced by monitoring/prometheus/rules/control-plane.yml.
+# Before this wiring existed the rules were unsatisfiable: they named series no code
+# emitted, so `OneStepControlPlaneUiWsDisconnectSpike`,
+# `OneStepControlPlaneCommandFailureRateHigh` and
+# `OneStepControlPlaneNotificationDeliveryFailures` could never fire. Each test below
+# pins one family's *contract*, not just its shape.
+
+COMMAND_COUNTER = "onestep_control_plane_agent_commands_total"
+DISCONNECT_COUNTER = "onestep_control_plane_ui_ws_disconnects_total"
+DELIVERY_COUNTER = "onestep_control_plane_notification_deliveries_total"
+
+
+def _counter_value(body: str, name: str, **labels: str) -> float:
+    """Read one counter sample out of an exposition body."""
+
+    label_text = ",".join(f'{key}="{value}"' for key, value in sorted(labels.items()))
+    match = re.search(rf"^{name}\{{{re.escape(label_text)}\}} (\S+)$", body, re.MULTILINE)
+    assert match is not None, f"no sample {name}{{{label_text}}} in:\n{body}"
+    return float(match.group(1))
+
+
+def test_all_three_alert_counters_are_emitted_at_zero_before_any_event() -> None:
+    """Every declared series exists from process start, including zeros.
+
+    ``OneStepControlPlaneCommandFailureRateHigh`` is a RATIO: without a denominator
+    series the query returns no data rather than 0, so an alert built on it cannot
+    distinguish "no commands ran" from "the metric is not wired". Emitting the
+    declared zeros is what makes the ratio well-defined.
+    """
+
+    body = build_observability_metrics()
+
+    for name in (COMMAND_COUNTER, DISCONNECT_COUNTER, DELIVERY_COUNTER):
+        assert f"# TYPE {name} counter" in body
+
+    assert _counter_value(body, COMMAND_COUNTER, status="succeeded") == 0
+    assert _counter_value(body, COMMAND_COUNTER, status="failed") == 0
+    assert _counter_value(body, DELIVERY_COUNTER, status="failed") == 0
+    assert _counter_value(body, DISCONNECT_COUNTER, reason="client_closed") == 0
+
+
+def test_agent_command_counter_counts_terminal_statuses() -> None:
+    """Each terminal status lands in its own series; the alert's regex selects them."""
+
+    obs.record_agent_command_outcome("failed")
+    obs.record_agent_command_outcome("failed")
+    obs.record_agent_command_outcome("timeout")
+    obs.record_agent_command_outcome("succeeded")
+
+    body = build_observability_metrics()
+
+    assert _counter_value(body, COMMAND_COUNTER, status="failed") == 2
+    assert _counter_value(body, COMMAND_COUNTER, status="timeout") == 1
+    assert _counter_value(body, COMMAND_COUNTER, status="succeeded") == 1
+    assert _counter_value(body, COMMAND_COUNTER, status="cancelled") == 0
+
+
+def test_agent_command_counter_rejects_non_terminal_statuses() -> None:
+    """In-flight statuses must not inflate the denominator of the failure ratio.
+
+    ``pending``/``dispatched``/``accepted`` are not terminal. Counting them would
+    divide failures by work that has not finished, understating the failure rate --
+    and the alert's regex does not select ``other``, so they cannot slip through.
+    """
+
+    for in_flight in ("pending", "dispatched", "accepted"):
+        assert obs.record_agent_command_outcome(in_flight) == "other"
+
+    body = build_observability_metrics()
+
+    for in_flight in ("pending", "dispatched", "accepted"):
+        assert f'status="{in_flight}"' not in body
+    assert _counter_value(body, COMMAND_COUNTER, status="other") == 3
+
+
+def test_notification_delivery_counter_separates_outcomes() -> None:
+    """A failed attempt is counted even though the outbox will retry it."""
+
+    obs.record_notification_delivery_outcome("failed")
+    obs.record_notification_delivery_outcome("succeeded")
+
+    body = build_observability_metrics()
+
+    assert _counter_value(body, DELIVERY_COUNTER, status="failed") == 1
+    assert _counter_value(body, DELIVERY_COUNTER, status="succeeded") == 1
+
+
+def test_ui_stream_disconnect_counter_separates_reasons() -> None:
+    """A client close and a stream error are distinguishable, not merged."""
+
+    obs.record_ui_stream_disconnect("client_closed")
+    obs.record_ui_stream_disconnect("error")
+    obs.record_ui_stream_disconnect("error")
+
+    body = build_observability_metrics()
+
+    assert _counter_value(body, DISCONNECT_COUNTER, reason="client_closed") == 1
+    assert _counter_value(body, DISCONNECT_COUNTER, reason="error") == 2
+
+
+@pytest.mark.parametrize(
+    ("recorder", "label_name"),
+    [
+        (lambda: obs.record_agent_command_outcome(IDENTITY_INSTANCE_ID), "status"),
+        (lambda: obs.record_notification_delivery_outcome(IDENTITY_SESSION_ID), "status"),
+        (lambda: obs.record_ui_stream_disconnect(IDENTITY_INSTANCE_ID), "reason"),
+    ],
+)
+def test_event_counter_labels_stay_bounded_under_identity_input(
+    recorder,
+    label_name: str,
+) -> None:
+    """An identity-shaped value must collapse to "other", never become a series.
+
+    This is the cardinality contract from the module docstring applied to the new
+    families: these call sites are fed values that originate in request and event
+    payloads, so a caller must not be able to create one series per instance.
+    """
+
+    assert recorder() == "other"
+
+    body = build_observability_metrics()
+
+    assert IDENTITY_INSTANCE_ID not in body
+    assert IDENTITY_SESSION_ID not in body
+    assert not re.search(rf'{label_name}="[0-9a-f-]{{36}}"', body)
+
+
+def test_event_counters_survive_reset_as_declared_zero_series() -> None:
+    """A reset restores the state a fresh process starts in: zeros, not emptiness."""
+
+    obs.record_agent_command_outcome("failed")
+    obs.reset_observability_state()
+
+    snapshot = obs.event_counter_snapshot()
+
+    assert set(snapshot) == {COMMAND_COUNTER, DISCONNECT_COUNTER, DELIVERY_COUNTER}
+    assert snapshot[COMMAND_COUNTER]["failed"] == 0
+    assert set(snapshot[COMMAND_COUNTER]) == set(obs.AGENT_COMMAND_OUTCOME_STATUSES)
+    assert set(snapshot[DELIVERY_COUNTER]) == set(obs.NOTIFICATION_DELIVERY_OUTCOMES)
+    assert set(snapshot[DISCONNECT_COUNTER]) == set(obs.UI_STREAM_DISCONNECT_REASONS)
+
+
+def test_event_counter_exposition_parses_as_prometheus_text_format() -> None:
+    """The new families must satisfy the same exposition contract as the rest."""
+
+    obs.record_agent_command_outcome("failed")
+    obs.record_notification_delivery_outcome("failed")
+    obs.record_ui_stream_disconnect("error")
+
+    lines = build_observability_metrics().splitlines()
+    sample_pattern = re.compile(
+        r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)"
+        r"(\{(?P<labels>[^}]*)\})?"
+        r" (?P<value>-?(?:[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?|Inf|NaN))$"
+    )
+
+    for line in lines:
+        if line.startswith("#"):
+            continue
+        assert sample_pattern.match(line) is not None, line
+
+    # Every counter family carries exactly one HELP and one TYPE line.
+    body = "\n".join(lines)
+    for name in (COMMAND_COUNTER, DISCONNECT_COUNTER, DELIVERY_COUNTER):
+        assert body.count(f"# HELP {name} ") == 1
+        assert body.count(f"# TYPE {name} ") == 1
