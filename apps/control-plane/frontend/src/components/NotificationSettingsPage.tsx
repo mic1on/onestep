@@ -86,7 +86,22 @@ const EVENTS: Array<{ value: NotificationEventType; label: string }> = [
   { value: 'instance_offline', label: 'Instance offline' },
 ];
 
-const DEFAULT_EVENTS: NotificationEventType[] = ['task_failed', 'task_missed_start', 'instance_offline'];
+// Events a NEW channel subscribes to. Existing channels keep whatever they already
+// have: `channelToForm` reads `channel.event_types`, so changing this only affects
+// the create form.
+//
+// `instance_online` is included deliberately. Subscribing only to `instance_offline`
+// tells an operator that something died but never that it came back, so they must
+// watch the console to learn whether an incident is over -- backwards for on-call,
+// where the recovery is the message that lets you stand down. The cost is one extra
+// message per instance recovery, damped by the same flap protection as the offline
+// direction.
+const DEFAULT_EVENTS: NotificationEventType[] = [
+  'task_failed',
+  'task_missed_start',
+  'instance_offline',
+  'instance_online',
+];
 
 const EMPTY_FORM: FormState = {
   id: null,

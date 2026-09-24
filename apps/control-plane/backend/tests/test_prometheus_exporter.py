@@ -14,6 +14,7 @@ from onestep_control_plane_api.api.schemas import MetricsIngestRequest
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.session import session_scope
 from sqlalchemy import event
+from sqlalchemy.pool import QueuePool
 
 
 def ingest_metrics(db_session, payload: dict[str, object]):
@@ -310,9 +311,23 @@ def test_every_alert_rule_metric_is_emitted_by_the_exporter() -> None:
     obs.record_agent_command_outcome("failed")
     obs.record_notification_delivery_outcome("failed")
     obs.record_ui_stream_disconnect("error")
+    # The outbox gauges are emitted only once the worker has sampled them, and only
+    # the worker can produce the age series (it is absent when nothing is due).
+    obs.record_notification_outbox_state(
+        pending=1, oldest_pending_seconds=1.0, permanently_failed=0
+    )
 
-    # Occupancy is sampled on the scrape path, so exercise that real path.
-    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    # Occupancy is sampled on the scrape path, so exercise that real path -- with a
+    # pool that actually HAS the occupancy accessors. An in-memory SQLite engine uses
+    # SingletonThreadPool, which does not, so it can never produce these families and
+    # would make this guard fail for the wrong reason. QueuePool is what production
+    # uses (and what the exporter needs in order to emit `db_pool_checked_out`).
+    engine = sa.create_engine(
+        "sqlite+pysqlite:///:memory:",
+        poolclass=QueuePool,
+        pool_size=1,
+        max_overflow=0,
+    )
     try:
         obs.refresh_pool_occupancy(engine, name="alert_rule_pool")
         body = build_observability_metrics()

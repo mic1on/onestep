@@ -21,6 +21,7 @@ from onestep_control_plane_api.api.notification_service import (
 from onestep_control_plane_api.api.notification_service import (
     dispatch_runtime_task_event_notifications as dispatch_runtime_task_event_notifications_async,
 )
+from onestep_control_plane_api.api.routers.prometheus import build_observability_metrics
 from onestep_control_plane_api.api.schemas import (
     EventsIngestRequest,
     ServiceDescriptor,
@@ -1403,3 +1404,155 @@ def test_transient_failure_does_not_count_as_lost(db_session, async_db, monkeypa
         "a retryable failure must not be reported as a lost notification"
     )
     assert db_session.query(NotificationOutbox).one().status == "pending"
+
+
+# --------------------------------------------------------------------------------------
+# Outbox backlog gauges: watching the watcher
+# --------------------------------------------------------------------------------------
+
+
+def _outbox_gauges() -> dict[str, float]:
+    from onestep_control_plane_api.ops import observability as obs
+
+    return dict(obs.notification_outbox_gauges())
+
+
+def test_outbox_backlog_is_not_sampled_until_the_worker_runs(db_session) -> None:
+    """An unsampled queue emits NOTHING, rather than a misleading zero.
+
+    The gauges exist to reveal a drainer that has stopped. If an unsampled process
+    reported zero it would claim "the queue was observed empty", which is the exact
+    opposite of the truth -- so the families must be absent until the worker records.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.reset_observability_state()
+    assert obs.notification_outbox_gauges() == {}
+    assert "onestep_control_plane_notification_outbox_pending" not in (
+        build_observability_metrics()
+    )
+
+
+def test_outbox_backlog_reports_pending_and_oldest_due(db_session, async_db) -> None:
+    """The sample must carry depth AND the age of the oldest due row.
+
+    Depth alone cannot tell "busy" from "stuck": a deep queue that is draining is
+    healthy, while a single row that has been due for fifteen minutes means the
+    drainer has stopped. The age is what makes that distinction expressible.
+    """
+
+    from onestep_control_plane_api.api.notification_service import notification_outbox_backlog
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    now = _utcnow()
+    row = db_session.query(NotificationOutbox).one()
+    # Make the row due 20 minutes ago: a stalled drainer's signature.
+    row.next_attempt_at = now - timedelta(minutes=20)
+    db_session.commit()
+
+    notification_outbox_backlog(db_session, now=now)
+    gauges = _outbox_gauges()
+
+    assert gauges["onestep_control_plane_notification_outbox_pending"] == 1
+    oldest = gauges["onestep_control_plane_notification_outbox_oldest_pending_seconds"]
+    assert oldest == pytest.approx(1200, abs=5)
+    assert gauges["onestep_control_plane_notification_outbox_permanently_failed"] == 0
+
+
+def test_outbox_oldest_due_is_absent_when_nothing_is_due(db_session, async_db) -> None:
+    """A queue with nothing due has an UNDEFINED age, not a zero age.
+
+    Emitting 0 would read as "a row is due right now but fresh", which would suppress
+    the very alert this metric exists to drive.
+    """
+
+    from onestep_control_plane_api.api.notification_service import notification_outbox_backlog
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    now = _utcnow()
+    row = db_session.query(NotificationOutbox).one()
+    row.next_attempt_at = now + timedelta(hours=1)
+    db_session.commit()
+
+    notification_outbox_backlog(db_session, now=now)
+    gauges = _outbox_gauges()
+
+    assert gauges["onestep_control_plane_notification_outbox_pending"] == 1
+    assert "onestep_control_plane_notification_outbox_oldest_pending_seconds" not in gauges
+
+
+def test_outbox_backlog_counts_abandoned_rows(db_session, async_db, monkeypatch) -> None:
+    """Abandoned rows are counted, so the queue shows its own permanent damage."""
+
+    from onestep_control_plane_api.api.notification_service import notification_outbox_backlog
+    from onestep_control_plane_api.ops import observability as obs
+
+    monkeypatch.setattr(settings, "notification_outbox_max_attempts", 1)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+    drain_notification_outbox(db_session, now=_utcnow())
+
+    obs.reset_observability_state()
+    notification_outbox_backlog(db_session, now=_utcnow())
+
+    assert _outbox_gauges()["onestep_control_plane_notification_outbox_permanently_failed"] == 1
+
+
+def test_outbox_worker_samples_the_backlog_before_draining(
+    db_session, async_db, monkeypatch
+) -> None:
+    """The worker samples on each tick, and samples BEFORE draining.
+
+    Sampling after the drain would describe the queue this tick left behind, so a
+    worker that keeps up perfectly would always report zero and the metric could never
+    show a buildup. This drives the real helper rather than the recorder, so removing
+    the call from the worker fails here.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+    from onestep_control_plane_api.workers.notification_outbox_worker import _drain_in_session
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    obs.reset_observability_state()
+    observed_at_drain: list[int] = []
+
+    def spy_drain(session) -> int:  # noqa: ANN001
+        # Whatever the gauge says while draining must already reflect the pre-drain
+        # queue, which holds exactly one row here.
+        observed_at_drain.append(
+            int(obs.notification_outbox_gauges()["onestep_control_plane_notification_outbox_pending"])
+        )
+        return 0
+
+    # _drain_in_session takes a session FACTORY, matching how the worker calls it.
+    _drain_in_session(lambda: db_session, spy_drain)
+
+    assert observed_at_drain == [1], (
+        "the backlog must be sampled before the drain, not after"
+    )

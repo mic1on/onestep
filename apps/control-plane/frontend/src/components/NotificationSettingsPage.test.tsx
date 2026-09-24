@@ -264,4 +264,26 @@ describe('NotificationSettingsPage custom webhooks', () => {
     expect(await screen.findByText('failed')).toBeTruthy();
     expect(await screen.findByText(/HTTP 500/)).toBeTruthy();
   });
+  it('subscribes a new channel to instance recovery, not just instance loss', async () => {
+    // A channel that only hears about `instance_offline` tells an operator something
+    // died but never that it came back, so they must watch the console to learn an
+    // incident is over. On-call needs the recovery to know they can stand down.
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/deliveries')) return jsonResponse({ items: [] });
+      if (url.includes('/services')) return jsonResponse({ items: [] });
+      if (url.includes('/channels')) return jsonResponse({ items: [] });
+      return jsonResponse({});
+    });
+
+    renderPage();
+
+    await screen.findByLabelText(/name/i);
+
+    // The create form must have both connectivity directions checked by default.
+    const offline = screen.getByRole('checkbox', { name: /instance offline/i });
+    const online = screen.getByRole('checkbox', { name: /instance online/i });
+    expect((offline as HTMLInputElement).checked).toBe(true);
+    expect((online as HTMLInputElement).checked).toBe(true);
+  });
 });

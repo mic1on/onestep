@@ -388,3 +388,44 @@ Operator actions:
 1. Grep the control plane logs for "could not sample pool occupancy".
 2. Confirm the engine is instrumented (`db/session.py` factory).
 3. Verify the pool exposes the SQLAlchemy occupancy accessors; a `StaticPool` does not.
+
+## OneStepControlPlaneNotificationQueueStuck
+
+Immediate meaning:
+
+- outbox rows are **due** (`next_attempt_at` in the past) but not being delivered
+
+The outbox worker samples this on each tick. The metric is the **age of the oldest
+due row**, not the queue depth, because depth alone cannot tell "busy" from "stuck":
+a deep queue that is draining is healthy, while a single row that has been due for
+fifteen minutes means the drainer has stopped.
+
+Operator actions:
+
+1. Check outbox worker leadership — only the leader replica drains, so a replica that
+   cannot take the advisory lock will never drain.
+2. Look for drain failures in the logs (`notification outbox worker drain failed`).
+3. Check the destination webhook: a hung downstream delays rows even when nothing is
+   permanently failed.
+4. Confirm `notification_outbox_drain_interval_s` and `notification_outbox_batch_size`
+   against the arrival rate; a batch smaller than the arrival rate produces a queue
+   that never catches up.
+
+## OneStepControlPlaneNotificationQueueUnsampled
+
+Immediate meaning:
+
+- the outbox backlog gauge has **never** been exported, so the drainer has not
+  completed a single tick since this process started
+
+The backlog gauges are sampled by the outbox worker, not by the scrape path. Their
+absence therefore means "the worker has never run", not "the queue is empty" — which
+is why no zero is emitted for an unsampled process.
+
+Operator actions:
+
+1. Confirm the outbox worker task is registered and running (`/readyz`
+   `background_tasks`).
+2. Check whether it is stuck waiting for leadership it can never acquire.
+3. Check for an exception at worker startup.
+

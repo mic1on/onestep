@@ -163,13 +163,18 @@ __all__ = [
     "emit_structured_log",
     "ensure_engine_instrumented",
     "ensure_event_loop_lag_sampler_started",
+    "OUTBOX_OLDEST_PENDING_GAUGE",
+    "OUTBOX_PENDING_GAUGE",
+    "OUTBOX_PERMANENTLY_FAILED_GAUGE",
     "event_counter_snapshot",
     "get_event_loop_lag_sampler",
     "instrument_engine",
     "log_ws_lifecycle",
     "normalize_scan_name",
+    "notification_outbox_gauges",
     "record_agent_command_outcome",
     "record_notification_delivery_outcome",
+    "record_notification_outbox_state",
     "record_pool_wait",
     "record_ui_stream_disconnect",
     "refresh_pool_occupancy",
@@ -1170,6 +1175,71 @@ _EVENT_COUNTER_HELP: dict[str, str] = {
     ),
 }
 
+#: Notification outbox gauges. Sampled by the outbox worker on each tick, which is
+#: the only place that already holds a session and knows the queue state.
+OUTBOX_PENDING_GAUGE = "onestep_control_plane_notification_outbox_pending"
+OUTBOX_OLDEST_PENDING_GAUGE = "onestep_control_plane_notification_outbox_oldest_pending_seconds"
+OUTBOX_PERMANENTLY_FAILED_GAUGE = (
+    "onestep_control_plane_notification_outbox_permanently_failed"
+)
+
+#: Last sampled outbox state. Empty until the worker's first tick, so an unsampled
+#: deployment emits NOTHING for these families rather than a misleading zero --
+#: "we have not looked" and "the queue is empty" are different facts.
+_OUTBOX_GAUGES: dict[str, float] = {}
+
+
+def record_notification_outbox_state(
+    *,
+    pending: int,
+    oldest_pending_seconds: float | None = None,
+    permanently_failed: int = 0,
+) -> None:
+    """Record the notification outbox queue state sampled by the outbox worker.
+
+    This is the "who watches the watcher" metric for Plane B. The notification
+    subsystem alerts on task and instance events, but if its own queue backs up --
+    or its drainer stops keeping up -- nothing reports that, and the operator
+    silently stops receiving alerts. These gauges make the queue observable.
+
+    ``pending`` is the number of rows still awaiting an attempt;
+    ``oldest_pending_seconds`` is the age of the oldest due row, which is what
+    distinguishes "busy" from "stuck" (a deep-but-draining queue is fine; a one-row
+    queue whose only row is an hour old is not);
+    ``permanently_failed`` is the count of abandoned rows.
+    """
+
+    with _LOCK:
+        _OUTBOX_GAUGES[OUTBOX_PENDING_GAUGE] = float(pending)
+        _OUTBOX_GAUGES[OUTBOX_PERMANENTLY_FAILED_GAUGE] = float(permanently_failed)
+        if oldest_pending_seconds is None:
+            # No due row: the age is undefined, not zero. Emitting 0 would read as
+            # "a row is due right now and fresh", the opposite of the truth.
+            _OUTBOX_GAUGES.pop(OUTBOX_OLDEST_PENDING_GAUGE, None)
+        else:
+            _OUTBOX_GAUGES[OUTBOX_OLDEST_PENDING_GAUGE] = float(oldest_pending_seconds)
+
+
+def notification_outbox_gauges() -> dict[str, float]:
+    """Return a copy of the last sampled outbox gauges (tests and diagnostics)."""
+
+    with _LOCK:
+        return dict(_OUTBOX_GAUGES)
+
+
+_OUTBOX_GAUGE_HELP: dict[str, str] = {
+    OUTBOX_PENDING_GAUGE: (
+        "Notification outbox rows still awaiting a delivery attempt."
+    ),
+    OUTBOX_OLDEST_PENDING_GAUGE: (
+        "Age in seconds of the oldest due notification outbox row. Absent when no row "
+        "is due, because the age is then undefined rather than zero."
+    ),
+    OUTBOX_PERMANENTLY_FAILED_GAUGE: (
+        "Notification outbox rows abandoned after exhausting their retry budget."
+    ),
+}
+
 
 def _increment_event_counter(family: str, label_value: str | None) -> str:
     """Increment one bounded counter series and return the label actually used.
@@ -1353,6 +1423,7 @@ def collect_prometheus_snapshot() -> ObservabilitySnapshot:
             )
             for name, state in _scan_states.items()
         }
+        outbox_gauges = dict(_OUTBOX_GAUGES)
 
     gauges = _lag_gauges(lag)
     counters: list[CounterSample] = []
@@ -1480,6 +1551,18 @@ def collect_prometheus_snapshot() -> ObservabilitySnapshot:
         for label_value, count in sorted(event_counters[family].items())
     )
 
+    # Notification outbox gauges, whenever the worker has sampled them. Emitted only
+    # once sampled: an absent family means "not looked at", which is honest, whereas
+    # a zero would claim the queue was observed empty.
+    gauges.extend(
+        GaugeSample(
+            name=name,
+            help_text=_OUTBOX_GAUGE_HELP[name],
+            value=value,
+        )
+        for name, value in sorted(outbox_gauges.items())
+    )
+
     return ObservabilitySnapshot(
         gauges=tuple(gauges),
         counters=tuple(counters),
@@ -1516,3 +1599,7 @@ def reset_observability_state() -> None:
             ),
         ):
             _EVENT_COUNTERS[family] = {value: 0 for value in declared}
+        # Cleared rather than zeroed, for the same reason a fresh process emits
+        # nothing: after a reset nothing has been sampled, so these families must be
+        # absent until the worker records again.
+        _OUTBOX_GAUGES.clear()
