@@ -109,6 +109,50 @@ groups:
             the destination webhook.
           runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationlost
 
+      # --- the notifier's own queue -------------------------------------------
+      # Plane B alerts on task and instance events, but nothing watched Plane B. If
+      # its outbox backs up or its drainer stops keeping up, the operator silently
+      # stops receiving alerts and the absence of alerts reads as health.
+      #
+      # These read gauges sampled by the outbox worker on each tick, so they only
+      # exist once a worker has run -- an absent family means "never sampled", and
+      # OneStepControlPlaneNotificationQueueUnsampled covers exactly that case.
+      - alert: OneStepControlPlaneNotificationQueueStuck
+        expr: onestep_control_plane_notification_outbox_oldest_pending_seconds > 900
+        for: 10m
+        labels:
+          # `warning`, not critical: the queue is stalled but recoverable, and the
+          # lost-notification alert already covers the case where anything was
+          # actually dropped. The age threshold matters more than the depth -- a
+          # deep queue that is draining is healthy, one stuck row is not.
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Notification outbox is not draining
+          description: >-
+            The oldest due outbox row has been waiting more than 15 minutes. Rows are
+            due (next_attempt_at is in the past) but not being delivered, so the
+            drainer is stalled, erroring, or has lost leadership. Notifications are
+            piling up rather than being lost, so nothing is unrecoverable yet.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueuestuck
+
+      - alert: OneStepControlPlaneNotificationQueueUnsampled
+        expr: up{job="onestep-control-plane"} == 1 and on() absent(onestep_control_plane_notification_outbox_pending)
+        for: 15m
+        labels:
+          # critical: the outbox worker has never reported, so the entire
+          # notification plane may be dead and nothing would say so.
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: Notification outbox has never been sampled
+          description: >-
+            No outbox backlog gauge has been exported, so the notification drainer has
+            not completed a single tick since this process started. The notification
+            plane is very likely dead while appearing configured. Check outbox worker
+            leadership and its logs.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueueunsampled
+
   - name: onestep-control-plane-latency
     rules:
       # NOTE: there is deliberately no alert on `onestep_task_*` (task throughput or

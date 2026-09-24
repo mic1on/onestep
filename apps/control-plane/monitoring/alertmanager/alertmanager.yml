@@ -60,7 +60,7 @@ inhibit_rules:
   - source_matchers:
       - alertname = "OneStepControlPlaneApiDown"
     target_matchers:
-      - alertname =~ "OneStepControlPlane(ReadyzFailing|EventLoopBlocked|EventLoopLagSamplerDead|LagWindowEmpty|DbPoolSaturated|DbPoolWaitSlow|DbPoolOccupancyMissing|ScanFailing|ScanSlow|UiWsDisconnectSpike|CommandFailureRateHigh|NotificationDeliveryFailures|NotificationLost)"
+      - alertname =~ "OneStepControlPlane(ReadyzFailing|EventLoopBlocked|EventLoopLagSamplerDead|LagWindowEmpty|DbPoolSaturated|DbPoolWaitSlow|DbPoolOccupancyMissing|ScanFailing|ScanSlow|UiWsDisconnectSpike|CommandFailureRateHigh|NotificationDeliveryFailures|NotificationLost|NotificationQueueStuck)"
     equal: ["service"]
 
   # --- a notification was permanently lost -------------------------------------

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from onestep_control_plane_api.api.notification_service import (
@@ -1226,3 +1226,82 @@ def test_instance_connectivity_scan_updates_state_for_unsubscribed_recovery(
     state = db_session.query(NotificationInstanceState).one()
     assert state.last_connectivity == "offline"
     assert state.last_transition_at == datetime(2026, 4, 30, 2, 14, 30, tzinfo=UTC)
+
+
+# --------------------------------------------------------------------------------------
+# missed-start detectability (the restart blind spot)
+# --------------------------------------------------------------------------------------
+
+
+def test_missed_start_is_undetectable_when_the_service_restarts_faster_than_grace() -> None:
+    """Pin the invariant that decides whether a missed start can be seen at all.
+
+    Detection needs an unbroken online run long enough to contain a scheduled slot
+    plus its whole grace period, because the scan only reports a slot once
+    ``scheduled_at + grace <= now`` while dropping every slot that predates the
+    current online run:
+
+        now - online_started_at >= grace_seconds + interval_seconds
+
+    Below that the check is not merely quiet, it is UNEVALUABLE -- measured directly:
+    with a 300 s interval and 300 s grace, a service online 400 s yields zero candidate
+    slots while one online an hour yields eleven. This test pins the boundary so a
+    future refactor cannot quietly move it.
+    """
+
+    from onestep_control_plane_api.api.notification_service import _missed_start_is_detectable
+
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+    def detectable(online_seconds: int, *, grace: int = 300, interval: int = 300) -> bool:
+        return _missed_start_is_detectable(
+            now=now,
+            online_started_at=now - timedelta(seconds=online_seconds),
+            grace_seconds=grace,
+            interval_seconds=interval,
+            source_kind="interval",
+        )
+
+    # Exactly at the boundary: a full interval AND a full grace must fit.
+    assert detectable(600) is True, "grace + interval must be enough"
+    # One second short: the grace period cannot elapse after a slot.
+    assert detectable(599) is False
+    # The pathological case from the analysis: restarts every 4 minutes.
+    assert detectable(240) is False
+
+    # A larger grace needs a correspondingly longer online run -- which is why raising
+    # the grace period silently widens the blind spot.
+    assert detectable(600, grace=600) is False
+    assert detectable(1200, grace=600) is True
+
+
+def test_missed_start_detectability_is_permissive_without_an_interval() -> None:
+    """No interval means no period to wait out, so never suppress on this basis.
+
+    Returning False here would skip the scan for every task whose cadence could not be
+    parsed, turning a visibility heuristic into a silent outage of the check.
+    """
+
+    from onestep_control_plane_api.api.notification_service import _missed_start_is_detectable
+
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    assert (
+        _missed_start_is_detectable(
+            now=now,
+            online_started_at=now - timedelta(seconds=1),
+            grace_seconds=300,
+            interval_seconds=None,
+            source_kind="interval",
+        )
+        is True
+    )
+    assert (
+        _missed_start_is_detectable(
+            now=now,
+            online_started_at=now - timedelta(seconds=1),
+            grace_seconds=300,
+            interval_seconds=0,
+            source_kind="interval",
+        )
+        is True
+    )

@@ -63,7 +63,9 @@ from onestep_control_plane_api.db.models import (
     TaskEvent,
 )
 from onestep_control_plane_api.ops.observability import (
+    emit_structured_log,
     record_notification_delivery_outcome,
+    record_notification_outbox_state,
 )
 
 logger = logging.getLogger("onestep_control_plane_api.api.notification_service")
@@ -1129,6 +1131,46 @@ def _iter_expected_slots_for_task(
     return []
 
 
+def _missed_start_is_detectable(
+    *,
+    now: datetime,
+    online_started_at: datetime,
+    grace_seconds: int,
+    interval_seconds: int | None,
+    source_kind: str,
+) -> bool:
+    """Whether a missed start for this task/service pair is detectable at all.
+
+    Detection needs an unbroken online run long enough to contain a scheduled slot
+    *plus* its whole grace period, because the scan only reports a slot once
+    ``scheduled_at + grace <= now`` and drops every slot that predates the current
+    online run. That is:
+
+        now - online_started_at >= grace_seconds + interval_seconds
+
+    A service restarting faster than that never satisfies it, so its missed starts are
+    invisible -- measured directly: with a 5-minute interval and a 300 s grace, a
+    service online 400 s yields ZERO candidate slots while one online an hour yields
+    eleven. Alerting is not merely quiet, it is unevaluable.
+
+    This is a *visibility* predicate, not a decision to alert. Changing what gets
+    alerted on would silently change operator-visible behaviour, so the caller uses it
+    only to emit a structured warning. A real fix needs a record of when a service was
+    actually online, which this schema does not have.
+    """
+
+    if source_kind == "cron":
+        # A cron schedule's own period is unknown without expanding the expression, so
+        # only the grace period can be asserted; assume the shortest possible period
+        # (one minute) rather than inventing a larger one.
+        interval_seconds = 60
+    if interval_seconds is None or interval_seconds <= 0:
+        return True
+
+    online_seconds = (now - as_utc_datetime(online_started_at)).total_seconds()
+    return online_seconds >= grace_seconds + interval_seconds
+
+
 def _task_started_for_scheduled_slot(
     db: Session,
     *,
@@ -1489,6 +1531,62 @@ def build_notification_test_response(
         channel_id=channel.id,
         provider=channel.provider,
         preview_text=build_notification_test_preview(channel, payload),
+    )
+
+
+def notification_outbox_backlog(db: Session, *, now: datetime | None = None) -> None:
+    """Sample the outbox queue depth and hand it to the observability layer.
+
+    Called by the outbox worker on each tick: that is the only place which already
+    holds a session, and a worker that has stopped ticking is precisely the failure
+    this metric exists to reveal. Recording nothing when the worker never runs is the
+    intended behaviour -- see ``record_notification_outbox_state``.
+
+    Three numbers, and the third distinguishes "busy" from "stuck":
+
+    * ``pending`` -- rows still awaiting an attempt.
+    * ``oldest_pending_seconds`` -- age of the oldest row that is ALREADY due
+      (``next_attempt_at <= now``). A deep backlog that is draining is fine; one row
+      that has been due for an hour is not. ``None`` when nothing is due, because the
+      age is then undefined rather than zero.
+    * ``permanently_failed`` -- rows abandoned after exhausting their retries.
+    """
+
+    current_time = _normalize_scan_now(now)
+    pending = int(
+        db.scalar(
+            select(func.count())
+            .select_from(NotificationOutbox)
+            .where(NotificationOutbox.status == "pending")
+        )
+        or 0
+    )
+    oldest_due_at = db.scalar(
+        select(func.min(NotificationOutbox.next_attempt_at)).where(
+            NotificationOutbox.status == "pending",
+            NotificationOutbox.next_attempt_at <= current_time,
+        )
+    )
+    permanently_failed = int(
+        db.scalar(
+            select(func.count())
+            .select_from(NotificationOutbox)
+            .where(NotificationOutbox.status == "permanently_failed")
+        )
+        or 0
+    )
+
+    record_notification_outbox_state(
+        pending=pending,
+        oldest_pending_seconds=(
+            None
+            if oldest_due_at is None
+            else max(
+                (current_time - _normalize_scan_now(oldest_due_at)).total_seconds(),
+                0.0,
+            )
+        ),
+        permanently_failed=permanently_failed,
     )
 
 
@@ -2075,6 +2173,36 @@ def _scan_and_dispatch_missed_start_notifications_sync(
                 grace_seconds=channel.missed_start_grace_seconds,
                 online_started_at=online_started_at,
             )
+            # A service that restarts more often than grace+interval can never be
+            # caught by this check, and that silence is indistinguishable from health.
+            # Detection needs an unbroken online run long enough to contain a full
+            # grace period after a scheduled slot, and every candidate slot that
+            # predates the restart is dropped by the guard inside the loop below.
+            # Make the blind spot visible instead of silently reporting nothing.
+            if not _missed_start_is_detectable(
+                now=current_time,
+                online_started_at=online_started_at,
+                grace_seconds=channel.missed_start_grace_seconds,
+                interval_seconds=interval_seconds,
+                source_kind=task_definition.source_kind,
+            ):
+                emit_structured_log(
+                    logger,
+                    logging.WARNING,
+                    "missed_start_scan_blind",
+                    service=service.name,
+                    environment=service.environment,
+                    task=task_definition.task_name,
+                    channel_id=str(channel.id),
+                    online_seconds=round(
+                        (current_time - as_utc_datetime(online_started_at)).total_seconds(),
+                        3,
+                    ),
+                    grace_seconds=channel.missed_start_grace_seconds,
+                    interval_seconds=interval_seconds,
+                    reason="service_restarts_faster_than_grace_plus_interval",
+                )
+                continue
             for scheduled_at in expected_slots:
                 if scheduled_at < online_started_at:
                     continue
