@@ -82,9 +82,28 @@ defined_jobs="$(
 )"
 [ -n "$defined_jobs" ] || fail "no job_name entries found in prometheus.yml"
 
+# Parsed as YAML, not grepped: a rule file is allowed to mention `job="x"` inside a
+# comment (this repo's own rules explain the `and on()` trap that way), and a text
+# search would treat that as a real selector and fail the build on prose.
 referenced_jobs="$(
-  grep -rhoE 'job[[:space:]]*=[[:space:]]*"[^"]+"' "$PROM_DIR/rules/" \
-    | sed -E 's/.*"([^"]+)".*/\1/' | sort -u
+  python3 - "$PROM_DIR/rules" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - PyYAML ships with the dev extra
+    sys.exit("PyYAML is required to parse the rule files; run: uv sync --extra dev")
+
+jobs: set[str] = set()
+for rule_file in sorted(Path(sys.argv[1]).glob("*.yml")):
+    document = yaml.safe_load(rule_file.read_text(encoding="utf-8")) or {}
+    for group in document.get("groups", []):
+        for rule in group.get("rules", []):
+            jobs.update(re.findall(r'job\s*=\s*"([^"]+)"', str(rule.get("expr", ""))))
+print("\n".join(sorted(jobs)))
+PY
 )"
 
 missing=""

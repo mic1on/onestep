@@ -29,6 +29,12 @@ route:
   receiver: default-webhook
   routes:
     # Critical pages. Shorter repeat so an unresolved outage is re-surfaced.
+    #
+    # `critical` here means one of two things, and both are worth waking someone:
+    # the control plane is down, OR it is up but has lost the ability to tell you
+    # about problems (a failing scan, failed notification delivery, a missing
+    # metric family). The second class is the reason severity was re-tiered:
+    # a silent alerting system is more dangerous than a loud outage.
     - matchers:
         - severity = "critical"
       receiver: default-webhook
@@ -45,11 +51,16 @@ inhibit_rules:
   # --- the API process is gone ------------------------------------------------
   # Everything the control plane measures about itself is unavailable or stale
   # while it is not running, and every alert below is a consequence of this one.
-  # Suppressing them is what turns "nine alerts" into "the API is down".
+  # Suppressing them is what turns "eleven alerts" into "the API is down".
+  #
+  # The absence guards are deliberately NOT listed here, and do not need to be:
+  # each requires `up == 1`, so it is false by construction while ApiDown holds.
+  # A guard answers "the target is up but its data is gone"; ApiDown answers "the
+  # target is gone". They can never both be true, which is the point.
   - source_matchers:
       - alertname = "OneStepControlPlaneApiDown"
     target_matchers:
-      - alertname =~ "OneStepControlPlane(ReadyzFailing|EventLoopBlocked|EventLoopLagSamplerDead|DbPoolSaturated|DbPoolWaitSlow|ScanFailing|ScanSlow|UiWsDisconnectSpike|CommandFailureRateHigh|NotificationDeliveryFailures)"
+      - alertname =~ "OneStepControlPlane(ReadyzFailing|EventLoopBlocked|EventLoopLagSamplerDead|LagWindowEmpty|DbPoolSaturated|DbPoolWaitSlow|DbPoolOccupancyMissing|ScanFailing|ScanSlow|UiWsDisconnectSpike|CommandFailureRateHigh|NotificationDeliveryFailures)"
     equal: ["service"]
 
   # --- the database is gone ---------------------------------------------------
@@ -60,7 +71,26 @@ inhibit_rules:
   - source_matchers:
       - alertname = "OneStepControlPlanePostgresDown"
     target_matchers:
-      - alertname =~ "OneStepControlPlane(ScanFailing|ScanSlow|DbPoolSaturated|DbPoolWaitSlow)"
+      - alertname =~ "OneStepControlPlane(ScanFailing|ScanSlow|DbPoolSaturated|DbPoolWaitSlow|DbPoolOccupancyMissing)"
+    equal: ["service"]
+
+  # --- the scan metric family is missing entirely ------------------------------
+  # ScanNeverRan means no scan has ever completed, so ScanFailing and ScanSlow have
+  # nothing to read: they are not "quiet", they are unevaluable. The specific alert
+  # is the actionable one; the two derived ones would only add noise.
+  - source_matchers:
+      - alertname = "OneStepControlPlaneScanNeverRan"
+    target_matchers:
+      - alertname =~ "OneStepControlPlane(ScanFailing|ScanSlow)"
+    equal: ["service"]
+
+  # --- the whole metric surface is missing -------------------------------------
+  # MetricsMissing subsumes the other absence guards: if no family is exported, then
+  # every guard fires at once. Keep the root cause and drop the rest.
+  - source_matchers:
+      - alertname = "OneStepControlPlaneMetricsMissing"
+    target_matchers:
+      - alertname =~ "OneStepControlPlane(ScanNeverRan|LagWindowEmpty|DbPoolOccupancyMissing)"
     equal: ["service"]
 
   # --- the lag sampler is dead ------------------------------------------------

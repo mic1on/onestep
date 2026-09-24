@@ -505,3 +505,166 @@ def test_alertmanager_config_has_a_receiver_for_every_route() -> None:
 
     missing = sorted(referenced - receivers)
     assert missing == [], f"routes reference undefined receivers: {missing}"
+
+
+# --------------------------------------------------------------------------------------
+# Absence guards: "no data" must not read as "healthy"
+# --------------------------------------------------------------------------------------
+
+
+def _load_rule_file() -> dict:
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "monitoring"
+        / "prometheus"
+        / "rules"
+        / "control-plane.yml"
+    )
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _all_rules() -> list[dict]:
+    return [rule for group in _load_rule_file()["groups"] for rule in group["rules"]]
+
+
+def test_absence_guards_use_and_on() -> None:
+    """An ``absent()`` guard must use ``and on()``, not a bare ``and``.
+
+    This is the trap the guards exist to avoid, and it is invisible in review: a bare
+    ``and`` matches on ALL labels, and ``absent()`` returns a series with an EMPTY
+    label set, so ``up{job="x"} and absent(...)`` matches nothing and the guard never
+    fires. A guard that can never fire is worse than no guard -- it looks like
+    coverage.
+
+    Verified against Prometheus 2.53: the bare form returned 0 series while the
+    ``and on()`` form returned 1 for the same missing family.
+    """
+
+    import re
+
+    guards = [rule for rule in _all_rules() if "absent(" in rule["expr"]]
+    assert guards, "no absence guards found; this test would prove nothing"
+
+    for rule in guards:
+        expr = rule["expr"]
+        assert re.search(r"\band\s+on\(\)", expr), (
+            f"{rule['alert']} uses absent() without `and on()`, so it can never fire: {expr}"
+        )
+
+
+def test_absence_guards_require_the_target_to_be_up() -> None:
+    """A guard must be gated on ``up == 1``.
+
+    Without that gate the guard also fires while the target is DOWN, which is a
+    different incident already covered by OneStepControlPlaneApiDown. The gate is what
+    makes the guard answer the question it is named for: "the target is up but its
+    data is gone".
+    """
+
+    guards = [rule for rule in _all_rules() if "absent(" in rule["expr"]]
+    assert guards
+
+    for rule in guards:
+        assert 'up{job="onestep-control-plane"} == 1' in rule["expr"], (
+            f"{rule['alert']} is not gated on the target being up: {rule['expr']}"
+        )
+
+
+def test_absence_guards_do_not_overlap_with_api_down() -> None:
+    """Guards must be mutually exclusive with ``ApiDown`` by construction.
+
+    A guard requires ``up == 1``; ApiDown fires on ``up == 0``. They can therefore
+    never both be true, which is why the guards are deliberately absent from
+    ApiDown's inhibit list. If a guard ever loses its ``up == 1`` gate, this test
+    fails -- and the guard would then double-report every outage.
+    """
+
+    api_down = next(r for r in _all_rules() if r["alert"] == "OneStepControlPlaneApiDown")
+    assert "== 0" in api_down["expr"]
+
+    for rule in _all_rules():
+        if "absent(" not in rule["expr"]:
+            continue
+        assert "== 0" not in rule["expr"], (
+            f"{rule['alert']} combines an absence guard with an `== 0` test, which is "
+            f"contradictory: {rule['expr']}"
+        )
+
+
+def test_alerts_whose_series_can_be_absent_have_a_guard() -> None:
+    """Families that only appear after their first observation need a guard.
+
+    These three families are emitted lazily -- the scan families only after a scan
+    runs, the lag percentiles only after a sample is recorded, occupancy only after a
+    scrape refreshes it. Until then their alerts are silent, which is the failure
+    mode this test pins: silence must be distinguishable from health.
+    """
+
+    guarded = {
+        match
+        for rule in _all_rules()
+        if "absent(" in rule["expr"]
+        for match in __import__("re").findall(r"absent\(([a-z0-9_]+)\)", rule["expr"])
+    }
+
+    for family in (
+        "onestep_control_plane_scan_runs_total",
+        "onestep_control_plane_event_loop_lag_p95_seconds",
+        "onestep_control_plane_db_pool_checked_out",
+        "onestep_control_plane_event_loop_lag_sampler_running",
+    ):
+        assert family in guarded, f"{family} can be absent but has no absence guard"
+
+
+def test_alerting_failure_alerts_are_critical() -> None:
+    """Alerts that mean "you have lost the ability to be told about problems" page.
+
+    A failing scan or failed notification delivery does not merely degrade a metric:
+    it stops the notification plane from reporting, so the operator goes blind without
+    being told. That is strictly more dangerous than an outage that announces itself,
+    which is why these two are critical rather than warning. Both carry `for: 15m`
+    over a 15m window, so the condition must hold for roughly 30 minutes -- this is
+    not a page on a single blip.
+    """
+
+    by_name = {rule["alert"]: rule for rule in _all_rules()}
+
+    for alert in (
+        "OneStepControlPlaneScanFailing",
+        "OneStepControlPlaneNotificationDeliveryFailures",
+        "OneStepControlPlaneMetricsMissing",
+        "OneStepControlPlaneScanNeverRan",
+    ):
+        assert by_name[alert]["labels"]["severity"] == "critical", (
+            f"{alert} is a blindness failure and must page"
+        )
+
+
+def test_guards_are_subsumed_by_the_broadest_guard() -> None:
+    """When every family is missing, report the root cause once, not four times."""
+
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "monitoring"
+        / "alertmanager"
+        / "alertmanager.yml"
+    )
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    subsumption = [
+        rule
+        for rule in config["inhibit_rules"]
+        if any("MetricsMissing" in m for m in rule.get("source_matchers", []))
+    ]
+    assert subsumption, "MetricsMissing does not inhibit the narrower absence guards"
+    targets = " ".join(subsumption[0]["target_matchers"])
+    for narrower in ("ScanNeverRan", "LagWindowEmpty", "DbPoolOccupancyMissing"):
+        assert narrower in targets, f"MetricsMissing should subsume {narrower}"

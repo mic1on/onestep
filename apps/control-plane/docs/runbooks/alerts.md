@@ -60,11 +60,53 @@ express alone:
 - **Routing** — `critical` repeats hourly (a page), `warning` repeats every 12
   hours (a ticket). The rules only carry `severity` and `service` labels.
 - **Inhibition** — most of these alerts are *derived* from a small number of root
-  causes. `OneStepControlPlaneApiDown` inhibits the ten alerts that are its
-  consequences, so an operator gets one page naming the cause instead of eleven.
+  causes. `OneStepControlPlaneApiDown` inhibits the eleven alerts that are its
+  consequences, so an operator gets one page naming the cause instead of a dozen.
   `OneStepControlPlanePostgresDown` inhibits only the database-derived symptoms
   (scans, pool), deliberately leaving command and notification failures visible —
   those have causes other than the database.
+
+### What the two severity tiers mean
+
+`critical` covers two classes, and both are worth waking someone:
+
+1. **The control plane is down** — `ApiDown`, `ReadyzFailing`, `PostgresDown`.
+2. **It is up but has lost the ability to tell you about problems** —
+   `ScanFailing`, `NotificationDeliveryFailures`, `MetricsMissing`,
+   `ScanNeverRan`.
+
+The second class is why severity was re-tiered. A failing scan or failed delivery
+does not merely degrade a metric: it stops the notification plane from reporting,
+so the operator goes blind *without being told*. That is strictly more dangerous
+than an outage that announces itself. Both carry `for: 15m` over a 15m window, so
+the condition must hold for roughly 30 minutes — not a page on a single blip.
+
+`warning` is everything that degrades the system while leaving it observable:
+websocket disconnect spikes, command failure rate, latency and pool pressure.
+
+### Absence guards: "no data" is not "healthy"
+
+Four rules in the `onestep-control-plane-absence` group exist because a PromQL
+expression over a **missing** series evaluates to *no data*, which fires nothing and
+looks identical to a healthy system on a graph. Several families are emitted lazily:
+
+| Guard | Fires when |
+| --- | --- |
+| `MetricsMissing` | the target is up but exports no observability families at all |
+| `ScanNeverRan` | no scan has ever completed, so `ScanFailing` cannot evaluate |
+| `LagWindowEmpty` | the lag sampler runs but the rolling window holds no samples |
+| `DbPoolOccupancyMissing` | the scrape-time occupancy sampling is failing |
+
+Each is gated on `up == 1`, which makes it **mutually exclusive with `ApiDown`** by
+construction — a guard answers "the target is up but its data is gone", while
+`ApiDown` answers "the target is gone". They can never both be true, which is why
+the guards are deliberately absent from `ApiDown`'s inhibit list.
+
+They use `and on()`, and that is load-bearing rather than decoration: `absent()`
+returns a series with an **empty label set**, and a bare `and` matches on all labels,
+so `up{job="x"} and absent(...)` matches nothing and the guard would never fire. The
+trap was verified against Prometheus 2.53 before these rules were written, and
+`test_absence_guards_use_and_on` now pins it.
 
 ## OneStepControlPlaneApiDown
 
@@ -255,3 +297,67 @@ Operator actions:
    the scan is a symptom rather than the cause.
 4. Remember scans are bounded by `notification_missed_start_scan_interval_s` (60 s by
    default), so a scan that runs longer than its interval delays the next one.
+
+## OneStepControlPlaneMetricsMissing
+
+Immediate meaning:
+
+- the scrape target is **up**, but the control plane exports no observability metrics
+
+Every alert that reads those families is therefore silent, and silence reads as
+healthy. This is the "who watches the watcher" alert.
+
+Not the bearer-token case: a wrong token makes `/metrics` answer 401, which marks the
+target **down** and raises `OneStepControlPlaneApiDown` instead. This fires when the
+scrape succeeds but the process exports nothing.
+
+Operator actions:
+
+1. Fetch `/metrics` with the configured token and confirm whether families are present.
+2. Check whether the app started its observability samplers (lifespan startup).
+3. Look for an import error or an exception in the metrics exporter path.
+
+## OneStepControlPlaneScanNeverRan
+
+Immediate meaning:
+
+- no background scan has completed since this process started
+
+Missed-start and instance-connectivity notifications are produced by these scans.
+While this fires, those alerts are not merely quiet — they are not being evaluated.
+
+Operator actions:
+
+1. Check scanner leadership: a replica that never wins the advisory lock never scans.
+2. Check the scanner's readiness state on `/readyz` (`background_tasks`).
+3. Confirm the scan interval setting is not absurdly large.
+
+## OneStepControlPlaneLagWindowEmpty
+
+Immediate meaning:
+
+- the event-loop lag sampler is running but the rolling window holds no samples
+
+`OneStepControlPlaneEventLoopBlocked` reads the p95/max gauges, which are absent
+while the window is empty, so lag is currently unmonitored.
+
+Operator actions:
+
+1. Confirm the sampler task is alive (`..._lag_sampler_running`).
+2. Check the sample interval; a very large interval delays the first sample.
+3. Look for an exception inside the sampler loop.
+
+## OneStepControlPlaneDbPoolOccupancyMissing
+
+Immediate meaning:
+
+- the pool occupancy gauges are absent, so the scrape-time sampling step is failing
+
+`OneStepControlPlaneDbPoolSaturated` reads these gauges, so pool saturation is
+unmonitored while this fires.
+
+Operator actions:
+
+1. Grep the control plane logs for "could not sample pool occupancy".
+2. Confirm the engine is instrumented (`db/session.py` factory).
+3. Verify the pool exposes the SQLAlchemy occupancy accessors; a `StaticPool` does not.
