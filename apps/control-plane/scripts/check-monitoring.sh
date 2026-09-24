@@ -48,12 +48,21 @@ fail() {
 # is written at container start by the compose entrypoint. promtool stats the file
 # during validation, so the check runs against a copy with a dummy token: the
 # token's VALUE is irrelevant to validity, only its presence is.
+#
+# The staging directory must be world-readable: `mktemp -d` creates 0700, and the
+# promtool container runs as its own user, so on Linux (where bind mounts preserve
+# ownership) it cannot stat the config and fails with "permission denied". Docker
+# Desktop on macOS hides this by sharing files through a VM, so it only shows up in
+# CI. Same reason the token file is chmod 0644 rather than 0400.
 workdir="$(mktemp -d)"
 cleanup() { rm -rf "$workdir"; }
 trap cleanup EXIT
 
+chmod 0755 "$workdir"
 cp -R "$PROM_DIR/." "$workdir/"
+chmod -R a+rX "$workdir"
 printf 'validation-token' > "$workdir/ingest_token"
+chmod 0644 "$workdir/ingest_token"
 
 echo "==> promtool check config"
 docker run --rm -v "$workdir:/etc/prometheus:ro" \
