@@ -3,25 +3,68 @@
 The Prometheus rules for the control plane live in
 `monitoring/prometheus/rules/control-plane.yml`.
 
-Some alerts depend on standard exporters:
+## Running the alerting stack
 
-- `up{job="onestep-control-plane"}` from the control plane scrape target
-- `probe_success{job="onestep-control-plane-readyz"}` from a blackbox `/readyz` probe
-- `pg_up{job="onestep-control-plane-postgres"}` from `postgres_exporter`
+The rules only fire if something loads them. `monitoring/prometheus/prometheus.yml`
+declares `rule_files` and defines the three scrape jobs the rules select on, and
+`docker-compose.monitoring.yml` brings up Prometheus, Alertmanager, a blackbox
+exporter and a postgres exporter:
 
-Every other alert reads a series emitted directly by the control plane's own
-authenticated `/metrics` endpoint. No metrics pipeline or SQL exporter is required.
+```bash
+cd apps/control-plane
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+# Prometheus:   http://127.0.0.1:9090
+# Alertmanager: http://127.0.0.1:9093
+```
 
-That is a checked property, not an aspiration: `backend/tests/test_prometheus_exporter.py`
-parses this rule file and asserts that every `onestep_control_plane_*` series a rule
-references is one the exporter can actually emit. If you add a rule for a series that
-does not exist, that test fails.
+Set your notification endpoint in the `default-webhook` receiver of
+`monitoring/alertmanager/alertmanager.yml`. Its shipped default is a reserved
+`.invalid` host (RFC 2606) that cannot resolve, so a forgotten configuration fails
+loudly at delivery time instead of dropping alerts silently.
 
-Latency alerts and connection-failure triage use the series emitted directly by the
-control plane `/metrics` endpoint (`onestep_control_plane_event_loop_lag_*`,
-`onestep_control_plane_db_pool_*`, `onestep_control_plane_scan_*`). To tell event-loop
-blocking apart from connection-pool wait or a slow database, follow
-`docs/runbooks/control-plane-latency-diagnostics.md`.
+All three monitoring ports bind to `127.0.0.1` only. Prometheus and Alertmanager
+have no authentication of their own.
+
+Validate any change to these files before shipping:
+
+```bash
+bash scripts/check-monitoring.sh
+```
+
+That runs `promtool check config` (config + all rules), `amtool check-config`
+(Alertmanager), and one check `promtool` cannot do: **every `job="..."` a rule
+selects on must be defined in the scrape config**. A rule selecting on a
+misspelled job name is valid PromQL, loads without complaint, and never fires —
+which is exactly how twelve rules once shipped for months without ever being
+loaded. The same check runs in CI (`monitoring` job) and in the backend suite.
+
+## Jobs the rules depend on
+
+| Job | Source | Series the rules read |
+| --- | --- | --- |
+| `onestep-control-plane` | the API's own `/metrics` (bearer token) | all `onestep_control_plane_*` |
+| `onestep-control-plane-readyz` | blackbox probe of `/readyz` | `probe_success` |
+| `onestep-control-plane-postgres` | postgres_exporter | `pg_up` |
+
+The `/metrics` endpoint requires a bearer token (`require_ingest_token`). Prometheus
+cannot expand environment variables inside its own config, so the compose
+entrypoint writes the first `ONESTEP_CP_INGEST_TOKENS` value to
+`/etc/prometheus/ingest_token`, which the scrape config reads via
+`credentials_file`.
+
+## Alert routing and inhibition
+
+`monitoring/alertmanager/alertmanager.yml` carries two things the rules cannot
+express alone:
+
+- **Routing** — `critical` repeats hourly (a page), `warning` repeats every 12
+  hours (a ticket). The rules only carry `severity` and `service` labels.
+- **Inhibition** — most of these alerts are *derived* from a small number of root
+  causes. `OneStepControlPlaneApiDown` inhibits the ten alerts that are its
+  consequences, so an operator gets one page naming the cause instead of eleven.
+  `OneStepControlPlanePostgresDown` inhibits only the database-derived symptoms
+  (scans, pool), deliberately leaving command and notification failures visible —
+  those have causes other than the database.
 
 ## OneStepControlPlaneApiDown
 

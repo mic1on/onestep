@@ -75,6 +75,13 @@ metric timestamps can be put on one clock.
 > `backend/tests/test_prometheus_exporter.py`. The latency alerts in that file
 > read the families in the table below, so no external exporter or metrics
 > pipeline is needed.
+>
+> **The rules are now actually loaded.** `monitoring/prometheus/prometheus.yml`
+> declares `rule_files` and defines the three scrape jobs the rules select on;
+> `docker-compose.monitoring.yml` runs Prometheus, Alertmanager, blackbox and
+> postgres_exporter against the control plane stack. Before that config existed,
+> the rules were correct and inert: nothing loaded them. Validate changes with
+> `bash scripts/check-monitoring.sh` (also a CI job).
 
 ## 2. Reproducible diagnostic session
 

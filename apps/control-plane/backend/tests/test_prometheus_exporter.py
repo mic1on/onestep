@@ -367,3 +367,141 @@ def test_every_alert_rule_runbook_anchor_resolves() -> None:
             checked += 1
 
     assert checked == sum(len(group["rules"]) for group in document["groups"])
+
+
+# --------------------------------------------------------------------------------------
+# Monitoring configuration: the rules must actually be loaded and scorable
+# --------------------------------------------------------------------------------------
+
+
+def test_prometheus_config_loads_the_rule_file() -> None:
+    """The alert rules must be reachable through a ``rule_files`` entry.
+
+    Regression guard for the defect that motivated this wiring: twelve rules
+    shipped in ``monitoring/prometheus/rules/control-plane.yml`` while no Prometheus
+    config anywhere in the repo contained a ``rule_files`` entry, so nothing ever
+    loaded them. They were correct and inert, and no test noticed.
+    """
+
+    from pathlib import Path
+
+    import yaml
+
+    config_path = (
+        Path(__file__).resolve().parents[2] / "monitoring" / "prometheus" / "prometheus.yml"
+    )
+    assert config_path.exists(), f"prometheus.yml not found at {config_path}"
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    rule_files = config.get("rule_files")
+    assert rule_files, "prometheus.yml declares no rule_files, so no rule is ever loaded"
+
+    # The rule file must be matched by at least one glob, or it loads nothing.
+    from fnmatch import fnmatch
+
+    actual = "control-plane.yml"
+    assert any(fnmatch(actual, pattern.rsplit("/", 1)[-1]) for pattern in rule_files), (
+        f"{actual} is not matched by any rule_files glob: {rule_files}"
+    )
+
+
+def test_every_scrape_job_a_rule_selects_on_is_defined() -> None:
+    """Every ``job="..."`` a rule selects on must exist in the scrape config.
+
+    ``promtool check config`` validates each file alone, so it cannot see this: a
+    rule selecting on a misspelled job name is valid PromQL, loads without
+    complaint, and simply never fires -- indistinguishable from a healthy system.
+    This mirrors the check in ``scripts/check-monitoring.sh`` so the backend suite
+    fails even when the Docker-based script is not run.
+    """
+
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    monitoring = Path(__file__).resolve().parents[2] / "monitoring" / "prometheus"
+    config = yaml.safe_load((monitoring / "prometheus.yml").read_text(encoding="utf-8"))
+
+    defined_jobs = {
+        job["job_name"] for job in config.get("scrape_configs", []) if "job_name" in job
+    }
+    assert defined_jobs, "prometheus.yml defines no scrape jobs"
+
+    referenced_jobs: set[str] = set()
+    for rule_file in (monitoring / "rules").glob("*.yml"):
+        document = yaml.safe_load(rule_file.read_text(encoding="utf-8"))
+        for group in document.get("groups", []):
+            for rule in group.get("rules", []):
+                referenced_jobs.update(re.findall(r'job\s*=\s*"([^"]+)"', rule["expr"]))
+
+    assert referenced_jobs, "no rule selects on a job label; this test would prove nothing"
+
+    missing = sorted(referenced_jobs - defined_jobs)
+    assert missing == [], (
+        "these jobs are selected by an alert rule but are not scraped, so those "
+        f"alerts can never fire: {missing} (defined: {sorted(defined_jobs)})"
+    )
+
+
+def test_alertmanager_inhibits_alerts_derived_from_an_api_outage() -> None:
+    """A root-cause alert must suppress the symptoms it explains.
+
+    Without inhibition, ``OneStepControlPlaneApiDown`` fires alongside the eight
+    alerts that are consequences of it, and an operator paged nine times learns
+    less than one paged once with the cause named.
+    """
+
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "monitoring"
+        / "alertmanager"
+        / "alertmanager.yml"
+    )
+    assert path.exists(), f"alertmanager.yml not found at {path}"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    inhibits = config.get("inhibit_rules") or []
+    assert inhibits, "alertmanager.yml defines no inhibit_rules"
+
+    sources = {
+        matcher.split("=", 1)[1].strip().strip('"')
+        for rule in inhibits
+        for matcher in rule.get("source_matchers", [])
+        if matcher.startswith("alertname")
+    }
+    assert "OneStepControlPlaneApiDown" in sources, (
+        "nothing inhibits the alerts derived from the API being down"
+    )
+
+
+def test_alertmanager_config_has_a_receiver_for_every_route() -> None:
+    """Every route must point at a receiver that exists, or alerts are dropped."""
+
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "monitoring"
+        / "alertmanager"
+        / "alertmanager.yml"
+    )
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    receivers = {receiver["name"] for receiver in config.get("receivers", [])}
+    assert receivers, "alertmanager.yml defines no receivers"
+
+    route = config.get("route", {})
+    referenced = {route["receiver"]} if route.get("receiver") else set()
+    referenced.update(
+        child["receiver"] for child in route.get("routes", []) if child.get("receiver")
+    )
+
+    missing = sorted(referenced - receivers)
+    assert missing == [], f"routes reference undefined receivers: {missing}"
