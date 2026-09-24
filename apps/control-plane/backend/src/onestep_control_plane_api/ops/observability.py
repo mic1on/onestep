@@ -1126,7 +1126,16 @@ AGENT_COMMAND_OUTCOME_STATUSES: tuple[str, ...] = (
 )
 
 #: Label values for ``onestep_control_plane_notification_deliveries_total``.
-NOTIFICATION_DELIVERY_OUTCOMES: tuple[str, ...] = ("succeeded", "failed")
+#: ``permanently_failed`` is separate from ``failed`` on purpose: ``failed`` counts
+#: every unsuccessful attempt, including the ones the outbox will retry, while
+#: ``permanently_failed`` means the retry budget is exhausted and that notification
+#: is LOST. The two need different alert thresholds -- one is "the webhook is having
+#: a bad minute", the other is "an operator was never told about an incident".
+NOTIFICATION_DELIVERY_OUTCOMES: tuple[str, ...] = (
+    "succeeded",
+    "failed",
+    "permanently_failed",
+)
 
 #: Counter state: family name -> label value -> count. Seeded with every declared
 #: label value at 0 so a rule's denominator exists before the first event.

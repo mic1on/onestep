@@ -193,7 +193,8 @@ Immediate meaning:
 
 This counts delivery **attempts**, not channels: a webhook that fails and is re-queued
 for retry increments `status="failed"` on every attempt, so a sustained outage fires
-even when no delivery has exhausted its retries yet.
+even when no delivery has exhausted its retries yet. For the subset that will never be
+retried, see `OneStepControlPlaneNotificationLost`.
 
 Operator actions:
 
@@ -201,6 +202,32 @@ Operator actions:
 2. Check destination webhook availability and rate limiting.
 3. Verify whether failures are isolated to one channel or affect all configured channels.
 4. If alerts are suppressed externally, use alternate notification paths until fixed.
+
+## OneStepControlPlaneNotificationLost
+
+Immediate meaning:
+
+- a notification exhausted its retry budget and was **abandoned** — it will never be sent
+
+This is the strictly worse sibling of the alert above. A transient delivery failure is
+retried, so the operator may still end up informed; a permanently failed delivery means
+that specific task failure, missed start or instance offline event reached **nobody**,
+and the operator has no way to know from inside the console.
+
+The distinction is carried by the `status` label: `permanently_failed` is a separate
+series from `failed` precisely so this can be strict (`for: 5m`, nothing to wait out)
+without the attempt-level alert firing on every blip.
+
+Operator actions:
+
+1. Query `notification_outbox` rows with `status='permanently_failed'` and note the
+   destinations and `last_error`.
+2. Treat the affected events as **unreported**: if a task failure or instance offline
+   happened in that window, nobody was told. Check the console for what was missed.
+3. Fix the destination, then confirm with the channel's test button — it performs a
+   real request and reports the actual HTTP outcome.
+4. Consider raising `notification_outbox_max_attempts` only after understanding why
+   every attempt failed; more retries do not fix a wrong URL or an expired token.
 
 ## OneStepControlPlaneEventLoopBlocked
 
