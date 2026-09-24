@@ -1,0 +1,85 @@
+# Alertmanager configuration for the OneStep control plane.
+#
+# Two things live here that the rule file cannot express on its own:
+#
+#   1. ROUTING -- the rules only carry `severity` and `service` labels. Without a
+#      route, every alert lands in one undifferentiated stream and "critical" means
+#      nothing operationally.
+#   2. INHIBITION -- most of these alerts are DERIVED from a small number of root
+#      causes. When the API is down, eight other alerts fire as a consequence; an
+#      operator woken by nine pages learns less than one woken by one page that
+#      names the cause. The inhibit rules below encode which alerts are symptoms.
+#
+# The webhook URL is substituted at container start (see
+# docker-compose.monitoring.yml). The default is a syntactically valid but
+# unresolvable `.invalid` host (RFC 2606) rather than a placeholder string, because
+# Alertmanager validates this field as a URL: an unset webhook therefore fails
+# loudly at delivery time instead of being silently accepted and dropped.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # Group by the root cause, not by the symptom: alerts that share a service and
+  # a severity are one notification.
+  group_by: ["service", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: default-webhook
+  routes:
+    # Critical pages. Shorter repeat so an unresolved outage is re-surfaced.
+    - matchers:
+        - severity = "critical"
+      receiver: default-webhook
+      repeat_interval: 1h
+      continue: false
+    # Warnings are a ticket, not a page: batched and repeated less often.
+    - matchers:
+        - severity = "warning"
+      receiver: default-webhook
+      repeat_interval: 12h
+      continue: false
+
+inhibit_rules:
+  # --- the API process is gone ------------------------------------------------
+  # Everything the control plane measures about itself is unavailable or stale
+  # while it is not running, and every alert below is a consequence of this one.
+  # Suppressing them is what turns "nine alerts" into "the API is down".
+  - source_matchers:
+      - alertname = "OneStepControlPlaneApiDown"
+    target_matchers:
+      - alertname =~ "OneStepControlPlane(ReadyzFailing|EventLoopBlocked|EventLoopLagSamplerDead|DbPoolSaturated|DbPoolWaitSlow|ScanFailing|ScanSlow|UiWsDisconnectSpike|CommandFailureRateHigh|NotificationDeliveryFailures)"
+    equal: ["service"]
+
+  # --- the database is gone ---------------------------------------------------
+  # Scans read the database, so a failing or slow scan while PostgreSQL is down is
+  # a symptom, not a second incident. Deliberately NARROWER than the API-down rule:
+  # command failures and notification delivery failures have causes other than the
+  # database (agent-side rejections, a bad webhook URL), so they are left visible.
+  - source_matchers:
+      - alertname = "OneStepControlPlanePostgresDown"
+    target_matchers:
+      - alertname =~ "OneStepControlPlane(ScanFailing|ScanSlow|DbPoolSaturated|DbPoolWaitSlow)"
+    equal: ["service"]
+
+  # --- the lag sampler is dead ------------------------------------------------
+  # This one is not about a dead process: the sampler can die while the API keeps
+  # serving. When it does, every lag gauge is a stale last value, so
+  # EventLoopBlocked would be reporting on data that is no longer being collected.
+  # The sampler alert says "no data"; the lag alert would claim "high lag". The
+  # honest one wins, and the operator is told the truth about which it is.
+  - source_matchers:
+      - alertname = "OneStepControlPlaneEventLoopLagSamplerDead"
+    target_matchers:
+      - alertname = "OneStepControlPlaneEventLoopBlocked"
+    equal: ["service"]
+
+receivers:
+  - name: default-webhook
+    webhook_configs:
+      # Overridden by ALERT_WEBHOOK_URL at container start. `.invalid` is reserved
+      # by RFC 2606 and can never resolve, so a deployment that forgets to set the
+      # variable gets a loud delivery failure rather than silent drops.
+      - url: "http://alert-webhook.invalid/onestep"
+        send_resolved: true

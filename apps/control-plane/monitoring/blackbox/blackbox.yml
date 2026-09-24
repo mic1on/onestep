@@ -1,0 +1,17 @@
+# Blackbox exporter modules for the OneStep control plane probes.
+#
+# `http_readyz` is referenced by the `onestep-control-plane-readyz` scrape job in
+# prometheus.yml. It differs from a plain 2xx check in one way that matters:
+# /readyz answers 503 when a deep dependency check fails, so a bare `http_2xx`
+# module would also work -- but `valid_status_codes` is stated explicitly so a
+# future change to the endpoint's contract (for example a 200-with-body-error)
+# does not silently turn the readiness alert into a no-op.
+
+modules:
+  http_readyz:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      preferred_ip_protocol: ip4

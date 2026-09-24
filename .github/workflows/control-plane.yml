@@ -69,6 +69,20 @@ jobs:
       - name: Frontend e2e
         run: pnpm --dir frontend run e2e
 
+  monitoring:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/control-plane
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      # Validates prometheus.yml + the alert rules with promtool, every job= a rule
+      # selects on against the scrape config, and alertmanager.yml with amtool.
+      # The rules once shipped for months without ever being loaded or parsed; this
+      # is the check that makes that impossible to repeat.
+      - name: Validate monitoring configuration
+        run: bash scripts/check-monitoring.sh
+
   docker:
     runs-on: ubuntu-latest
     steps:
