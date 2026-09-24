@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -30,6 +31,7 @@ from onestep_control_plane_api.api.notification_helpers import (
     missed_start_dedupe_key,
     raw_task_event_dedupe_key,
     scheduled_at_from_meta,
+    scheduled_at_to_storage_string,
 )
 from onestep_control_plane_api.api.notification_payloads import build_webhook_payload
 from onestep_control_plane_api.api.query_support import (
@@ -41,6 +43,8 @@ from onestep_control_plane_api.api.schemas import (
     NotificationChannelEnabledPatchRequest,
     NotificationChannelSummary,
     NotificationChannelUpdateRequest,
+    NotificationDeliveryListResponse,
+    NotificationDeliverySummary,
     NotificationServiceListResponse,
     NotificationServiceOption,
     NotificationTestRequest,
@@ -53,6 +57,7 @@ from onestep_control_plane_api.db.models import (
     NotificationDelivery,
     NotificationInstanceState,
     NotificationOutbox,
+    NotificationTaskFailureBurst,
     Service,
     TaskDefinition,
     TaskEvent,
@@ -1300,21 +1305,176 @@ def delete_notification_channel(db: Session, channel_id) -> None:
     db.commit()
 
 
+def build_notification_test_payload(
+    channel: NotificationChannel,
+    *,
+    message: str | None = None,
+    now: datetime | None = None,
+) -> tuple[str, str, dict[str, object]]:
+    """Build the request body a real notification for this channel would carry.
+
+    Returns ``(method, url, body)``. This deliberately reuses the same payload
+    builders as live delivery, so what the operator tests is what production sends:
+    a hand-written "ping" body would pass while the real rendering is broken.
+    """
+
+    if channel.provider == "custom":
+        event = _build_test_notification_event(channel, message=message, now=now)
+        rendered = render_custom_webhook_request(channel.custom_config_json or {}, event)
+        method = rendered.method
+        payload = rendered.to_delivery_payload()
+        return (
+            method,
+            channel.webhook_url,
+            {"query": payload.get("query") or {}, "body": payload.get("body") or {}},
+        )
+
+    event = _build_test_notification_event(channel, message=message, now=now)
+    return "POST", channel.webhook_url, dict(build_webhook_payload(channel.provider, event))
+
+
+def _build_test_notification_event(
+    channel: NotificationChannel,
+    *,
+    message: str | None,
+    now: datetime | None = None,
+) -> NotificationEventRecord:
+    """Synthesize a clearly-labelled test event for payload rendering.
+
+    The event is marked as a test in the rendered text so a recipient can tell it
+    apart from a real incident notification, and it uses the channel's first
+    configured scope when one exists so the rendering path sees realistic values.
+    """
+
+    occurred_at = _normalize_scan_now(now)
+    scope = channel.service_scopes_json[0] if channel.service_scopes_json else {}
+    service_name = str(scope.get("name") or "onestep-test")
+    service_environment = str(scope.get("environment") or "test")
+    summary = message or f"Test notification for channel {channel.name}"
+    return NotificationEventRecord(
+        event_type="task_failed",
+        service_name=service_name,
+        service_environment=service_environment,
+        task_name="onestep-connectivity-test",
+        occurred_at=occurred_at,
+        failure=NotificationFailureInfo(
+            kind="test",
+            exception_type=None,
+            message=summary,
+        ),
+        console_url=settings.build_console_url("/settings/notifications"),
+    )
+
+
+def deliver_notification_test(
+    db: Session,
+    channel_id,
+    payload: NotificationTestRequest,
+    *,
+    deliver_fn: Callable[..., None] | None = None,
+    now: datetime | None = None,
+) -> NotificationTestResponse:
+    """Send one real test notification through the channel's webhook.
+
+    This used to only render a preview string while the API returned
+    ``status="accepted"`` and the console showed "Test accepted by {provider}" -- so
+    a channel with a wrong URL or an expired token reported success and the operator
+    only found out during a real incident. A test that does not send is worse than no
+    test at all, so the request is actually made and its outcome is reported.
+
+    The delivery is recorded as a ``NotificationDelivery`` row so the attempt shows
+    up in the delivery history alongside real notifications, and the response
+    carries the real HTTP status or the transport error.
+    """
+
+    channel = _get_channel_or_404(db, channel_id)
+    current_time = _normalize_scan_now(now)
+    method, webhook_url, request_payload = build_notification_test_payload(
+        channel,
+        message=payload.message,
+        now=current_time,
+    )
+
+    delivery = NotificationDelivery(
+        channel=channel,
+        dedupe_key=f"test:{channel.id}:{uuid4().hex}",
+        event_type="test",
+        service_name=None,
+        service_environment=None,
+        task_name=None,
+        status="pending",
+        request_payload_json=request_payload,
+    )
+    db.add(delivery)
+    db.flush()
+
+    outbox = NotificationOutbox(
+        delivery=delivery,
+        webhook_url=webhook_url,
+        provider=channel.provider,
+        webhook_method=str(method).upper(),
+        status="pending",
+        attempts=0,
+        max_attempts=1,
+    )
+    db.add(outbox)
+    db.flush()
+
+    send = deliver_fn if deliver_fn is not None else _post_webhook
+    send(delivery, webhook_url=webhook_url, timeout_s=settings.notification_delivery_timeout_s)
+
+    # The test is a direct, synchronous attempt: it is not queued for retry, and the
+    # outbox row exists only so the shared delivery path can build the request.
+    outbox.status = "delivered" if delivery.status == "succeeded" else "permanently_failed"
+    outbox.attempts = 1
+    outbox.last_attempt_at = delivery.sent_at or current_time
+    outbox.last_response_status_code = delivery.response_status_code
+    outbox.last_response_body = delivery.response_body
+    outbox.last_error = delivery.error_message
+    outbox.next_attempt_at = current_time
+    db.commit()
+    db.refresh(delivery)
+
+    record_notification_delivery_outcome(delivery.status)
+
+    return NotificationTestResponse(
+        status="accepted",
+        channel_id=channel.id,
+        provider=channel.provider,
+        delivered=delivery.status == "succeeded",
+        response_status_code=delivery.response_status_code,
+        error_message=delivery.error_message,
+        preview_text=build_notification_test_preview(channel, payload),
+    )
+
+
+def build_notification_test_preview(
+    channel: NotificationChannel,
+    payload: NotificationTestRequest,
+) -> str:
+    """Human-readable summary of what the test sent (kept for the console)."""
+
+    if channel.provider == "custom" and payload.message is None:
+        return build_custom_webhook_preview(channel.custom_config_json)
+    return payload.message or f"Test notification for channel {channel.name}"
+
+
 def build_notification_test_response(
     db: Session,
     channel_id,
     payload: NotificationTestRequest,
 ) -> NotificationTestResponse:
+    """Deprecated preview-only helper, retained for callers that render a message.
+
+    Prefer :func:`deliver_notification_test`: this function performs no network call
+    and therefore cannot tell an operator whether their channel works.
+    """
+
     channel = _get_channel_or_404(db, channel_id)
-    preview_text = (
-        build_custom_webhook_preview(channel.custom_config_json)
-        if channel.provider == "custom" and payload.message is None
-        else payload.message or f"Test notification for channel {channel.name}"
-    )
     return NotificationTestResponse(
         channel_id=channel.id,
         provider=channel.provider,
-        preview_text=preview_text,
+        preview_text=build_notification_test_preview(channel, payload),
     )
 
 
@@ -1324,6 +1484,50 @@ def list_notification_services(db: Session) -> NotificationServiceListResponse:
         items=[
             NotificationServiceOption(name=service.name, environment=service.environment)
             for service in services
+        ]
+    )
+
+
+def list_notification_deliveries(
+    db: Session,
+    *,
+    channel_id=None,
+    limit: int = 50,
+) -> NotificationDeliveryListResponse:
+    """Recent delivery attempts, newest first, optionally for one channel.
+
+    Delivery rows already carry the outcome (status, HTTP code, error) but nothing
+    exposed them: an operator had to query the database to answer "did my alert
+    actually go out?". This is that read path.
+
+    Rows whose channel was deleted are retained with ``channel_id=None`` (the delete
+    path nulls the FK rather than dropping history), so a channel filter excludes
+    them and an unfiltered listing still shows them.
+    """
+
+    statement = select(NotificationDelivery).order_by(
+        NotificationDelivery.created_at.desc(),
+        NotificationDelivery.id.desc(),
+    )
+    if channel_id is not None:
+        statement = statement.where(NotificationDelivery.channel_id == channel_id)
+    deliveries = db.scalars(statement.limit(max(1, min(limit, 500)))).all()
+    return NotificationDeliveryListResponse(
+        items=[
+            NotificationDeliverySummary(
+                id=delivery.id,
+                channel_id=delivery.channel_id,
+                event_type=delivery.event_type,
+                service_name=delivery.service_name,
+                service_environment=delivery.service_environment,
+                task_name=delivery.task_name,
+                status=delivery.status,
+                response_status_code=delivery.response_status_code,
+                error_message=delivery.error_message,
+                created_at=delivery.created_at,
+                sent_at=delivery.sent_at,
+            )
+            for delivery in deliveries
         ]
     )
 
@@ -1577,6 +1781,119 @@ async def scan_and_dispatch_instance_connectivity_notifications_async(
     )
 
 
+def _task_failure_burst_state(
+    db: Session,
+    *,
+    channel: NotificationChannel,
+    service: Service,
+) -> NotificationTaskFailureBurst:
+    """Load or create the burst-damping state for one (channel, service)."""
+
+    state = db.scalar(
+        select(NotificationTaskFailureBurst).where(
+            NotificationTaskFailureBurst.channel_id == channel.id,
+            NotificationTaskFailureBurst.service_id == service.id,
+        )
+    )
+    if state is None:
+        state = NotificationTaskFailureBurst(
+            channel_id=channel.id,
+            service_id=service.id,
+            failure_count=0,
+            suppressed_count=0,
+        )
+        db.add(state)
+        db.flush()
+    return state
+
+
+def _task_failure_burst_is_open(
+    state: NotificationTaskFailureBurst,
+    *,
+    now: datetime,
+) -> bool:
+    """A burst stays open while failures keep arriving inside the window."""
+
+    last_failure_at = state.last_failure_at
+    if last_failure_at is None:
+        return False
+    return (
+        now - as_utc_datetime(last_failure_at)
+    ).total_seconds() < settings.task_failure_burst_window_s
+
+
+def _close_task_failure_burst(state: NotificationTaskFailureBurst) -> None:
+    state.burst_started_at = None
+    state.last_failure_at = None
+    state.failure_count = 0
+    state.suppressed_count = 0
+
+
+def _flush_quiet_task_failure_burst(
+    db: Session,
+    *,
+    channel: NotificationChannel,
+    service: Service,
+    state: NotificationTaskFailureBurst,
+    now: datetime,
+) -> list[tuple[NotificationDelivery, str]]:
+    """Emit the summary for a burst that has gone quiet, then close it.
+
+    Returns no deliveries when the burst owed no summary (nothing was suppressed),
+    so a service with a handful of ordinary failures never gets an extra message.
+    The snapshot is taken BEFORE the counters are reset -- reading them afterwards
+    would summarize a blank burst.
+    """
+
+    if _task_failure_burst_is_open(state, now=now):
+        return []
+    if int(state.suppressed_count or 0) <= 0:
+        _close_task_failure_burst(state)
+        return []
+
+    suppressed = int(state.suppressed_count or 0)
+    total = int(state.failure_count or 0)
+    started_at = as_utc_datetime(state.burst_started_at or state.last_failure_at)
+    last_at = as_utc_datetime(state.last_failure_at)
+    _close_task_failure_burst(state)
+
+    event = NotificationEventRecord(
+        event_type="task_failed",
+        service_name=service.name,
+        service_environment=service.environment,
+        task_name=None,
+        occurred_at=last_at,
+        detected_at=now,
+        failure=NotificationFailureInfo(
+            kind="burst_summary",
+            exception_type=None,
+            message=(
+                f"{suppressed} of {total} failures in this burst were suppressed"
+            ),
+        ),
+        console_url=settings.build_console_url(
+            f"/services/{service.name}?environment={service.environment}"
+        ),
+        suppressed_failure_count=suppressed,
+        burst_failure_count=total,
+        burst_started_at=started_at,
+    )
+    delivery = _persist_pending_delivery(
+        db,
+        channel=channel,
+        notification_event=event,
+        dedupe_key=(
+            f"{channel.id}:{service.environment}:{service.name}:"
+            f"{scheduled_at_to_storage_string(last_at)}:task_failure_burst"
+        ),
+        task_event_id=None,
+        scheduled_at=None,
+    )
+    if delivery is None:
+        return []
+    return [(delivery, channel.webhook_url)]
+
+
 def _dispatch_runtime_task_event_notifications(
     db: Session,
     *,
@@ -1594,6 +1911,39 @@ def _dispatch_runtime_task_event_notifications(
             event_type=notification_event.event_type,
         )
         for channel in matching_channels:
+            if notification_event.event_type == "task_failed":
+                # Burst damping. Only task_failed is damped: it is the event a
+                # single root cause multiplies (one per task per instance), while
+                # started/succeeded/missed_start are already bounded by the
+                # scheduler or the slot dedupe key.
+                state = _task_failure_burst_state(
+                    db,
+                    channel=channel,
+                    service=task_event.service,
+                )
+                # A quiet burst is summarized on the next failure that starts a
+                # new one, so the withheld count is never lost.
+                pending_deliveries.extend(
+                    _flush_quiet_task_failure_burst(
+                        db,
+                        channel=channel,
+                        service=task_event.service,
+                        state=state,
+                        now=notification_event.occurred_at,
+                    )
+                )
+                if not _task_failure_burst_is_open(state, now=notification_event.occurred_at):
+                    state.burst_started_at = notification_event.occurred_at
+                    state.failure_count = 0
+                    state.suppressed_count = 0
+                state.failure_count = int(state.failure_count or 0) + 1
+                state.last_failure_at = notification_event.occurred_at
+                if state.failure_count > settings.task_failure_burst_max_notifications:
+                    # Withheld, but counted: the summary states the number, so
+                    # silence never reads as health.
+                    state.suppressed_count = int(state.suppressed_count or 0) + 1
+                    continue
+
             delivery = _persist_pending_delivery(
                 db,
                 channel=channel,

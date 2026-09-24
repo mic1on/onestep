@@ -79,6 +79,13 @@ class NotificationEventRecord:
     flap_episode_started_at: datetime | None = None
     flap_episode_last_flip_at: datetime | None = None
     flap_episode_flips: int | None = None
+    # --- task-failure burst summary ------------------------------------------
+    # Set only on the single summary emitted when a failure burst goes quiet.
+    # suppressed_failure_count is how many failures were withheld, so the summary
+    # can never read as "all clear" -- it reports what was not sent.
+    suppressed_failure_count: int | None = None
+    burst_failure_count: int | None = None
+    burst_started_at: datetime | None = None
 
 
 def normalize_notification_event_type(raw_value: str) -> NotificationEventType:
@@ -344,6 +351,15 @@ def build_message_lines(event: NotificationEventRecord) -> list[str]:
 
     if event.attempts is not None:
         lines.append(f"尝试次数: {event.attempts}")
+    if event.suppressed_failure_count is not None:
+        # Burst summary: state plainly what was withheld, so the message can never
+        # read as a routine single failure.
+        lines.append(f"失败抑制: 已静默 {event.suppressed_failure_count} 次任务失败")
+        if event.burst_failure_count is not None:
+            lines.append(f"本次爆发失败总数: {event.burst_failure_count}")
+        burst_started = format_datetime_for_message(event.burst_started_at)
+        if burst_started is not None:
+            lines.append(f"爆发开始: {burst_started}")
     if is_instance_event_type(event.event_type) and event.suppressed_flip_count is not None:
         # Flap-episode summary: state plainly what was withheld, so the message
         # can never read as a routine single flip.

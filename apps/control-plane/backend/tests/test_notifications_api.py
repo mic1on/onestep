@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
 from onestep_control_plane_api.auth.service import LocalAuthService
@@ -148,12 +150,17 @@ def test_notification_channels_crud_round_trip(client, db_session) -> None:
         json={"message": "manual smoke check"},
     )
     assert test_response.status_code == 200
-    assert test_response.json() == {
-        "status": "accepted",
-        "channel_id": channel_id,
-        "provider": "wechat_work",
-        "preview_text": "manual smoke check",
-    }
+    body = test_response.json()
+    assert body["status"] == "accepted"
+    assert body["channel_id"] == channel_id
+    assert body["provider"] == "wechat_work"
+    assert body["preview_text"] == "manual smoke check"
+    # The test performs a real request now, so the response reports the real
+    # outcome. This channel points at an unreachable URL, which is the point: the
+    # API previously returned "accepted" without sending anything, so a broken
+    # channel looked healthy until an incident.
+    assert body["delivered"] is False
+    assert body["error_message"] is not None
 
     delete_response = client.delete(f"/api/v1/settings/notifications/channels/{channel_id}")
     assert delete_response.status_code == 200
@@ -481,3 +488,189 @@ def test_notification_viewer_can_read_channels_but_cannot_write(client, db_sessi
     assert delete_forbidden.json()["detail"] == "insufficient role for command execution"
 
     assert db_session.query(NotificationChannel).count() == 1
+
+
+# --------------------------------------------------------------------------------------
+# The test button must actually send, and delivery history must be readable
+# --------------------------------------------------------------------------------------
+
+
+def _create_channel(client, *, provider: str = "feishu", webhook_url: str) -> str:
+    response = client.post(
+        "/api/v1/settings/notifications/channels",
+        json={
+            "name": f"probe-{uuid4().hex[:8]}",
+            "provider": provider,
+            "webhook_url": webhook_url,
+            "enabled": True,
+            "service_scopes": [],
+            "event_types": ["task_failed"],
+            "missed_start_grace_seconds": 300,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+class _FakeWebhookClient:
+    """Stand-in for ``httpx.Client`` scoped to the notification service module.
+
+    ``httpx.Client`` cannot be patched globally: the test client is itself httpx-based,
+    so a global patch also intercepts the request under test and the endpoint never
+    runs. Patching only the name bound in ``notification_service`` keeps the real
+    ``_post_webhook`` logic (status mapping, error capture) under test while leaving
+    the test transport alone.
+    """
+
+    calls: list[tuple[str, str]] = []
+    response_factory = None
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def __enter__(self) -> _FakeWebhookClient:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def post(self, url: str, **kwargs: object):
+
+        type(self).calls.append(("POST", url))
+        assert type(self).response_factory is not None
+        return type(self).response_factory(url)
+
+    def get(self, url: str, **kwargs: object):
+        return self.post(url, **kwargs)
+
+
+@pytest.fixture()
+def fake_webhook(monkeypatch):
+    """Intercept only the notification service's outbound webhook client."""
+
+    import httpx
+    from onestep_control_plane_api.api import notification_service as service_module
+
+    _FakeWebhookClient.calls = []
+
+    def ok(url: str):
+        return httpx.Response(200, json={"code": 0}, request=httpx.Request("POST", url))
+
+    def boom(url: str):
+        return httpx.Response(500, text="boom", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(service_module, "httpx", SimpleNamespace(Client=_FakeWebhookClient))
+    return SimpleNamespace(
+        calls=_FakeWebhookClient.calls,
+        respond_ok=lambda: setattr(_FakeWebhookClient, "response_factory", ok),
+        respond_error=lambda: setattr(_FakeWebhookClient, "response_factory", boom),
+    )
+
+
+def test_notification_test_actually_posts_to_the_webhook(client, fake_webhook) -> None:
+    """The test endpoint must perform a real request, not just render a preview.
+
+    Regression guard: this endpoint used to return ``status="accepted"`` while the
+    console displayed "Test accepted by {provider}", and no HTTP request was ever
+    made. A channel with a wrong URL or an expired token therefore reported success,
+    and the operator only discovered it during a real incident. A test that does not
+    send is worse than no test at all.
+    """
+
+    fake_webhook.respond_ok()
+    login_console_role(client, username="admin", role="admin")
+    channel_id = _create_channel(client, webhook_url="https://hooks.example.com/feishu")
+
+    response = client.post(
+        f"/api/v1/settings/notifications/channels/{channel_id}/test",
+        json={"message": "connectivity probe"},
+    )
+
+    assert response.status_code == 200
+    assert fake_webhook.calls == [("POST", "https://hooks.example.com/feishu")], (
+        "the test endpoint must actually POST to the channel's webhook"
+    )
+    body = response.json()
+    assert body["delivered"] is True
+    assert body["response_status_code"] == 200
+    assert body["error_message"] is None
+
+
+def test_notification_test_reports_a_failing_webhook_as_not_delivered(
+    client, fake_webhook
+) -> None:
+    """A failing webhook must be reported as a failure, not swallowed as accepted."""
+
+    fake_webhook.respond_error()
+    login_console_role(client, username="admin", role="admin")
+    channel_id = _create_channel(client, webhook_url="https://hooks.example.com/broken")
+
+    response = client.post(
+        f"/api/v1/settings/notifications/channels/{channel_id}/test",
+        json={},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["delivered"] is False
+    assert body["response_status_code"] == 500
+    assert body["error_message"] is not None
+
+
+def test_notification_test_is_recorded_in_delivery_history(client, fake_webhook) -> None:
+    """A test attempt shows up in the delivery history alongside real notifications."""
+
+    fake_webhook.respond_ok()
+    login_console_role(client, username="admin", role="admin")
+    channel_id = _create_channel(client, webhook_url="https://hooks.example.com/feishu")
+
+    client.post(f"/api/v1/settings/notifications/channels/{channel_id}/test", json={})
+
+    history = client.get(
+        "/api/v1/settings/notifications/deliveries",
+        params={"channel_id": channel_id},
+    )
+
+    assert history.status_code == 200
+    items = history.json()["items"]
+    assert any(item["event_type"] == "test" for item in items), (
+        f"the test attempt must appear in delivery history: {items}"
+    )
+
+
+def test_delivery_history_is_readable_and_ordered_newest_first(client, db_session) -> None:
+    """Delivery history exposes the outcome an operator needs to trust a channel."""
+
+    from onestep_control_plane_api.db.models import NotificationDelivery
+
+    login_console_role(client, username="admin", role="admin")
+    channel_id = _create_channel(client, webhook_url="https://hooks.example.com/feishu")
+
+    with client.app.state.session_factory() as session:
+        for index in range(3):
+            session.add(
+                NotificationDelivery(
+                    channel_id=UUID(channel_id),
+                    dedupe_key=f"history-{index}-{uuid4().hex}",
+                    event_type="task_failed",
+                    service_name="billing-sync",
+                    service_environment="prod",
+                    task_name="sync_users",
+                    status="succeeded" if index % 2 else "failed",
+                    response_status_code=200 if index % 2 else 500,
+                    error_message=None if index % 2 else "webhook responded with status 500",
+                )
+            )
+        session.commit()
+
+    response = client.get(
+        "/api/v1/settings/notifications/deliveries",
+        params={"channel_id": channel_id},
+    )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 3
+    assert items[0]["created_at"] >= items[-1]["created_at"]
+    failed = [item for item in items if item["status"] == "failed"]
+    assert failed and failed[0]["error_message"] is not None

@@ -18,12 +18,14 @@ import {
   getApiErrorMessage,
   isAuthRequiredError,
   listNotificationChannels,
+  listNotificationDeliveries,
   listNotificationServices,
   setNotificationChannelEnabled,
   testNotificationChannel,
   updateNotificationChannel,
   type NotificationChannel,
   type NotificationCustomParam,
+  type NotificationDelivery,
   type NotificationWebhookMethod,
   type NotificationChannelInput,
   type NotificationEventType,
@@ -198,6 +200,8 @@ export default function NotificationSettingsPage({
   const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openVariablePicker, setOpenVariablePicker] = useState<string | null>(null);
+  const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
+  const [deliveriesChannelId, setDeliveriesChannelId] = useState<string | null>(null);
 
   const isEditing = form.id !== null;
   const includesMissedStart = form.eventTypes.includes('task_missed_start');
@@ -222,6 +226,20 @@ export default function NotificationSettingsPage({
     }
     return t('notifications.servicesCount', { count: channel.service_scopes.length });
   };
+
+  async function loadDeliveries(channelId?: string) {
+    // Delivery history is the feedback loop the notification system lacked: an
+    // operator could configure a channel and never learn whether anything was
+    // actually delivered. A failure here must not break the page, so it is
+    // reported non-fatally.
+    try {
+      const response = await listNotificationDeliveries(channelId);
+      setDeliveries(response.items);
+      setDeliveriesChannelId(channelId ?? null);
+    } catch {
+      setDeliveries([]);
+    }
+  }
 
   async function loadNotifications(silent = false) {
     setIsLoading(true);
@@ -253,6 +271,7 @@ export default function NotificationSettingsPage({
 
   useEffect(() => {
     void loadNotifications(true);
+    void loadDeliveries();
   }, []);
 
   function updateEventType(eventType: NotificationEventType, checked: boolean) {
@@ -335,7 +354,26 @@ export default function NotificationSettingsPage({
     setTestingChannelId(channel.id);
     try {
       const response = await testNotificationChannel(channel.id);
-      onNotify(t('notifications.testAccepted', { provider: providerLabel(response.provider, t), name: channel.name }), 'success');
+      // Report the real delivery outcome. The endpoint performs an actual request
+      // now, so claiming success unconditionally would tell the operator a broken
+      // channel works -- which is exactly the bug this surface used to have.
+      if (response.delivered) {
+        onNotify(
+          t('notifications.testDelivered', {
+            provider: providerLabel(response.provider, t),
+            name: channel.name,
+            status: response.response_status_code ?? '',
+          }),
+          'success',
+        );
+      } else {
+        const detail =
+          response.error_message ??
+          t('notifications.testStatusOnly', { status: response.response_status_code ?? '' });
+        setError(detail);
+        onNotify(t('notifications.testFailed', { message: detail }), 'warn');
+      }
+      void loadDeliveries(channel.id);
     } catch (testError) {
       if (isAuthRequiredError(testError)) {
         onAuthRequired();
@@ -953,6 +991,81 @@ export default function NotificationSettingsPage({
           </form>
         </aside>
       </div>
+
+      <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-bold text-slate-900">{t('notifications.deliveryHistory')}</h2>
+          <div className="flex items-center gap-2">
+            {deliveriesChannelId !== null && (
+              <button
+                className="ui-pressable rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                onClick={() => void loadDeliveries()}
+                type="button"
+              >
+                {t('notifications.showAllChannels')}
+              </button>
+            )}
+            <button
+              aria-label={t('notifications.refreshHistory')}
+              className="ui-pressable rounded-md border border-slate-200 p-1.5 text-slate-600 hover:bg-slate-50"
+              onClick={() => void loadDeliveries(deliveriesChannelId ?? undefined)}
+              type="button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">{t('notifications.deliveryHistoryHint')}</p>
+        {deliveries.length === 0 ? (
+          <p className="mt-3 text-xs text-slate-500">{t('notifications.noDeliveries')}</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="py-1.5 pr-3">{t('notifications.deliveryTime')}</th>
+                  <th className="py-1.5 pr-3">{t('notifications.deliveryEvent')}</th>
+                  <th className="py-1.5 pr-3">{t('notifications.deliveryTarget')}</th>
+                  <th className="py-1.5 pr-3">{t('notifications.deliveryStatus')}</th>
+                  <th className="py-1.5">{t('notifications.deliveryDetail')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deliveries.map((delivery) => (
+                  <tr className="border-t border-slate-100" key={delivery.id}>
+                    <td className="py-1.5 pr-3 text-slate-600">
+                      {new Date(delivery.created_at).toLocaleString()}
+                    </td>
+                    <td className="py-1.5 pr-3 text-slate-700">{delivery.event_type}</td>
+                    <td className="py-1.5 pr-3 text-slate-600">
+                      {delivery.service_name
+                        ? `${delivery.service_environment ?? ''}/${delivery.service_name}`
+                        : '—'}
+                    </td>
+                    <td className="py-1.5 pr-3">
+                      <span
+                        className={
+                          delivery.status === 'succeeded'
+                            ? 'font-semibold text-emerald-600'
+                            : 'font-semibold text-rose-600'
+                        }
+                      >
+                        {delivery.status}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-slate-600">
+                      {delivery.response_status_code !== null && (
+                        <span className="mr-2">HTTP {delivery.response_status_code}</span>
+                      )}
+                      {delivery.error_message ?? ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
