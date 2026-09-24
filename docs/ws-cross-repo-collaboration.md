@@ -9,7 +9,7 @@ OneStep runtime、control-plane reporter 与 control-plane 服务端在通信、
 onestep/
 ├── src/onestep/                         # runtime
 ├── plugins/onestep-control-plane/       # reporter / WS client
-└── apps/control-plane/                  # FastAPI + React + Electron + Docker
+└── apps/control-plane/                  # FastAPI + React + Docker
 ```
 
 Agent 与 Control Plane 之间只使用 WebSocket。前端查询、登录和健康检查继续使用 HTTP。
@@ -36,7 +36,7 @@ Agent 与 Control Plane 之间只使用 WebSocket。前端查询、登录和健�
 - Agent session 管理
 - telemetry 校验与落库
 - command 创建、下发和状态流转
-- 查询 API、Web Console 与 Desktop
+- 查询 API 与 Web Console
 
 ### 2.3 边界原则
 
@@ -184,7 +184,7 @@ apps/control-plane/backend/**
   ├── control-plane full CI
   └── control-plane contract CI
 
-apps/control-plane/frontend/** or desktop/**
+apps/control-plane/frontend/**
   └── control-plane full CI
 ```
 
