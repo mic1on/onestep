@@ -180,11 +180,28 @@ def _build_prometheus_metrics(db: Session) -> str:
     runtime_metrics = _collect_task_runtime_metrics(db)
     custom_metrics = _collect_custom_metrics(db)
     lines: list[str] = []
+    # GAUGE, not counter, and the name keeps its historical `_total` suffix for
+    # wire compatibility. These values are SUM(TaskMetricWindow.*) over every window
+    # still inside retention, and the retention worker deletes windows older than
+    # `retention_task_metric_windows_days` (90 by default). The sum therefore
+    # DECREASES on every retention pass -- proven in
+    # `test_task_metric_windows_are_not_monotonic_counters`.
+    #
+    # Declaring them `counter` would be a lie with consequences: Prometheus treats a
+    # counter decrease as a reset and folds the drop into the next increase(), so any
+    # `increase()`/`rate()` expression over these families would spike by roughly the
+    # whole retained total after each retention run. That is also why there is no
+    # alert rule on task throughput or failure rate -- see the note in
+    # monitoring/prometheus/rules/control-plane.yml.
     _append_metric_family(
         lines,
         name="onestep_task_succeeded_total",
-        help_text="OneStep task deliveries that completed successfully.",
-        metric_type="counter",
+        help_text=(
+            "Task deliveries that succeeded, summed over the retained metric windows. "
+            "A rolling sum, NOT a monotonic counter: it decreases when retention "
+            "removes old windows, so do not use increase() or rate() on it."
+        ),
+        metric_type="gauge",
         samples=[
             (_runtime_labels(series), aggregate.succeeded)
             for series, aggregate in runtime_metrics.items()
@@ -193,8 +210,13 @@ def _build_prometheus_metrics(db: Session) -> str:
     _append_metric_family(
         lines,
         name="onestep_task_failed_total",
-        help_text="OneStep task deliveries that failed after retry policy handling.",
-        metric_type="counter",
+        help_text=(
+            "Task deliveries that failed after retry policy handling, summed over the "
+            "retained metric windows. A rolling sum, NOT a monotonic counter: it "
+            "decreases when retention removes old windows, so do not use increase() "
+            "or rate() on it."
+        ),
+        metric_type="gauge",
         samples=[
             (_runtime_labels(series), aggregate.failed)
             for series, aggregate in runtime_metrics.items()
@@ -224,8 +246,13 @@ def _build_prometheus_metrics(db: Session) -> str:
     _append_metric_family(
         lines,
         name="onestep_task_custom_counter_total",
-        help_text="Custom OneStep counter metrics reported by task handlers.",
-        metric_type="counter",
+        help_text=(
+            "Custom counter metrics reported by task handlers, summed over the "
+            "retained metric windows. A rolling sum, NOT a monotonic counter: it "
+            "decreases when retention removes old windows, so do not use increase() "
+            "or rate() on it."
+        ),
+        metric_type="gauge",
         samples=[
             (_custom_labels(series), aggregate.total)
             for series, aggregate in custom_metrics.items()

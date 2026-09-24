@@ -83,11 +83,49 @@ groups:
             Notification webhook deliveries have failed in the last 15 minutes. Task
             failure, missed start and instance offline notifications are not reaching
             their destination while this fires, so the operator may be blind to
-            incidents without knowing it.
+            incidents without knowing it. This counts ATTEMPTS, including ones the
+            outbox will retry -- see OneStepControlPlaneNotificationLost for the
+            subset that will never be sent again.
           runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationdeliveryfailures
+
+      - alert: OneStepControlPlaneNotificationLost
+        expr: sum(increase(onestep_control_plane_notification_deliveries_total{status="permanently_failed"}[15m])) > 0
+        for: 5m
+        labels:
+          # `for: 5m` rather than 15m: a lost notification is already final, so there
+          # is nothing to wait out. This is the subset of delivery failures that will
+          # NEVER be retried -- the retry budget is exhausted, so the operator was
+          # simply never told. Kept separate from the attempt-level alert above so
+          # this one can be strict without its noisy sibling firing on every blip.
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: A notification was permanently abandoned
+          description: >-
+            The retry budget for a notification was exhausted and the delivery was
+            abandoned, so that task failure, missed start or instance offline event
+            was never reported to anyone. Unlike a transient delivery failure this
+            will not retry. Check the outbox rows with status permanently_failed and
+            the destination webhook.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationlost
 
   - name: onestep-control-plane-latency
     rules:
+      # NOTE: there is deliberately no alert on `onestep_task_*` (task throughput or
+      # task failure rate).
+      #
+      # Those families look like counters and keep a `_total` suffix, but their value
+      # is SUM(TaskMetricWindow.*) over every window still inside retention, and the
+      # retention worker deletes windows older than 90 days. The sum therefore
+      # DECREASES on each retention pass, so they are exported as gauges and no
+      # `increase()`/`rate()` rule may use them -- Prometheus would read the drop as
+      # a counter reset and fold the whole retained total into one bogus spike.
+      #
+      # `test_no_alert_rule_uses_increase_or_rate_on_task_totals` enforces this. To
+      # get a real task failure-rate alert the emitter needs a monotonic counter that
+      # only ever increases per process (for example an in-process counter incremented
+      # on ingest, with its own bounded labels) rather than a retention-window sum.
+      #
       # These read the series emitted directly by the control plane's own /metrics
       # endpoint (the #197 baseline plus the scrape-time pool occupancy sampling),
       # so they need no external exporter. Thresholds are the ones the latency

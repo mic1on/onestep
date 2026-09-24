@@ -707,6 +707,12 @@ def _apply_delivery_outcome(
     channel is ultimately reachable. Counting here -- and not in
     ``claim_next_pending_outbox_row``, which can mark a delivery failed without
     making a request -- keeps one attempt equal to one increment.
+
+    A permanently failed attempt increments BOTH ``failed`` and
+    ``permanently_failed``. That is deliberate, not double counting: ``failed``
+    stays "this attempt did not succeed" (so the existing rate alert keeps working
+    unchanged), while ``permanently_failed`` adds "and this notification will never
+    be sent again". Only the second means an operator was never told.
     """
     outbox.last_response_status_code = delivery.response_status_code
     outbox.last_response_body = delivery.response_body
@@ -723,6 +729,10 @@ def _apply_delivery_outcome(
     if outbox.attempts >= outbox.max_attempts:
         outbox.status = "permanently_failed"
         outbox.next_attempt_at = now
+        # The retry budget is spent: this notification is lost. Counted separately
+        # so a "notifications are being silently dropped" alert can exist without
+        # firing on every transient blip.
+        record_notification_delivery_outcome("permanently_failed")
         logger.warning(
             "notification outbox delivery permanently failed",
             extra={
@@ -776,6 +786,10 @@ def claim_next_pending_outbox_row(
         outbox.status = "permanently_failed"
         outbox.next_attempt_at = current_time
         outbox.delivery.status = "failed"
+        # This row is abandoned WITHOUT an HTTP attempt, so _apply_delivery_outcome
+        # never runs for it and would never count the loss. Count it here, or a
+        # notification dropped on the claim path is invisible to the metric.
+        record_notification_delivery_outcome("permanently_failed")
     else:
         outbox.attempts += 1
         outbox.last_attempt_at = current_time

@@ -5,6 +5,7 @@ import asyncio
 import sqlalchemy as sa
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_metrics_request
 from onestep_control_plane_api.api.routers.prometheus import (
+    _build_prometheus_metrics,
     build_observability_metrics,
     build_prometheus_metrics,
     reset_prometheus_metrics_cache,
@@ -668,3 +669,181 @@ def test_guards_are_subsumed_by_the_broadest_guard() -> None:
     targets = " ".join(subsumption[0]["target_matchers"])
     for narrower in ("ScanNeverRan", "LagWindowEmpty", "DbPoolOccupancyMissing"):
         assert narrower in targets, f"MetricsMissing should subsume {narrower}"
+
+
+# --------------------------------------------------------------------------------------
+# Task metrics are rolling sums, not counters
+# --------------------------------------------------------------------------------------
+
+
+def test_task_metric_windows_are_not_monotonic_counters(db_session) -> None:
+    """Prove the task totals DECREASE when retention prunes, then pin the type.
+
+    These families look like counters and even keep a `_total` suffix, but their value
+    is `SUM(TaskMetricWindow.*)` over every window still inside retention, and the
+    retention worker deletes windows older than
+    `retention_task_metric_windows_days` (90 by default). The sum therefore drops on
+    every retention pass.
+
+    Declaring them `counter` is not a cosmetic mistake. Prometheus treats a counter
+    decrease as a reset and folds the whole drop into the next `increase()`, so a rule
+    using `increase()` over these families would spike by roughly the entire retained
+    total after every retention run. That is the real reason there is no task
+    throughput or failure-rate alert.
+    """
+
+    from datetime import UTC, datetime, timedelta
+
+    from onestep_control_plane_api.db.models import Instance, Service, TaskMetricWindow
+
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+    service = Service(name="metrics-probe", environment="prod", latest_deployment_version="1")
+    db_session.add(service)
+    db_session.flush()
+    instance = Instance(
+        service_id=service.id,
+        instance_id=__import__("uuid").uuid4(),
+        node_name="vm",
+        deployment_version="1",
+        status="ok",
+    )
+    db_session.add(instance)
+    db_session.flush()
+
+    def manufactured_total() -> float:
+        return float(
+            db_session.execute(
+                sa.select(sa.func.sum(TaskMetricWindow.succeeded)).where(
+                    TaskMetricWindow.service_id == service.id
+                )
+            ).scalar()
+            or 0
+        )
+
+    for index, (ended_at, succeeded) in enumerate(
+        ((now, 100), (now - timedelta(days=100), 50))
+    ):
+        db_session.add(
+            TaskMetricWindow(
+                service_id=service.id,
+                instance_id=instance.instance_id,
+                task_name="probe",
+                window_id=f"probe-{index}",
+                window_started_at=ended_at - timedelta(minutes=1),
+                window_ended_at=ended_at,
+                fetched=succeeded,
+                started=succeeded,
+                succeeded=succeeded,
+                retried=0,
+                failed=0,
+                dead_lettered=0,
+                cancelled=0,
+                timeouts=0,
+                inflight=0,
+                avg_duration_ms=1.0,
+                received_at=ended_at,
+                created_at=ended_at,
+            )
+        )
+    db_session.commit()
+
+    before = manufactured_total()
+    assert before == 150
+
+    # Exactly what the retention worker does for windows older than the cutoff.
+    db_session.execute(
+        sa.delete(TaskMetricWindow).where(
+            TaskMetricWindow.window_ended_at < now - timedelta(days=90)
+        )
+    )
+    db_session.commit()
+
+    after = manufactured_total()
+    assert after == 100, "retention should have removed the 50 older successes"
+    assert after < before, (
+        "the task totals must be allowed to decrease -- if this ever becomes "
+        "monotonic, the metric can be declared a counter again"
+    )
+
+
+def test_task_totals_are_exported_as_gauges() -> None:
+    """The declared type must match the non-monotonic value.
+
+    Companion to the test above: that one proves the VALUE can decrease, this one
+    proves the EXPOSITION says so. Both are needed -- a future edit could flip the
+    type back to `counter` without changing the value, and only this asserts it.
+    """
+
+    rendered = _render_task_metric_types()
+    for name in (
+        "onestep_task_succeeded_total",
+        "onestep_task_failed_total",
+        "onestep_task_custom_counter_total",
+    ):
+        assert rendered[name] == "gauge", (
+            f"{name} must be a gauge: its value is a rolling sum over retained windows "
+            f"and decreases when retention prunes, so `counter` would make "
+            f"increase()/rate() spike after every retention run"
+        )
+
+
+def _render_task_metric_types() -> dict[str, str]:
+    """Read the declared TYPE of the task families out of a live exposition.
+
+    ``_build_prometheus_metrics`` needs a database session for the values, but the
+    TYPE lines are emitted from static code, so an in-memory session is enough.
+    """
+
+    import re
+
+    from onestep_control_plane_api.db.base import Base
+    from onestep_control_plane_api.db.models import Service
+    from sqlalchemy.orm import Session
+
+    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = Session(engine)
+    try:
+        session.add(Service(name="type-probe", environment="prod", latest_deployment_version="1"))
+        session.commit()
+        body = _build_prometheus_metrics(session)
+    finally:
+        session.close()
+        engine.dispose()
+    return dict(re.findall(r"^# TYPE (onestep_task_[a-z_]+) (\w+)$", body, re.MULTILINE))
+
+
+def test_no_alert_rule_uses_increase_or_rate_on_task_totals() -> None:
+    """No rule may treat the task rolling sums as monotonic counters.
+
+    This is the enforcement half of the pair above: the types are honest *and* no
+    rule relies on the dishonest reading. A rule doing
+    `increase(onestep_task_failed_total[1h]) > N` would appear to work in testing and
+    then fire with a huge bogus value after the first retention pass.
+    """
+
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "monitoring"
+        / "prometheus"
+        / "rules"
+        / "control-plane.yml"
+    )
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    offenders = [
+        (group["name"], rule["alert"], rule["expr"])
+        for group in document["groups"]
+        for rule in group["rules"]
+        if "onestep_task_" in rule["expr"]
+        and re.search(r"\b(increase|rate)\s*\(", rule["expr"])
+    ]
+    assert offenders == [], (
+        "these rules use increase()/rate() on the task rolling sums, which decrease "
+        f"when retention prunes and would spike after every retention run: {offenders}"
+    )

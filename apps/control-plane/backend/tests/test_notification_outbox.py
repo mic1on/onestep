@@ -1318,3 +1318,88 @@ def test_non_failure_task_events_are_never_damped(db_session, async_db, monkeypa
     dispatch_runtime_task_event_notifications(db_session, task_events=events)
 
     assert db_session.query(NotificationDelivery).count() == 5
+
+
+# --------------------------------------------------------------------------------------
+# Permanent failure is a distinct signal from a failed attempt
+# --------------------------------------------------------------------------------------
+
+
+def test_permanently_failed_delivery_is_counted_separately(
+    db_session, async_db, monkeypatch
+) -> None:
+    """Exhausting the retry budget must be distinguishable from a failed attempt.
+
+    ``failed`` counts every unsuccessful attempt, including ones the outbox will
+    retry -- that is the right signal for "the webhook is having a bad minute".
+    ``permanently_failed`` means the retry budget is spent and that notification is
+    LOST, so the operator was never told. Collapsing the two makes "notifications are
+    being silently dropped" impossible to alert on without also paging on blips.
+    """
+
+
+    monkeypatch.setattr(settings, "notification_outbox_max_attempts", 1)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    after = _delivery_counts()
+
+    # Attempt-level: both increment.
+    assert after["failed"] == before["failed"] + 1
+    # Loss-level: only the permanent one, and it is what an operator pages on.
+    assert after["permanently_failed"] == before["permanently_failed"] + 1
+
+    outbox = db_session.query(NotificationOutbox).one()
+    assert outbox.status == "permanently_failed"
+
+
+def test_transient_failure_does_not_count_as_lost(db_session, async_db, monkeypatch) -> None:
+    """A retryable failure must NOT increment ``permanently_failed``.
+
+    This is what keeps the "notification was lost" alert honest: it must stay quiet
+    while the outbox still intends to retry, or it would fire on the first blip and
+    be ignored within a week.
+    """
+
+
+    monkeypatch.setattr(settings, "notification_outbox_max_attempts", 5)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    after = _delivery_counts()
+
+    assert after["failed"] == before["failed"] + 1
+    assert after["permanently_failed"] == before["permanently_failed"], (
+        "a retryable failure must not be reported as a lost notification"
+    )
+    assert db_session.query(NotificationOutbox).one().status == "pending"
