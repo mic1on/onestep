@@ -289,6 +289,8 @@ reporter.attach(app)
 也可以继续使用 `reporter: true`，再通过 `ONESTEP_SERVICE_DESCRIPTION` 注入服务级描述。
 Reporter 会推送拓扑同步、心跳、指标和事件，也可以接收 `pause_task`、`resume_task`、`restart_task` 等远程任务控制命令。任务处理函数可以通过 `ctx.metrics.counter(...).inc()` 和 `ctx.metrics.gauge(...).set()` 上报低基数自定义指标。
 
+从 `onestep-control-plane` 0.2.0 起，Reporter 还会在**主循环心跳迟到**时补发独立心跳（presence beacon），避免 handler 同步阻塞事件循环时实例被控制面误判为离线并反复上下线。该线程在循环健康时不发任何请求，因此现有部署行为不变；卡顿期间实例保持"在线"，但阻塞仍会影响任务吞吐与 `ping`/`drain` 等命令响应，建议同步阻塞逻辑改用 `asyncio.to_thread()`。可用 `ONESTEP_CONTROL_PLANE_PRESENCE_ENABLED` 关闭，用 `_INTERVAL_S` / `_GRACE_S` 调整节奏。
+
 ## 对比 0.5.x
 
 | 特性 | 0.5.x | 1.x |

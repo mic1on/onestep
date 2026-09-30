@@ -25,6 +25,8 @@ from onestep.identity_store import (
 )
 from onestep.retry import FailureKind
 
+from .presence import PresenceBeacon
+
 if TYPE_CHECKING:
     from onestep.app import OneStepApp
 
@@ -87,6 +89,25 @@ def _coerce_positive_int(name: str, value: int) -> int:
     if value < 1:
         raise ValueError(f"{name} must be >= 1")
     return value
+
+
+def _coerce_bool(name: str, value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{name} must be a boolean (true/false), got {value!r}")
+
+
+def _read_bool_env(name: str, default: bool) -> bool:
+    raw = _read_env(name)
+    if raw is None:
+        return default
+    return _coerce_bool(name, raw)
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -197,6 +218,23 @@ class ControlPlaneReporterConfig:
     reconnect_base_delay_s: float = 0.5
     reconnect_max_delay_s: float = 30.0
     shutdown_flush_timeout_s: float = 0.5
+    # --- presence beacon (loop-stall liveness) -------------------------------
+    # The heartbeat loop and every task handler share one event loop, so a
+    # handler making a blocking call starves the heartbeat and the control plane
+    # reports a working instance as offline. The beacon is a daemon thread that
+    # covers exactly that window: it sends nothing while the loop is healthy and
+    # only reports liveness once the loop has been silent for longer than
+    # ``presence_grace_s``. See ``onestep_control_plane.presence``.
+    presence_enabled: bool = True
+    #: ``None`` means "derive from heartbeat_interval_s" -- resolved in
+    #: ``__post_init__`` so the default tracks a caller's heartbeat interval
+    #: instead of silently disagreeing with it.
+    presence_interval_s: float | None = None
+    #: ``None`` means ``2 * presence_interval_s``. That floor is what makes the
+    #: zero-traffic promise structural: the beacon sleeps at most half a grace,
+    #: so a loop touching on its interval always interrupts the sleep before it
+    #: completes, and a healthy process never reports.
+    presence_grace_s: float | None = None
 
     def __post_init__(self) -> None:
         self.base_url = _normalize_base_url(self.base_url)
@@ -206,10 +244,42 @@ class ControlPlaneReporterConfig:
         if self.environment not in {"dev", "staging", "prod"}:
             raise ValueError("environment must be one of: dev, staging, prod")
         self.service_description = _normalize_optional_text(self.service_description)
+        self.presence_enabled = _coerce_bool("presence_enabled", self.presence_enabled)
         self.heartbeat_interval_s = _coerce_positive_float(
             "heartbeat_interval_s",
             self.heartbeat_interval_s,
         )
+        if self.presence_interval_s is None:
+            self.presence_interval_s = self.heartbeat_interval_s
+        else:
+            self.presence_interval_s = _coerce_positive_float(
+                "presence_interval_s",
+                self.presence_interval_s,
+            )
+        if self.presence_grace_s is None:
+            # Derived from the interval, not from the heartbeat: the invariant
+            # below is about the beacon's own sleep, so deriving it from a
+            # different knob would reject a perfectly sensible config that only
+            # set ``presence_interval_s``. With both knobs at their defaults this
+            # is ``2 x heartbeat_interval_s`` -- two missed heartbeats.
+            self.presence_grace_s = 2 * self.presence_interval_s
+        else:
+            self.presence_grace_s = _coerce_positive_float(
+                "presence_grace_s",
+                self.presence_grace_s,
+            )
+        # The beacon sleeps at most half a grace window, so a loop that keeps
+        # touching on its interval interrupts every sleep. That is what makes
+        # "a healthy process sends nothing" true by construction instead of
+        # relying on the thread scheduler being punctual; a grace below twice
+        # the interval lets a sleep complete on a healthy process and would
+        # report liveness from a loop that is not stalled.
+        if self.presence_grace_s < 2 * self.presence_interval_s:
+            raise ValueError(
+                "presence_grace_s must be >= 2 * presence_interval_s "
+                f"(got presence_grace_s={self.presence_grace_s:g}, "
+                f"presence_interval_s={self.presence_interval_s:g})"
+            )
         self.metrics_interval_s = _coerce_positive_float(
             "metrics_interval_s",
             self.metrics_interval_s,
@@ -307,6 +377,9 @@ class ControlPlaneReporterConfig:
         shutdown_flush_timeout_s = float(
             _read_env("ONESTEP_CONTROL_PLANE_SHUTDOWN_FLUSH_TIMEOUT_S") or 0.5
         )
+        presence_enabled = _read_bool_env("ONESTEP_CONTROL_PLANE_PRESENCE_ENABLED", True)
+        presence_interval_value = _read_env("ONESTEP_CONTROL_PLANE_PRESENCE_INTERVAL_S")
+        presence_grace_value = _read_env("ONESTEP_CONTROL_PLANE_PRESENCE_GRACE_S")
         return cls(
             base_url=base_url,
             token=token,
@@ -328,6 +401,13 @@ class ControlPlaneReporterConfig:
             reconnect_base_delay_s=reconnect_base_delay_s,
             reconnect_max_delay_s=reconnect_max_delay_s,
             shutdown_flush_timeout_s=shutdown_flush_timeout_s,
+            presence_enabled=presence_enabled,
+            presence_interval_s=(
+                None if presence_interval_value is None else float(presence_interval_value)
+            ),
+            presence_grace_s=(
+                None if presence_grace_value is None else float(presence_grace_value)
+            ),
         )
 
 
@@ -406,9 +486,15 @@ class ControlPlaneReporter:
         config: ControlPlaneReporterConfig,
         *,
         sender: ReporterSender | None = None,
+        presence_beacon: PresenceBeacon | None = None,
     ) -> None:
         self.config = config
+        # Only the reporter's OWN sender proves this is a real deployment. An
+        # injected sender means a test or a custom transport, where a beacon
+        # thread would be an unrequested background HTTP client.
+        self._uses_default_sender = sender is None
         self._sender = sender or _build_default_sender(config)
+        self._presence = presence_beacon
         self._app: OneStepApp | None = None
         self._logger = logging.getLogger("onestep.control_plane")
         self._attached = False
@@ -496,12 +582,17 @@ class ControlPlaneReporter:
                 asyncio.create_task(self._metrics_loop(), name="onestep-control-plane-metrics"),
                 asyncio.create_task(self._events_loop(), name="onestep-control-plane-events"),
             ]
+            self._start_presence_beacon()
         except Exception:
             self._close_identity_store()
             raise
 
     async def shutdown(self) -> None:
         try:
+            # Stopped first: the beacon is the only thing here that can outlive
+            # the loop, and it must not report liveness while we are tearing the
+            # reporter down.
+            self._stop_presence_beacon()
             if self._stop_event is not None:
                 self._stop_event.set()
             if self._event_flush_signal is not None:
@@ -568,6 +659,10 @@ class ControlPlaneReporter:
 
     async def _heartbeat_loop(self) -> None:
         while not await self._wait_for_stop(self.config.heartbeat_interval_s):
+            # Reaching here proves the loop ran, so the beacon can stay quiet.
+            # Touched before the sends: the beacon measures loop liveness, not
+            # whether the control plane accepted the last frame.
+            self._touch_presence()
             await self._safe_send_sync()
             await self._safe_send_heartbeat()
 
@@ -603,6 +698,44 @@ class ControlPlaneReporter:
         except asyncio.TimeoutError:
             return False
         return True
+
+    # ----- presence beacon ---------------------------------------------------
+
+    def _start_presence_beacon(self) -> None:
+        # ``presence_enabled`` is the deployment switch and wins over everything,
+        # including an explicitly passed beacon: one config flag to turn it off.
+        if not self.config.presence_enabled:
+            return
+        beacon = self._presence
+        if beacon is None and not self._uses_default_sender:
+            # An injected sender means tests or a custom transport; a background
+            # HTTP client there would be a surprise, not a feature. Passing a
+            # beacon explicitly is a request, so that case is started below.
+            return
+        if beacon is None:
+            beacon = PresenceBeacon(
+                base_url=self.config.base_url,
+                token=self.config.token,
+                # Frozen copy of plain data: the thread never touches reporter or
+                # app state, so it cannot race the loop thread's bookkeeping.
+                service_descriptor=self._service_descriptor(),
+                interval_s=float(self.config.presence_interval_s),
+                grace_s=float(self.config.presence_grace_s),
+                timeout_s=float(self.config.timeout_s),
+                logger=self._logger,
+            )
+            self._presence = beacon
+        beacon.start()
+
+    def _touch_presence(self) -> None:
+        beacon = self._presence
+        if beacon is not None:
+            beacon.touch()
+
+    def _stop_presence_beacon(self) -> None:
+        beacon = self._presence
+        if beacon is not None:
+            beacon.stop()
 
     def _next_sequence(self) -> int:
         self._sequence += 1

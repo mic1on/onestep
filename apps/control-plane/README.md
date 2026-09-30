@@ -399,6 +399,15 @@ Agent telemetry and control now enter only through `GET /api/v1/agents/ws`.
 The WS handshake uses the same ingest token configured by `ONESTEP_CP_INGEST_TOKENS`.
 Telemetry payloads still reuse the historical heartbeat/sync/metrics/events body shapes
 inside the WS `telemetry` envelope.
+
+One exception, added in 0.2.0 of the reporter plugin: `POST /api/v1/agents/presence`.
+It is a liveness-only beacon the agent sends from a daemon thread while its event loop
+is blocked inside a synchronous handler — the exact window where the socket starves and
+the instance would otherwise be reported `offline` while it is alive and working. It
+advances `last_seen_at` and nothing else (no sequence, no health, no task controls), so
+it cannot reorder or overwrite real telemetry. While the loop is healthy the beacon
+sends nothing at all. See `docs/protocols/agent-ws-protocol.md` §23.1.
+
 When agents and the plane both support `telemetry.custom_metrics`, handler
 counter/gauge samples are included in metrics telemetry and later exported from
 `/metrics`.
