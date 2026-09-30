@@ -429,3 +429,55 @@ Operator actions:
 2. Check whether it is stuck waiting for leadership it can never acquire.
 3. Check for an exception at worker startup.
 
+## OneStepControlPlaneNotificationQueueSamplingStale
+
+Immediate meaning:
+
+- the outbox backlog gauge **exists but has stopped being refreshed**: the last
+  successful sample (`onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds`)
+  is more than two minutes old while the API target is up
+
+This is the third of three distinct questions, and they are easy to confuse:
+
+| Question | Series | Alert |
+| --- | --- | --- |
+| has the drainer ever looked? | family **absent** | `NotificationQueueUnsampled` |
+| is the queue moving? | `oldest_pending_seconds` | `NotificationQueueStuck` |
+| is the reading **current**? | `sampled_at_timestamp_seconds` | this alert |
+
+The distinction matters because the outbox gauges are process-local values that a
+scrape merely **replays**. A worker that dies after its first tick leaves them
+frozen and permanently plausible: the series never expire, so
+`NotificationQueueUnsampled` cannot fire (nothing is absent), and
+`NotificationQueueStuck` cannot fire either (a frozen `oldest_pending_seconds`
+keeps reporting whatever the queue's age was at the last tick). The only signal
+that still moves is the age of the sample itself.
+
+Why it is `warning`, and how it divides work with `ReadyzFailing`: the usual cause
+— the worker stopped ticking — also stalls `/readyz` (`background task is
+stalled` after `readiness_task_stale_after_s`, 120s), and
+`OneStepControlPlaneReadyzFailing` already pages as `critical` for that root
+cause. This alert covers the case `/readyz` cannot see: a worker that **keeps
+ticking** (so readiness stays green) while the backlog sample stops advancing —
+for example a drain that wedges, or sampling that stops being called while the
+task itself is alive. It also states the metric-level fact directly, which is what
+you need in order to know whether the numbers on the outbox dashboard mean
+anything right now. Because the two are different root causes rather than a
+duplicate of one, this alert is deliberately **not** inhibited by `ReadyzFailing`.
+
+Operator actions:
+
+1. Query the age directly:
+   `time() - onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds`
+   in the Prometheus UI. Confirm it is growing rather than a single slow scrape.
+2. Check the outbox worker logs (`notification outbox worker drain failed`,
+   `notification outbox worker lease check failed`) and whether the worker still
+   holds leadership. A replica that lost the advisory lock stops draining and
+   stops sampling.
+3. Compare with `/readyz`: `background_tasks` green **and** this alert firing means
+   the task is alive but not sampling — look at `_drain_in_session` being reached
+   (it samples before the drain) and at the drain blocking for longer than the
+   threshold.
+4. Until this clears, treat **every** outbox gauge as unproven. Do not conclude
+   the notification plane is healthy from a flat queue depth — a frozen gauge
+   reads exactly like a healthy one.

@@ -102,7 +102,7 @@ inhibit_rules:
   - source_matchers:
       - alertname = "OneStepControlPlaneMetricsMissing"
     target_matchers:
-      - alertname =~ "OneStepControlPlane(ScanNeverRan|LagWindowEmpty|DbPoolOccupancyMissing)"
+      - alertname =~ "OneStepControlPlane(ScanNeverRan|LagWindowEmpty|DbPoolOccupancyMissing|NotificationQueueUnsampled)"
     equal: ["service"]
 
   # --- the lag sampler is dead ------------------------------------------------

@@ -661,7 +661,7 @@ def test_alerting_failure_alerts_are_critical() -> None:
 
 
 def test_guards_are_subsumed_by_the_broadest_guard() -> None:
-    """When every family is missing, report the root cause once, not four times."""
+    """When every family is missing, report the root cause once, not many times."""
 
     from pathlib import Path
 
@@ -682,7 +682,12 @@ def test_guards_are_subsumed_by_the_broadest_guard() -> None:
     ]
     assert subsumption, "MetricsMissing does not inhibit the narrower absence guards"
     targets = " ".join(subsumption[0]["target_matchers"])
-    for narrower in ("ScanNeverRan", "LagWindowEmpty", "DbPoolOccupancyMissing"):
+    for narrower in (
+        "ScanNeverRan",
+        "LagWindowEmpty",
+        "DbPoolOccupancyMissing",
+        "NotificationQueueUnsampled",
+    ):
         assert narrower in targets, f"MetricsMissing should subsume {narrower}"
 
 

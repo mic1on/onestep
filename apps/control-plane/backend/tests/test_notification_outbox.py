@@ -1434,6 +1434,77 @@ def test_outbox_backlog_is_not_sampled_until_the_worker_runs(db_session) -> None
     )
 
 
+def test_outbox_sampled_at_is_absent_until_the_worker_runs(db_session) -> None:
+    """The freshness stamp is absent before the first sample, like its siblings.
+
+    An unsampled process has no reading to date, so exporting a timestamp would
+    invent a sample that never happened.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.reset_observability_state()
+    assert (
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+        not in obs.notification_outbox_gauges()
+    )
+    assert (
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+        not in build_observability_metrics()
+    )
+
+
+def test_outbox_sample_is_stamped_with_the_current_time(db_session) -> None:
+    """A sample carries WHEN it was taken, so the reading's age is decidable.
+
+    The queue gauges are process-local values replayed on every scrape: a worker
+    that died after its first tick keeps exporting them forever. The stamp is the
+    only series that can say how old that reading is.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.reset_observability_state()
+    before = time.time()
+    obs.record_notification_outbox_state(pending=5, oldest_pending_seconds=900.0)
+    after = time.time()
+
+    stamped_at = _outbox_gauges()[
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+    ]
+    assert before <= stamped_at <= after, (
+        "the stamp must be the sample's wall-clock time, not a constant or an offset"
+    )
+    # It must survive into the scrape body too, or no rule could ever read it.
+    body = build_observability_metrics()
+    assert "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds " in body
+    # Sanity-check the magnitude against the queue age, which is in the same unit.
+    assert stamped_at > 1_700_000_000, "expected a Unix timestamp in seconds"
+
+
+def test_outbox_sample_timestamp_advances_between_ticks(db_session) -> None:
+    """Two ticks must produce two different stamps.
+
+    A frozen value here would defeat the entire point: it would report a fresh
+    reading for a worker that stopped ticking, which is the failure this series
+    exists to expose.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    name = "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+    obs.reset_observability_state()
+    obs.record_notification_outbox_state(pending=1)
+    first = _outbox_gauges()[name]
+
+    time.sleep(0.05)
+    obs.record_notification_outbox_state(pending=2)
+    second = _outbox_gauges()[name]
+
+    assert second > first, "the stamp must move forward, not replay the first sample"
+    assert second - first == pytest.approx(0.05, abs=0.5)
+
+
 def test_outbox_backlog_reports_pending_and_oldest_due(db_session, async_db) -> None:
     """The sample must carry depth AND the age of the oldest due row.
 
@@ -1551,8 +1622,15 @@ def test_outbox_worker_samples_the_backlog_before_draining(
         return 0
 
     # _drain_in_session takes a session FACTORY, matching how the worker calls it.
+    started_at = time.time()
     _drain_in_session(lambda: db_session, spy_drain)
 
     assert observed_at_drain == [1], (
         "the backlog must be sampled before the drain, not after"
     )
+    # The real worker tick must also stamp the reading, not just the recorder:
+    # without this the freshness series would only exist for hand-written samples.
+    stamped_at = obs.notification_outbox_gauges()[
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+    ]
+    assert started_at <= stamped_at <= time.time()
