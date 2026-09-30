@@ -508,6 +508,8 @@ YAML resource 的生命周期由 app resource 管理器处理。
 0 < heartbeat_interval_s <= lease_duration_s / 3
 ```
 
+上面的建议仍然成立：阻塞事件循环会同时拖慢任务吞吐和命令响应（`ping`、`drain`、`pause_task` 都要等循环回到可调度状态）。但它不再会让控制面把实例误判为离线——`onestep-control-plane` 0.2.0 起，reporter 会启动一条独立守护线程（presence beacon），只在**主循环心跳迟到**时才补发一次 HTTP 心跳，仅推进控制面的 `last_seen_at`。健康时该线程不发任何请求，因此不改变现有部署行为；卡顿期间实例保持"在线"，而"暂时无法执行命令"由既有的 session / 命令通道状态体现。
+
 多个 worker 副本可以使用同一 source 配置，但 `worker_id` 应使用 pod name、hostname 或其他实例唯一标识，便于诊断 lease 和 attempt。
 
 多进程或 pre-fork 部署时，推荐每个进程使用

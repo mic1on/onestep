@@ -499,6 +499,39 @@ project scaffolding.
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
 
+## onestep-control-plane 0.2.0
+
+**Presence beacon: an instance blocked in a synchronous handler is no longer
+reported offline.**
+
+The heartbeat loop and every task handler share one asyncio event loop, so a
+handler that blocks (`requests`, `boto3`, `pandas`, `time.sleep`) starves the
+heartbeat: `last_seen_at` goes stale, the instance is reported `offline`, and it
+comes back `online` when the block ends -- a flap on every slow call. A blocked
+loop cannot answer WebSocket ping/pong either, so the socket dies before the
+offline window elapses and no in-band fix is possible.
+
+- The reporter now starts a **daemon thread** that watches a monotonic timestamp
+  the heartbeat loop updates each tick, and POSTs
+  `POST /api/v1/agents/presence` **only** once the loop has been silent for
+  longer than its grace window. While the loop is healthy the thread sends
+  nothing, so existing deployments and their traffic are unchanged.
+- The control plane advances `instances.last_seen_at` and nothing else. The
+  frame carries no sequence and no health, so it cannot reorder the heartbeat
+  stream or overwrite the last `status` / `app_snapshot_json` the agent sent.
+  `connectivity` keeps its three values and the console is unchanged.
+- A genuine reporting outage is not hidden: an agent whose socket is broken
+  while its loop is healthy keeps touching the timestamp, stays silent, and is
+  still reported `offline`.
+- Older control planes without the route answer `404`; the beacon logs once and
+  disables itself, so the plugin can ship before the plane.
+- Enabled by default. `ONESTEP_CONTROL_PLANE_PRESENCE_ENABLED` turns it off;
+  `_INTERVAL_S` (default `heartbeat_interval_s`) and `_GRACE_S` (default
+  `2 x heartbeat_interval_s`) tune it.
+- Blocking handlers are still worth converting to `asyncio.to_thread()`: the
+  beacon keeps the instance shown as online, but a blocked loop still delays
+  task throughput and command responses.
+
 ## onestep-control-plane 0.1.3
 
 - **Table-sink topology now reports `batch_size`.** `batch_size` was added to

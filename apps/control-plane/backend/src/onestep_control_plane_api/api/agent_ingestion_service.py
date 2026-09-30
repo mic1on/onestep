@@ -53,6 +53,7 @@ from onestep_control_plane_api.api.notification_service import (
     dispatch_runtime_task_event_notifications,
 )
 from onestep_control_plane_api.api.schemas import (
+    AgentPresenceRequest,
     EventsAcceptedResponse,
     EventsIngestRequest,
     HeartbeatIngestRequest,
@@ -138,6 +139,45 @@ def _ingest_heartbeat_request(
         )
 
     db.commit()
+    return IngestionAcceptedResponse(received_at=received_at)
+
+
+def _ingest_presence_request(
+    db: Session,
+    request: AgentPresenceRequest,
+    *,
+    received_at: datetime,
+) -> IngestionAcceptedResponse:
+    """Advance ``last_seen_at`` for an instance that is alive but stalled.
+
+    Commit-free by design, per the repository convention that ``session_scope``
+    alone owns commit/rollback: the caller's work unit commits the attribute
+    write below. The older ingest bodies in this module predate that convention
+    and still commit internally; this one does not join them.
+
+    This is the only ingest that deliberately does not touch telemetry. It
+    writes ``last_seen_at`` and nothing else -- not ``last_heartbeat_sequence``,
+    not ``last_heartbeat_sent_at``, not ``status``, not ``app_snapshot_json``.
+    A beacon arriving while the loop is blocked must not reorder the heartbeat
+    stream or overwrite the last health/task-control snapshot the agent managed
+    to send, so the presence frame carries no sequence to apply.
+
+    ``ensure_service``/``ensure_instance_stub`` still run, so a beacon that
+    reaches the control plane before the first sync creates the service and
+    instance rows rather than being dropped. They are marked with
+    ``status="unknown"`` and no runtime descriptor, which is exactly what an
+    instance that has never synced looks like.
+    """
+
+    service = ensure_service(db, request.service, update_existing_version=False)
+    instance = ensure_instance_stub(db, service=service, identity=request.service)
+    ensure_instance_identity_matches(instance, request.service)
+
+    # Monotonic: an out-of-order beacon (or a clock skewed agent) must never
+    # move ``last_seen_at`` backwards, which would manufacture an outage.
+    if instance.last_seen_at is None or as_utc(instance.last_seen_at) < received_at:
+        instance.last_seen_at = received_at
+
     return IngestionAcceptedResponse(received_at=received_at)
 
 
@@ -279,6 +319,25 @@ async def ingest_heartbeat_request(
     received_at = received_at or utcnow()
     return await session.run_sync(
         lambda db: _ingest_heartbeat_request(db, request, received_at=received_at)
+    )
+
+
+async def ingest_presence_request(
+    session: AsyncSession,
+    request: AgentPresenceRequest,
+    *,
+    received_at: datetime | None = None,
+) -> IngestionAcceptedResponse:
+    """One presence beacon as its own short work unit.
+
+    ``run_sync`` is the sanctioned bridge to the shared synchronous helpers; it
+    does not open a second transaction, so the row the helpers touch is
+    committed by the caller's ``session_scope``.
+    """
+
+    received_at = received_at or utcnow()
+    return await session.run_sync(
+        lambda db: _ingest_presence_request(db, request, received_at=received_at)
     )
 
 

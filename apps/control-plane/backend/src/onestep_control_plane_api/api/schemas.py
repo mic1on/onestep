@@ -326,6 +326,21 @@ class HeartbeatIngestRequest(IngestionEnvelope):
     health: HealthDescriptor
 
 
+class AgentPresenceRequest(APIModel):
+    """Liveness-only frame from the reporter's presence beacon.
+
+    Deliberately NOT an :class:`IngestionEnvelope`: there is no ``sequence``
+    and no health/runtime payload, because this frame is not telemetry. It
+    exists so an instance whose event loop is blocked inside a synchronous
+    handler can still prove it is alive, and the control plane advances
+    ``last_seen_at`` without touching ``status``, ``app_snapshot_json`` or the
+    heartbeat sequence (so it can never reorder or overwrite real telemetry).
+    """
+
+    service: ServiceDescriptor
+    sent_at: datetime
+
+
 class MetricsWindow(APIModel):
     started_at: datetime
     ended_at: datetime
