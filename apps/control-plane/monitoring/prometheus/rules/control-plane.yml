@@ -116,7 +116,11 @@ groups:
       #
       # These read gauges sampled by the outbox worker on each tick, so they only
       # exist once a worker has run -- an absent family means "never sampled", and
-      # OneStepControlPlaneNotificationQueueUnsampled covers exactly that case.
+      # OneStepControlPlaneNotificationQueueUnsampled covers exactly that case. A
+      # family that EXISTS but has stopped advancing is the other half of the same
+      # problem and needs a different test, because the values are replayed from
+      # process memory on every scrape: OneStepControlPlaneNotificationQueueSamplingStale
+      # reads the age of the sample itself.
       - alert: OneStepControlPlaneNotificationQueueStuck
         expr: onestep_control_plane_notification_outbox_oldest_pending_seconds > 900
         for: 10m
@@ -152,6 +156,59 @@ groups:
             plane is very likely dead while appearing configured. Check outbox worker
             leadership and its logs.
           runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueueunsampled
+
+      # Not an absence guard, so it must NOT use absent(): the frozen family is
+      # present, only its value is old -- `absent()` would be false forever here.
+      #
+      # Threshold: 120s, the same staleness bound the readiness check applies to a
+      # background task (`readiness_task_stale_after_s`), so "stale" means one thing
+      # in this deployment. It is far above the healthy sample cadence -- the worker
+      # samples once per drain (drain_interval 2s + drain time), so an empty queue
+      # stamps a fresh value every ~2s and even a full 50-row batch against a fast
+      # webhook takes ~10s. It is also 8x the 15s scrape interval, so scrape jitter
+      # cannot reach it. A single pathological batch CAN (50 rows x 5s delivery
+      # timeout = 250s), which is why the 10m `for` is load-bearing rather than
+      # decorative: only a sustained condition alerts. That case is not a false
+      # positive either -- the drain's per-row progress callback keeps /readyz green
+      # while the readings age, so this rule is the only thing that can report it.
+      #
+      # `up == 1` gate: deliberate, and it does the same job it does for the guards
+      # above. While the target is down its last scraped sample also ages past the
+      # threshold, and that incident is already named by OneStepControlPlaneApiDown.
+      # The gate makes the two mutually exclusive by construction, so this rule needs
+      # no inhibit entry in alertmanager.yml -- exactly like the absence guards.
+      #
+      # The `and` matches on the full label set on purpose: Prometheus attaches the
+      # scraped target's job/instance labels to the gauge, so each replica is judged
+      # against its OWN last sample. A standby replica never drains and therefore
+      # emits no timestamp at all (no series, so no alert here), and a multi-replica
+      # deployment cannot cross-pair one replica's `up` with another's freshness.
+      - alert: OneStepControlPlaneNotificationQueueSamplingStale
+        expr: |
+          up{job="onestep-control-plane"} == 1
+            and (time() - onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds) > 120
+        for: 10m
+        labels:
+          # `warning`, not critical: the common shape of this incident (the worker
+          # stops ticking) also stalls the readiness check, and
+          # OneStepControlPlaneReadyzFailing already pages for that root cause as
+          # critical. What is left for this rule is the residue /readyz cannot see --
+          # a worker that keeps ticking while its samples stop -- plus the metric-level
+          # statement of the fact. Same tier and `for` as NotificationQueueStuck: a
+          # ticket, not a second page for one root cause.
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Notification outbox readings have gone stale
+          description: >-
+            The last successful outbox sample is more than 2 minutes old while the API
+            target is up, so every outbox gauge is a value replayed from process memory
+            rather than a current reading. NotificationQueueStuck reads the age of the
+            QUEUE and cannot see this (a frozen oldest_pending_seconds stays plausible
+            forever), and NotificationQueueUnsampled needs the family to be ABSENT,
+            which it is not. Treat the outbox gauges as unproven until this clears: the
+            notification plane may be dead while its backlog reads healthy.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueuesamplingstale
 
   - name: onestep-control-plane-latency
     rules:
