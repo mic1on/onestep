@@ -166,6 +166,7 @@ __all__ = [
     "OUTBOX_OLDEST_PENDING_GAUGE",
     "OUTBOX_PENDING_GAUGE",
     "OUTBOX_PERMANENTLY_FAILED_GAUGE",
+    "OUTBOX_SAMPLED_AT_GAUGE",
     "event_counter_snapshot",
     "get_event_loop_lag_sampler",
     "instrument_engine",
@@ -1182,6 +1183,16 @@ OUTBOX_OLDEST_PENDING_GAUGE = "onestep_control_plane_notification_outbox_oldest_
 OUTBOX_PERMANENTLY_FAILED_GAUGE = (
     "onestep_control_plane_notification_outbox_permanently_failed"
 )
+#: Unix timestamp of the last successful sample. The three gauges above are
+#: process-local values replayed on every scrape, so a worker that dies after its
+#: first tick leaves them frozen and forever plausible -- the series never expire
+#: and ``absent()`` can never fire. This timestamp is the age of the READING
+#: (distinct from ``oldest_pending_seconds``, the age of the QUEUE), which is what
+#: makes a frozen reading decidable: ``time() - sampled_at`` grows while the
+#: worker is dead. Same idea as ``db_pool_occupancy_timestamp_seconds``.
+OUTBOX_SAMPLED_AT_GAUGE = (
+    "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+)
 
 #: Last sampled outbox state. Empty until the worker's first tick, so an unsampled
 #: deployment emits NOTHING for these families rather than a misleading zero --
@@ -1207,11 +1218,18 @@ def record_notification_outbox_state(
     distinguishes "busy" from "stuck" (a deep-but-draining queue is fine; a one-row
     queue whose only row is an hour old is not);
     ``permanently_failed`` is the count of abandoned rows.
+
+    Every call also stamps ``OUTBOX_SAMPLED_AT_GAUGE`` with the wall-clock moment of
+    the sample. The queue numbers are snapshots that a scrape merely replays, so
+    without a timestamp a worker that stopped ticking is indistinguishable from a
+    healthy one with a stable queue.
     """
 
+    sampled_at = utcnow()
     with _LOCK:
         _OUTBOX_GAUGES[OUTBOX_PENDING_GAUGE] = float(pending)
         _OUTBOX_GAUGES[OUTBOX_PERMANENTLY_FAILED_GAUGE] = float(permanently_failed)
+        _OUTBOX_GAUGES[OUTBOX_SAMPLED_AT_GAUGE] = sampled_at.timestamp()
         if oldest_pending_seconds is None:
             # No due row: the age is undefined, not zero. Emitting 0 would read as
             # "a row is due right now and fresh", the opposite of the truth.
@@ -1237,6 +1255,12 @@ _OUTBOX_GAUGE_HELP: dict[str, str] = {
     ),
     OUTBOX_PERMANENTLY_FAILED_GAUGE: (
         "Notification outbox rows abandoned after exhausting their retry budget."
+    ),
+    OUTBOX_SAMPLED_AT_GAUGE: (
+        "Unix timestamp of the last successful outbox sample. Absent until the worker "
+        "samples, because 'never sampled' and 'sampled long ago' must be "
+        "distinguishable: the queue gauges are replayed on every scrape, so only this "
+        "series can show that the reading itself has gone stale."
     ),
 }
 
@@ -1601,5 +1625,7 @@ def reset_observability_state() -> None:
             _EVENT_COUNTERS[family] = {value: 0 for value in declared}
         # Cleared rather than zeroed, for the same reason a fresh process emits
         # nothing: after a reset nothing has been sampled, so these families must be
-        # absent until the worker records again.
+        # absent until the worker records again. This includes the sampled-at
+        # timestamp: a stale stamp left behind would date a reading that no longer
+        # exists, so it must disappear with the values it describes.
         _OUTBOX_GAUGES.clear()
