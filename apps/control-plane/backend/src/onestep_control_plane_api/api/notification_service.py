@@ -1136,39 +1136,61 @@ def _missed_start_is_detectable(
     now: datetime,
     online_started_at: datetime,
     grace_seconds: int,
-    interval_seconds: int | None,
     source_kind: str,
+    source_config: dict[str, Any] | None,
 ) -> bool:
     """Whether a missed start for this task/service pair is detectable at all.
 
-    Detection needs an unbroken online run long enough to contain a scheduled slot
-    *plus* its whole grace period, because the scan only reports a slot once
-    ``scheduled_at + grace <= now`` and drops every slot that predates the current
-    online run. That is:
+    The scan reports a slot only when it is already due (``scheduled_at + grace <= now``,
+    which the slot generators encode) and does not predate the current online run (the
+    ``scheduled_at < online_started_at`` guard in the scan loop). So the check is
+    evaluable exactly when the task's own cadence yields a due slot inside the current
+    online run; a service that restarts faster than that is not merely quiet, it is
+    UNEVALUABLE -- measured directly: with a 5-minute interval, ``immediate: false`` and
+    a 300 s grace, a service online 400 s yields ZERO candidate slots while one online
+    an hour yields eleven.
 
-        now - online_started_at >= grace_seconds + interval_seconds
+    The window therefore follows the cadence the scan actually uses, not one formula:
 
-    A service restarting faster than that never satisfies it, so its missed starts are
-    invisible -- measured directly: with a 5-minute interval and a 300 s grace, a
-    service online 400 s yields ZERO candidate slots while one online an hour yields
-    eleven. Alerting is not merely quiet, it is unevaluable.
+    * ``immediate: true`` anchors the interval schedule at the online start itself
+      (``_derive_interval_anchor`` returns the anchor unchanged), so the first slot is
+      due after ``grace_seconds`` alone -- not ``grace_seconds + interval_seconds``.
+    * ``immediate: false`` waits one interval before the first slot, hence
+      ``grace_seconds + interval_seconds``.
+    * A cron expression is expanded instead of assumed: its slots come from the
+      expression alone (the generator never consults the online start), and a cron
+      period is arbitrary -- every minute and once a day are both valid -- so no fixed
+      period may be invented for it.
 
-    This is a *visibility* predicate, not a decision to alert. Changing what gets
-    alerted on would silently change operator-visible behaviour, so the caller uses it
-    only to emit a structured warning. A real fix needs a record of when a service was
-    actually online, which this schema does not have.
+    This is a *visibility* predicate, not a decision to alert. It only drives the
+    ``missed_start_scan_blind`` structured warning; the scan itself keeps evaluating
+    every candidate slot, so it can never silently suppress a notification. A real fix
+    needs a record of when a service was actually online, which this schema does not
+    have.
     """
 
+    online_started_at_utc = as_utc_datetime(online_started_at)
     if source_kind == "cron":
-        # A cron schedule's own period is unknown without expanding the expression, so
-        # only the grace period can be asserted; assume the shortest possible period
-        # (one minute) rather than inventing a larger one.
-        interval_seconds = 60
-    if interval_seconds is None or interval_seconds <= 0:
+        # Ask the same generator the scan uses whether any already-due slot survives the
+        # post-restart guard. That keeps the two in lockstep and needs no assumed period.
+        return any(
+            slot >= online_started_at_utc
+            for slot in _iter_expected_cron_slots(
+                now=now,
+                grace_seconds=grace_seconds,
+                source_config=source_config,
+            )
+        )
+    interval_seconds = _interval_seconds_from_source_config(source_config)
+    if interval_seconds is None:
+        # A cadence that cannot be parsed has no window to fall short of, so claiming a
+        # blind spot here would describe a config problem as a restart problem.
         return True
 
-    online_seconds = (now - as_utc_datetime(online_started_at)).total_seconds()
-    return online_seconds >= grace_seconds + interval_seconds
+    immediate = bool((source_config or {}).get("immediate", False))
+    anchor_offset = 0 if immediate else interval_seconds
+    online_seconds = (now - online_started_at_utc).total_seconds()
+    return online_seconds >= grace_seconds + anchor_offset
 
 
 def _task_started_for_scheduled_slot(
@@ -2173,18 +2195,20 @@ def _scan_and_dispatch_missed_start_notifications_sync(
                 grace_seconds=channel.missed_start_grace_seconds,
                 online_started_at=online_started_at,
             )
-            # A service that restarts more often than grace+interval can never be
-            # caught by this check, and that silence is indistinguishable from health.
-            # Detection needs an unbroken online run long enough to contain a full
-            # grace period after a scheduled slot, and every candidate slot that
-            # predates the restart is dropped by the guard inside the loop below.
-            # Make the blind spot visible instead of silently reporting nothing.
+            # A service that restarts more often than its own cadence plus the grace
+            # period yields no slot the loop below can report, and that silence is
+            # indistinguishable from health. Make the blind spot visible instead of
+            # silently reporting nothing -- but only in the log. This predicate is
+            # observability, not a decision: every candidate slot still goes through
+            # the loop below, whose `scheduled_at < online_started_at` guard is what
+            # actually drops pre-restart slots. Skipping the loop here once swallowed
+            # real missed-start notifications.
             if not _missed_start_is_detectable(
                 now=current_time,
                 online_started_at=online_started_at,
                 grace_seconds=channel.missed_start_grace_seconds,
-                interval_seconds=interval_seconds,
                 source_kind=task_definition.source_kind,
+                source_config=task_definition.source_config_json,
             ):
                 emit_structured_log(
                     logger,
@@ -2200,9 +2224,8 @@ def _scan_and_dispatch_missed_start_notifications_sync(
                     ),
                     grace_seconds=channel.missed_start_grace_seconds,
                     interval_seconds=interval_seconds,
-                    reason="service_restarts_faster_than_grace_plus_interval",
+                    reason="service_restarts_faster_than_grace_plus_cadence",
                 )
-                continue
             for scheduled_at in expected_slots:
                 if scheduled_at < online_started_at:
                     continue
