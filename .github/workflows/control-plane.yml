@@ -83,21 +83,11 @@ jobs:
       - name: Validate monitoring configuration
         run: bash scripts/check-monitoring.sh
 
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
-      - name: Build control plane image
-        run: >-
-          docker build --target plane -t onestep-control-plane:ci
-          apps/control-plane
-
   smoke:
     runs-on: ubuntu-latest
     needs:
       - backend
       - frontend
-      - docker
     defaults:
       run:
         working-directory: apps/control-plane
@@ -149,13 +139,43 @@ jobs:
             type=raw,value=latest
             type=sha,format=long
 
+      # Invoked through scripts/retry-docker-build.sh rather than
+      # docker/build-push-action: the action has no retry knob, and a transient
+      # registry 429 here would fail the release rather than the build. The
+      # buildx invocation is otherwise equivalent to what the action ran.
       - name: Build and push control plane image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.18.0
-        with:
-          context: ./apps/control-plane
-          file: ./apps/control-plane/Dockerfile
-          target: plane
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE_LABELS: ${{ steps.meta.outputs.labels }}
+          # docker/build-push-action adds this attestation by default for public
+          # repositories; reproduce it so the published image keeps the same
+          # provenance metadata as before.
+          PROVENANCE_BUILDER_ID: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            tag_args+=(--tag "$tag")
+          done <<EOF
+          $IMAGE_TAGS
+          EOF
+
+          label_args=()
+          while IFS= read -r label; do
+            [ -n "$label" ] || continue
+            label_args+=(--label "$label")
+          done <<EOF
+          $IMAGE_LABELS
+          EOF
+
+          bash apps/control-plane/scripts/retry-docker-build.sh \
+            docker buildx build \
+              --file ./apps/control-plane/Dockerfile \
+              --target plane \
+              --platform linux/amd64,linux/arm64 \
+              --attest "type=provenance,mode=max,builder-id=$PROVENANCE_BUILDER_ID" \
+              --push \
+              "${tag_args[@]}" "${label_args[@]}" \
+              ./apps/control-plane

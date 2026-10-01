@@ -99,7 +99,12 @@ trap cleanup EXIT INT TERM
 
 if [ "$SMOKE_MANAGE_STACK" = "1" ] || [ "$SMOKE_MANAGE_STACK" = "true" ]; then
   if [ "$SMOKE_BUILD" = "1" ] || [ "$SMOKE_BUILD" = "true" ]; then
-    compose build plane
+    # Base-image pulls can fail on registry rate limits (ECR Public answers
+    # anonymous pulls with "toomanyrequests / Data limit exceeded"), which says
+    # nothing about the code under test. Retry those before failing the smoke run.
+    # shellcheck disable=SC2086
+    bash "$ROOT_DIR/scripts/retry-docker-build.sh" \
+      docker compose ${ENV_ARG:+$ENV_ARG }-f "$COMPOSE_PATH" build plane
   fi
   if compose config --services | grep -qx postgres; then
     compose up -d postgres
