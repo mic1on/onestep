@@ -65,7 +65,6 @@ import {
   Pause,
   RotateCcw,
   RefreshCw,
-  Workflow,
   ChevronRight,
   Terminal,
   ArrowLeft,
@@ -219,9 +218,8 @@ export default function App() {
 
   // --- Loading / Overlay State ---
   const [isRestartingAll, setIsRestartingAll] = useState(false);
-  const [isDeploying, setIsDeploying] = useState(false);
+  const [isSyncPending, setIsSyncPending] = useState(false);
   const [isLogoutPending, setIsLogoutPending] = useState(false);
-  const [deploymentProgress, setDeploymentProgress] = useState(0);
   const [refreshFeedbackKey, setRefreshFeedbackKey] = useState(0);
   // Task id currently awaiting a pause/resume outcome from the worker (command
   // dispatched, polling pause_requested until it reflects the new state or times
@@ -656,35 +654,28 @@ export default function App() {
     addToast(tr('toast.serviceCommandNoTargets', { name: selectedService.name }), 'warn');
   };
 
-  // Deploy Config / Code Update Simulation
-  const handleDeployUpdate = async () => {
+  // Request a fresh runtime snapshot from online service instances.
+  const handleSyncNow = async () => {
     if (selectedService.apiName && selectedService.environment) {
       if (!serviceHasOnlineInstances) {
         addToast(tr('toast.serviceNoOnlineInstances', { name: selectedService.name }), 'warn');
         return;
       }
-      setIsDeploying(true);
-      setDeploymentProgress(30);
-      addToast(tr('toast.deployDispatch', { name: selectedService.name }), 'info');
+      setIsSyncPending(true);
+      addToast(tr('toast.syncDispatch', { name: selectedService.name }), 'info');
       try {
         const response = await dispatchServiceCommand(selectedService, 'sync_now');
-        setDeploymentProgress(100);
-        handleFanoutResponse(response, selectedService.name, tr('toast.deployAccepted', { name: selectedService.name }));
+        handleFanoutResponse(response, selectedService.name, tr('toast.syncAccepted', { name: selectedService.name }));
         await refreshControlPlaneData(selectedService.id, true);
       } catch (error) {
         handleApiActionError(error, tr('error.syncFailed'));
       } finally {
-        setTimeout(() => {
-          setIsDeploying(false);
-          setDeploymentProgress(0);
-        }, 600);
+        setIsSyncPending(false);
       }
       return;
     }
 
-    // No connected control plane: do not simulate a rolling deploy. The button
-    // is disabled in this state; reaching here means no API identity, so
-    // surface that honestly instead of faking deploy progress + version bumps.
+    // A service without an API identity has no command targets.
     addToast(tr('toast.serviceCommandNoTargets', { name: selectedService.name }), 'warn');
   };
 
@@ -1360,43 +1351,19 @@ export default function App() {
                         <span>{isRestartingAll ? tr('button.restarting') : tr('button.restartAll')}</span>
                       </button>
                       <button
-                        aria-busy={isDeploying}
-                        onClick={handleDeployUpdate}
-                        disabled={isDeploying || !serviceHasOnlineInstances || !apiConnected}
+                        aria-busy={isSyncPending}
+                        onClick={handleSyncNow}
+                        disabled={isSyncPending || !serviceHasOnlineInstances || !apiConnected}
                         className="ui-pressable flex min-w-[128px] items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
                         type="button"
                       >
-                        <Workflow className="w-4 h-4" />
-                        <span>{isDeploying ? tr('button.deploying') : tr('button.deployUpdate')}</span>
+                        <RefreshCw className={`w-4 h-4 ${isSyncPending ? 'animate-spin' : ''}`} />
+                        <span>{isSyncPending ? tr('button.requestingSync') : tr('button.syncNow')}</span>
                       </button>
                     </>
                   )}
                 </div>
               </div>
-
-              {/* Deploy rolling progress indicator */}
-              {isDeploying && (
-                <div className="ui-panel-state-enter space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-4 font-medium">
-                  <div className="flex justify-between items-center text-xs text-blue-700 font-bold">
-                    <span>{tr('service.deployProgress')}</span>
-                    <span>{deploymentProgress}%</span>
-                  </div>
-                  <div
-                    aria-label={tr('service.deployProgress')}
-                    aria-valuemax={100}
-                    aria-valuemin={0}
-                    aria-valuenow={deploymentProgress}
-                    className="h-2 w-full overflow-hidden rounded-full bg-indigo-100"
-                    role="progressbar"
-                  >
-                    <div
-                      aria-hidden="true"
-                      className="ui-progress-fill h-full rounded-full bg-indigo-600"
-                      style={{ '--ui-progress': deploymentProgress / 100 } as CSSProperties}
-                    />
-                  </div>
-                </div>
-              )}
 
               {/* Global Reboot loading indicator */}
               {isRestartingAll && (

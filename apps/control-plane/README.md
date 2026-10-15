@@ -52,7 +52,13 @@ export ONESTEP_CP_INGEST_TOKENS='token-a,token-b'
 export ONESTEP_CP_INGEST_TOKENS='["token-a","token-b"]'
 ```
 
-Prometheus can scrape `GET /metrics` with the same bearer token. Workers do not
+Runtime WebSocket ingestion and `POST /api/v1/agents/presence` also accept a
+registered worker agent's connection token. The worker agent supplies this token
+to its deployed runtimes by default, so presence beacons work even without a
+separate static ingest token. Presence authentication uses a short async database
+session that closes before ingestion begins.
+
+Prometheus can scrape `GET /metrics` with a configured static ingest token. Workers do not
 need to expose scrape ports; they push telemetry outbound to the plane, and the
 plane exports retained runtime and custom handler metrics in Prometheus text
 format.
@@ -61,6 +67,27 @@ In `dev`, the monitoring console can optionally use a single shared username/pas
 via `ONESTEP_CP_CONSOLE_AUTH_USERNAME` and `ONESTEP_CP_CONSOLE_AUTH_PASSWORD`. In
 production-style environments, prefer database-backed local users instead of the shared
 credential fallback.
+
+Console authorization distinguishes configuration changes from deployment control:
+
+| Action | Viewer | Operator | Admin |
+| --- | --- | --- | --- |
+| Read service, task, instance, Worker, Connector, and deployment summaries | Yes | Yes | Yes |
+| Create, edit, or delete Worker and Connector configuration; upload workflow packages | No | Yes | Yes |
+| Download a compiled Worker package, which can contain connector credentials | No | No | Yes |
+| Create deployments or deploy a saved Worker | No | No | Yes |
+| Stop or restart deployments | No | No | Yes, with recent authentication |
+
+Runtime commands retain their existing policy: operators may issue non-destructive
+commands; `shutdown`, `restart`, and `drain` require an admin with recent
+authentication. The unconfigured `dev` console retains its existing authentication
+bypass for Worker, Connector, and deployment management. Once local users or shared
+console credentials are configured, that bypass no longer applies. Notification
+settings keep requiring an authenticated operator or admin.
+
+The service detail action **Sync now** sends `sync_now` to refresh runtime telemetry.
+Its confirmation means the command was accepted; it does not deploy code or
+configuration.
 
 Browser access to the query API is controlled by `ONESTEP_CP_CORS_ALLOW_ORIGINS`. It defaults to
 no allowed browser origins, so configure it explicitly when the UI is hosted separately. For local

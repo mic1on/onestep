@@ -943,7 +943,7 @@ test("dispatches service, task, and instance commands to the control-plane API",
   await page.getByRole("button", { name: "Restart All" }).click();
   await expect(page.getByText("Restart command accepted for billing-sync / prod.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Deploy Update" }).click();
+  await page.getByRole("button", { name: "Sync Now" }).click();
   await expect(page.getByText("Sync command accepted for billing-sync / prod.")).toBeVisible();
 
   await page.getByText("orders_to_ledger").first().click();

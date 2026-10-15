@@ -23,17 +23,52 @@ handler must never receive a synchronous ``Session``.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials
 
 from onestep_control_plane_api.api.agent_ingestion_service import ingest_presence_request
 from onestep_control_plane_api.api.schemas import (
     AgentPresenceRequest,
     IngestionAcceptedResponse,
 )
-from onestep_control_plane_api.api.security import require_ingest_token
+from onestep_control_plane_api.api.security import (
+    _match_worker_agent_token,
+    _validate_ingest_token_value,
+    bearer_scheme,
+)
 from onestep_control_plane_api.db.session import session_scope
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agent-presence"])
+
+
+async def require_presence_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)],
+) -> str:
+    """Accept the same reporter identities as the agent WebSocket.
+
+    Worker deployments use their host's connection token for both telemetry and
+    presence. Its lookup closes the authentication session before ingestion;
+    configured ingest tokens need no database lookup.
+    """
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = credentials.credentials
+    if _validate_ingest_token_value(token) or await _match_worker_agent_token(token):
+        return token
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="invalid bearer token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @router.post(
@@ -43,7 +78,7 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agent-presence"])
 )
 async def ingest_presence(
     request: AgentPresenceRequest,
-    _token: str = Depends(require_ingest_token),
+    _token: str = Depends(require_presence_token),
 ) -> IngestionAcceptedResponse:
     """Record that an instance is alive, without touching its telemetry.
 
