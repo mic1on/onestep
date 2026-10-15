@@ -27,6 +27,7 @@ from onestep_control_plane_api.api.notification_service import (
     scan_and_dispatch_instance_connectivity_notifications,
 )
 from onestep_control_plane_api.api.query_support import get_instance_connectivity, online_cutoff
+from onestep_control_plane_api.api.routers import agent_presence
 from onestep_control_plane_api.api.schemas import (
     AgentPresenceRequest,
     HeartbeatIngestRequest,
@@ -42,6 +43,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from test_agent_ingestion import ingest_heartbeat, make_heartbeat_payload
 from test_notification_service import seed_channel
+from test_worker_agent_ws import _register_worker_agent
 
 INSTANCE_ID = "8f9f0d7c-4b4a-4a58-8a6f-52d6735f44df"
 OTHER_INSTANCE_ID = "4f25903d-44d7-4f5a-a7aa-865c2665289a"
@@ -356,8 +358,14 @@ def test_presence_cancels_an_already_pending_offline_flip(
 
 
 def test_presence_endpoint_accepts_and_advances_last_seen_at(
-    client, db_session, auth_headers
+    client, db_session, auth_headers, async_db, monkeypatch
 ) -> None:
+    async def unexpected_worker_token_lookup(_token):
+        raise AssertionError("static ingest tokens must not query worker-agent authentication")
+
+    monkeypatch.setattr(
+        agent_presence, "_match_worker_agent_token", unexpected_worker_token_lookup
+    )
     response = client.post(
         "/api/v1/agents/presence",
         json=presence_payload(),
@@ -371,15 +379,77 @@ def test_presence_endpoint_accepts_and_advances_last_seen_at(
     assert instance.status == "unknown"
     assert instance.last_heartbeat_sequence is None
     assert get_instance_connectivity(instance, cutoff=online_cutoff(datetime.now(UTC))) == "online"
+    assert async_db.open_sessions == []
+    assert async_db.checkedout() == 0
 
 
-def test_presence_endpoint_requires_a_bearer_token(client) -> None:
-    response = client.post("/api/v1/agents/presence", json=presence_payload())
+@pytest.mark.parametrize("configured_ingest_tokens", [True, False])
+def test_presence_endpoint_accepts_worker_agent_token_and_releases_auth_session(
+    client,
+    db_session,
+    async_db,
+    monkeypatch,
+    worker_agent_registration_token,
+    configured_ingest_tokens,
+) -> None:
+    registration = _register_worker_agent(client, worker_agent_registration_token)
+    if not configured_ingest_tokens:
+        monkeypatch.setattr(settings, "ingest_tokens", [])
+
+    original_ingest = agent_presence.ingest_presence_request
+    ingestion_calls = 0
+
+    async def ingest_after_auth_released(session, request):
+        nonlocal ingestion_calls
+        ingestion_calls += 1
+        # The new ingestion session is open, but no authentication session or
+        # checked-out connection may survive into this work unit.
+        assert async_db.open_sessions == [session]
+        assert async_db.checkedout() == 0
+        return await original_ingest(session, request)
+
+    monkeypatch.setattr(agent_presence, "ingest_presence_request", ingest_after_auth_released)
+    response = client.post(
+        "/api/v1/agents/presence",
+        json=presence_payload(),
+        headers={"Authorization": f"Bearer {registration['connection_token']}"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "accepted"
+    assert ingestion_calls == 1
+    assert load_instance(db_session).last_seen_at is not None
+    assert async_db.open_sessions == []
+    assert async_db.checkedout() == 0
+
+
+@pytest.mark.parametrize("configured_ingest_tokens", [True, False])
+@pytest.mark.parametrize("authorization", [None, "Bearer", "Basic not-a-bearer-token"])
+def test_presence_endpoint_requires_a_bearer_token(
+    client, db_session, async_db, monkeypatch, configured_ingest_tokens, authorization
+) -> None:
+    if not configured_ingest_tokens:
+        monkeypatch.setattr(settings, "ingest_tokens", [])
+    checkouts_before = async_db.checkouts
+    headers = {} if authorization is None else {"Authorization": authorization}
+    response = client.post(
+        "/api/v1/agents/presence", json=presence_payload(), headers=headers
+    )
 
     assert response.status_code == 401
+    assert response.json()["detail"] == "missing bearer token"
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert db_session.scalar(select(Instance)) is None
+    assert async_db.checkouts == checkouts_before
+    assert async_db.open_sessions == []
 
 
-def test_presence_endpoint_rejects_a_bad_token(client) -> None:
+@pytest.mark.parametrize("configured_ingest_tokens", [True, False])
+def test_presence_endpoint_rejects_a_bad_token(
+    client, db_session, async_db, monkeypatch, configured_ingest_tokens
+) -> None:
+    if not configured_ingest_tokens:
+        monkeypatch.setattr(settings, "ingest_tokens", [])
     response = client.post(
         "/api/v1/agents/presence",
         json=presence_payload(),
@@ -387,6 +457,11 @@ def test_presence_endpoint_rejects_a_bad_token(client) -> None:
     )
 
     assert response.status_code == 401
+    assert response.json()["detail"] == "invalid bearer token"
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert db_session.scalar(select(Instance)) is None
+    assert async_db.open_sessions == []
+    assert async_db.checkedout() == 0
 
 
 def test_presence_endpoint_rejects_a_body_with_a_sequence(client, auth_headers) -> None:

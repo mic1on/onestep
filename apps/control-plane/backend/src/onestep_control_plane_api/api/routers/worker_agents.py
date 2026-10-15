@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, Header, Query
+from fastapi import APIRouter, Body, Depends, Header, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -19,7 +19,10 @@ from onestep_control_plane_api.api.schemas import (
     WorkflowPackageSummary,
 )
 from onestep_control_plane_api.api.security import (
+    require_command_role,
     require_console_auth,
+    require_console_management_admin,
+    require_console_management_write_access,
     require_worker_agent_connection,
 )
 from onestep_control_plane_api.api.worker_agent_connection_registry import (
@@ -105,7 +108,7 @@ def create_workflow_package_endpoint(
     filename: str = Query("workflow.zip", min_length=1, max_length=255),
     entrypoint: str | None = Query(None, min_length=1, max_length=255),
     content_type: Annotated[str | None, Header(alias="content-type")] = None,
-    identity=Depends(require_console_auth),
+    identity=Depends(require_console_management_write_access),
     db: Session = Depends(get_db_session),
 ) -> WorkflowPackageSummary:
     package = create_workflow_package(
@@ -144,7 +147,7 @@ def download_workflow_package_endpoint(
 )
 async def create_worker_deployment_endpoint(
     request: WorkerDeploymentCreateRequest,
-    identity=Depends(require_console_auth),
+    identity=Depends(require_console_management_admin),
     db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
     deployment = create_worker_deployment(
@@ -165,9 +168,11 @@ async def create_worker_deployment_endpoint(
 )
 async def stop_worker_deployment_endpoint(
     deployment_id: UUID,
-    _: object = Depends(require_console_auth),
+    http_request: Request,
+    identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
+    require_command_role("shutdown", identity, http_request)
     deployment = get_worker_deployment_or_404(db, deployment_id)
     command = create_stop_deployment_command(db, deployment=deployment)
     await _dispatch_if_connected(db, deployment=deployment, command=command)
@@ -181,9 +186,11 @@ async def stop_worker_deployment_endpoint(
 )
 async def restart_worker_deployment_endpoint(
     deployment_id: UUID,
-    _: object = Depends(require_console_auth),
+    http_request: Request,
+    identity=Depends(require_console_auth),
     db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
+    require_command_role("restart", identity, http_request)
     deployment = get_worker_deployment_or_404(db, deployment_id)
     package = get_workflow_package_or_404(db, deployment.workflow_package_id)
     command = create_restart_deployment_command(db, deployment=deployment, package=package)

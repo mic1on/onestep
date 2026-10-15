@@ -16,6 +16,12 @@
 
 - 契约测试：`tests/contract/test_app_schema.py` 断言 Schema 与严格校验一致（资源属性取自 `handler.allowed_fields` 而非资源目录 `fields`——目录对 `mysql`/`postgres`/`rabbitmq`/`redis` 展示 `host`/`username`/`password`，但严格校验拒绝它们）、发布副本不漂移、以及在最小安装（未装连接器插件）下跳过而非误报。`tests/contract/test_config_validation_issues.py` 断言收集模式的**首个**问题与 fail-fast 报错逐字一致，防止两条路径漂移。
 
+- **收紧控制面管理接口权限。** `viewer` 不能再修改 Worker/Connector、上传工作包或操作部署；配置写入和上传允许 `operator`/`admin`，含连接凭据的编译包下载与部署操作限 `admin`，停止/重启部署复用近期登录要求。保留未配置认证的开发环境旁路，并增加权限矩阵回归测试。
+
+- **修复 Worker Agent 默认令牌的 presence 兼容。** HTTP presence 与运行时 WebSocket 一样接受已注册 Worker Agent 的连接令牌，包含未配置静态 ingest token 的情况；令牌校验的异步数据库会话在写入 presence 前释放，避免有效运行实例的补充心跳被 401 拒绝。
+
+- **控制台同步操作使用真实语义。** 原“部署更新”实际下发 `sync_now`，现改为同步命令的下发/接受提示，移除伪造的百分比和硬编码版本的滚动部署进度。
+
 ## onestep-sql 0.7.1
 
 批内唯一校验改为按块调用驱动，减少逐行等待，并遵守真实包大小限制（#228）。

@@ -397,6 +397,26 @@ def require_console_admin(
     )
 
 
+def require_console_management_write_access(
+    identity: LocalIdentity | None = Depends(require_console_auth),
+) -> LocalIdentity | None:
+    """Protect configuration changes while preserving the explicit dev bypass."""
+
+    if identity is None:
+        return None
+    return require_console_write_access(identity)
+
+
+def require_console_management_admin(
+    identity: LocalIdentity | None = Depends(require_console_auth),
+) -> LocalIdentity | None:
+    """Protect deployments and credential exports, including their dev workflow."""
+
+    if identity is None:
+        return None
+    return require_console_admin(identity)
+
+
 def require_command_role(
     command_kind: str,
     identity: LocalIdentity | None,
