@@ -21,6 +21,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `tests/contract/test_official_connector_conformance.py` derives the official connector set from plugins that still declare `[project.entry-points."onestep.resources"]`; the `sql` profile owns MySQL+PostgreSQL conformance since the shims dropped their entry points.
 - Plugin test dirs share basenames (e.g. `test_state_sqlalchemy.py`), so run each plugin suite in its own pytest process — see `scripts/run-reliability-checks.sh`.
 - Migration guide: `docs/guide/migrate-to-onestep-sql.md`.
+- Binlog recovery contract: `docs/broker/mysql.md` and `plugins/onestep-mysql/tests/test_mysql_binlog_recovery.py` (real MySQL coverage beside it in `integration/`). Checkpoints cover complete events only; attempts/retries are process-local. Keep driver reads nonblocking and emulate `blocking=True` with async polling: closing a blocking PyMySQL read from another thread can deadlock or reconnect.
 
 ## OneStepApp lifecycle decomposition (issue #146)
 
