@@ -63,7 +63,7 @@ class RedisStreamDelivery(Delivery):
 
     async def start_processing(self) -> None:
         if self._queue is not None:
-            async with self._queue._delivery_lock:
+            async with self._queue._runtime_lock("delivery"):
                 self._queue._check_active(self)
                 await self._queue._owned_action(self._message_id, "renew")
 
@@ -73,7 +73,7 @@ class RedisStreamDelivery(Delivery):
                 await self._redis.xack(self._stream, self._group, self._message_id)
                 self._settled = True
             return
-        async with self._queue._delivery_lock:
+        async with self._queue._runtime_lock("delivery"):
             if self._settled:
                 return
             self._queue._check_active(self)
@@ -259,10 +259,31 @@ class RedisStreamQueue(Source, Sink):
         self._active: dict[bytes | str, RedisStreamDelivery] = {}
         self._ready: deque[RedisStreamDelivery] = deque()
         self._heartbeat: asyncio.Task | None = None
-        self._fetch_lock = asyncio.Lock()
-        self._delivery_lock = asyncio.Lock()
-        self._transport_lock = asyncio.Lock()
+        self._fetch_lock: asyncio.Lock | None = None
+        self._delivery_lock: asyncio.Lock | None = None
+        self._transport_lock: asyncio.Lock | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._acquired = False
+
+    def _runtime_lock(self, kind: str) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        if self._loop is not current_loop:
+            # Python 3.9 locks bind at construction. Resources are commonly built
+            # synchronously (including after asyncio.run has closed its loop).
+            self._loop = current_loop
+            self._fetch_lock = asyncio.Lock()
+            self._delivery_lock = asyncio.Lock()
+            self._transport_lock = asyncio.Lock()
+            self._redis = None
+            self._opened = False
+            self._acquired = False
+            self._heartbeat = None
+            self._active.clear()
+            self._ready.clear()
+            self._claim_cursor = "0-0"
+        lock = getattr(self, f"_{kind}_lock")
+        assert lock is not None
+        return lock
 
     def _connection_secrets(self) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
@@ -272,7 +293,7 @@ class RedisStreamQueue(Source, Sink):
 
     async def open(self) -> None:
         """Open connection and create consumer group if needed."""
-        async with self._transport_lock:
+        async with self._runtime_lock("transport"):
             await self._open_connection()
 
     async def _open_connection(self) -> None:
@@ -327,7 +348,7 @@ class RedisStreamQueue(Source, Sink):
 
     async def fetch(self, limit: int) -> list[Delivery]:
         # A single cursor and local reservation set protect concurrent fetch calls.
-        async with self._fetch_lock:
+        async with self._runtime_lock("fetch"):
             return await self._fetch(limit)
 
     async def _fetch(self, limit: int) -> list[Delivery]:
@@ -371,7 +392,7 @@ class RedisStreamQueue(Source, Sink):
             raise connector_error from None
 
     async def _process_messages(self, messages: list, *, reclaimed: bool = False) -> list[Delivery]:
-        async with self._delivery_lock:
+        async with self._runtime_lock("delivery"):
             return await self._process_messages_locked(messages, reclaimed=reclaimed)
 
     async def _process_messages_locked(self, messages: list, *, reclaimed: bool) -> list[Delivery]:
@@ -435,7 +456,7 @@ class RedisStreamQueue(Source, Sink):
             raise RedisOwnershipLostError("Redis delivery no longer active")
 
     async def _requeue(self, delivery: RedisStreamDelivery, *, increment: bool) -> None:
-        async with self._delivery_lock:
+        async with self._runtime_lock("delivery"):
             await self._requeue_locked(delivery, increment=increment)
 
     async def _requeue_locked(self, delivery: RedisStreamDelivery, *, increment: bool) -> None:
@@ -458,7 +479,7 @@ class RedisStreamQueue(Source, Sink):
         while True:
             await asyncio.sleep(self.reclaim_idle_ms / 3000)
             for message_id in list(self._active):
-                async with self._delivery_lock:
+                async with self._runtime_lock("delivery"):
                     if message_id not in self._active:
                         continue
                     try:
@@ -508,7 +529,7 @@ class RedisStreamQueue(Source, Sink):
 
     async def _reset_transport_state(self) -> None:
         """Reset transport state on error."""
-        async with self._transport_lock:
+        async with self._runtime_lock("transport"):
             await self._reset_transport_locked()
 
     async def _reset_transport_locked(self) -> None:

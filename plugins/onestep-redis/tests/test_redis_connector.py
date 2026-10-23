@@ -223,3 +223,40 @@ class TestRedisStreamQueue:
 
             assert mock_redis.xreadgroup.await_count == 2
             await stream.close()
+
+
+def test_construct_after_closed_loop_and_use_in_fresh_loops():
+    """Python 3.9 construction must not ask for an ambient event loop."""
+    import asyncio
+
+    async def previous_run():
+        pass
+
+    asyncio.run(previous_run())
+    connector = RedisConnector('redis://localhost')
+    stream = connector.stream('events')
+    assert stream._fetch_lock is None
+    assert stream._delivery_lock is None
+    assert stream._transport_lock is None
+    previous_locks = None
+
+    async def use_stream():
+        nonlocal previous_locks
+        client = AsyncMock()
+        client.xautoclaim.return_value = [b'0-0', [], []]
+        client.xreadgroup.return_value = [[b'events', [(b'1-0', {b'body': b'{}'})]]]
+        client.eval.return_value = 1
+        with patch.object(connector, 'acquire', return_value=client), patch.object(connector, 'release'):
+            delivery = (await stream.fetch(1))[0]
+            await delivery.start_processing()
+            await delivery.ack()
+            locks = (stream._fetch_lock, stream._delivery_lock, stream._transport_lock)
+            assert all(lock is not None for lock in locks)
+            if previous_locks is not None:
+                assert all(old is not new for old, new in zip(previous_locks, locks))
+            previous_locks = locks
+            await stream.close()
+            assert stream._heartbeat is None
+
+    asyncio.run(use_stream())
+    asyncio.run(use_stream())
