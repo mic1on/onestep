@@ -28,6 +28,7 @@ import { dirname, join } from 'node:path';
 
 import { PostgresBackend } from '../src/backends/postgres.ts';
 import { ExecutionClient } from '../src/client.ts';
+import { parseDbTimestamp } from '../src/schema.ts';
 import { ExecutionConflict, ExecutionNotReady } from '../src/errors.ts';
 import { PyFloat, submissionDigest } from '../src/canonical.ts';
 
@@ -263,6 +264,20 @@ test('microseconds survive reads, transactions and complete pagination', async (
       cursor = page.nextCursor;
     }
     assert.deepEqual(actual, expected, `complete pagination with limit ${limit}`);
+  }
+});
+
+test('binary pool preferences preserve microseconds inside and outside transactions', async (t) => {
+  if (!available) return t.skip(skipReason);
+  const binary = await PostgresBackend.create({ connectionString: DSN, poolOptions: { binary: true } });
+  try {
+    for (const stamp of ['2026-10-23T10:00:00.900001Z', '1969-12-31T23:59:59.999999Z']) {
+      const sql = 'SELECT $1::timestamptz AS stamp';
+      assert.equal(parseDbTimestamp((await binary.query(sql, [stamp]))[0].stamp), stamp.replace('Z', '+00:00'));
+      assert.equal(parseDbTimestamp((await binary.transaction((tx) => tx.query(sql, [stamp])))[0].stamp), stamp.replace('Z', '+00:00'));
+    }
+  } finally {
+    await binary.close();
   }
 });
 

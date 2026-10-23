@@ -38,7 +38,7 @@ export interface PostgresBackendOptions {
   connectionString: string;
   /** Maximum pooled connections. */
   max?: number;
-  /** Extra options forwarded to pg.Pool. */
+  /** Extra pg.Pool options; timestamp parsers and text result format are enforced. */
   poolOptions?: Record<string, unknown>;
   /** Injectable pg module (for tests); defaults to a dynamic import. */
   pgModule?: PgModule;
@@ -69,11 +69,13 @@ export class PostgresBackend implements Backend {
       connectionString: options.connectionString,
       max: options.max ?? 10,
       ...(options.poolOptions ?? {}),
+      // Keep raw microseconds before any driver Date/binary conversion.
+      binary: false,
       types: {
         getTypeParser(oid: number, format?: string) {
           // The tracked-execution schema uses TIMESTAMPTZ (OID 1184).
           // Keep caller parsers for every other type; never mutate pg.types.
-          if (oid === 1184 && format !== 'binary') return (value: string) => value;
+          if (oid === 1184) return (value: string) => value;
           return inheritedTypes.getTypeParser(oid, format);
         },
       },
