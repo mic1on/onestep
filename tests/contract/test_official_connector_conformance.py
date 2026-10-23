@@ -65,6 +65,7 @@ PROFILES = (
         contracts={
             Capability.BASIC_SOURCE: (
                 "plugins/onestep-kafka/tests/test_kafka_connector.py::test_kafka_topic_fetch_decodes_envelopes_and_injects_metadata",
+                "plugins/onestep-kafka/tests/test_kafka_recovery.py::test_max_attempts_terminates_across_distinct_deliveries",
             ),
             Capability.CHECKPOINT_SOURCE: (
                 "plugins/onestep-kafka/tests/test_kafka_connector.py::test_ack_commits_only_after_contiguous_offsets_complete",
