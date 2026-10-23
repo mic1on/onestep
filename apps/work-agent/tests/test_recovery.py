@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -15,6 +17,28 @@ from onestep_worker_agent.commands import CommandJournal
 from onestep_worker_agent.identity import AgentIdentity
 from onestep_worker_agent.state import DeploymentStateStore
 from onestep_worker_agent.supervisor import DeploymentSpec, SubprocessSupervisor
+
+
+async def assert_process_stopped(pid):
+    """Require OS evidence of exit; an extant sleeping process must fail."""
+    for _ in range(200):
+        if sys.platform.startswith("linux"):
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            except FileNotFoundError:
+                return
+        else:
+            probe = await asyncio.create_subprocess_exec(
+                "ps", "-o", "stat=", "-p", str(pid), stdout=asyncio.subprocess.PIPE
+            )
+            output, _ = await probe.communicate()
+            state = output.decode().strip()
+            if not state and probe.returncode == 1:
+                return
+        if state.startswith("Z"):
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail(f"process {pid} is still executing (OS state {state!r})")
 
 
 def supervisor_at(path):
@@ -332,15 +356,7 @@ asyncio.run(run())
         agent = await asyncio.create_subprocess_exec(sys.executable, "-c", program)
         assert await agent.wait() == 17
         pid = int(pid_file.read_text())
-        for _ in range(300):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-            await asyncio.sleep(0.01)
-        else:
-            os.kill(pid, 9)
-            pytest.fail("preparation child survived agent death")
+        await assert_process_stopped(pid)
 
     asyncio.run(run())
 
@@ -382,8 +398,7 @@ def test_stop_kills_descendant_when_group_leader_exits_on_term(tmp_path, recover
             await process.wait()
             assert owner.used_slots == 0
             assert owner.state_store.load_all() == {}
-            with pytest.raises(ProcessLookupError):
-                os.kill(child_pid, 0)
+            await assert_process_stopped(child_pid)
         finally:
             if child_pid is not None:
                 try:
@@ -463,5 +478,23 @@ def test_legacy_recovered_pid_does_not_signal_agents_shared_group(tmp_path):
             if process.returncode is None:
                 process.kill()
                 await process.wait()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX zombie state")
+def test_group_cleanup_recognizes_an_unreaped_zombie(tmp_path):
+    async def run():
+        # Leave this direct child deliberately unreaped so the test exercises Z,
+        # rather than inferring zombie status merely because kill(pid, 0) worked.
+        child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        try:
+            await assert_process_stopped(child.pid)
+            os.kill(child.pid, 0)  # still exists until this parent calls wait()
+            supervisor = supervisor_at(tmp_path)
+            assert not await supervisor._group_has_live_members(child.pid)
+            await supervisor._wait_group_exit(child.pid)
+        finally:
+            child.wait()
 
     asyncio.run(run())

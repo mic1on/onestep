@@ -319,7 +319,7 @@ class SubprocessSupervisor:
         marker.write_text(expected_marker)
 
     @staticmethod
-    async def _spawn_process(*args, **kwargs):
+    async def _spawn_process(*args, preparation: bool = False, **kwargs):
         # Cancellation may race with the OS creating the child. Finish acquiring
         # its handle before cleaning up; cancelling create_subprocess_exec can
         # otherwise lose that handle completely.
@@ -327,9 +327,12 @@ class SubprocessSupervisor:
             asyncio.create_subprocess_exec(*args, **kwargs, start_new_session=(os.name != "nt"))
         )
         try:
-            return await asyncio.shield(task)
+            process = await asyncio.shield(task)
+            process._onestep_preparation = preparation
+            return process
         except asyncio.CancelledError:
             process = await task
+            process._onestep_preparation = preparation
             await SubprocessSupervisor._kill_and_wait(process)
             raise
 
@@ -341,7 +344,7 @@ class SubprocessSupervisor:
                 str(os.getpid()),
                 *args,
             )
-        return await self._spawn_process(*args, **kwargs)
+        return await self._spawn_process(*args, preparation=(os.name != "nt"), **kwargs)
 
     async def _run_subprocess(
         self,
@@ -385,6 +388,17 @@ class SubprocessSupervisor:
 
     @staticmethod
     async def _kill_and_wait(process) -> None:
+        if isinstance(process, asyncio.subprocess.Process) and getattr(
+            process, "_onestep_preparation", False
+        ):
+            # The wrapper kills its separate child group and reaps its child.
+            # Killing both together would leave orphan zombies behind on Linux.
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            return
         try:
             if os.name != "nt" and isinstance(process, asyncio.subprocess.Process):
                 os.killpg(process.pid, signal.SIGKILL)
@@ -545,6 +559,30 @@ class SubprocessSupervisor:
         while self._group_is_alive(group):
             # Orphan zombies can remain until the host's init reaps them. They
             # cannot execute business work and must not pin a deployment slot.
+            if not await self._group_has_live_members(group):
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"process group {group} has not exited after SIGKILL")
+            await asyncio.sleep(0.02)
+
+    @staticmethod
+    async def _group_has_live_members(group: int) -> bool:
+        if sys.platform.startswith("linux"):
+            # Linux slim images need no procps package. /proc stat exposes the
+            # state and process group even while an orphan awaits init's reap.
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+                except FileNotFoundError:
+                    continue
+                except PermissionError:
+                    return True
+                if int(fields[2]) == group and fields[0] != "Z":
+                    return True
+            return False
+        try:
             probe = await asyncio.create_subprocess_exec(
                 "ps",
                 "-axo",
@@ -552,18 +590,17 @@ class SubprocessSupervisor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            output, _ = await probe.communicate()
-            if probe.returncode == 0:
-                members = [
-                    line.split()[1]
-                    for line in output.decode().splitlines()
-                    if len(line.split()) >= 2 and line.split()[0] == str(group)
-                ]
-                if not any(not state.startswith("Z") for state in members):
-                    return
-            if asyncio.get_running_loop().time() >= deadline:
-                raise RuntimeError(f"process group {group} has not exited after SIGKILL")
-            await asyncio.sleep(0.02)
+        except FileNotFoundError:
+            return True  # Retain ownership if exit cannot be established.
+        output, _ = await probe.communicate()
+        if probe.returncode != 0:
+            return True
+        members = [
+            line.split()[1]
+            for line in output.decode().splitlines()
+            if len(line.split()) >= 2 and line.split()[0] == str(group)
+        ]
+        return any(not state.startswith("Z") for state in members)
 
     def _pid_is_alive(self, pid: int) -> bool:
         if pid <= 0:
