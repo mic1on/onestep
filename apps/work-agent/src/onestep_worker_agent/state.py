@@ -14,6 +14,7 @@ class DeploymentState:
     entrypoint: str
     env: dict[str, str]
     pid: int | None = None
+    process_group_id: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -23,6 +24,7 @@ class DeploymentState:
             "entrypoint": self.entrypoint,
             "env": self.env,
             "pid": self.pid,
+            "process_group_id": self.process_group_id,
         }
 
     @classmethod
@@ -34,6 +36,11 @@ class DeploymentState:
             entrypoint=str(payload["entrypoint"]),
             env={str(key): str(value) for key, value in dict(payload.get("env", {})).items()},
             pid=int(payload["pid"]) if payload.get("pid") is not None else None,
+            process_group_id=(
+                int(payload["process_group_id"])
+                if payload.get("process_group_id") is not None
+                else None
+            ),
         )
 
 
@@ -62,7 +69,8 @@ class DeploymentStateStore:
             json.dumps(
                 {
                     "deployments": [
-                        state.to_json() for state in sorted(
+                        state.to_json()
+                        for state in sorted(
                             states.values(),
                             key=lambda item: item.deployment_id,
                         )

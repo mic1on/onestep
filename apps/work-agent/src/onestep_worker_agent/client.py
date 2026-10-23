@@ -460,14 +460,15 @@ async def handle_control_message(
             runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
             if runtime is None:
                 supervisor.release_slot(deployment_id)
+            succeeded = runtime == record["runtime_instance_id"]
+            if payload.get("kind") == "stop_deployment" and runtime is None:
+                succeeded = True
             await _send_command_result(
                 socket,
                 command_id=command_id,
-                status="succeeded" if runtime == record["runtime_instance_id"] else "cancelled",
+                status="succeeded" if succeeded else "cancelled",
                 result={"runtime_instance_id": runtime} if runtime else None,
-                error_code=None
-                if runtime == record["runtime_instance_id"]
-                else "agent_interrupted",
+                error_code=None if succeeded else "agent_interrupted",
             )
             raise
         except Exception as exc:

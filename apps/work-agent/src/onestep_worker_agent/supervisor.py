@@ -62,6 +62,7 @@ class SubprocessSupervisor:
         self._reserved: set[str] = set()
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._external_pids: dict[str, int] = {}
+        self._process_groups: dict[str, int] = {}
         self._log_files: dict[str, object] = {}
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._monitors: dict[str, asyncio.Task] = {}
@@ -104,13 +105,46 @@ class SubprocessSupervisor:
 
     def _reap_external(self) -> None:
         for deployment_id, pid in list(self._external_pids.items()):
-            if not self._pid_is_alive(pid):
-                self._exited(deployment_id, None)
+            if not self._pid_is_alive(pid) and deployment_id not in self._stopping:
+                group = self._process_groups.get(deployment_id)
+                if group is not None and self._group_is_alive(group):
+                    if deployment_id not in self._monitors:
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            continue
+                        self._track_monitor(
+                            deployment_id,
+                            loop.create_task(self._finish_external_group(deployment_id, group)),
+                        )
+                else:
+                    self._exited(deployment_id, None)
 
     async def _monitor(self, deployment_id: str, process) -> None:
         returncode = await process.wait()
         if self._processes.get(deployment_id) is process and deployment_id not in self._stopping:
-            self._exited(deployment_id, returncode)
+            async with self.operation_lock(deployment_id):
+                group = self._process_groups.get(deployment_id)
+                if group is not None:
+                    await self._terminate_group(group, grace_seconds=10.0)
+                if self._processes.get(deployment_id) is process:
+                    self._exited(deployment_id, returncode)
+
+    async def _finish_external_group(self, deployment_id: str, group: int) -> None:
+        async with self.operation_lock(deployment_id):
+            if self._process_groups.get(deployment_id) != group:
+                return
+            await self._terminate_group(group, grace_seconds=10.0)
+            self._exited(deployment_id, None)
+
+    def _track_monitor(self, deployment_id: str, monitor: asyncio.Task) -> None:
+        self._monitors[deployment_id] = monitor
+
+        def finished(task):
+            if self._monitors.get(deployment_id) is task:
+                self._monitors.pop(deployment_id, None)
+
+        monitor.add_done_callback(finished)
 
     @property
     def used_slots(self) -> int:
@@ -133,6 +167,7 @@ class SubprocessSupervisor:
         self._runtime_ids.pop(deployment_id, None)
         self._processes.pop(deployment_id, None)
         self._external_pids.pop(deployment_id, None)
+        self._process_groups.pop(deployment_id, None)
         log_file = self._log_files.pop(deployment_id, None)
         if log_file is not None:
             log_file.close()
@@ -145,7 +180,22 @@ class SubprocessSupervisor:
         recovered: list[str] = []
         for state in self.state_store.load_all().values():
             self._runtime_ids[state.deployment_id] = state.runtime_instance_id
-            if state.pid is None or not self._pid_is_alive(state.pid):
+            group = state.process_group_id if os.name != "nt" else None
+            if (
+                group is None
+                and state.pid is not None
+                and os.name != "nt"
+                and self._pid_is_alive(state.pid)
+            ):
+                try:
+                    if os.getpgid(state.pid) == state.pid:
+                        group = state.pid
+                except ProcessLookupError:
+                    pass
+            if group is not None:
+                self._process_groups[state.deployment_id] = group
+            group_alive = group is not None and self._group_is_alive(group)
+            if state.pid is None or (not self._pid_is_alive(state.pid) and not group_alive):
                 self._exited(state.deployment_id, None)
                 continue
             # Existing workers remain managed even if capacity was reduced.
@@ -379,6 +429,8 @@ class SubprocessSupervisor:
             raise
         self._processes[spec.deployment_id] = process
         self._log_files[spec.deployment_id] = log_file
+        if os.name != "nt" and isinstance(process, asyncio.subprocess.Process):
+            self._process_groups[spec.deployment_id] = process.pid
         try:
             if self.state_store is not None:
                 self.state_store.upsert(
@@ -389,6 +441,7 @@ class SubprocessSupervisor:
                         entrypoint=spec.entrypoint,
                         env=spec.env,
                         pid=process.pid,
+                        process_group_id=self._process_groups.get(spec.deployment_id),
                     )
                 )
             if getattr(process, "stdin", None) is not None:
@@ -400,45 +453,117 @@ class SubprocessSupervisor:
             self.release_slot(spec.deployment_id)
             raise
         self._runtime_ids[spec.deployment_id] = spec.runtime_instance_id
-        monitor = asyncio.create_task(self._monitor(spec.deployment_id, process))
-        self._monitors[spec.deployment_id] = monitor
-
-        def finished(task):
-            if self._monitors.get(spec.deployment_id) is task:
-                self._monitors.pop(spec.deployment_id, None)
-
-        monitor.add_done_callback(finished)
+        self._track_monitor(
+            spec.deployment_id, asyncio.create_task(self._monitor(spec.deployment_id, process))
+        )
         return process
 
     async def stop(self, deployment_id: str, *, grace_seconds: float = 10.0) -> int | None:
         async with self.operation_lock(deployment_id):
             self._stopping.add(deployment_id)
+            cleaned = False
             try:
                 process = self._processes.get(deployment_id)
+                group = self._process_groups.get(deployment_id)
+                if group is not None:
+                    try:
+                        await self._terminate_group(group, grace_seconds=grace_seconds or 10.0)
+                    except asyncio.CancelledError:
+                        # _terminate_group finishes SIGKILL/exit verification first.
+                        cleaned = True
+                        if process is not None:
+                            await process.wait()
+                        raise
+                    if process is not None:
+                        await process.wait()
+                    cleaned = True
+                    return process.returncode if process is not None else 0
                 if process is not None:
                     try:
-                        if os.name != "nt" and isinstance(process, asyncio.subprocess.Process):
-                            os.killpg(process.pid, signal.SIGTERM)
-                        else:
-                            process.terminate()
+                        process.terminate()
                     except ProcessLookupError:
                         pass
                     try:
-                        return await asyncio.wait_for(process.wait(), timeout=grace_seconds)
+                        result = await asyncio.wait_for(process.wait(), timeout=grace_seconds)
                     except (TimeoutError, asyncio.CancelledError):
                         await self._kill_and_wait(process)
+                        cleaned = True
                         if asyncio.current_task().cancelling():
                             raise
-                        return process.returncode
+                        result = process.returncode
+                    cleaned = True
+                    return result
                 pid = self._external_pids.get(deployment_id)
                 if pid is not None:
-                    return await self._terminate_pid(pid, grace_seconds=grace_seconds or 10.0)
+                    try:
+                        return await self._terminate_pid(pid, grace_seconds=grace_seconds or 10.0)
+                    finally:
+                        cleaned = not self._pid_is_alive(pid)
+                cleaned = True
                 return None
             finally:
-                pid = self._external_pids.get(deployment_id)
-                if pid is None or not self._pid_is_alive(pid):
+                if cleaned:
                     self.release_slot(deployment_id)
                 self._stopping.discard(deployment_id)
+
+    @staticmethod
+    def _group_is_alive(group: int) -> bool:
+        try:
+            os.killpg(group, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @staticmethod
+    def _signal_group(group: int, sig: int) -> None:
+        try:
+            os.killpg(group, sig)
+        except ProcessLookupError:
+            pass
+
+    async def _terminate_group(self, group: int, *, grace_seconds: float) -> None:
+        self._signal_group(group, signal.SIGTERM)
+        cancelled = False
+        try:
+            deadline = asyncio.get_running_loop().time() + grace_seconds
+            while self._group_is_alive(group):
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            cancelled = True
+        if self._group_is_alive(group):
+            self._signal_group(group, signal.SIGKILL)
+            await self._wait_group_exit(group)
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _wait_group_exit(self, group: int) -> None:
+        deadline = asyncio.get_running_loop().time() + 5
+        while self._group_is_alive(group):
+            # Orphan zombies can remain until the host's init reaps them. They
+            # cannot execute business work and must not pin a deployment slot.
+            probe = await asyncio.create_subprocess_exec(
+                "ps",
+                "-axo",
+                "pgid=,stat=",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            output, _ = await probe.communicate()
+            if probe.returncode == 0:
+                members = [
+                    line.split()[1]
+                    for line in output.decode().splitlines()
+                    if len(line.split()) >= 2 and line.split()[0] == str(group)
+                ]
+                if not any(not state.startswith("Z") for state in members):
+                    return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"process group {group} has not exited after SIGKILL")
+            await asyncio.sleep(0.02)
 
     def _pid_is_alive(self, pid: int) -> bool:
         if pid <= 0:

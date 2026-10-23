@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from dataclasses import replace
@@ -340,5 +341,127 @@ asyncio.run(run())
         else:
             os.kill(pid, 9)
             pytest.fail("preparation child survived agent death")
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+@pytest.mark.parametrize("recovered", [False, True, "dead_leader"])
+def test_stop_kills_descendant_when_group_leader_exits_on_term(tmp_path, recovered):
+    async def run():
+        supervisor = supervisor_at(tmp_path)
+        ready = tmp_path / "descendant"
+        child = (
+            "import os,signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"open({str(ready)!r},'w').write(str(os.getpid())); time.sleep(60)"
+        )
+        parent = (
+            "import subprocess,sys,time; "
+            f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(60)"
+        )
+        process = await supervisor.start(spec_at(tmp_path, parent))
+        child_pid = None
+        try:
+            for _ in range(300):
+                if ready.exists():
+                    break
+                await asyncio.sleep(0.01)
+            child_pid = int(ready.read_text())
+            owner = supervisor
+            if recovered:
+                # Simulate the original agent no longer having a monitor.
+                monitor = supervisor._monitors["d"]
+                monitor.cancel()
+                await asyncio.gather(monitor, return_exceptions=True)
+                if recovered == "dead_leader":
+                    process.kill()
+                    await process.wait()
+                owner = supervisor_at(tmp_path)
+                assert owner.recover_running_deployments() == ["d"]
+            await owner.stop("d", grace_seconds=0.1)
+            await process.wait()
+            assert owner.used_slots == 0
+            assert owner.state_store.load_all() == {}
+            with pytest.raises(ProcessLookupError):
+                os.kill(child_pid, 0)
+        finally:
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, 9)
+                except ProcessLookupError:
+                    pass
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
+    asyncio.run(run())
+
+
+def test_cancelled_stop_event_send_reports_already_completed_stop(tmp_path):
+    async def run():
+        supervisor = supervisor_at(tmp_path)
+        process = await supervisor.start(spec_at(tmp_path))
+        context = command_context(tmp_path)
+        context["message"]["payload"]["kind"] = "stop_deployment"
+        stopped = asyncio.Event()
+
+        class BlockingSocket(FakeWebSocket):
+            async def send(self, text):
+                frame = json.loads(text)
+                if (
+                    frame["type"] == "deployment_event"
+                    and frame["payload"]["observed_status"] == "stopped"
+                ):
+                    stopped.set()
+                    await asyncio.Future()
+                await super().send(text)
+
+        socket = BlockingSocket()
+        task = asyncio.create_task(
+            handle_control_message(websocket=socket, supervisor=supervisor, **context)
+        )
+        await asyncio.wait_for(stopped.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert process.returncode is not None
+        assert socket.messages[-1]["payload"]["status"] == "succeeded"
+        assert socket.messages[-1]["payload"]["error_code"] is None
+        record = CommandJournal(tmp_path / "commands").load("command")
+        assert record["frames"]["command_result"]["payload"]["status"] == "succeeded"
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX legacy shared process group")
+def test_legacy_recovered_pid_does_not_signal_agents_shared_group(tmp_path):
+    from onestep_worker_agent.state import DeploymentState
+
+    async def run():
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "import time; time.sleep(60)"
+        )
+        supervisor = supervisor_at(tmp_path)
+        supervisor.state_store.upsert(
+            DeploymentState(
+                deployment_id="legacy",
+                runtime_instance_id="legacy",
+                package_dir=tmp_path,
+                entrypoint="worker.yaml",
+                env={},
+                pid=process.pid,
+            )
+        )
+        try:
+            assert os.getpgid(process.pid) == os.getpgrp()
+            assert supervisor.recover_running_deployments() == ["legacy"]
+            assert "legacy" not in supervisor._process_groups
+            await supervisor.stop("legacy", grace_seconds=0.1)
+            await process.wait()
+            assert supervisor.used_slots == 0
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
 
     asyncio.run(run())
