@@ -15,6 +15,8 @@ The plugin registers YAML resource types through the `onestep.resources` entry p
 
 Redis server **6.2 or newer** is required. Stream sources reserve fetched entries
 locally, so subsequent fetches never execute the same active delivery again.
+Each broker read waits at most one second, including when `block_ms: 0` is
+configured, so drain/pause/shutdown can finish an empty fetch safely.
 Retries keep the PEL entry reserved through their delay. Unstarted release
 requeues locally without adding an attempt; successful ACK or terminal failure
 removes the PEL entry. Closing the source leaves unfinished entries recoverable.

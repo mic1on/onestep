@@ -255,3 +255,36 @@ asyncio.run(main())
     assert recovered._message_id.decode() == previous['id']
     assert recovered.envelope.attempts == 1
     await recovered.ack()
+
+
+@pytest.mark.parametrize('block_ms', [0, 60000])
+async def test_empty_blocking_fetch_does_not_prevent_shutdown(queues, monkeypatch, block_ms):
+    a, _ = queues
+    a.block_ms = block_ms
+    fetching = asyncio.Event()
+    original = a._redis.xreadgroup
+
+    async def observe_read(*args, **kwargs):
+        fetching.set()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(a._redis, 'xreadgroup', observe_read)
+    app = OneStepApp('redis-stop-empty')
+
+    @app.task(source=a)
+    async def handler(ctx, payload):
+        raise AssertionError('empty stream must not invoke handler')
+
+    serving = asyncio.create_task(app.serve())
+    try:
+        await asyncio.wait_for(fetching.wait(), 2)
+        app.request_shutdown()
+        done, _ = await asyncio.wait({serving}, timeout=2)
+        assert serving in done
+        await serving
+    finally:
+        if not serving.done():
+            # Unblock the old infinite-BLOCK implementation on assertion failure.
+            await a.publish({'cleanup': True})
+            app.request_shutdown()
+            await asyncio.wait_for(serving, 3)

@@ -349,7 +349,10 @@ class RedisStreamQueue(Source, Sink):
                 return deliveries
             messages = await self._redis.xreadgroup(
                 groupname=self.group, consumername=self.consumer,
-                streams={self.name: ">"}, count=fetch_limit, block=self.block_ms,
+                streams={self.name: ">"}, count=fetch_limit,
+                # Fetch is not cancel-safe: bound every broker wait so stop
+                # controls can join it, including Redis BLOCK 0 (infinite).
+                block=min(self.block_ms, 1000) if self.block_ms > 0 else 1000,
             )
             return await self._process_messages(messages or [])
         except ConnectorOperationError:
