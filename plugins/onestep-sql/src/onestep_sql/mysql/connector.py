@@ -21,6 +21,8 @@ from onestep_sql._shared.state_keys import _default_incremental_state_key
 from onestep_sql._shared.table_queue import (
     TableQueueCompleteMixin,
     complete_table_queue_row,
+    retry_table_queue_row,
+    fail_table_queue_row,
 )
 from onestep_sql._shared.table_sink_policy import (
     TableSinkUpdatePolicy,
@@ -339,6 +341,7 @@ class TableQueueSource(Source):
         self.nack = nack
         self.batch_size = batch_size
         self.poll_interval_s = poll_interval_s
+        self._retry_attempts: dict[Any, int] = {}
 
     async def fetch(self, limit: int) -> list[Delivery]:
         try:
@@ -357,7 +360,7 @@ class TableQueueSource(Source):
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
-            envelope = Envelope(body=row, meta={"table": self.table_name})
+            envelope = Envelope(body=row, meta={"table": self.table_name}, attempts=self._retry_attempts.get(key_value, 0))
             row_ref = _TableRowRef(self.table_name, self.key, key_value)
             deliveries.append(TableQueueDelivery(self, envelope, row_ref))
         return deliveries
@@ -382,6 +385,7 @@ class TableQueueSource(Source):
 
     async def ack_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.ack)
+        self._retry_attempts.pop(row_ref.key_value, None)
 
     async def complete_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
         await complete_table_queue_row(
@@ -390,14 +394,13 @@ class TableQueueSource(Source):
             values=values,
             ack=self.ack,
         )
+        self._retry_attempts.pop(row_ref.key_value, None)
 
     async def retry_row(self, row_ref: _TableRowRef, *, delay_s: float | None = None) -> None:
-        if delay_s:
-            await asyncio.sleep(delay_s)
-        await self.update_row(row_ref, self.nack)
+        await retry_table_queue_row(self, row_ref, delay_s=delay_s)
 
     async def fail_row(self, row_ref: _TableRowRef, exc: Exception | None = None) -> None:
-        await self.update_row(row_ref, self.nack)
+        await fail_table_queue_row(self, row_ref)
 
     async def release_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.nack)

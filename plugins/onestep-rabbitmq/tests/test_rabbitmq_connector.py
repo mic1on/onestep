@@ -195,10 +195,13 @@ def test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding(monkeypatch):
 
         original = batch[0]._message
         await batch[0].retry()
-        assert original.nacked is True
+        assert original.nacked is False
+        assert original.acked is False
 
         redelivery = await queue.fetch(1)
         assert len(redelivery) == 1
+        assert redelivery[0].envelope.attempts == 3
+        assert redelivery[0]._message is original
         await redelivery[0].ack()
         assert redelivery[0]._message.acked is True
 
@@ -429,3 +432,88 @@ def test_rabbitmq_open_failure_does_not_leak_url_credentials(monkeypatch):
     )
     assert "supersecret" not in traceback_text
     assert "writer:supersecret" not in traceback_text
+
+
+def test_rabbitmq_local_retries_reach_max_attempts_without_publish_or_ack(monkeypatch):
+    from onestep import MaxAttempts, OneStepApp, ExponentialBackoff
+    from onestep.runtime.runner import TaskRunner
+
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", SimpleNamespace(connect_robust=fake_connect_robust, Message=FakeMessage))
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://localhost/")
+        queue = connector.queue("jobs", prefetch=1)
+        await queue.publish({"value": 1})
+        app = OneStepApp("rabbit-attempts")
+
+        @app.task(source=queue, retry=MaxAttempts(3))
+        async def poison(ctx, payload):
+            raise ValueError("poison")
+
+        runner = TaskRunner(app, app.tasks[0])
+        original = None
+        for attempt in range(3):
+            delivery, = await queue.fetch(1)
+            original = original or delivery._message
+            assert delivery._message is original
+            assert delivery.envelope.attempts == attempt
+            backoff = ExponentialBackoff(max_attempts=10).on_error(delivery.envelope, ValueError(), None)
+            assert backoff.delay_s == 2 ** attempt
+            await runner._handle_delivery(delivery)
+            await delivery.retry()  # stale action cannot duplicate the next attempt
+            assert not original.acked and not original.nacked
+        assert original.rejected
+        assert queue._retry_attempts == {}
+        assert len(queue._exchange.published) == 1
+        await queue.close()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_channel_loss_drops_local_attempts_and_stale_retry(monkeypatch):
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", SimpleNamespace(connect_robust=fake_connect_robust, Message=FakeMessage))
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://localhost/")
+        queue = connector.queue("jobs")
+        await queue.publish(1)
+        first, = await queue.fetch(1)
+        await first.retry()
+        second, = await queue.fetch(1)
+        assert second.envelope.attempts == 1
+        await queue._on_receive_channel_closed(queue._receive_channel, RuntimeError("closed"))
+        await second.retry()
+        assert queue._consumer_messages.empty()
+        assert queue._retry_attempts == {}
+        # Broker redelivery after reconnect has the published envelope's history.
+        fresh = FakeIncomingMessage(queue._queue, first._message.body)
+        assert rabbitmq_module.RabbitMQDelivery(fresh, queue).envelope.attempts == 0
+        await queue.close()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+def test_rabbitmq_release_returns_broker_ownership_and_resets_local_history(monkeypatch):
+    monkeypatch.setattr(rabbitmq_module, "aio_pika", SimpleNamespace(connect_robust=fake_connect_robust, Message=FakeMessage))
+
+    async def scenario():
+        connector = RabbitMQConnector("amqp://localhost/")
+        queue = connector.queue("jobs")
+        await queue.publish(1, attempts=2)
+        first, = await queue.fetch(1)
+        await first.retry()
+        retry, = await queue.fetch(1)
+        assert retry.envelope.attempts == 3
+        await retry.release_unstarted()
+        assert retry._message.nacked
+        assert queue._retry_attempts == {}
+        fresh, = await queue.fetch(1)
+        assert fresh._message is not retry._message
+        assert fresh.envelope.attempts == 2
+        await fresh.ack()
+        await queue.close()
+        await connector.close()
+
+    asyncio.run(scenario())

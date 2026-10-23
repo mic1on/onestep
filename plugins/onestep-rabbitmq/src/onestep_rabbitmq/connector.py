@@ -19,23 +19,51 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 class RabbitMQDelivery(Delivery):
-    def __init__(self, message: Any) -> None:
-        super().__init__(decode_envelope(message.body))
+    def __init__(self, message: Any, queue: "RabbitMQQueue") -> None:
+        envelope = decode_envelope(message.body)
+        envelope.attempts = queue._retry_attempts.get(id(message), envelope.attempts)
+        super().__init__(envelope)
         self._message = message
+        self._queue = queue
+        self._generation = queue._delivery_generation
+        self._terminal = False
 
     async def ack(self) -> None:
+        if self._terminal:
+            return
         await self._message.ack()
+        self._queue._retry_attempts.pop(id(self._message), None)
+        self._terminal = True
 
     async def release_unstarted(self) -> None:
+        if self._terminal:
+            return
         await self._message.nack(requeue=True)
+        self._queue._retry_attempts.pop(id(self._message), None)
+        self._terminal = True
 
     async def retry(self, *, delay_s: float | None = None) -> None:
+        if self._terminal:
+            return
         if delay_s:
             await asyncio.sleep(delay_s)
-        await self._message.nack(requeue=True)
+        if self._terminal:
+            return
+        if self._generation == self._queue._delivery_generation:
+            # Keep the original broker delivery unacked. This preserves payload and
+            # attempts without an ack/publish loss window or requiring message_id.
+            messages, _ = self._queue._ensure_consumer_state()
+            self._queue._retry_attempts[id(self._message)] = self.envelope.attempts + 1
+            messages.put_nowait(self._message)
+        # A closed receive channel already returned its deliveries to the broker.
+        self._terminal = True
 
     async def fail(self, exc: Exception | None = None) -> None:
+        if self._terminal:
+            return
         await self._message.reject(requeue=False)
+        self._queue._retry_attempts.pop(id(self._message), None)
+        self._terminal = True
 
 
 @dataclass
@@ -188,6 +216,8 @@ class RabbitMQQueue(Source, Sink):
         self._consumer_loop: asyncio.AbstractEventLoop | None = None
         self._consumer_accepting = False
         self._opened = False
+        self._retry_attempts: dict[int, int] = {}
+        self._delivery_generation = 0
 
     def _connection_secrets(self) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
@@ -270,13 +300,13 @@ class RabbitMQQueue(Source, Sink):
             deliveries: list[Delivery] = []
             fetch_limit = max(1, min(limit, self.batch_size))
             message = await messages.get()
-            deliveries.append(RabbitMQDelivery(message))
+            deliveries.append(RabbitMQDelivery(message, self))
             while len(deliveries) < fetch_limit:
                 try:
                     message = messages.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                deliveries.append(RabbitMQDelivery(message))
+                deliveries.append(RabbitMQDelivery(message, self))
             return deliveries
         except asyncio.CancelledError:
             await self._reset_transport_state(release_connection=True)
@@ -336,6 +366,8 @@ class RabbitMQQueue(Source, Sink):
     async def _on_receive_channel_closed(
         self, _channel: Any, _exc: BaseException | None
     ) -> None:
+        self._delivery_generation += 1
+        self._retry_attempts.clear()
         if self._consumer_messages is None:
             return
         while not self._consumer_messages.empty():
@@ -410,6 +442,8 @@ class RabbitMQQueue(Source, Sink):
                 await self.connector.release()
 
     def _clear_transport_state(self) -> None:
+        self._delivery_generation += 1
+        self._retry_attempts.clear()
         self._publish_channel = None
         self._receive_channel = None
         self._queue = None

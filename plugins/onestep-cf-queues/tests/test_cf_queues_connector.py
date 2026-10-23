@@ -678,3 +678,41 @@ def test_cf_queue_pending_entries_survive_loop_change():
     assert client.acked == ["lease-1"]
     assert client.retried == [{"lease_id": "lease-2", "delay_seconds": 1}]
     assert queue._pending_acks == []
+
+
+def test_cf_broker_attempts_reach_terminal_failure_after_source_restarts():
+    from onestep import MaxAttempts, OneStepApp
+    from onestep.runtime.runner import TaskRunner
+
+    async def scenario():
+        client = FakeCFClient()
+        client.enqueue('{"body":{"value":1}}')
+        for attempt in range(3):
+            client.available[0].attempts = attempt + 1
+            queue = _connector(client).queue("q1", on_fail="ack", ack_flush_interval_s=0)
+            app = OneStepApp("cf-attempts")
+
+            @app.task(source=queue, retry=MaxAttempts(3))
+            async def poison(ctx, payload):
+                raise ValueError("poison")
+
+            delivery, = await queue.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+            await queue.close()
+        assert len(client.retried) == 2
+        assert len(client.acked) == 1
+        assert not client.available
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_cf_attempt_count_adds_to_seed_and_grows_backoff(count):
+    from onestep import ExponentialBackoff
+
+    queue = _connector(FakeCFClient()).queue("q1")
+    delivery = CFQueuesDelivery(queue, SDKMessage(body={"body": 1, "attempts": 2}, lease_id="lease", attempts=count))
+    assert delivery.envelope.attempts == count + 1
+    action = ExponentialBackoff(max_attempts=10).on_error(delivery.envelope, ValueError(), None)
+    assert action.delay_s == 2 ** (count + 1)

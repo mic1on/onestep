@@ -231,7 +231,7 @@ def test_sqs_delivery_preserves_encoded_envelope_and_merges_sqs_metadata():
         delivery = (await queue.fetch(1))[0]
 
         assert delivery.payload == {"value": 2}
-        assert delivery.envelope.attempts == 4
+        assert delivery.envelope.attempts == 5
         assert delivery.envelope.meta == {
             "source": "upstream",
             "sqs": {
@@ -462,3 +462,53 @@ def test_sqs_batch_delete_keeps_pending_entries_when_delete_raises() -> None:
         await connector.close()
 
     asyncio.run(scenario())
+
+
+def test_sqs_broker_receive_count_reaches_max_attempts_across_source_restarts():
+    from onestep import MaxAttempts, OneStepApp
+    from onestep.runtime.runner import TaskRunner
+
+    class CountingClient(FakeSQSClient):
+        def receive_message(self, **kwargs):
+            result = super().receive_message(**kwargs)
+            for message in result.get("Messages", []):
+                attrs = message.setdefault("Attributes", {})
+                attrs["ApproximateReceiveCount"] = str(int(attrs.get("ApproximateReceiveCount", "0")) + 1)
+            return result
+
+    async def scenario():
+        client = CountingClient()
+        connector = SQSConnector(region_name="ap-southeast-1", client=client)
+        client.send_message(MessageBody='{"body":{"value":1}}')
+        for attempt in range(3):
+            queue = connector.queue("https://sqs.example/jobs", on_fail="delete", wait_time_s=0, delete_flush_interval_s=0)
+            app = OneStepApp("sqs-attempts")
+
+            @app.task(source=queue, retry=MaxAttempts(3))
+            async def poison(ctx, payload):
+                raise ValueError("poison")
+
+            delivery, = await queue.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+            await queue.close()
+        assert len(client.visibility_changes) == 2
+        assert len(client.deleted) == 1
+        assert not client.available
+
+    asyncio.run(scenario())
+
+
+def test_sqs_receive_history_adds_to_seed_attempts_and_grows_backoff():
+    from onestep import ExponentialBackoff
+    from onestep_sqs.connector import SQSDelivery
+
+    connector = SQSConnector(region_name="ap-southeast-1", client=FakeSQSClient())
+    queue = connector.queue("https://sqs.example/jobs")
+    policy = ExponentialBackoff(max_attempts=10)
+    delays = []
+    for count in (1, 2, 3):
+        delivery = SQSDelivery(queue, {"Body": '{"body":1,"attempts":2}', "ReceiptHandle": "r", "Attributes": {"ApproximateReceiveCount": str(count)}})
+        assert delivery.envelope.attempts == count + 1
+        delays.append(policy.on_error(delivery.envelope, ValueError(), None).delay_s)
+    assert delays == [4, 8, 16]

@@ -42,6 +42,7 @@ PROFILES = (
         name="feishu-bitable",
         contracts={
             Capability.BASIC_SOURCE: (
+                "plugins/onestep-feishu-bitable/tests/test_feishu_source_delivery_semantics.py::test_max_attempts_stops_poison_row_and_commits_terminal_tail",
                 "plugins/onestep-feishu-bitable/tests/test_feishu_bitable_connector.py::test_feishu_incremental_source_advances_cursor_in_ack_order_and_resumes",
             ),
             Capability.CHECKPOINT_SOURCE: (
@@ -83,6 +84,8 @@ PROFILES = (
         name="mongodb",
         contracts={
             Capability.BASIC_SOURCE: (
+                "plugins/onestep-mongodb/tests/test_mongodb_polling.py::test_polling_retry_budget_survives_generations_and_release",
+                "plugins/onestep-mongodb/tests/test_mongodb_change_stream.py::test_change_stream_retry_budget_survives_resume_and_reaches_terminal",
                 "plugins/onestep-mongodb/tests/test_mongodb_change_stream.py::test_default_watch_emits_complete_raw_delete_event",
             ),
             Capability.CHECKPOINT_SOURCE: (
@@ -113,6 +116,7 @@ PROFILES = (
             # forwarding shims in Phase 3 and no longer declare their own
             # resource entry points, so their conformance is owned here.
             Capability.BASIC_SOURCE: (
+                "tests/contract/test_onestep_sql_shared.py::test_table_queue_retry_attempts_reach_terminal_and_preserve_eligible_history",
                 "plugins/onestep-mysql/tests/test_mysql_table_queue.py::test_mysql_table_queue_round_trip",
                 "plugins/onestep-postgres/tests/test_postgres_table_queue.py::test_postgres_table_queue_round_trip",
             ),
@@ -139,6 +143,7 @@ PROFILES = (
         name="rabbitmq",
         contracts={
             Capability.BASIC_SOURCE: (
+                "plugins/onestep-rabbitmq/tests/test_rabbitmq_connector.py::test_rabbitmq_local_retries_reach_max_attempts_without_publish_or_ack",
                 "plugins/onestep-rabbitmq/tests/test_rabbitmq_connector.py::test_rabbitmq_queue_send_fetch_retry_fail_and_exchange_binding",
             ),
             Capability.CHECKPOINT_SOURCE: (
@@ -173,6 +178,7 @@ PROFILES = (
         name="sqs",
         contracts={
             Capability.BASIC_SOURCE: (
+                "plugins/onestep-sqs/tests/test_sqs_connector.py::test_sqs_broker_receive_count_reaches_max_attempts_across_source_restarts",
                 "plugins/onestep-sqs/tests/test_sqs_connector.py::test_sqs_queue_send_fetch_batch_delete_and_fail_delete",
             ),
             Capability.CHECKPOINT_SOURCE: (
@@ -190,6 +196,7 @@ PROFILES = (
         name="cf-queues",
         contracts={
             Capability.BASIC_SOURCE: (
+                "plugins/onestep-cf-queues/tests/test_cf_queues_connector.py::test_cf_broker_attempts_reach_terminal_failure_after_source_restarts",
                 "plugins/onestep-cf-queues/tests/test_cf_queues_connector.py::test_cf_queue_pull_decodes_body_and_injects_metadata",
             ),
             Capability.CLAIMED_SOURCE: (

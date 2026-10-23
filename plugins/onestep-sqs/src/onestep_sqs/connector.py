@@ -32,6 +32,13 @@ class SQSDelivery(Delivery):
         if "Attributes" in message:
             sqs_meta["attributes"] = dict(message["Attributes"])
         envelope.meta["sqs"] = sqs_meta
+        # SQS counts receives from one, including visibility expiry and releases.
+        # Add to any attempt history carried by a republished OneStep envelope.
+        receive_count = (message.get("Attributes") or {}).get("ApproximateReceiveCount", 1)
+        try:
+            envelope.attempts += max(0, int(receive_count) - 1)
+        except (TypeError, ValueError):
+            pass
         super().__init__(envelope)
         self._queue = queue
         self._message = message
