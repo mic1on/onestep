@@ -115,10 +115,17 @@ inbound string. Only a UTC `isoformat` datetime survives that round trip, so a
 cursor carrying a non-UTC offset is rejected by the server itself. `encodeCursor`
 therefore always emits UTC.
 
+`PostgresBackend` reads `timestamptz` as text using a pool-local parser and text result format (even if
+`poolOptions.binary` is set). This
+preserves microseconds in returned executions and page cursors, including rows
+less than one millisecond apart. Other PostgreSQL type parsers are preserved.
+Custom backends that return `Date` retain milliseconds but cannot recover
+microseconds already discarded by their driver.
+
 ## Testing
 
 ```bash
-npm run test:unit    # 6 golden-vector tests, no infrastructure needed
+npm run test:unit    # golden vectors and timestamp/parser tests, no infrastructure needed
 npm run test:e2e     # 9 live tests: TS submits -> Python worker executes
 npm run typecheck
 npm run build        # emits the publishable package into dist/

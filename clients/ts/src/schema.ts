@@ -133,7 +133,7 @@ export function parseDbTimestamp(value: unknown): string {
     throw new Error('expected a timestamp, got null');
   }
   if (value instanceof Date) {
-    return isoformatUtc(value, null);
+    return isoformatUtc(value, String(value.getUTCMilliseconds()).padStart(3, '0'));
   }
   const text = String(value);
   const date = new Date(text);

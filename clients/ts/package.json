@@ -40,7 +40,8 @@
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
-    "test:unit": "node --test --experimental-strip-types tests/canonical.test.ts",
+    "pretest": "npm run build",
+    "test:unit": "npm run build && node --test --experimental-strip-types tests/canonical.test.ts tests/timestamps.test.ts",
     "test:e2e": "node --test --experimental-strip-types tests/e2e.test.ts",
     "golden": "python3 fixtures/generate_golden.py",
     "prepublishOnly": "npm run build && npm run typecheck"
