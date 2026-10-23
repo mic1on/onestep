@@ -261,6 +261,8 @@ class RedisStreamQueue(Source, Sink):
         self._heartbeat: asyncio.Task | None = None
         self._fetch_lock = asyncio.Lock()
         self._delivery_lock = asyncio.Lock()
+        self._transport_lock = asyncio.Lock()
+        self._acquired = False
 
     def _connection_secrets(self) -> list[str]:
         """Secret-bearing config tokens used to scrub error messages."""
@@ -270,10 +272,15 @@ class RedisStreamQueue(Source, Sink):
 
     async def open(self) -> None:
         """Open connection and create consumer group if needed."""
+        async with self._transport_lock:
+            await self._open_connection()
+
+    async def _open_connection(self) -> None:
         if self._opened:
             return
         try:
             self._redis = await self.connector.acquire()
+            self._acquired = True
             
             if self.create_group:
                 # Create consumer group if not exists
@@ -292,7 +299,10 @@ class RedisStreamQueue(Source, Sink):
                         raise
             
             self._opened = True
-        except Exception as exc:
+        except BaseException as exc:
+            await self._reset_transport_locked()
+            if not isinstance(exc, Exception):
+                raise
             connector_error = as_redis_connector_operation_error(
                 operation=ConnectorOperation.OPEN,
                 exc=exc,
@@ -305,9 +315,7 @@ class RedisStreamQueue(Source, Sink):
             raise connector_error from None
 
     async def close(self) -> None:
-        """Close connection."""
-        if not self._opened:
-            return
+        """Stop renewal even if a prior transport error already closed the client."""
         if self._heartbeat is not None:
             self._heartbeat.cancel()
             with suppress(asyncio.CancelledError):
@@ -315,9 +323,7 @@ class RedisStreamQueue(Source, Sink):
             self._heartbeat = None
         self._active.clear()
         self._ready.clear()
-        self._redis = None
-        self._opened = False
-        await self.connector.release()
+        await self._reset_transport_state()
 
     async def fetch(self, limit: int) -> list[Delivery]:
         # A single cursor and local reservation set protect concurrent fetch calls.
@@ -499,6 +505,12 @@ class RedisStreamQueue(Source, Sink):
 
     async def _reset_transport_state(self) -> None:
         """Reset transport state on error."""
+        async with self._transport_lock:
+            await self._reset_transport_locked()
+
+    async def _reset_transport_locked(self) -> None:
         self._redis = None
         self._opened = False
-        await self.connector.release()
+        if self._acquired:
+            self._acquired = False
+            await self.connector.release()

@@ -225,3 +225,33 @@ async def test_own_expired_claim_fences_previous_generation(queues):
     with pytest.raises(RedisOwnershipLostError):
         await old.ack()
     await replacement.ack()
+
+
+async def test_abrupt_process_exit_is_recoverable_by_default_new_consumer(queues):
+    import json
+    import sys
+
+    a, b = queues
+    await a.publish({'id': 'crash'})
+    script = '''
+import asyncio, json, os, sys
+from onestep_redis import RedisConnector
+async def main():
+    q = RedisConnector(os.environ['REDIS_URL']).stream(sys.argv[1], group='workers', reclaim_idle_ms=150)
+    d = (await q.fetch(1))[0]
+    print(json.dumps({'consumer': q.consumer, 'id': d._message_id.decode()}), flush=True)
+    os._exit(0)  # No close, ACK, or finally blocks.
+asyncio.run(main())
+'''
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, '-c', script, a.name, stdout=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await asyncio.wait_for(process.communicate(), 5)
+    assert process.returncode == 0
+    previous = json.loads(stdout)
+    assert previous['consumer'] != b.consumer
+    await asyncio.sleep(.18)
+    recovered = (await b.fetch(1))[0]
+    assert recovered._message_id.decode() == previous['id']
+    assert recovered.envelope.attempts == 1
+    await recovered.ack()
