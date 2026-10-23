@@ -220,21 +220,49 @@ test('result() on a non-terminal execution raises ExecutionNotReady', async (t) 
   await assert.rejects(() => client.result(submitted.id), ExecutionNotReady);
 });
 
-test('list() returns newest-first and paginates with a server-valid cursor', async (t) => {
+test('microseconds survive reads, transactions and complete pagination', async (t) => {
   if (!available) return t.skip(skipReason);
-
-  const page1 = await client.list({ taskName: TASK, limit: 2 });
-  assert.ok(page1.items.length <= 2);
-  if (page1.nextCursor) {
-    // The cursor must decode and be accepted by the server's own round-trip
-    // check; a malformed cursor would surface as an invalid-cursor error here.
-    const page2 = await client.list({ taskName: TASK, limit: 2, cursor: page1.nextCursor });
-    assert.ok(page2.items.length >= 0);
-    // No overlap between pages.
-    const ids1 = new Set(page1.items.map((e) => e.id));
-    for (const item of page2.items) {
-      assert.ok(!ids1.has(item.id), 'pages must not overlap');
+  const task = 'e2e.precision';
+  const stamps = [
+    '2026-10-23T04:05:06.123456+00:00',
+    '2026-10-23T04:05:06.123455+00:00',
+    '2026-10-23T04:05:06.000001+00:00',
+    '2026-10-23T04:05:06.000001+00:00',
+    '2026-10-23T04:05:05.999999+00:00',
+  ];
+  const ids: string[] = [];
+  for (const [index, stamp] of stamps.entries()) {
+    const row = await client.submit(task, { index }, { idempotencyKey: `precision-${index}` });
+    ids.push(row.id);
+    await backend.execute(
+      'UPDATE onestep_executions SET created_at = $1, available_at = $1, started_at = $1, finished_at = $1, cancel_requested_at = $1, expires_at = $1 WHERE id = $2',
+      [stamp, row.id],
+    );
+    const mapped = await client.get(row.id);
+    assert.ok(mapped);
+    for (const key of ['createdAt', 'availableAt', 'startedAt', 'finishedAt', 'cancelRequestedAt', 'expiresAt'] as const) {
+      assert.equal(mapped[key], stamp, key);
     }
+    const repeated = await client.submit(task, { index }, { idempotencyKey: `precision-${index}` });
+    assert.equal(repeated.createdAt, stamp);
+  }
+  const transactionRows = await backend.transaction((tx) => tx.query(
+    'SELECT created_at FROM onestep_executions WHERE id = $1', [ids[0]],
+  ));
+  assert.equal(typeof transactionRows[0].created_at, 'string');
+  const expected = ids.map((id, index) => ({ id, stamp: stamps[index] }))
+    .sort((a, b) => b.stamp.localeCompare(a.stamp) || b.id.localeCompare(a.id))
+    .map(({ id }) => id);
+  for (const limit of [1, 2, 3]) {
+    const actual: string[] = [];
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex <= stamps.length; pageIndex++) {
+      const page = await client.list({ taskName: task, limit, cursor });
+      actual.push(...page.items.map((item) => item.id));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    assert.deepEqual(actual, expected, `complete pagination with limit ${limit}`);
   }
 });
 

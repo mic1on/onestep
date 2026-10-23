@@ -9,11 +9,9 @@
  *     jsonb into JS objects, so values must NOT be JSON.stringify'd on write
  *     (passing an object lets the driver encode it) and must tolerate arriving
  *     as either an object or a string.
- *   - timestamps are `timestamp with time zone`, so the driver returns Date
- *     objects. Losing sub-millisecond precision is acceptable here because the
- *     server compares timestamps as instants; only the *cursor* text has to
- *     round-trip, and that is re-derived from the value the server itself
- *     stored (see cursor.ts).
+ *   - timestamps are `timestamp with time zone`. Read them as text through
+ *     a pool-local parser so keyset cursors preserve all six fractional digits.
+ *     JavaScript Date truncates microseconds before row mapping can recover them.
  *
  * Uses its own pg.Pool. The `pg` module is an optional peer dependency.
  */
@@ -26,7 +24,12 @@ interface PgPool {
   end(): Promise<void>;
 }
 
+interface PgTypeParsers {
+  getTypeParser(oid: number, format?: string): (value: string) => unknown;
+}
+
 interface PgModule {
+  types: PgTypeParsers;
   Pool: new (config: Record<string, unknown>) => PgPool;
 }
 
@@ -61,10 +64,19 @@ export class PostgresBackend implements Backend {
   /** Build a backend, loading `pg` dynamically. */
   static async create(options: PostgresBackendOptions): Promise<PostgresBackend> {
     const pg = options.pgModule ?? (await loadPg());
+    const inheritedTypes = (options.poolOptions?.types as PgTypeParsers | undefined) ?? pg.types;
     const pool = new pg.Pool({
       connectionString: options.connectionString,
       max: options.max ?? 10,
       ...(options.poolOptions ?? {}),
+      types: {
+        getTypeParser(oid: number, format?: string) {
+          // The tracked-execution schema uses TIMESTAMPTZ (OID 1184).
+          // Keep caller parsers for every other type; never mutate pg.types.
+          if (oid === 1184 && format !== 'binary') return (value: string) => value;
+          return inheritedTypes.getTypeParser(oid, format);
+        },
+      },
     });
     return new PostgresBackend(pool);
   }
