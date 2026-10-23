@@ -82,6 +82,7 @@ WORKER_AGENT_CAPABILITIES = frozenset(
         "deployment.stop",
         "deployment.restart",
         "agent.sync_state",
+        "agent.command_recovery",
     }
 )
 WORKER_AGENT_COMMAND_CAPABILITY_BY_KIND = {
@@ -411,7 +412,25 @@ async def apply_worker_deployment_event_async(
     if deployment_id is None:
         return False
 
-    if message.payload.observed_status is not None:
+    event_id = None
+    raw_event_id = message.payload.payload.get("agent_event_id")
+    if isinstance(raw_event_id, str):
+        try:
+            event_id = UUID(raw_event_id)
+        except ValueError:
+            return False
+        if await session.get(WorkerDeploymentEvent, event_id) is not None:
+            return True
+    current_runtime = await session.scalar(
+        select(WorkerDeployment.runtime_instance_id).where(
+            WorkerDeployment.deployment_id == deployment_id
+        )
+    )
+    event_runtime = message.payload.payload.get("runtime_instance_id")
+    is_current = (
+        event_runtime is None or current_runtime is None or str(current_runtime) == event_runtime
+    )
+    if message.payload.observed_status is not None and is_current:
         await session.execute(
             update(WorkerDeployment)
             .where(WorkerDeployment.deployment_id == deployment_id)
@@ -422,6 +441,7 @@ async def apply_worker_deployment_event_async(
         )
     session.add(
         WorkerDeploymentEvent(
+            **({"id": event_id} if event_id is not None else {}),
             deployment_id=deployment_id,
             worker_agent_id=worker_agent_id,
             event_type=message.payload.event_type,
@@ -766,7 +786,8 @@ def _mark_worker_agent_command_dispatched(
     session_id: str,
     dispatched_at,
 ) -> WorkerAgentCommand:
-    command.status = "dispatched"
+    if command.status != "accepted":
+        command.status = "dispatched"
     command.session_id = session_id
     command.dispatched_at = dispatched_at
     command.updated_at = dispatched_at
@@ -797,11 +818,17 @@ async def list_redeliverable_worker_agent_commands_async(
     The caller's work unit owns the commit.
     """
 
+    agent = await session.scalar(
+        select(WorkerAgent).where(WorkerAgent.worker_agent_id == worker_agent_id)
+    )
+    statuses = set(WORKER_AGENT_REDELIVERABLE_COMMAND_STATUSES)
+    if agent is not None and "agent.command_recovery" in (agent.capabilities_json or []):
+        statuses.add("accepted")
     rows = await session.scalars(
         select(WorkerAgentCommand)
         .where(
             WorkerAgentCommand.worker_agent_id == worker_agent_id,
-            WorkerAgentCommand.status.in_(WORKER_AGENT_REDELIVERABLE_COMMAND_STATUSES),
+            WorkerAgentCommand.status.in_(statuses),
         )
         .order_by(WorkerAgentCommand.created_at.asc(), WorkerAgentCommand.command_id.asc())
     )
@@ -1007,6 +1034,20 @@ def _apply_worker_command_success_to_deployment(
                     deployment.runtime_instance_id = UUID(runtime_instance_id)
                 except ValueError:
                     pass
+                # An exit can arrive before replay of the start result after a
+                # disconnect. The historical start succeeded, but its process
+                # must not be resurrected in the deployment snapshot.
+                exit_event = db.scalar(
+                    select(WorkerDeploymentEvent).where(
+                        WorkerDeploymentEvent.deployment_id == deployment.deployment_id,
+                        WorkerDeploymentEvent.event_type == "exited",
+                        WorkerDeploymentEvent.payload_json["runtime_instance_id"].as_string()
+                        == runtime_instance_id,
+                    ).order_by(WorkerDeploymentEvent.created_at.desc()).limit(1)
+                )
+                if exit_event is not None:
+                    deployment.observed_status = exit_event.observed_status
+                    deployment.finished_at = exit_event.created_at
     elif command.kind == "stop_deployment":
         deployment.observed_status = "stopped"
         deployment.finished_at = finished_at
