@@ -31,6 +31,7 @@ it before claiming.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 
@@ -100,3 +101,41 @@ async def complete_table_queue_row(
             await conn.execute(
                 sa.update(table).where(key_column == row_ref.key_value).values(**ack_payload)
             )
+
+
+async def retry_table_queue_row(source: Any, row_ref: Any, *, delay_s: float | None) -> None:
+    """Remember a local retry before making the row eligible for another claim."""
+    if delay_s:
+        await asyncio.sleep(delay_s)
+    key = row_ref.key_value
+    previous = source._retry_attempts.get(key, 0)
+    source._retry_attempts[key] = previous + 1
+    try:
+        await source.update_row(row_ref, source.nack)
+    except BaseException:
+        if previous:
+            source._retry_attempts[key] = previous
+        else:
+            source._retry_attempts.pop(key, None)
+        raise
+
+
+async def fail_table_queue_row(source: Any, row_ref: Any) -> None:
+    """Apply configured nack; retain exhausted counts only for eligible rows."""
+    table = await source.connector._table(row_ref.table)
+    async with source.connector.engine.begin() as conn:
+        if source.nack:
+            await conn.execute(
+                sa.update(table)
+                .where(table.c[row_ref.key] == row_ref.key_value)
+                .values(**source.nack)
+            )
+        # Check before releasing the UPDATE lock: a concurrent claim must not
+        # disguise an eligible failed row as ineligible and erase its history.
+        eligible = await conn.scalar(
+            sa.select(table.c[row_ref.key])
+            .where(table.c[row_ref.key] == row_ref.key_value)
+            .where(sa.text(source.where))
+        )
+    if eligible is None:
+        source._retry_attempts.pop(row_ref.key_value, None)

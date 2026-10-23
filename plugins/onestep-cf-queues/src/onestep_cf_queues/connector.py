@@ -107,6 +107,11 @@ class CFQueuesDelivery(Delivery):
         attempts = _message_field(message, "attempts")
         if attempts is not None:
             cf_meta["attempts"] = attempts
+            # Pull API attempts is one-based and survives consumer restarts.
+            try:
+                envelope.attempts += max(0, int(attempts) - 1)
+            except (TypeError, ValueError):
+                pass
         if isinstance(metadata, dict):
             cf_meta["metadata"] = dict(metadata)
         envelope.meta["cf_queues"] = cf_meta

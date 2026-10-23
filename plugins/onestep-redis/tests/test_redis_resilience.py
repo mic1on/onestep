@@ -74,3 +74,30 @@ async def test_send_failure_does_not_leak_url_credentials() -> None:
     )
     assert "s3cret" not in traceback_text
     assert "reader:s3cret" not in traceback_text
+
+
+@pytest.mark.asyncio
+async def test_close_after_transport_failure_stops_renewal_without_reopening() -> None:
+    import asyncio
+
+    connector = RedisConnector('redis://localhost')
+    stream = connector.stream('events', reclaim_idle_ms=30)
+    client = AsyncMock()
+    client.xautoclaim.return_value = [b'0-0', [], []]
+    client.xreadgroup.return_value = [[b'events', [(b'1-0', {b'body': b'{}'})]]]
+    client.eval.return_value = 1
+    with patch.object(connector, 'acquire', return_value=client) as acquire, patch.object(connector, 'release') as release:
+        await stream.fetch(1)
+        heartbeat = stream._heartbeat
+        client.xreadgroup.side_effect = ConnectionError('transport unavailable')
+        with pytest.raises(ConnectorOperationError):
+            await stream.fetch(1)
+        assert not stream._opened
+        await stream.close()
+        await asyncio.sleep(.04)
+        assert heartbeat.done()
+        assert stream._heartbeat is None
+        assert not stream._active and not stream._ready
+        assert not stream._opened
+        assert acquire.await_count == 1
+        assert release.await_count == 1
