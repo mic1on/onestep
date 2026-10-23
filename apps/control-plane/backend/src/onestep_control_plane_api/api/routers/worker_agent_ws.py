@@ -250,6 +250,11 @@ async def worker_agent_ws(
                         ),
                         close_connection=False,
                     )
+                if applied and deployment_event.payload.payload.get("agent_event_id"):
+                    await websocket.send_json({
+                        "type": "deployment_event_ack",
+                        "payload": {"event_id": deployment_event.payload.payload["agent_event_id"]},
+                    })
                 continue
 
             if envelope.type == "command_ack":

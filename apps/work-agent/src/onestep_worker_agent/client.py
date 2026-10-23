@@ -16,6 +16,7 @@ import httpx
 import websockets
 
 from onestep_worker_agent import __version__
+from onestep_worker_agent.commands import CommandJournal, JournalSocket
 from onestep_worker_agent.config import AgentConfig
 from onestep_worker_agent.identity import AgentIdentity
 from onestep_worker_agent.packages import extract_package
@@ -66,7 +67,12 @@ async def register_agent(config: AgentConfig) -> AgentIdentity:
                 "execution_mode": "subprocess",
                 "max_concurrent_deployments": config.max_concurrent_deployments,
                 "labels": {},
-                "capabilities": ["deployment.start", "deployment.stop", "deployment.restart"],
+                "capabilities": [
+                    "deployment.start",
+                    "deployment.stop",
+                    "deployment.restart",
+                    "agent.command_recovery",
+                ],
                 "platform": {
                     "system": platform.system(),
                     "machine": platform.machine(),
@@ -96,7 +102,12 @@ def build_hello_message(
         "payload": {
             "protocol_version": "1",
             "worker_agent_id": str(worker_agent_id),
-            "capabilities": ["deployment.start", "deployment.stop", "deployment.restart"],
+            "capabilities": [
+                "deployment.start",
+                "deployment.stop",
+                "deployment.restart",
+                "agent.command_recovery",
+            ],
             "max_concurrent_deployments": max_concurrent_deployments,
             "used_slots": used_slots,
             "running_deployments": running_deployments,
@@ -181,10 +192,7 @@ async def run_control_loop(
                 # from the base budget rather than escalating the retry.
                 attempt_backoff = _BASE_BACKOFF_SECONDS
                 delay = _jittered_backoff_delay(attempt_backoff, jitter_source)
-                print(
-                    "onestep-worker-agent: control session closed; "
-                    f"reconnecting in {delay:.1f}s"
-                )
+                print(f"onestep-worker-agent: control session closed; reconnecting in {delay:.1f}s")
                 await asyncio.sleep(delay)
 
 
@@ -297,9 +305,13 @@ async def _run_one_session(
         # so we still stay alive against an older or stricter server.
         heartbeat_interval = _parse_hello_ack(await websocket.recv(), default=30)
 
+        await _flush_exit_events(websocket, supervisor)
+
         async def heartbeat_loop() -> None:
             while True:
                 await asyncio.sleep(heartbeat_interval)
+                supervisor.running_deployments()
+                await _flush_exit_events(websocket, supervisor)
                 await websocket.send(
                     json.dumps(
                         build_heartbeat_message(
@@ -384,6 +396,106 @@ async def _ack_unsupported_command(websocket, message: dict[str, object]) -> Non
 async def handle_control_message(
     *,
     websocket,
+    http_client,
+    config,
+    identity,
+    supervisor,
+    message,
+) -> None:
+    if message.get("type") == "deployment_event_ack":
+        supervisor.acknowledge_exit(str(message.get("payload", {}).get("event_id", "")))
+        return
+    payload = message.get("payload")
+    if message.get("type") != "command" or not isinstance(payload, dict):
+        return
+    command_id = str(payload.get("command_id") or "")
+    args = payload.get("args")
+    if not command_id or not isinstance(args, dict):
+        return
+    deployment_id = str(args.get("deployment_id") or "")
+    if not hasattr(supervisor, "command_journal"):
+        supervisor.command_journal = CommandJournal(config.work_dir / "commands")
+    journal = supervisor.command_journal
+    async with journal.lock(deployment_id):
+        record = journal.load(command_id)
+        if record is not None:
+            socket = JournalSocket(websocket, journal, record)
+            if "command_result" not in record["frames"] and not (
+                record["frames"].get("command_ack", {}).get("payload", {}).get("status")
+                == "rejected"
+            ):
+                # The process restarted during an accepted operation. A saved
+                # matching runtime proves start completed; all other interrupted
+                # operations terminate explicitly instead of being run twice.
+                runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
+                succeeded = runtime == record["runtime_instance_id"]
+                if payload.get("kind") == "stop_deployment" and runtime is None:
+                    succeeded = True
+                await _send_command_result(
+                    socket,
+                    command_id=command_id,
+                    status="succeeded" if succeeded else "cancelled",
+                    result={"runtime_instance_id": runtime} if runtime else None,
+                    error_code=None if succeeded else "agent_interrupted",
+                )
+            await socket.replay()
+            return
+        record = journal.begin(command_id, payload)
+        socket = JournalSocket(websocket, journal, record)
+        try:
+            await _execute_control_message(
+                websocket=socket,
+                http_client=http_client,
+                config=config,
+                identity=identity,
+                supervisor=supervisor,
+                message={
+                    **message,
+                    "payload": {**payload, "runtime_instance_id": record["runtime_instance_id"]},
+                },
+            )
+        except asyncio.CancelledError:
+            # The subprocess helpers finish kill+wait before cancellation gets
+            # here. Preserve a launched worker; release only a preparation slot.
+            runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
+            if runtime is None:
+                supervisor.release_slot(deployment_id)
+            await _send_command_result(
+                socket,
+                command_id=command_id,
+                status="succeeded" if runtime == record["runtime_instance_id"] else "cancelled",
+                result={"runtime_instance_id": runtime} if runtime else None,
+                error_code=None
+                if runtime == record["runtime_instance_id"]
+                else "agent_interrupted",
+            )
+            raise
+        except Exception as exc:
+            await _send_command_result(
+                socket,
+                command_id=command_id,
+                status="failed",
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+            )
+
+
+async def _flush_exit_events(websocket, supervisor) -> None:
+    for event_id, event in list(getattr(supervisor, "exit_events", {}).items()):
+        code = event["returncode"]
+        await _send_deployment_event(
+            websocket,
+            deployment_id=event["deployment_id"],
+            event_type="exited",
+            observed_status="stopped" if code == 0 else "failed",
+            message=f"deployment process exited (returncode={code})",
+            payload={**event, "agent_event_id": event_id},
+        )
+
+
+async def _execute_control_message(
+    *,
+    websocket,
     http_client: httpx.AsyncClient,
     config: AgentConfig,
     identity: AgentIdentity,
@@ -453,6 +565,17 @@ async def _handle_start_deployment_command(
     credential_refs = _string_list(args.get("credential_refs"))
     timeout_s = _payload_timeout_s(payload)
 
+    existing_runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
+    if existing_runtime is not None and not stop_existing_first:
+        await _send_command_ack(websocket, command_id=command_id, status="accepted")
+        await _send_command_result(
+            websocket,
+            command_id=command_id,
+            status="succeeded",
+            result={"runtime_instance_id": existing_runtime},
+        )
+        return
+
     if stop_existing_first:
         await supervisor.stop(deployment_id, grace_seconds=timeout_s)
 
@@ -470,7 +593,7 @@ async def _handle_start_deployment_command(
 
     await _send_command_ack(websocket, command_id=command_id, status="accepted")
     package_dir = config.work_dir / "deployments" / deployment_id / "package"
-    runtime_instance_id = str(uuid4())
+    runtime_instance_id = str(payload.get("runtime_instance_id") or uuid4())
     try:
         await _send_deployment_event(
             websocket,
