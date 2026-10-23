@@ -5,6 +5,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import (
     Depends,
@@ -52,6 +53,11 @@ CONSOLE_AUTHENTICATED_AT_STATE_KEY = "console_authenticated_at"
 class WebSocketIngestAuth:
     token: str
     accepted_subprotocol: str | None = None
+
+
+@dataclass(frozen=True)
+class WebSocketWorkerAgentAuth:
+    worker_agent_id: UUID
 
 
 def _validate_ingest_token_value(token: str) -> bool:
@@ -144,10 +150,9 @@ def require_worker_agent_connection(
     return worker_agent
 
 
-def require_websocket_worker_agent_connection(
+async def require_websocket_worker_agent_connection(
     websocket: WebSocket,
-    db: Session = Depends(get_db_session),
-) -> WorkerAgent:
+) -> WebSocketWorkerAgentAuth:
     token = _extract_bearer_token(websocket.headers.get("authorization"))
     if token is None:
         raise WebSocketException(
@@ -156,15 +161,18 @@ def require_websocket_worker_agent_connection(
         )
 
     token_hash = hash_worker_agent_token(token)
-    worker_agent = db.scalar(
-        select(WorkerAgent).where(WorkerAgent.connection_token_hash == token_hash)
-    )
-    if worker_agent is None:
+    async with session_scope() as session:
+        worker_agent_id = await session.scalar(
+            select(WorkerAgent.worker_agent_id).where(
+                WorkerAgent.connection_token_hash == token_hash
+            )
+        )
+    if worker_agent_id is None:
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="invalid worker agent bearer token",
         )
-    return worker_agent
+    return WebSocketWorkerAgentAuth(worker_agent_id=worker_agent_id)
 
 
 def require_websocket_ingest_token(

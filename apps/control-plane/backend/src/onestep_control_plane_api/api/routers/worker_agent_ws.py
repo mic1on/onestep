@@ -58,7 +58,10 @@ from onestep_control_plane_api.api.schemas import (
     WorkerAgentWsEnvelope,
     WorkerDeploymentEventMessage,
 )
-from onestep_control_plane_api.api.security import require_websocket_worker_agent_connection
+from onestep_control_plane_api.api.security import (
+    WebSocketWorkerAgentAuth,
+    require_websocket_worker_agent_connection,
+)
 from onestep_control_plane_api.api.worker_agent_connection_registry import (
     worker_agent_connection_registry,
 )
@@ -77,7 +80,6 @@ from onestep_control_plane_api.api.worker_agent_service import (
     mark_worker_agent_session_message_async,
     reject_worker_agent_command_without_delivery_async,
 )
-from onestep_control_plane_api.db.models import WorkerAgent
 from onestep_control_plane_api.db.session import session_scope
 
 router = APIRouter(prefix="/api/v1/worker-agents", tags=["worker-agent-ws"])
@@ -137,7 +139,7 @@ async def _send_loop(
 @router.websocket("/ws")
 async def worker_agent_ws(
     websocket: WebSocket,
-    worker_agent: WorkerAgent = Depends(require_websocket_worker_agent_connection),
+    worker_agent: WebSocketWorkerAgentAuth = Depends(require_websocket_worker_agent_connection),
 ) -> None:
     await websocket.accept()
     send_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
