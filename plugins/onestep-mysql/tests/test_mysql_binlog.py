@@ -5,7 +5,7 @@ from collections import deque
 from types import SimpleNamespace
 
 import pytest
-from onestep_mysql import MySQLConnector
+from onestep_mysql import MySQLConnector, connector
 from onestep_mysql.connector import _binlog_payload, _BinlogToken
 
 from onestep.state import InMemoryCursorStore
@@ -173,23 +173,26 @@ def test_mysql_binlog_terminal_fail_settles_token() -> None:
     asyncio.run(scenario())
 
 
-def test_mysql_binlog_delayed_retry_does_not_block_later_records() -> None:
+@pytest.mark.parametrize("blocking", [False, True])
+def test_mysql_binlog_delayed_retry_does_not_block_later_records(monkeypatch, blocking: bool) -> None:
     async def scenario() -> None:
         db = MySQLConnector("sqlite:///:memory:")
         state = InMemoryCursorStore()
         await state.save("cdc", {"file": "mysql-bin.000001", "pos": 100})
-        source = db.binlog(server_id=18491, state=state, state_key="cdc")
+        source = db.binlog(server_id=18491, state=state, state_key="cdc", blocking=blocking)
         rows = _binlog_rows((1, 120, 0, 1), (2, 240, 0, 1))
         source._fetch_sync = lambda limit: [rows.popleft() for _ in range(min(limit, len(rows)))]
 
         first, = await source.fetch(1)
+        now = 1000.0
+        monkeypatch.setattr(connector.time, "monotonic", lambda: now)
         await first.retry(delay_s=60)
         second, = await source.fetch(1)
         assert second.payload["id"] == 2
         await second.ack()
         assert await state.load("cdc") == {"file": "mysql-bin.000001", "pos": 100}
 
-        source._retry_rows[first._token].ready_at = 0
+        now += 60
         redelivered, = await source.fetch(1)
         assert redelivered.payload["id"] == 1
         await redelivered.ack()

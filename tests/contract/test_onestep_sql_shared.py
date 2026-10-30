@@ -2215,3 +2215,110 @@ def test_legacy_forwarders_still_alias_the_shared_backend_objects() -> None:
     assert mysql_legacy_state.SQLAlchemyCursorStore is mysql_state.SQLAlchemyCursorStore
     assert postgres_legacy_state.SQLAlchemyStateStore is postgres_state.SQLAlchemyStateStore
     assert postgres_legacy_state.SQLAlchemyCursorStore is postgres_state.SQLAlchemyCursorStore
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_table_queue_retry_attempts_reach_terminal_and_preserve_eligible_history(backend, tmp_path):
+    from onestep import MaxAttempts, ExponentialBackoff
+    from onestep.runtime.runner import TaskRunner
+
+    db_url, _ = _seed_orders_table(tmp_path, f"attempts-{backend}.db", [{"id": 1}])
+
+    async def scenario():
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(table="orders", key="id", where="status = 0", claim={"status": 9}, ack={"status": 1}, nack={"status": 0})
+        assert _backend_connector_module(backend).retry_table_queue_row is shared_table_queue.retry_table_queue_row
+        assert _backend_connector_module(backend).fail_table_queue_row is shared_table_queue.fail_table_queue_row
+        app = OneStepApp("table-queue-attempts")
+
+        @app.task(source=source, retry=MaxAttempts(3))
+        async def poison(ctx, payload):
+            raise ValueError("poison")
+
+        actions = []
+        retry_row, fail_row = source.retry_row, source.fail_row
+
+        async def retry(row_ref, **kwargs):
+            actions.append("retry")
+            await retry_row(row_ref, **kwargs)
+
+        async def fail(row_ref, **kwargs):
+            actions.append("fail")
+            await fail_row(row_ref, **kwargs)
+
+        source.retry_row, source.fail_row = retry, fail
+        runner = TaskRunner(app, app.tasks[0])
+        for attempt in (0, 1, 2, 2):
+            delivery, = await source.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            await delivery.release_unstarted()
+            delivery, = await source.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            assert ExponentialBackoff(max_attempts=10).on_error(delivery.envelope, ValueError(), None).delay_s == 2 ** attempt
+            await runner._handle_delivery(delivery)
+        assert actions == ["retry", "retry", "fail", "fail"]
+        # Explicit nack keeps the row eligible; exhausted attempts must not reset.
+        assert source._retry_attempts == {1: 2}
+        delivery, = await source.fetch(1)
+        await delivery.ack()
+        assert source._retry_attempts == {}
+        assert await source.fetch(1) == []
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("terminal", ["complete", "fail", "deleted"])
+def test_table_queue_retry_count_cleanup_and_new_source_boundary(backend, terminal, tmp_path):
+    db_url, _ = _seed_orders_table(tmp_path, f"cleanup-{backend}-{terminal}.db", [{"id": 1}])
+
+    async def scenario():
+        connector = _backend_connector_cls(backend)(db_url)
+        options = dict(table="orders", key="id", where="status = 0", claim={"status": 9}, ack={"status": 1}, nack={"status": 0})
+        source = connector.table_queue(**options)
+        delivery, = await source.fetch(1)
+        await delivery.retry()
+        restarted = connector.table_queue(**options)
+        fresh, = await restarted.fetch(1)
+        assert fresh.envelope.attempts == 0
+        await fresh.release_unstarted()
+        delivery, = await source.fetch(1)
+        assert delivery.envelope.attempts == 1
+        if terminal == "complete":
+            await delivery.complete({"score": 5})
+        else:
+            source.nack = {"status": -1}
+            if terminal == "deleted":
+                async with connector.engine.begin() as conn:
+                    await conn.execute(sa.text("DELETE FROM orders WHERE id = 1"))
+            await delivery.fail()
+        assert source._retry_attempts == {}
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_table_queue_retry_update_failure_does_not_consume_attempt(backend, tmp_path):
+    db_url, _ = _seed_orders_table(tmp_path, f"retry-failure-{backend}.db", [{"id": 1}])
+
+    async def scenario():
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(table="orders", key="id", where="status = 0", claim={"status": 9}, ack={"status": 1}, nack={"status": 0})
+        delivery, = await source.fetch(1)
+        update = source.update_row
+
+        async def broken(*args):
+            raise OSError("database unavailable")
+
+        source.update_row = broken
+        with pytest.raises(OSError):
+            await delivery.retry()
+        assert source._retry_attempts == {}
+        source.update_row = update
+        await delivery.retry()
+        assert (await source.fetch(1))[0].envelope.attempts == 1
+        await connector.close()
+
+    asyncio.run(scenario())

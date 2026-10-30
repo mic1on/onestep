@@ -896,6 +896,7 @@ class ControlPlaneWsSender:
             "telemetry.sync",
             "telemetry.heartbeat",
             "telemetry.metrics",
+            "telemetry.custom_metrics",
             "telemetry.events",
         ]
         for capability in DEFAULT_COMMAND_CAPABILITIES:

@@ -16,7 +16,7 @@ test('Date values retain milliseconds and textual timestamps retain microseconds
   assert.equal(parseDbTimestamp(new Date('2026-10-23T04:05:06Z')), '2026-10-23T04:05:06+00:00');
 });
 
-test('Postgres timestamp parser is pool-local and preserves custom parsers for other types', async () => {
+test('Postgres enforces timestamp/JSON parsers locally and preserves other custom parsers', async () => {
   let config: Record<string, unknown> = {};
   const defaultParser = (value: string | Buffer) => new Date(String(value));
   const customParser = (value: string | Buffer) => `custom:${value}`;
@@ -34,6 +34,11 @@ test('Postgres timestamp parser is pool-local and preserves custom parsers for o
   const timestamp = '2026-10-23 04:05:06.123456+00';
   assert.equal(localTypes.getTypeParser(1184)(timestamp), timestamp);
   assert.equal(localTypes.getTypeParser(23)('123'), 'custom:123');
+  for (const oid of [114, 3802]) {
+    assert.equal(localTypes.getTypeParser(oid)('"123"'), '123');
+    assert.equal(localTypes.getTypeParser(oid)('123'), 123);
+    assert.deepEqual(localTypes.getTypeParser(oid)('{"n":1}'), { n: 1 });
+  }
   assert.equal(types.getTypeParser(), defaultParser);
   assert.equal(config.binary, false);
   await backend.close();

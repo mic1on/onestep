@@ -195,6 +195,7 @@ export function canonicalize(value: CanonicalValue): string {
     // non-integral as floats; callers that know the true type must wrap in
     // PyFloat.
     const n = value as number;
+    if (Object.is(n, -0)) return '-0.0';
     if (Number.isInteger(n) && Math.abs(n) < 1e21) return String(n);
     return formatPyFloat(n);
   }

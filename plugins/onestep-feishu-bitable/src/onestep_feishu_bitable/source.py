@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from onestep.envelope import Envelope
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 @dataclass
 class _FeishuCursorToken:
     value: tuple[Any, str]
+    status: str = "active"
 
 
 class FeishuBitableIncrementalDelivery(Delivery):
@@ -52,30 +53,17 @@ class FeishuBitableIncrementalDelivery(Delivery):
         await self._source.ack_token(self._token)
 
     async def release_unstarted(self) -> None:
-        # The runtime dropped this batch before it started processing; the token must
-        # not sit at the head of the pending deque because that would block every
-        # later prefix commit forever. do not commit it: the records were never
-        # delivered, so the durable cursor must not advance past them.
-        await self._source.discard_token(self._token)
+        await self._source.requeue_token(self._token, self.envelope, retry=False)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
         if delay_s:
             await asyncio.sleep(delay_s)
-        # A retry must actually be re-read, so this cannot simply drop the token:
-        # ``fetch()`` had already advanced ``_fetched_cursor`` to the batch tail, and
-        # the read cursor is what the next poll searches from. Dropping alone would
-        # leave the record invisible until the process restarts. Rewind the read
-        # cursor to just before this token and drop it from the pending deque so the
-        # prefix commit is not wedged. The token is never committed here.
-        await self._source.requeue_token(self._token)
+        await self._source.requeue_token(self._token, self.envelope, retry=True)
 
     async def fail(self, exc: Exception | None = None) -> None:
-        # The record is permanently abandoned. Drop the token so the prefix commit can
-        # advance past it and the durable cursor does not freeze forever; this is a
-        # deliberate data-loss trade-off chosen over a permanent cursor stall. The
-        # cursor is not written here: ack_token() still only moves it over a contiguous
-        # run of acked prefixes.
-        await self._source.discard_token(self._token)
+        # A permanent failure is a terminal skip, unlike retry/release. Persist it
+        # through the same contiguous-prefix rule, including a failed batch tail.
+        await self._source.ack_token(self._token)
 
 
 class FeishuBitableIncrementalSource(Source):
@@ -106,6 +94,8 @@ class FeishuBitableIncrementalSource(Source):
         self.state_key = state_key
         self._pending: deque[tuple[Any, str]] = deque()
         self._acked: set[tuple[Any, str]] = set()
+        self._tokens: dict[tuple[Any, str], _FeishuCursorToken] = {}
+        self._retry_queue: deque[tuple[tuple[Any, str], Envelope]] = deque()
         self._commit_lock: asyncio.Lock | None = None
         self._loaded = False
         self._committed_cursor: tuple[Any, str] | None = None
@@ -123,6 +113,14 @@ class FeishuBitableIncrementalSource(Source):
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
         page_size = max(1, min(int(limit), self.batch_size))
+        if self._retry_queue:
+            deliveries: list[Delivery] = []
+            while self._retry_queue and len(deliveries) < page_size:
+                value, envelope = self._retry_queue.popleft()
+                token = _FeishuCursorToken(value)
+                self._tokens[value] = token
+                deliveries.append(FeishuBitableIncrementalDelivery(self, envelope, token))
+            return deliveries
         try:
             records = await self._fetch_records(page_size)
         except ConnectorOperationError:
@@ -152,6 +150,7 @@ class FeishuBitableIncrementalSource(Source):
                     message=f"feishu_bitable record {record_id!r} is missing cursor field {self.cursor_field!r}",
                 )
             token = _FeishuCursorToken((cursor_value, record_id))
+            self._tokens[token.value] = token
             self._pending.append(token.value)
             self._fetched_cursor = token.value
             body = {"record_id": record_id, "fields": fields}
@@ -169,89 +168,55 @@ class FeishuBitableIncrementalSource(Source):
             deliveries.append(FeishuBitableIncrementalDelivery(self, envelope, token))
         return deliveries
 
+    def _lock(self) -> asyncio.Lock:
+        if self._commit_lock is None:
+            self._commit_lock = asyncio.Lock()
+        return self._commit_lock
+
     async def ack_token(self, token: _FeishuCursorToken) -> None:
-        lock = self._commit_lock
-        if lock is None:
-            lock = asyncio.Lock()
-            self._commit_lock = lock
-        async with lock:
+        async with self._lock():
+            if self._tokens.get(token.value) is not token or token.status != "active":
+                return
             self._acked.add(token.value)
-            advanced: tuple[Any, str] | None = None
-            while self._pending and self._pending[0] in self._acked:
-                advanced = self._pending.popleft()
-                self._acked.remove(advanced)
-            if advanced is not None:
-                self._committed_cursor = advanced
-                if not self._pending:
-                    self._fetched_cursor = advanced
-                await self.state.save(self.state_key, [advanced[0], advanced[1]])
-
-    async def discard_token(self, token: _FeishuCursorToken) -> None:
-        """Drop ``token`` from the pending deque without committing it.
-
-        Used by the delivery's release/retry/fail paths so that an abandoned token can
-        never wedge the prefix commit. Idempotent and safe when the token is unknown.
-        """
-        lock = self._commit_lock
-        if lock is None:
-            lock = asyncio.Lock()
-            self._commit_lock = lock
-        async with lock:
-            value = token.value
             try:
-                self._pending.remove(value)
-            except ValueError:
-                return
-            self._acked.discard(value)
-            # Removing a head token can expose a run of already-acked successors.
-            # Drain it through the normal prefix-commit path so the durable cursor
-            # moves as far as the acks allow instead of waiting for a later ack.
-            advanced: tuple[Any, str] | None = None
-            while self._pending and self._pending[0] in self._acked:
-                advanced = self._pending.popleft()
-                self._acked.remove(advanced)
-            if advanced is not None:
-                self._committed_cursor = advanced
-                if not self._pending:
-                    self._fetched_cursor = advanced
-                await self.state.save(self.state_key, [advanced[0], advanced[1]])
+                await self._commit_prefix()
+            except BaseException:
+                # Saving may fail or be cancelled. Keep the prefix and read cursor
+                # intact so this delivery can be retried without losing any row.
+                self._acked.discard(token.value)
+                raise
+            token.status = "acked"
 
-    async def requeue_token(self, token: _FeishuCursorToken) -> None:
-        """Drop ``token`` without committing it and rewind the read cursor onto it.
+    async def _commit_prefix(self) -> None:
+        prefix: list[tuple[Any, str]] = []
+        for value in self._pending:
+            if value not in self._acked:
+                break
+            prefix.append(value)
+        if not prefix:
+            return
+        advanced = prefix[-1]
+        # Do not mutate memory before durable storage accepts the complete prefix.
+        await self.state.save(self.state_key, [advanced[0], advanced[1]])
+        for value in prefix:
+            self._pending.popleft()
+            self._acked.remove(value)
+            self._tokens.pop(value, None)
+        self._committed_cursor = advanced
 
-        ``fetch()`` advances ``_fetched_cursor`` to the tail of the batch it returned,
-        and reads start from ``_fetched_cursor or _committed_cursor``. A retried record
-        must therefore be visible again on the next poll: rewinding the read cursor to
-        the token immediately *before* this one makes the next search re-include it
-        (``_cursor_after`` keeps strictly-greater records, so pointing at the token
-        itself would skip it).
-
-        The durable cursor is never moved onto ``token``; only an already-acked
-        contiguous prefix may commit. Idempotent and safe when the token is unknown.
-        """
-        await self.discard_token(token)
-        lock = self._commit_lock
-        if lock is None:
-            lock = asyncio.Lock()
-            self._commit_lock = lock
-        async with lock:
-            value = token.value
-            # Never rewind behind the durable cursor: those rows were already committed
-            # and re-reading them would replay the whole range.
-            if self._committed_cursor is not None and not _cursor_after(value, self._committed_cursor):
+    async def requeue_token(
+        self, token: _FeishuCursorToken, envelope: Envelope, *, retry: bool
+    ) -> None:
+        async with self._lock():
+            if self._tokens.get(token.value) is not token or token.status != "active":
                 return
-            if self._fetched_cursor is None or not _cursor_after(self._fetched_cursor, value):
-                return
-            # Newest already-pending token strictly below the retried one; the search
-            # is exclusive, so pointing here re-includes the retried record.
-            predecessor: tuple[Any, str] | None = self._committed_cursor
-            for pending in self._pending:
-                if _cursor_after(value, pending) and (
-                    predecessor is None or _cursor_after(pending, predecessor)
-                ):
-                    predecessor = pending
-            if predecessor is not None:
-                self._fetched_cursor = predecessor
+            # Retain the original position in _pending as a cursor fence. Re-reading
+            # through the API would skip a first/tail row or duplicate live successors;
+            # retain the fetched payload and hand out only this row on the next poll.
+            self._retry_queue.append(
+                (token.value, replace(envelope, attempts=envelope.attempts + int(retry)))
+            )
+            token.status = "queued"
 
     def control_plane_descriptor(self) -> dict[str, Any]:
         return {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,10 +17,12 @@ from .resilience import as_kafka_connector_operation_error, collect_sensitive_to
 try:  # pragma: no cover - optional dependency
     from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
     from aiokafka.structs import TopicPartition
+    from aiokafka.abc import ConsumerRebalanceListener
 except ImportError:  # pragma: no cover - optional dependency
     AIOKafkaConsumer = None
     AIOKafkaProducer = None
     TopicPartition = None
+    ConsumerRebalanceListener = object
 
 
 @dataclass
@@ -44,6 +47,7 @@ class KafkaOffsetTracker:
 
     def mark_completed(self, topic: str, partition: int, offset: int) -> int | None:
         state = self._state(topic, partition, offset)
+        state.fetched_offsets.add(offset)
         state.completed_offsets.add(offset)
         return self._next_committable_offset(state)
 
@@ -64,8 +68,11 @@ class KafkaOffsetTracker:
         state = self._state(topic, partition, offset)
         if offset in state.started_offsets or offset in state.completed_offsets:
             return None
-        state.fetched_offsets.discard(offset)
+        # Released records remain a commit barrier until redelivered.
         return offset
+
+    def reset_partition(self, topic: str, partition: int) -> None:
+        self._states.pop((topic, partition), None)
 
     def next_committed_offset(self, topic: str, partition: int) -> int | None:
         state = self._states.get((topic, partition))
@@ -85,35 +92,51 @@ class KafkaOffsetTracker:
         if state.next_commit_offset is None:
             return None
         next_offset = state.next_commit_offset
-        while next_offset in state.completed_offsets:
-            next_offset += 1
+        # Kafka offsets are positions, not a contiguous sequence of records.
+        for offset in sorted(state.fetched_offsets):
+            if offset not in state.completed_offsets:
+                break
+            next_offset = offset + 1
         if next_offset == state.next_commit_offset:
             return None
         return next_offset
 
 
 class KafkaDelivery(Delivery):
-    def __init__(self, topic: "KafkaTopic", record: Any) -> None:
+    def __init__(self, topic: "KafkaTopic", record: Any, *, envelope: Envelope | None = None) -> None:
         self._topic = topic
         self._record = record
-        super().__init__(_decode_record_envelope(record))
+        self._epoch = topic._epochs.get((record.topic, record.partition), 0)
+        self._settled = False
+        super().__init__(envelope if envelope is not None else _decode_record_envelope(record))
 
     async def start_processing(self) -> None:
-        await self._topic.mark_started(self._record)
+        await self._topic.start_delivery(self)
 
     async def release_unstarted(self) -> None:
-        await self._topic.release_unstarted_record(self._record)
+        await self._topic.requeue_delivery(self, increment=False)
 
     async def ack(self) -> None:
-        await self._topic.ack_record(self._record)
+        await self._topic.ack_delivery(self)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
         if delay_s:
             await asyncio.sleep(delay_s)
-        await self._topic.seek_record(self._record)
+        await self._topic.requeue_delivery(self, increment=True)
 
     async def fail(self, exc: Exception | None = None) -> None:
-        await self._topic.ack_record(self._record)
+        await self._topic.ack_delivery(self)
+
+
+class _RebalanceListener(ConsumerRebalanceListener):
+    def __init__(self, topic: "KafkaTopic") -> None:
+        self.topic = topic
+
+    async def on_partitions_revoked(self, revoked: Any) -> None:
+        await self.topic.reset_partitions(revoked)
+
+    async def on_partitions_assigned(self, assigned: Any) -> None:
+        await self.topic.reset_partitions(assigned)
 
 
 class KafkaConnector:
@@ -211,6 +234,8 @@ class KafkaTopic(Source, Sink):
         self._offset_lock: asyncio.Lock | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._offset_tracker = KafkaOffsetTracker()
+        self._epochs: dict[tuple[str, int], int] = {}
+        self._retries: deque[KafkaDelivery] = deque()
 
     async def open(self) -> None:
         return None
@@ -231,6 +256,8 @@ class KafkaTopic(Source, Sink):
                 errors.append(exc)
             finally:
                 self._producer = None
+        await self.reset_partitions([self.connector.driver().TopicPartition(*key) for key in self._epochs])
+        self._retries.clear()
         if errors:
             raise errors[0]
 
@@ -238,13 +265,29 @@ class KafkaTopic(Source, Sink):
         try:
             consumer = await self._open_consumer()
             max_records = max(1, min(limit, self.batch_size))
+            async with self._runtime_offset_lock():
+                ready = []
+                while self._retries and len(ready) < max_records:
+                    delivery = self._retries.popleft()
+                    if self.owns(delivery):
+                        ready.append(delivery)
+                if ready:
+                    return ready
+                epochs = dict(self._epochs)
             batches = await consumer.getmany(timeout_ms=self.poll_timeout_ms, max_records=max_records)
             deliveries: list[Delivery] = []
             async with self._runtime_offset_lock():
-                for records in batches.values():
+                for tp, records in batches.items():
+                    key = (tp.topic, tp.partition)
+                    if epochs.get(key, 0) != self._epochs.get(key, 0):
+                        # A rebalance raced getmany. Re-read under the new assignment.
+                        if records and tp in consumer.assignment():
+                            consumer.seek(tp, records[0].offset)
+                        continue
                     for record in records:
                         if len(deliveries) >= max_records:
                             break
+                        self._epochs.setdefault((record.topic, record.partition), 0)
                         self._offset_tracker.mark_fetched(record.topic, record.partition, record.offset)
                         deliveries.append(KafkaDelivery(self, record))
             return deliveries
@@ -284,6 +327,47 @@ class KafkaTopic(Source, Sink):
             if connector_error is None:
                 raise
             raise connector_error from None
+
+    def owns(self, delivery: KafkaDelivery) -> bool:
+        record = delivery._record
+        return delivery._epoch == self._epochs.get((record.topic, record.partition), 0)
+
+    async def reset_partitions(self, partitions: Any) -> None:
+        async with self._runtime_offset_lock():
+            for tp in partitions:
+                key = (tp.topic, tp.partition)
+                self._epochs[key] = self._epochs.get(key, 0) + 1
+                self._offset_tracker.reset_partition(*key)
+            self._retries = deque(d for d in self._retries if self.owns(d))
+
+    async def start_delivery(self, delivery: KafkaDelivery) -> None:
+        async with self._runtime_offset_lock():
+            if not self.owns(delivery):
+                raise RuntimeError("Kafka partition ownership changed before processing")
+            record = delivery._record
+            self._offset_tracker.mark_started(record.topic, record.partition, record.offset)
+
+    async def requeue_delivery(self, delivery: KafkaDelivery, *, increment: bool) -> None:
+        async with self._runtime_offset_lock():
+            if delivery._settled or not self.owns(delivery):
+                return
+            envelope = delivery.envelope
+            self._retries.append(KafkaDelivery(self, delivery._record, envelope=Envelope(
+                body=envelope.body, meta=dict(envelope.meta),
+                attempts=envelope.attempts + int(increment),
+            )))
+            delivery._settled = True
+
+    async def ack_delivery(self, delivery: KafkaDelivery) -> None:
+        async with self._runtime_offset_lock():
+            if delivery._settled or not self.owns(delivery):
+                return
+            record = delivery._record
+            next_offset = self._offset_tracker.mark_completed(record.topic, record.partition, record.offset)
+            if next_offset is not None:
+                await self._commit_offset_unlocked(record.topic, record.partition, next_offset)
+                self._offset_tracker.mark_committed(record.topic, record.partition, next_offset)
+            delivery._settled = True
 
     async def mark_started(self, record: Any) -> None:
         async with self._runtime_offset_lock():
@@ -348,7 +432,8 @@ class KafkaTopic(Source, Sink):
             }
             if self.client_id is not None:
                 options["client_id"] = self.client_id
-            self._consumer = driver.AIOKafkaConsumer(self.topic, **options)
+            self._consumer = driver.AIOKafkaConsumer(**options)
+            self._consumer.subscribe(topics=[self.topic], listener=_RebalanceListener(self))
             await self._consumer.start()
             return self._consumer
 
@@ -385,6 +470,8 @@ class KafkaTopic(Source, Sink):
             self._consumer = None
             self._producer = None
             self._offset_tracker = KafkaOffsetTracker()
+            self._epochs = {}
+            self._retries = deque()
 
 
 def _decode_record_envelope(record: Any) -> Envelope:
