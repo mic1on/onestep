@@ -324,6 +324,89 @@ def test_ws_sender_advertises_restart_and_drain_only_after_binding_runtime() -> 
     assert "command.replay_dead_letters" not in capabilities
 
 
+def test_ws_sender_negotiates_and_sends_custom_metrics() -> None:
+    connection = FakeWsConnection(
+        initial_messages=[
+            {
+                "type": "hello_ack",
+                "message_id": "msg_server_1",
+                "sent_at": "2026-03-17T12:00:00Z",
+                "payload": {
+                    "session_id": "sess_server_1",
+                    "protocol_version": "1",
+                    "heartbeat_interval_s": 30,
+                    "accepted_capabilities": [
+                        "telemetry.sync",
+                        "telemetry.heartbeat",
+                        "telemetry.metrics",
+                        "telemetry.custom_metrics",
+                    ],
+                    "server_time": "2026-03-17T12:00:00Z",
+                },
+            }
+        ]
+    )
+
+    async def connect_factory(url: str, headers: dict[str, str], subprotocols: list[str]):
+        return connection
+
+    transport = ControlPlaneWsTransport(
+        base_url="https://control-plane.example.com",
+        token="secret-token",
+        connect_factory=connect_factory,
+    )
+    sender = ControlPlaneWsSender(_make_config(), transport=transport)
+    app = OneStepApp("billing-sync")
+    reporter = ControlPlaneReporter(_make_config(), sender=sender)
+    reporter.attach(app)
+
+    async def scenario() -> None:
+        await app.startup()
+        app.custom_metrics.for_task("sync_users").counter(
+            "rows_total", labels={"outcome": "unchanged"}
+        ).inc(3)
+        await reporter.flush_metrics_now()
+        await app.shutdown()
+
+    asyncio.run(scenario())
+
+    hello_message = connection.sent_messages[0]
+    assert hello_message["type"] == "hello"
+    assert "telemetry.custom_metrics" in hello_message["payload"]["capabilities"]
+
+    metrics_message = next(
+        message
+        for message in connection.sent_messages
+        if message["type"] == "telemetry"
+        and message["payload"]["channel"] == "metrics"
+    )
+    assert metrics_message["payload"]["body"]["tasks"] == [
+        {
+            "task_name": "sync_users",
+            "window_id": metrics_message["payload"]["body"]["tasks"][0]["window_id"],
+            "fetched": 0,
+            "started": 0,
+            "succeeded": 0,
+            "retried": 0,
+            "failed": 0,
+            "dead_lettered": 0,
+            "cancelled": 0,
+            "timeouts": 0,
+            "inflight": 0,
+            "avg_duration_ms": None,
+            "p95_duration_ms": None,
+            "custom_metrics": [
+                {
+                    "name": "rows_total",
+                    "kind": "counter",
+                    "value": 3,
+                    "labels": {"outcome": "unchanged"},
+                }
+            ],
+        }
+    ]
+
+
 def test_ws_sender_advertises_dead_letter_replay_only_for_compatible_tasks() -> None:
     connection = FakeWsConnection(
         initial_messages=[
