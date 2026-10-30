@@ -25,7 +25,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "99cb195dda89fb034ebe49b5140b20fe56de6f89e93446bdc95ac2ea5bb77db2"
+      "expectedDigest": "99cb195dda89fb034ebe49b5140b20fe56de6f89e93446bdc95ac2ea5bb77db2",
+      "payloadJson": "{\"a\":1,\"b\":\"x\"}",
+      "metadataJson": "{}"
     },
     {
       "label": "nested",
@@ -62,7 +64,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "52651ebce76da044b66ba4c3c6badf97f8214a81d8b4aac1046d0bca28dad31c"
+      "expectedDigest": "52651ebce76da044b66ba4c3c6badf97f8214a81d8b4aac1046d0bca28dad31c",
+      "payloadJson": "{\"a\":1,\"b\":\"x\",\"n\":{\"f\":1.5,\"k\":null}}",
+      "metadataJson": "{}"
     },
     {
       "label": "empty_payload",
@@ -78,7 +82,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "2620b57c90c9152fc38cddb3a8eeac433c8115be3f73df2a5a829876a2a3ffc8"
+      "expectedDigest": "2620b57c90c9152fc38cddb3a8eeac433c8115be3f73df2a5a829876a2a3ffc8",
+      "payloadJson": "{}",
+      "metadataJson": "{}"
     },
     {
       "label": "unicode",
@@ -107,7 +113,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "fc31b228c8bbaf8ba82b954565822824b8f46a077386c4dae669e01e0b039785"
+      "expectedDigest": "fc31b228c8bbaf8ba82b954565822824b8f46a077386c4dae669e01e0b039785",
+      "payloadJson": "{\"emoji\":\"\\ud83c\\udf89\",\"mixed\":\"a\\u4e2db\",\"name\":\"\\u5f20\\u4e09\"}",
+      "metadataJson": "{}"
     },
     {
       "label": "unicode_escape",
@@ -136,7 +144,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "84dc1e38fcc3fd77f53d56955ae634f332083e8ea6ea4896c244b1062461cfa8"
+      "expectedDigest": "84dc1e38fcc3fd77f53d56955ae634f332083e8ea6ea4896c244b1062461cfa8",
+      "payloadJson": "{\"bs\":\"a\\\\b\",\"ctrl\":\"a\\tb\\nc\",\"quote\":\"say \\\"hi\\\"\"}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_1_0",
@@ -157,7 +167,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "2ea929c7a78f54e9c4a2dadf90f74dada9bed158c434f39196d1058cb6678663"
+      "expectedDigest": "2ea929c7a78f54e9c4a2dadf90f74dada9bed158c434f39196d1058cb6678663",
+      "payloadJson": "{\"v\":1.0}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_3_0",
@@ -178,7 +190,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "d01d42db2d80163c84ef8c8cc972ebba75bf76f75008ae7672d5068ce6d7c3df"
+      "expectedDigest": "d01d42db2d80163c84ef8c8cc972ebba75bf76f75008ae7672d5068ce6d7c3df",
+      "payloadJson": "{\"v\":3.0}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_neg_0_0",
@@ -199,7 +213,59 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "dd4d9b7b70989c214b70fb284f304800cac4adf1fd2402d29d19d58b83961bd1"
+      "expectedDigest": "dd4d9b7b70989c214b70fb284f304800cac4adf1fd2402d29d19d58b83961bd1",
+      "payloadJson": "{\"v\":-0.0}",
+      "metadataJson": "{}"
+    },
+    {
+      "label": "nested_floats",
+      "namespace": "demo",
+      "taskName": "orders.sync",
+      "payload": {
+        "__t": "dict",
+        "v": {
+          "i": {
+            "__t": "int",
+            "v": 1
+          },
+          "xs": {
+            "__t": "list",
+            "v": [
+              {
+                "__t": "float",
+                "v": "1.0"
+              },
+              {
+                "__t": "float",
+                "v": "-0.0"
+              },
+              {
+                "__t": "dict",
+                "v": {
+                  "f": {
+                    "__t": "float",
+                    "v": "3.0"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "__t": "dict",
+        "v": {
+          "n": {
+            "__t": "float",
+            "v": "2.0"
+          }
+        }
+      },
+      "delayS": null,
+      "expiresAt": null,
+      "expectedDigest": "df8254137fc71846f2bebf2fa55a961ec05250be15a7dad59aed000d40415d27",
+      "payloadJson": "{\"i\":1,\"xs\":[1.0,-0.0,{\"f\":3.0}]}",
+      "metadataJson": "{\"n\":2.0}"
     },
     {
       "label": "float_frac",
@@ -220,7 +286,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "8f38db0c01e27023633dfd48d40c77f04ce4467ceb8a92b09912b820bba5c662"
+      "expectedDigest": "8f38db0c01e27023633dfd48d40c77f04ce4467ceb8a92b09912b820bba5c662",
+      "payloadJson": "{\"v\":0.30000000000000004}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_exp_large",
@@ -241,7 +309,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "9f680f0e257bc1e08fd6570b939178a8ebeb4cd8f63fc6fd1687554c781af697"
+      "expectedDigest": "9f680f0e257bc1e08fd6570b939178a8ebeb4cd8f63fc6fd1687554c781af697",
+      "payloadJson": "{\"v\":1e+30}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_exp_small",
@@ -262,7 +332,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "cc04a6ad53c35def2ac7ee02c9fb7702f1bacc3842041d16221cb1492b18c785"
+      "expectedDigest": "cc04a6ad53c35def2ac7ee02c9fb7702f1bacc3842041d16221cb1492b18c785",
+      "payloadJson": "{\"v\":1e-07}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_exp_20",
@@ -283,7 +355,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "d986cf7c3edb4973c142d96e110311737156232fd9213e59323b0a52468db96b"
+      "expectedDigest": "d986cf7c3edb4973c142d96e110311737156232fd9213e59323b0a52468db96b",
+      "payloadJson": "{\"v\":1e+20}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_exp_21",
@@ -304,7 +378,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "a21fb9177d1ca3ca893c7e1634a0c5e293ce0c2781f703698e6d0262547f006b"
+      "expectedDigest": "a21fb9177d1ca3ca893c7e1634a0c5e293ce0c2781f703698e6d0262547f006b",
+      "payloadJson": "{\"v\":1e+21}",
+      "metadataJson": "{}"
     },
     {
       "label": "float_many",
@@ -341,7 +417,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "75a7cf9555ef0e7f57bead84446ba12d947ae123c6ff525c030cc84c8c43789d"
+      "expectedDigest": "75a7cf9555ef0e7f57bead84446ba12d947ae123c6ff525c030cc84c8c43789d",
+      "payloadJson": "{\"a\":1.0,\"b\":2.5,\"c\":1e+21,\"d\":0.0001,\"e\":1e-07}",
+      "metadataJson": "{}"
     },
     {
       "label": "int_vs_float",
@@ -366,7 +444,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "0778a3b2d0417ceef010fc200b2c924163cd6e252c9c6e473c107be2a3e2b022"
+      "expectedDigest": "0778a3b2d0417ceef010fc200b2c924163cd6e252c9c6e473c107be2a3e2b022",
+      "payloadJson": "{\"f\":1.0,\"i\":1}",
+      "metadataJson": "{}"
     },
     {
       "label": "bool_null",
@@ -394,7 +474,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "aab8713a4d00cd0272d4958317da8e5b8b03cc2246ba7991e4c68a8182fed54e"
+      "expectedDigest": "aab8713a4d00cd0272d4958317da8e5b8b03cc2246ba7991e4c68a8182fed54e",
+      "payloadJson": "{\"f\":false,\"n\":null,\"t\":true}",
+      "metadataJson": "{}"
     },
     {
       "label": "list",
@@ -440,7 +522,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "2bcb4bbb450d4b328ca2f7075bd0525553e9c3416d2cf51b1bc62e9ef13b3364"
+      "expectedDigest": "2bcb4bbb450d4b328ca2f7075bd0525553e9c3416d2cf51b1bc62e9ef13b3364",
+      "payloadJson": "{\"xs\":[1,2.0,\"three\",null,{\"k\":1}]}",
+      "metadataJson": "{}"
     },
     {
       "label": "nested_empty",
@@ -465,7 +549,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "54403a380e23631ad8d4d42b495250cf0740b3253b3c720271c830c2e19420ed"
+      "expectedDigest": "54403a380e23631ad8d4d42b495250cf0740b3253b3c720271c830c2e19420ed",
+      "payloadJson": "{\"a\":{},\"b\":[]}",
+      "metadataJson": "{}"
     },
     {
       "label": "metadata",
@@ -495,7 +581,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "881a30992102373e4ce0f91c6c76b145b9da19c2159aeb1bdf4af1cdce78780f"
+      "expectedDigest": "881a30992102373e4ce0f91c6c76b145b9da19c2159aeb1bdf4af1cdce78780f",
+      "payloadJson": "{\"a\":1}",
+      "metadataJson": "{\"n\":2,\"trace\":\"abc\"}"
     },
     {
       "label": "delay",
@@ -516,7 +604,9 @@
       },
       "delayS": "30.0",
       "expiresAt": null,
-      "expectedDigest": "87813724931a39e894e28b59c02a8c093ea0bf9d6998ee8ff69e2b79835664ad"
+      "expectedDigest": "87813724931a39e894e28b59c02a8c093ea0bf9d6998ee8ff69e2b79835664ad",
+      "payloadJson": "{\"a\":1}",
+      "metadataJson": "{}"
     },
     {
       "label": "delay_int",
@@ -537,7 +627,9 @@
       },
       "delayS": "5.0",
       "expiresAt": null,
-      "expectedDigest": "db1fbe07d6bd018442d1371d0b56c68ba1a6911896cf39c56a5df303b4f2207d"
+      "expectedDigest": "db1fbe07d6bd018442d1371d0b56c68ba1a6911896cf39c56a5df303b4f2207d",
+      "payloadJson": "{\"a\":1}",
+      "metadataJson": "{}"
     },
     {
       "label": "expires_utc",
@@ -558,7 +650,9 @@
       },
       "delayS": null,
       "expiresAt": "2026-09-17T10:07:00.123456+00:00",
-      "expectedDigest": "694d52f8599d93293e52ab77e32a565f63fd8e9b6467bf102cb17bc3dadf9fa3"
+      "expectedDigest": "694d52f8599d93293e52ab77e32a565f63fd8e9b6467bf102cb17bc3dadf9fa3",
+      "payloadJson": "{\"a\":1}",
+      "metadataJson": "{}"
     },
     {
       "label": "expires_utc_round",
@@ -579,7 +673,9 @@
       },
       "delayS": null,
       "expiresAt": "2026-09-17T10:07:00+00:00",
-      "expectedDigest": "f7f6d96486774b50d853cb1b7cf3495ccd6e224797eadb50a9a5da1ba12f18c3"
+      "expectedDigest": "f7f6d96486774b50d853cb1b7cf3495ccd6e224797eadb50a9a5da1ba12f18c3",
+      "payloadJson": "{\"a\":1}",
+      "metadataJson": "{}"
     },
     {
       "label": "expires_offset",
@@ -600,7 +696,9 @@
       },
       "delayS": null,
       "expiresAt": "2026-09-17T18:07:00.123456+08:00",
-      "expectedDigest": "e9bb7636c30192f80df8ae7b33d28ef45536e9ce7749fe194daa417e1d1fd56d"
+      "expectedDigest": "e9bb7636c30192f80df8ae7b33d28ef45536e9ce7749fe194daa417e1d1fd56d",
+      "payloadJson": "{\"a\":1}",
+      "metadataJson": "{}"
     },
     {
       "label": "e2e_echo_floats",
@@ -629,7 +727,9 @@
       },
       "delayS": null,
       "expiresAt": null,
-      "expectedDigest": "cbe4c756f9696ee45955287d0f5a3c5fdf8fbbbcb4d021591024c2f4a0bba00a"
+      "expectedDigest": "cbe4c756f9696ee45955287d0f5a3c5fdf8fbbbcb4d021591024c2f4a0bba00a",
+      "payloadJson": "{\"orderId\":\"A-1001\",\"qty\":3.0,\"ratio\":1.0}",
+      "metadataJson": "{}"
     },
     {
       "label": "combined",
@@ -659,7 +759,9 @@
       },
       "delayS": "12.5",
       "expiresAt": "2027-01-01T00:00:00+00:00",
-      "expectedDigest": "ea7e3f9fcdc982e80db436c96287aa85c7d8c2c2bb25bca460461f3c83f6fa2e"
+      "expectedDigest": "ea7e3f9fcdc982e80db436c96287aa85c7d8c2c2bb25bca460461f3c83f6fa2e",
+      "payloadJson": "{\"s\":\"\\u4e2d\\u6587\",\"v\":1.0}",
+      "metadataJson": "{\"k\":1.0}"
     }
   ],
   "cursor": [
@@ -706,6 +808,68 @@
         "id",
         "v"
       ]
+    }
+  ],
+  "expiry": [
+    {
+      "input": "2026-10-24T10:00:00Z",
+      "normalized": "2026-10-24T10:00:00+00:00",
+      "expectedDigest": "045d5a32102f153530c60a82887ac9c82783d777ffd3824eeaff2e3e73cabc6b"
+    },
+    {
+      "input": "2026-10-24T10:00:00.000000+00:00",
+      "normalized": "2026-10-24T10:00:00+00:00",
+      "expectedDigest": "045d5a32102f153530c60a82887ac9c82783d777ffd3824eeaff2e3e73cabc6b"
+    },
+    {
+      "input": "2026-10-24T10:00:00.123Z",
+      "normalized": "2026-10-24T10:00:00.123000+00:00",
+      "expectedDigest": "a209fcaa31c7ac7018b591b733e8d1127c22e9ff11dd468a05f3494b771238ad"
+    },
+    {
+      "input": "2026-10-24T10:00:00.123000+00:00",
+      "normalized": "2026-10-24T10:00:00.123000+00:00",
+      "expectedDigest": "a209fcaa31c7ac7018b591b733e8d1127c22e9ff11dd468a05f3494b771238ad"
+    },
+    {
+      "input": "2026-10-24T10:00:00.123456+00:00",
+      "normalized": "2026-10-24T10:00:00.123456+00:00",
+      "expectedDigest": "ec0c5b77d97de30f7ff57f7116be518d2e3a7b00c275afd963ad6cac5f8b0c08"
+    },
+    {
+      "input": "2026-10-24T10:00:00.123457+00:00",
+      "normalized": "2026-10-24T10:00:00.123457+00:00",
+      "expectedDigest": "7e6cc1ab112840b2fd07563d41e42d7278739b76bf612653ed4a2572553c5d0f"
+    },
+    {
+      "input": "2026-10-24T10:00:00.000001+08:00",
+      "normalized": "2026-10-24T10:00:00.000001+08:00",
+      "expectedDigest": "ea46fa28e534ac4ba6e4e4cb378cdcbbea870f33d6b0b6c27959d28fdf4148f6"
+    },
+    {
+      "input": "2026-10-24T10:00:00.123456-03:30",
+      "normalized": "2026-10-24T10:00:00.123456-03:30",
+      "expectedDigest": "4fefb16f0dd9530da192dd00e4af0b8fca57b67d8ca29ff96ffd04e373d311f5"
+    },
+    {
+      "input": "2026-10-24T10:00:00+05:45",
+      "normalized": "2026-10-24T10:00:00+05:45",
+      "expectedDigest": "04887a01f8ee6050c4ddf8f043f823bcec6c4d7ea8c220851abcc55c69513fde"
+    },
+    {
+      "input": "2026-10-24T10:00:00-00:00",
+      "normalized": "2026-10-24T10:00:00+00:00",
+      "expectedDigest": "045d5a32102f153530c60a82887ac9c82783d777ffd3824eeaff2e3e73cabc6b"
+    },
+    {
+      "input": "2028-02-29T10:00:00.1+08:00",
+      "normalized": "2028-02-29T10:00:00.100000+08:00",
+      "expectedDigest": "4d7f5f685ba28a85634f817bb5f9fdb7c1be0c20a8a150e1ecccc7ed55860e21"
+    },
+    {
+      "input": "2026-10-24 10:00+08:00",
+      "normalized": "2026-10-24T10:00:00+08:00",
+      "expectedDigest": "e0463fa711ddeafef2b849d4921295f0c52096d111519e352d6480042a7bd977"
     }
   ],
   "e2ePayload": {

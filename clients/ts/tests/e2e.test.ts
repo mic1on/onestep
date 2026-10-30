@@ -16,7 +16,7 @@
  * message when either is unavailable, so `npm test` stays usable offline.
  *
  *   ONESTEP_E2E_DSN   libpq DSN (default postgresql://onestep:onestep@localhost:5432/onestep)
- *   ONESTEP_PYTHON    python interpreter (default ../.venv/bin/python)
+ *   ONESTEP_PYTHON    absolute interpreter path (default <repo>/.venv/bin/python)
  */
 
 import { test, before, after } from 'node:test';
@@ -30,7 +30,8 @@ import { PostgresBackend } from '../src/backends/postgres.ts';
 import { ExecutionClient } from '../src/client.ts';
 import { parseDbTimestamp } from '../src/schema.ts';
 import { ExecutionConflict, ExecutionNotReady } from '../src/errors.ts';
-import { PyFloat, submissionDigest } from '../src/canonical.ts';
+import { canonicalize, PyFloat, submissionDigest } from '../src/canonical.ts';
+import { fromTagged, type Tagged } from './tagged.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
@@ -54,15 +55,19 @@ const golden = JSON.parse(
   readFileSync(join(here, '..', 'fixtures', 'golden.json'), 'utf-8'),
 ) as {
   e2ePayload: { payload: unknown; expectedDigest: string };
+  digest: Array<{ label: string; namespace: string; taskName: string; payload: Tagged; metadata: Tagged;
+    payloadJson: string; metadataJson: string; delayS: string | null; expiresAt: string | null; expectedDigest: string }>;
+  expiry: Array<{ input: string; normalized: string; expectedDigest: string }>;
 };
 const goldenE2eDigest = golden.e2ePayload.expectedDigest;
 
-function runPython(args: string[], timeoutMs = 60_000): string {
+function runPython(args: string[], timeoutMs = 60_000, input?: unknown): string {
   return execFileSync(PYTHON, [WORKER, ...args], {
     cwd: repoRoot,
     env: { ...process.env, ONESTEP_E2E_DSN: DSN },
     encoding: 'utf-8',
     timeout: timeoutMs,
+    input: input === undefined ? undefined : JSON.stringify(input),
   });
 }
 
@@ -70,6 +75,9 @@ before(async () => {
   try {
     runPython(['reset']);
   } catch (error) {
+    // Explicit test infrastructure must fail visibly rather than turn a broken
+    // integration into a green run containing only skipped tests.
+    if (process.env.ONESTEP_E2E_DSN) throw error;
     available = false;
     skipReason =
       `e2e prerequisites unavailable (${(error as Error).message.split('\n')[0]}). ` +
@@ -286,4 +294,118 @@ test('worker-side lease operations are refused with a clear error', async (t) =>
 
   const { assertWorkerOnly } = await import('../src/client.ts');
   assert.throws(() => assertWorkerOnly('claim'), /worker-side lease operation/);
+});
+
+interface InteropRequest {
+  namespace: string; taskName: string; payloadJson: string; metadataJson: string;
+  idempotencyKey: string; delayS: number | null; expiresAt: string | null;
+  operation?: string; id?: string; expectConflict?: boolean;
+}
+interface InteropResult {
+  id: string; payloadTypes: unknown; metadataTypes: unknown; expiresAt: string | null; conflict?: boolean;
+}
+function interop(requests: InteropRequest[]): InteropResult[] {
+  return JSON.parse(runPython(['interop'], 60_000, requests).trim().split('\n').at(-1)!);
+}
+
+test('all golden payloads and expiries replay idempotently TS -> Python and Python -> TS', async (t) => {
+  if (!available) return t.skip(skipReason);
+  const cases = [
+    ...golden.digest.map((vector) => ({
+      ...vector, payload: fromTagged(vector.payload), metadata: fromTagged(vector.metadata) as Record<string, unknown>,
+      delayS: vector.delayS === null ? null : Number(vector.delayS),
+    })),
+    ...golden.expiry.map((vector, i) => ({
+      label: `expiry-${i}`, namespace: 'demo', taskName: 'orders.sync', payload: 1, metadata: {},
+      payloadJson: '1', metadataJson: '{}', delayS: null, expiresAt: vector.input, expectedDigest: vector.expectedDigest,
+    })),
+  ];
+  const requests: InteropRequest[] = [];
+  const tsIds: string[] = [];
+  for (const vector of cases) {
+    const submitter = new ExecutionClient({ backend, namespace: vector.namespace });
+    const idempotencyKey = `ts-first-${vector.label}`;
+    const row = await submitter.submit(vector.taskName, vector.payload, {
+      idempotencyKey, metadata: vector.metadata, delayS: vector.delayS, expiresAt: vector.expiresAt,
+    });
+    tsIds.push(row.id);
+    requests.push({ namespace: vector.namespace, taskName: vector.taskName, idempotencyKey,
+      payloadJson: vector.payloadJson, metadataJson: vector.metadataJson, delayS: vector.delayS, expiresAt: vector.expiresAt });
+    const stored = await backend.query('SELECT submission_digest FROM onestep_executions WHERE id = $1', [row.id]);
+    assert.equal(stored[0].submission_digest, vector.expectedDigest, vector.label);
+  }
+  const pythonReplay = interop(requests);
+  assert.deepEqual(pythonReplay.map((row) => row.id), tsIds);
+  const pythonFirstRequests = requests.map((request) => ({ ...request, idempotencyKey: request.idempotencyKey.replace('ts-first-', 'py-first-') }));
+  const pythonFirst = interop(pythonFirstRequests);
+  for (const [index, vector] of cases.entries()) {
+    const submitter = new ExecutionClient({ backend, namespace: vector.namespace });
+    const row = await submitter.submit(vector.taskName, vector.payload, {
+      idempotencyKey: pythonFirstRequests[index].idempotencyKey, metadata: vector.metadata, delayS: vector.delayS, expiresAt: vector.expiresAt,
+    });
+    assert.equal(row.id, pythonFirst[index].id, vector.label);
+    assert.equal(row.expiresAt, pythonFirst[index].expiresAt, vector.label);
+  }
+});
+
+test('JSON strings and other values survive PostgreSQL -> Python worker -> TS result', async (t) => {
+  if (!available) return t.skip(skipReason);
+  const values = ['123', 'true', 'null', '{}', '[]', '"quoted"', 123, true, false, null, { n: 1 }, [1]];
+  const rows = [];
+  for (const value of values) {
+    const row = await client.submit('e2e.json', value);
+    assert.deepEqual(row.payload, value);
+    assert.deepEqual((await client.get(row.id))?.payload, value);
+    rows.push(row);
+  }
+  runPython(['run', '--task', 'e2e.json', '--wait', '5']);
+  for (const [index, row] of rows.entries()) assert.deepEqual(await client.result(row.id), values[index]);
+});
+
+test('Python sees integral PyFloat types in nested payload/metadata and can replay stored data', async (t) => {
+  if (!available) return t.skip(skipReason);
+  const payload = { integer: 1, nested: [new PyFloat(1), { float: new PyFloat(3) }] };
+  const metadata = { nested: [new PyFloat(2)] };
+  const request: InteropRequest = { namespace: NAMESPACE, taskName: 'e2e.types', idempotencyKey: 'stored-floats',
+    payloadJson: canonicalize(payload), metadataJson: canonicalize(metadata), delayS: null, expiresAt: null };
+  const row = await client.submit(request.taskName, payload, { idempotencyKey: request.idempotencyKey, metadata });
+  const replayed = interop([{ ...request, operation: 'resubmit-stored', id: row.id }])[0];
+  assert.equal(replayed.id, row.id);
+  const expectedTypes = { integer: { type: 'int', repr: '1' }, nested: [
+    { type: 'float', repr: '1.0' }, { float: { type: 'float', repr: '3.0' } },
+  ] };
+  assert.deepEqual(replayed.payloadTypes, expectedTypes);
+  assert.deepEqual(replayed.metadataTypes, { nested: [{ type: 'float', repr: '2.0' }] });
+  runPython(['run', '--task', request.taskName, '--wait', '3']);
+  assert.deepEqual((await client.result(row.id) as { types: unknown }).types, expectedTypes);
+});
+
+test('JSONB numeric normalization is explicit: original negative-zero/exponent requests still replay', async (t) => {
+  if (!available) return t.skip(skipReason);
+  const payload = { negativeZero: new PyFloat(-0), exponent: new PyFloat(1e20) };
+  const request: InteropRequest = { namespace: NAMESPACE, taskName: 'e2e.jsonb-limits', idempotencyKey: 'jsonb-normalization',
+    payloadJson: canonicalize(payload), metadataJson: '{}', delayS: null, expiresAt: null };
+  const row = await client.submit(request.taskName, payload, { idempotencyKey: request.idempotencyKey });
+  const python = interop([request])[0];
+  assert.equal(python.id, row.id);
+  assert.deepEqual(python.payloadTypes, { negativeZero: { type: 'float', repr: '0.0' },
+    exponent: { type: 'int', repr: '100000000000000000000' } });
+  assert.equal(interop([{ ...request, operation: 'resubmit-stored', id: row.id, expectConflict: true }])[0].conflict, true);
+  runPython(['run', '--task', request.taskName, '--wait', '3']);
+  const result = await client.result(row.id) as { types: unknown; echo: { negativeZero: number } };
+  assert.deepEqual(result.types, python.payloadTypes);
+  assert.equal(Object.is(result.echo.negativeZero, -0), false);
+});
+
+test('microsecond changes and offset changes conflict with Python submissions', async (t) => {
+  if (!available) return t.skip(skipReason);
+  const request: InteropRequest = { namespace: NAMESPACE, taskName: 'e2e.expiry-conflict', idempotencyKey: 'expiry-conflict',
+    payloadJson: '1', metadataJson: '{}', delayS: null, expiresAt: '2026-10-24T10:00:00.123456+00:00' };
+  const python = interop([request])[0];
+  for (const expiresAt of ['2026-10-24T10:00:00.123457+00:00', '2026-10-24T18:00:00.123456+08:00']) {
+    await assert.rejects(client.submit(request.taskName, 1, { idempotencyKey: request.idempotencyKey, expiresAt }), ExecutionConflict);
+  }
+  const row = await client.submit(request.taskName, 1, { idempotencyKey: request.idempotencyKey, expiresAt: request.expiresAt });
+  assert.equal(row.id, python.id);
+  assert.equal(row.expiresAt, request.expiresAt);
 });

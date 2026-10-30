@@ -14,6 +14,9 @@ export interface Backend {
    *
    * `values` are bound parameters; `$1`-style placeholders are used by the
    * PostgreSQL backend and rewritten for MySQL by its implementation.
+   * JSON/JSONB columns must already be decoded into JavaScript values exactly
+   * once. A string is a JSON string value, never raw JSON text for mapRow to
+   * parse. Drivers configured to return raw JSON must decode at this boundary.
    */
   query(sql: string, values: unknown[]): Promise<Record<string, unknown>[]>;
 

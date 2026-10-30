@@ -5,10 +5,9 @@
  * plugins/onestep-sql/src/onestep_sql/postgres/execution_schema.py. Relevant
  * facts observed from a live `\d onestep_executions`:
  *
- *   - payload / metadata / result / error are `jsonb`. `pg` already parses
- *     jsonb into JS objects, so values must NOT be JSON.stringify'd on write
- *     (passing an object lets the driver encode it) and must tolerate arriving
- *     as either an object or a string.
+ *   - payload / metadata / result / error are `jsonb`. Read them as decoded
+ *     JavaScript values, including string scalars. Writes bind canonical JSON
+ *     text with an explicit ::jsonb cast to retain PyFloat numeric spelling.
  *   - timestamps are `timestamp with time zone`. Read them as text through
  *     a pool-local parser so keyset cursors preserve all six fractional digits.
  *     JavaScript Date truncates microseconds before row mapping can recover them.
@@ -38,7 +37,7 @@ export interface PostgresBackendOptions {
   connectionString: string;
   /** Maximum pooled connections. */
   max?: number;
-  /** Extra pg.Pool options; timestamp parsers and text result format are enforced. */
+  /** Extra pool options; timestamp/JSON parsers and text result format are enforced. */
   poolOptions?: Record<string, unknown>;
   /** Injectable pg module (for tests); defaults to a dynamic import. */
   pgModule?: PgModule;
@@ -74,8 +73,10 @@ export class PostgresBackend implements Backend {
       types: {
         getTypeParser(oid: number, format?: string) {
           // The tracked-execution schema uses TIMESTAMPTZ (OID 1184).
-          // Keep caller parsers for every other type; never mutate pg.types.
+          // JSON/JSONB must be decoded once, even with a caller raw-text parser.
+          // Keep caller parsers for other types; never mutate pg.types.
           if (oid === 1184) return (value: string) => value;
+          if (oid === 114 || oid === 3802) return JSON.parse;
           return inheritedTypes.getTypeParser(oid, format);
         },
       },
