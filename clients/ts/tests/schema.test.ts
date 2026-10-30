@@ -60,19 +60,10 @@ test('mapRow keeps sink replay fields absent when the stored error omits them', 
   assert.equal(execution.error.sinksRemaining, undefined);
 });
 
-test('mapRow accepts JSON-string error columns with sink fields', () => {
-  const execution = mapRow(
-    makeRow({
-      error: JSON.stringify({
-        kind: 'error',
-        exception_type: 'RuntimeError',
-        stage: 'sink',
-        sinks_succeeded: 'first',
-        sinks_remaining: 'second',
-      }),
-    }),
-  );
-  assert.ok(execution.error);
-  assert.equal(execution.error.sinksSucceeded, 'first');
-  assert.equal(execution.error.sinksRemaining, 'second');
+test('mapRow preserves decoded JSON strings and other JSON types', () => {
+  for (const value of ['123', 'true', 'null', '{}', '[]', '"quoted"', 123, true, null, {}, []]) {
+    const execution = mapRow(makeRow({ payload: value, result: value }));
+    assert.deepEqual(execution.payload, value);
+    assert.deepEqual(execution.result, value);
+  }
 });

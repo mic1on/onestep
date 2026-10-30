@@ -21,6 +21,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `tests/contract/test_official_connector_conformance.py` derives the official connector set from plugins that still declare `[project.entry-points."onestep.resources"]`; the `sql` profile owns MySQL+PostgreSQL conformance since the shims dropped their entry points.
 - Plugin test dirs share basenames (e.g. `test_state_sqlalchemy.py`), so run each plugin suite in its own pytest process — see `scripts/run-reliability-checks.sh`.
 - Migration guide: `docs/guide/migrate-to-onestep-sql.md`.
+- TypeScript/Python submission compatibility and PostgreSQL JSONB numeric limits are documented in `clients/ts/README.md`; `clients/ts/tests/e2e.test.ts` exercises both replay directions against the production Python client. Its explicit `ONESTEP_E2E_DSN` must point to a disposable database: the suite resets execution tables.
 - Binlog recovery contract: `docs/broker/mysql.md` and `plugins/onestep-mysql/tests/test_mysql_binlog_recovery.py` (real MySQL coverage beside it in `integration/`). Checkpoints cover complete events only; attempts/retries are process-local. Keep driver reads nonblocking and emulate `blocking=True` with async polling: closing a blocking PyMySQL read from another thread can deadlock or reconnect.
 
 ## OneStepApp lifecycle decomposition (issue #146)
@@ -31,6 +32,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `src/onestep/runtime/task_ops.py` `TaskOperations(app)` owns dead-letter replay/discard, one-shot manual run, capability probes (`supports_*_commands`, `_task_supports_*`), and `_SyntheticManualRunDelivery`.
 - `src/onestep/runtime/event_hub.py` `EventHub(app)` owns startup/shutdown hooks, event handlers, `emit_event`, and structured event logging.
 - Facade keeps read-only `_runners`/`_runner_tasks`/`_resources` properties and an `_install_signal_handlers()` passthrough because `tests/contract/test_runtime_contract.py` reads them directly. `serve()`/`request_drain()`/`request_task_pause()`/`request_shutdown()` and `**app.describe()` structures are byte-for-byte unchanged.
+- Fetch-stop recovery is pinned by `tests/test_fetch_release.py`: even a cancelled fetch may return owned deliveries. MemoryQueue returns unstarted envelopes without waiting for a free slot, so `size()` can temporarily exceed `maxsize`; producers retain backpressure until the total drops below capacity. Returned envelopes are consumed first, in return order.
 
 ## Machine-readable CLI contracts (AI-friendly surface)
 
@@ -95,3 +97,8 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - **The publish job calls buildx directly, not `docker/build-push-action`,** because that action has no retry knob. If you touch `.github/workflows/control-plane.yml`'s publish step: the action implicitly added `--attest type=provenance,mode=max,builder-id=<run URL>` for public repos, and the hand-written invocation must keep passing it, or published images silently lose their provenance metadata.
 - **There is no separate `docker` job.** It ran the same `--target plane` build as the smoke job's `compose build plane`, tripling ECR pulls per push. `backend/tests/test_retry_docker_build.py` asserts the job stays deleted, that no job invokes `docker build` / `compose build` directly, and that smoke + Makefile route through the wrapper.
 - Rate limiting is only mitigated, not eliminated: the fix is to mirror `node`/`python`/`uv` into a registry you control (GHCR or the Aliyun `ceeg` namespace already used by `ceegic-sync`) and repoint the Dockerfiles. `docker/worker/Dockerfile` (`python:3.11-slim`) is the same risk and is not yet wrapped.
+
+## MongoDB live CI
+
+- The MongoDB 8.0 live/stepdown jobs and the main CI integration job use `ubuntu-22.04` (currently kernel 6.8): MongoDB aborts on kernels >= 6.19 due to SERVER-121912. Containers share the host kernel, so changing the image's base OS cannot fix it. `scripts/start-mongodb-replica-set.sh` waits for ping and primary with explicit exit codes and prints container state/logs on startup failure. Revisit the runner pin when upstream supports the newer kernel.
+- `scripts/run-integration-tests.sh` must capture setup exports in a separate assignment before `eval`: `eval "$(...)"` masks setup failure and runs tests without service variables. It prints Compose state/logs before cleanup on failure; `tests/test_integration_runner_script.py` exercises failure propagation and cleanup without starting Docker.

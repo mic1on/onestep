@@ -6,12 +6,14 @@ on:
       - main
     paths:
       - ".github/workflows/plugin-mongodb.yml"
+      - "scripts/start-mongodb-replica-set.sh"
       - "plugins/onestep-mongodb/**"
       - "src/**"
       - "pyproject.toml"
   pull_request:
     paths:
       - ".github/workflows/plugin-mongodb.yml"
+      - "scripts/start-mongodb-replica-set.sh"
       - "plugins/onestep-mongodb/**"
       - "src/**"
       - "pyproject.toml"
@@ -80,44 +82,38 @@ jobs:
   live-compatibility:
     name: Live MongoDB replica set
     needs: test
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 rejects kernels >= 6.19 (SERVER-121912); 22.04 uses 6.8.
+    # Docker shares the runner kernel, so changing the container OS cannot fix it.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - uses: astral-sh/setup-uv@v5
       - name: Start MongoDB replica set
-        run: |
-          docker run -d --name mongodb -p 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
-          for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'db.adminCommand("ping").ok' && break; sleep 2; done
-          docker exec mongodb mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
-          for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'rs.status().myState == 1' | grep -q true && exit 0; sleep 2; done
-          docker logs mongodb
-          exit 1
+        run: bash scripts/start-mongodb-replica-set.sh
       - name: Install test dependencies
         run: uv sync --frozen --all-packages --extra test
       - name: Run live suite
         env: { ONESTEP_MONGODB_URI: "mongodb://127.0.0.1:27017/onestep?replicaSet=rs0" }
         run: uv run --all-packages python -m pytest -q plugins/onestep-mongodb/tests/integration -m integration
+      - name: Stop MongoDB
+        if: always()
+        run: docker rm -fv mongodb
 
   resilience-stepdown:
     name: MongoDB primary-stepdown profile
     if: github.event_name == 'workflow_dispatch' && inputs.primary_stepdown
     needs: test
-    runs-on: ubuntu-latest
+    # Keep the same supported host kernel as live-compatibility (SERVER-121912).
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - uses: astral-sh/setup-uv@v5
       - name: Start MongoDB replica set
-        run: |
-          docker run -d --name mongodb -p 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
-          for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'db.adminCommand("ping").ok' && break; sleep 2; done
-          docker exec mongodb mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
-          for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'rs.status().myState == 1' | grep -q true && exit 0; sleep 2; done
-          docker logs mongodb
-          exit 1
+        run: bash scripts/start-mongodb-replica-set.sh
       - name: Install test dependencies
         run: uv sync --frozen --all-packages --extra test
       - name: Verify before and after stepdown
@@ -127,6 +123,10 @@ jobs:
           docker exec mongodb mongosh --quiet --eval 'db.adminCommand({replSetStepDown:5,force:true})' || true
           for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'rs.status().myState == 1' | grep -q true && break; sleep 2; done
           uv run --all-packages python -m pytest -q plugins/onestep-mongodb/tests/integration -m integration
+
+      - name: Stop MongoDB
+        if: always()
+        run: docker rm -fv mongodb
 
   detect-version:
     name: Detect plugin version change

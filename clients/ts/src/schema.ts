@@ -165,34 +165,21 @@ function parseNullableTimestamp(value: unknown): string | null {
   return parseDbTimestamp(value);
 }
 
-/** Parse a JSON column that may arrive as a string or an object. */
-function parseJsonColumn(value: unknown): unknown {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
-    }
-  }
-  return value;
-}
-
-/** Map a raw driver row to an `Execution`. */
+/** Map a backend row to an `Execution`. JSON columns are already decoded. */
 export function mapRow(row: Record<string, unknown>): Execution {
   const status = String(row.status) as ExecutionStatus;
   if (!(EXECUTION_STATUSES as readonly string[]).includes(status)) {
     throw new Error(`unknown execution status from database: ${status}`);
   }
-  const rawError = parseJsonColumn(row.error);
+  const rawError = row.error ?? null;
   return {
     id: String(row.id),
     namespace: String(row.namespace),
     taskName: String(row.task_name),
     status,
-    payload: parseJsonColumn(row.payload),
-    metadata: (parseJsonColumn(row.metadata) ?? {}) as Record<string, unknown>,
-    result: parseJsonColumn(row.result),
+    payload: row.payload ?? null,
+    metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    result: row.result ?? null,
     error: rawError === null ? null : normalizeErrorDetail(rawError),
     attempts: Number(row.attempts),
     createdAt: parseDbTimestamp(row.created_at),

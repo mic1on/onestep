@@ -89,9 +89,19 @@ intent explicitly with `PyFloat`:
 
 ```ts
 import { PyFloat } from '@mic1on/onestep-client';
-await client.submit('t', { ratio: new PyFloat(1.0) });  // digest covers 1.0
+await client.submit('t', { ratio: new PyFloat(1.0) });  // digest AND JSON write contain 1.0
 await client.submit('t', { ratio: 1 });                 // digest covers 1
 ```
+
+Payload and metadata are written using the same canonical encoder as the digest,
+including nested `PyFloat` values and negative zero (`-0.0`). PostgreSQL JSONB
+preserves `1.0`, so Python reads a `float` rather than an `int`. However, JSONB
+normalizes negative zero to positive zero and expands exponent notation: e.g.
+`-0.0` becomes `0.0`, and `1e+20` becomes `100000000000000000000` (a Python `int`).
+These are database limitations shared with Python submissions. Retain the
+**original typed request** for idempotent retries; rebuilding it from a stored
+row can change the digest. JavaScript reads also cannot distinguish `1.0` from
+`1`, so returned values do not reconstruct `PyFloat` wrappers.
 
 ### 2. Datetime formatting
 
@@ -102,11 +112,49 @@ Python  2026-09-17T10:07:00.123456+00:00
 JS      2026-09-17T10:07:00.123Z
 ```
 
-The client normalizes to Python's UTC `isoformat` form and rejects naive
-datetimes, matching the server's own rule.
+The client normalizes the input string to Python's `datetime.isoformat()` form
+without passing through `Date`: `Z` becomes `+00:00`, nonzero fractional seconds
+use six digits, and integral seconds have no fraction. The original offset is
+retained, so `2026-10-24T18:00:00.123+08:00` becomes
+`2026-10-24T18:00:00.123000+08:00`. Naive datetimes, invalid calendar dates, and
+more than six fractional digits are rejected. The supported input is a four-digit
+calendar date and time with an explicit `Z` or `±HH:MM` offset.
 
-**Both are covered by golden-vector tests** against digests produced by the real
-Python implementation.
+Python's existing digest distinguishes two representations of the same instant
+with different offsets. Preserve the original offset when retrying. Returned
+database timestamps and cursors still use UTC; they do not retain that original
+offset.
+
+**Both are covered through `ExecutionClient.submit`**, with Python golden
+vectors and live TS→Python / Python→TS idempotency tests.
+
+### JSON and capture types
+
+`Backend.query` returns JSON/JSONB columns already decoded exactly once. A value
+such as `"123"`, `"true"`, `"null"`, `"{}"`, or `"[]"` remains a string through
+`submit`, `get`, and `result`. `PostgresBackend` enforces JSON parsers locally
+even when `poolOptions.types` supplies raw-text parsers. Custom backends must
+decode JSON at their own driver boundary.
+
+Submissions support plain JSON values plus `PyFloat`. Python capture types
+(datetime, UUID, bytes, Decimal, tuple/set, Enum, namedtuple) are not implemented
+by this client. Special JavaScript objects (`Date`, `Map`, `Set`, buffers, class
+instances, including `PyDateTime`) and objects with a `$onestep` key are rejected
+on submission rather than silently flattened or interpreted as capture tags.
+`PyDateTime` remains a low-level canonical string helper, not a capture encoder.
+Python results containing capture tags remain encoded objects on the TS side.
+
+### Compatibility with previously submitted rows
+
+The Python digest algorithm and stored digests are unchanged. Existing Python
+requests replay with the same payload types and expiry offset. Earlier TS
+versions could store floats as integers and truncate/convert expiries before
+hashing. Retrying an affected old key with the corrected original request can
+therefore raise `ExecutionConflict`. Fetch the known execution by id and inspect
+it before deciding whether a new submission is needed; no fallback digest or
+automatic rewrite is applied, since it could accept distinct microsecond
+expiries as the same request. Previously discarded float/expiry information
+cannot be recovered from the row.
 
 ## Cursor caveat
 
@@ -118,25 +166,29 @@ therefore always emits UTC.
 `PostgresBackend` reads `timestamptz` as text using a pool-local parser and text result format (even if
 `poolOptions.binary` is set). This
 preserves microseconds in returned executions and page cursors, including rows
-less than one millisecond apart. Other PostgreSQL type parsers are preserved.
+less than one millisecond apart. Parsers other than timestamp and JSON/JSONB
+are preserved.
 Custom backends that return `Date` retain milliseconds but cannot recover
 microseconds already discarded by their driver.
 
 ## Testing
 
 ```bash
-npm run test:unit    # golden vectors and timestamp/parser tests, no infrastructure needed
-npm run test:e2e     # 9 live tests: TS submits -> Python worker executes
+npm run test:unit    # submit, golden vectors, row mapping and parser regressions
+npm run test:e2e     # live PostgreSQL and Python worker/bidirectional replay tests
+npm test             # builds and runs both suites
 npm run typecheck
 npm run build        # emits the publishable package into dist/
 ```
 
-The e2e suite needs a reachable PostgreSQL and the repo's Python venv with
-`onestep-sql` installed. It skips with an explanation when either is missing.
+The e2e suite needs a **disposable test PostgreSQL database** and the repo's
+Python venv with `onestep-sql[postgres]` installed. It resets the execution
+tables. It skips when implicit local prerequisites are missing; with an
+explicit `ONESTEP_E2E_DSN`, setup failures fail the run instead of skipping.
 
 ```bash
 ONESTEP_E2E_DSN=postgresql://onestep:onestep@localhost:5432/onestep \
-ONESTEP_PYTHON=../.venv/bin/python \
+ONESTEP_PYTHON="$PWD/../../.venv/bin/python" \
 npm run test:e2e
 ```
 
@@ -158,12 +210,17 @@ a `ts-v*` tag push and an explicit `publish_npm` input.
 
 ### Regenerating the golden vectors
 
-`fixtures/golden.json` is generated from the production Python algorithm, not
-hand-written. Regenerate it after any change to the digest or cursor format:
+`fixtures/golden.json` is generated with Python's canonical JSON and datetime
+formatting, using the production digest formula. Regenerate it with Python
+3.11+ after any change to the digest or cursor format. The live tests also
+verify those vectors against the production Python client:
 
 ```bash
-npm run golden
+ONESTEP_PYTHON="$PWD/../../.venv/bin/python" npm run golden
 ```
+
+`ONESTEP_PYTHON` selects the interpreter; when unset the command uses `python3`.
+The generator reports a clear error if that interpreter is older than 3.11.
 
 ## Design notes
 
