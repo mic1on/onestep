@@ -21,6 +21,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `tests/contract/test_official_connector_conformance.py` derives the official connector set from plugins that still declare `[project.entry-points."onestep.resources"]`; the `sql` profile owns MySQL+PostgreSQL conformance since the shims dropped their entry points.
 - Plugin test dirs share basenames (e.g. `test_state_sqlalchemy.py`), so run each plugin suite in its own pytest process — see `scripts/run-reliability-checks.sh`.
 - Migration guide: `docs/guide/migrate-to-onestep-sql.md`.
+- TypeScript/Python submission compatibility and PostgreSQL JSONB numeric limits are documented in `clients/ts/README.md`; `clients/ts/tests/e2e.test.ts` exercises both replay directions against the production Python client. Its explicit `ONESTEP_E2E_DSN` must point to a disposable database: the suite resets execution tables.
 - Binlog recovery contract: `docs/broker/mysql.md` and `plugins/onestep-mysql/tests/test_mysql_binlog_recovery.py` (real MySQL coverage beside it in `integration/`). Checkpoints cover complete events only; attempts/retries are process-local. Keep driver reads nonblocking and emulate `blocking=True` with async polling: closing a blocking PyMySQL read from another thread can deadlock or reconnect.
 
 ## OneStepApp lifecycle decomposition (issue #146)
@@ -31,6 +32,7 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `src/onestep/runtime/task_ops.py` `TaskOperations(app)` owns dead-letter replay/discard, one-shot manual run, capability probes (`supports_*_commands`, `_task_supports_*`), and `_SyntheticManualRunDelivery`.
 - `src/onestep/runtime/event_hub.py` `EventHub(app)` owns startup/shutdown hooks, event handlers, `emit_event`, and structured event logging.
 - Facade keeps read-only `_runners`/`_runner_tasks`/`_resources` properties and an `_install_signal_handlers()` passthrough because `tests/contract/test_runtime_contract.py` reads them directly. `serve()`/`request_drain()`/`request_task_pause()`/`request_shutdown()` and `**app.describe()` structures are byte-for-byte unchanged.
+- Fetch-stop recovery is pinned by `tests/test_fetch_release.py`: even a cancelled fetch may return owned deliveries. MemoryQueue returns unstarted envelopes without waiting for a free slot, so `size()` can temporarily exceed `maxsize`; producers retain backpressure until the total drops below capacity. Returned envelopes are consumed first, in return order.
 
 ## Machine-readable CLI contracts (AI-friendly surface)
 
