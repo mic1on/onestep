@@ -23,7 +23,7 @@ from onestep_control_plane_api.api.worker_service import (
     compile_worker_package_for_download,
     create_worker,
     delete_worker,
-    deploy_worker,
+    deploy_worker_native,
     get_worker_or_404,
     list_workers,
     update_worker,
@@ -115,6 +115,5 @@ def download_worker_package_endpoint(
 async def deploy_worker_endpoint(
     worker_id: UUID,
     request: WorkerDeployRequest,
-    db: Session = Depends(get_db_session),
 ) -> dict:
-    return await deploy_worker(db, worker_id, request)
+    return await deploy_worker_native(worker_id, request)

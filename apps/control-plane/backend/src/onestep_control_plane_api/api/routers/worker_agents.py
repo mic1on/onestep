@@ -25,20 +25,14 @@ from onestep_control_plane_api.api.security import (
     require_console_management_write_access,
     require_worker_agent_connection,
 )
-from onestep_control_plane_api.api.worker_agent_connection_registry import (
-    worker_agent_connection_registry,
-)
 from onestep_control_plane_api.api.worker_agent_service import (
     build_worker_agent_summary,
     build_worker_deployment_event_summary,
     build_worker_deployment_summary,
     build_workflow_package_summary,
-    create_restart_deployment_command,
-    create_start_deployment_command,
-    create_stop_deployment_command,
-    create_worker_deployment,
+    control_worker_deployment_native,
+    create_worker_deployment_native,
     create_workflow_package,
-    dispatch_worker_agent_command,
     get_worker_agent_or_404,
     get_worker_deployment_or_404,
     get_workflow_package_or_404,
@@ -49,7 +43,7 @@ from onestep_control_plane_api.api.worker_agent_service import (
     register_worker_agent,
     require_worker_agent_package_assignment,
 )
-from onestep_control_plane_api.db.models import WorkerAgent, WorkerAgentCommand, WorkerDeployment
+from onestep_control_plane_api.db.models import WorkerAgent
 from onestep_control_plane_api.db.session import get_db_session
 
 router = APIRouter(prefix="/api/v1", tags=["worker-agents"])
@@ -148,18 +142,11 @@ def download_workflow_package_endpoint(
 async def create_worker_deployment_endpoint(
     request: WorkerDeploymentCreateRequest,
     identity=Depends(require_console_management_admin),
-    db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
-    deployment = create_worker_deployment(
-        db,
+    return await create_worker_deployment_native(
         request,
         created_by=identity.username if identity is not None else "system",
     )
-    package = get_workflow_package_or_404(db, deployment.workflow_package_id)
-    if deployment.desired_status == "running":
-        command = create_start_deployment_command(db, deployment=deployment, package=package)
-        await _dispatch_if_connected(db, deployment=deployment, command=command)
-    return build_worker_deployment_summary(deployment)
 
 
 @router.post(
@@ -170,14 +157,9 @@ async def stop_worker_deployment_endpoint(
     deployment_id: UUID,
     http_request: Request,
     identity=Depends(require_console_auth),
-    db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
     require_command_role("shutdown", identity, http_request)
-    deployment = get_worker_deployment_or_404(db, deployment_id)
-    command = create_stop_deployment_command(db, deployment=deployment)
-    await _dispatch_if_connected(db, deployment=deployment, command=command)
-    db.refresh(deployment)
-    return build_worker_deployment_summary(deployment)
+    return await control_worker_deployment_native(deployment_id, command_kind="stop_deployment")
 
 
 @router.post(
@@ -188,15 +170,9 @@ async def restart_worker_deployment_endpoint(
     deployment_id: UUID,
     http_request: Request,
     identity=Depends(require_console_auth),
-    db: Session = Depends(get_db_session),
 ) -> WorkerDeploymentSummary:
     require_command_role("restart", identity, http_request)
-    deployment = get_worker_deployment_or_404(db, deployment_id)
-    package = get_workflow_package_or_404(db, deployment.workflow_package_id)
-    command = create_restart_deployment_command(db, deployment=deployment, package=package)
-    await _dispatch_if_connected(db, deployment=deployment, command=command)
-    db.refresh(deployment)
-    return build_worker_deployment_summary(deployment)
+    return await control_worker_deployment_native(deployment_id, command_kind="restart_deployment")
 
 
 @router.get(
@@ -259,21 +235,4 @@ def list_worker_deployment_events_endpoint(
         total=total,
         limit=limit,
         offset=offset,
-    )
-
-
-async def _dispatch_if_connected(
-    db: Session,
-    *,
-    deployment: WorkerDeployment,
-    command: WorkerAgentCommand,
-) -> None:
-    live_connection = await worker_agent_connection_registry.get(deployment.worker_agent_id)
-    if live_connection is None:
-        return
-    await dispatch_worker_agent_command(
-        db,
-        command=command,
-        send_queue=live_connection.send_queue,
-        session_id=live_connection.session_id,
     )
