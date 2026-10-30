@@ -311,7 +311,8 @@ def test_cancelled_read_is_retained_and_can_resume_with_smaller_limit():
     asyncio.run(scenario())
 
 
-def test_local_retry_wakes_a_blocking_read():
+@pytest.mark.parametrize("delay_s", [None, 0.05])
+def test_local_retry_wakes_a_blocking_read(delay_s):
     async def scenario():
         db, source, state = await make_source([(200, [1])], blocking=True)
         (first,) = await source.fetch(1)
@@ -326,7 +327,7 @@ def test_local_retry_wakes_a_blocking_read():
         pending = asyncio.create_task(source.fetch(1))
         await asyncio.to_thread(entered.wait, 5)
         try:
-            await first.retry()
+            await first.retry(delay_s=delay_s)
             (replacement,) = await asyncio.wait_for(pending, 1)
             assert replacement.payload == first.payload
             await replacement.ack()
