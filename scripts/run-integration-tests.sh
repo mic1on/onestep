@@ -12,6 +12,10 @@ fi
 
 cleanup() {
   local exit_code="$1"
+  if [[ "$exit_code" != "0" ]]; then
+    docker compose -f "$COMPOSE_FILE" ps -a >&2 || true
+    docker compose -f "$COMPOSE_FILE" logs --no-color --tail 100 >&2 || true
+  fi
   if [[ "$KEEP_SERVICES" != "1" ]]; then
     docker compose -f "$COMPOSE_FILE" down --remove-orphans >/dev/null 2>&1 || true
   fi
@@ -20,10 +24,12 @@ cleanup() {
 
 trap 'cleanup $?' EXIT
 
-docker compose -f "$COMPOSE_FILE" up -d
+docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 120
 
+# Keep setup's exit status: eval would turn a failed, empty substitution into success.
+integration_env="$("$ROOT_DIR/scripts/setup-integration-env.sh")"
 # shellcheck disable=SC1091
-eval "$("$ROOT_DIR/scripts/setup-integration-env.sh")"
+eval "$integration_env"
 
 test_paths=()
 for path in \
@@ -37,7 +43,7 @@ for path in \
   plugins/onestep-sqs/tests/integration \
   plugins/onestep-kafka/tests/integration
 do
-  if find "$ROOT_DIR/$path" -maxdepth 1 -type f -name 'test_*.py' | grep -q .; then
+  if [[ -d "$ROOT_DIR/$path" ]] && find "$ROOT_DIR/$path" -maxdepth 1 -type f -name 'test_*.py' | grep -q .; then
     test_paths+=("$path")
   fi
 done

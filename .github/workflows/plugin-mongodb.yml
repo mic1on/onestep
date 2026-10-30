@@ -88,7 +88,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Start MongoDB replica set
         run: |
-          docker run -d --name mongodb -p 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
+          # SERVER-121912: glibc rseq disables TCMalloc's incompatible per-CPU path.
+          docker run -d --name mongodb -p 27017:27017 -e GLIBC_TUNABLES=glibc.pthread.rseq=1 mongo:8.0 mongod --replSet rs0 --bind_ip_all
           for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'db.adminCommand("ping").ok' && break; sleep 2; done
           docker exec mongodb mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
           for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'rs.status().myState == 1' | grep -q true && exit 0; sleep 2; done
@@ -112,7 +113,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Start MongoDB replica set
         run: |
-          docker run -d --name mongodb -p 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
+          # SERVER-121912: glibc rseq disables TCMalloc's incompatible per-CPU path.
+          docker run -d --name mongodb -p 27017:27017 -e GLIBC_TUNABLES=glibc.pthread.rseq=1 mongo:8.0 mongod --replSet rs0 --bind_ip_all
           for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'db.adminCommand("ping").ok' && break; sleep 2; done
           docker exec mongodb mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
           for attempt in $(seq 1 60); do docker exec mongodb mongosh --quiet --eval 'rs.status().myState == 1' | grep -q true && exit 0; sleep 2; done

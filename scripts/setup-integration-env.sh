@@ -241,7 +241,7 @@ PY
 }
 
 if [[ "${1:-}" == "--start" ]]; then
-  docker compose -f "$COMPOSE_FILE" up -d
+  docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 120
 fi
 
 wait_for_url "$LOCALSTACK_ENDPOINT/_localstack/health" "LocalStack"
@@ -250,7 +250,7 @@ wait_for_mysql
 wait_for_postgres
 wait_for_redis
 wait_for_kafka
-docker exec -i onestep-mongodb mongosh --quiet < "$ROOT_DIR/docker/mongodb/init-replica-set.js" >/dev/null 2>&1 || true
+docker compose -f "$COMPOSE_FILE" exec -T mongo mongosh --quiet --file /dev/stdin < "$ROOT_DIR/docker/mongodb/init-replica-set.js" >&2
 wait_for_url "http://127.0.0.1:8123/ping" "ClickHouse"
 wait_for_mongodb
 

@@ -43,6 +43,11 @@ When updating this file, preserve this bar for all agents and keep entries conci
 - `_normalize_argv` in `cli.py` allowlists subcommand names; a new subcommand must be added there or it is rewritten to `run <name>`.
 - Adding a test dependency means updating `uv.lock` (`uv lock`); `jsonschema` is test-only and validates the schema in `tests/contract/test_app_schema.py`.
 
+## Live integration harness
+
+- `scripts/run-integration-tests.sh` waits for Compose health checks, captures setup exports before evaluating them (an inline `eval "$(setup)"` hides setup failures), and prints container status/logs before failure cleanup. Behaviour guards: `tests/test_integration_scripts.py`. Setup stdout is reserved for shell exports; diagnostics go to stderr.
+- MongoDB 8.0's TCMalloc per-CPU rseq path can refuse startup on Linux >= 6.19 (SERVER-121912). Both `docker-compose.integration.yml` and `.github/workflows/plugin-mongodb.yml` set `GLIBC_TUNABLES=glibc.pthread.rseq=1` to use glibc rseq instead. Keep those launch paths consistent.
+
 ## Control-plane alerts and metrics
 
 - Alert rules: `apps/control-plane/monitoring/prometheus/rules/control-plane.yml`; runbooks in `apps/control-plane/docs/runbooks/alerts.md` (one `## Heading` per alert, linked by GitHub heading slug).

@@ -119,6 +119,10 @@ services:
   mongo:
     image: mongo:8.0
     container_name: onestep-mongodb
+    environment:
+      # Avoid TCMalloc's incompatible per-CPU rseq path on Linux >= 6.19.
+      # https://jira.mongodb.org/browse/SERVER-121912
+      GLIBC_TUNABLES: glibc.pthread.rseq=1
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
