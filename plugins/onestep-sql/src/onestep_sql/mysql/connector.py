@@ -435,14 +435,25 @@ class BinlogDelivery(Delivery):
         await self._source.ack_token(self._token)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
-        if delay_s:
-            await asyncio.sleep(delay_s)
+        await self._source.retry_token(self._token, self.envelope, delay_s=delay_s)
 
     async def fail(self, exc: Exception | None = None) -> None:
-        return None
+        await self._source.fail_token(self._token)
+
+    async def release_unstarted(self) -> None:
+        await self._source.release_token(self._token, self.envelope)
+
+
+@dataclass
+class _BinlogRetryRow:
+    envelope: Envelope
+    ready_at: float
+    in_flight: bool = False
 
 
 class BinlogSource(Source):
+    fetch_is_cancel_safe = False
+
     def __init__(
         self,
         *,
@@ -479,6 +490,7 @@ class BinlogSource(Source):
         self._buffered: deque[tuple[dict[str, Any], _BinlogToken]] = deque()
         self._pending: deque[_BinlogToken] = deque()
         self._acked: set[_BinlogToken] = set()
+        self._retry_rows: dict[_BinlogToken, _BinlogRetryRow] = {}
         self._commit_lock: asyncio.Lock | None = None
         self._commit_loop: asyncio.AbstractEventLoop | None = None
 
@@ -498,6 +510,11 @@ class BinlogSource(Source):
 
     async def fetch(self, limit: int) -> list[Delivery]:
         await self.open()
+        retry_delivery = self._take_ready_retry_delivery()
+        if retry_delivery is not None:
+            return [retry_delivery]
+        # A delayed or in-flight retry remains a checkpoint barrier, but must
+        # not stop the stream from delivering later records.
         try:
             rows = await asyncio.to_thread(self._fetch_sync, max(1, min(limit, self.batch_size)))
         except Exception as exc:
@@ -513,10 +530,13 @@ class BinlogSource(Source):
             raise connector_error from exc
 
         deliveries: list[Delivery] = []
-        for payload, token in rows:
-            self._pending.append(token)
-            envelope = Envelope(body=payload, meta={"source": "mysql_binlog", "binlog": dict(payload["binlog"])})
-            deliveries.append(BinlogDelivery(self, envelope, token))
+        lock = self._runtime_commit_lock()
+        async with lock:
+            for payload, token in rows:
+                if token not in self._pending:
+                    self._pending.append(token)
+                envelope = Envelope(body=payload, meta={"source": "mysql_binlog", "binlog": dict(payload["binlog"])})
+                deliveries.append(BinlogDelivery(self, envelope, token))
         return deliveries
 
     async def close(self) -> None:
@@ -528,14 +548,79 @@ class BinlogSource(Source):
     async def ack_token(self, token: _BinlogToken) -> None:
         lock = self._runtime_commit_lock()
         async with lock:
+            if token not in self._pending:
+                return
             self._acked.add(token)
-            advanced: _BinlogToken | None = None
-            while self._pending and self._pending[0] in self._acked:
-                advanced = self._pending.popleft()
-                self._acked.remove(advanced)
-            if advanced is not None and advanced.row + 1 >= advanced.rows:
-                self._committed = advanced
-                await self.state.save(self.state_key, {"file": advanced.file, "pos": advanced.pos})
+            last_complete: _BinlogToken | None = None
+            for pending in self._pending:
+                if pending not in self._acked:
+                    break
+                if pending.row + 1 >= pending.rows:
+                    last_complete = pending
+            if last_complete is None:
+                return
+
+            commit_length = 0
+            for pending in self._pending:
+                commit_length += 1
+                if pending == last_complete:
+                    break
+            await self.state.save(
+                self.state_key,
+                {"file": last_complete.file, "pos": last_complete.pos},
+            )
+            self._committed = last_complete
+            for _ in range(commit_length):
+                committed = self._pending.popleft()
+                self._acked.remove(committed)
+                self._retry_rows.pop(committed, None)
+
+    def _take_ready_retry_delivery(self) -> Delivery | None:
+        now = time.monotonic()
+        for token in self._pending:
+            retry = self._retry_rows.get(token)
+            if retry is None or retry.in_flight or retry.ready_at > now:
+                continue
+            retry.in_flight = True
+            return BinlogDelivery(self, retry.envelope, token)
+        return None
+
+    async def retry_token(
+        self,
+        token: _BinlogToken,
+        envelope: Envelope,
+        *,
+        delay_s: float | None,
+    ) -> None:
+        lock = self._runtime_commit_lock()
+        async with lock:
+            self._acked.discard(token)
+            self._retry_rows[token] = _BinlogRetryRow(
+                envelope=Envelope(
+                    body=envelope.body,
+                    meta=dict(envelope.meta),
+                    attempts=envelope.attempts + 1,
+                ),
+                ready_at=time.monotonic() + max(0.0, delay_s or 0.0),
+            )
+
+    async def release_token(
+        self, token: _BinlogToken, envelope: Envelope
+    ) -> None:
+        lock = self._runtime_commit_lock()
+        async with lock:
+            self._acked.discard(token)
+            retry = self._retry_rows.get(token)
+            if retry is None:
+                retry = _BinlogRetryRow(envelope=envelope, ready_at=time.monotonic())
+                self._retry_rows[token] = retry
+            retry.in_flight = False
+            retry.ready_at = time.monotonic()
+
+    async def fail_token(self, token: _BinlogToken) -> None:
+        # A terminal failure is an explicit discard; runtime dead-letter routing
+        # has already run before Delivery.fail() is called.
+        await self.ack_token(token)
 
     def _fetch_sync(self, limit: int) -> list[tuple[dict[str, Any], _BinlogToken]]:
         stream = self._ensure_stream()
