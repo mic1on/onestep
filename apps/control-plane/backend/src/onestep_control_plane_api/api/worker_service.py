@@ -24,7 +24,9 @@ from onestep_control_plane_api.api.worker_agent_service import (
     build_worker_deployment_summary,
     create_start_deployment_command,
     create_worker_deployment,
+    create_worker_deployment_native,
     create_workflow_package,
+    create_workflow_package_native,
     dispatch_worker_agent_command,
     get_workflow_package_or_404,
     get_workflow_package_path_or_404,
@@ -35,6 +37,7 @@ from onestep_control_plane_api.api.worker_compiler import (
     merge_package,
 )
 from onestep_control_plane_api.db.models import Worker
+from onestep_control_plane_api.db.session import session_scope
 
 DEFAULT_REPORTING_CONFIG: dict[str, object] = {"mode": "platform", "endpoint_url": None}
 
@@ -190,8 +193,8 @@ def create_worker(db: Session, request: WorkerCreateRequest) -> dict[str, object
     existing = db.scalar(select(Worker).where(Worker.name == request.name))
     if existing is not None:
         raise HTTPException(status_code=409, detail="worker name already exists")
-    reporting_enabled, reporting_config, reporting_secret_encrypted = (
-        _prepare_reporting_for_create(request)
+    reporting_enabled, reporting_config, reporting_secret_encrypted = _prepare_reporting_for_create(
+        request
     )
     worker = Worker(
         id=uuid4(),
@@ -346,3 +349,47 @@ async def deploy_worker(
                 session_id=live_connection.session_id,
             )
     return build_worker_deployment_summary(deployment).model_dump()
+
+
+async def deploy_worker_native(worker_id: UUID, request: WorkerDeployRequest) -> dict[str, object]:
+    """Compile using the shared sync algorithm, then persist with async work units."""
+
+    def load_compile_and_prepare(db):
+        worker = get_worker_or_404(db, worker_id)
+        compiled = compile_worker_package(db, worker)
+        deployment_env = request.env if request.env is not None else dict(worker.env_json or {})
+        runtime_env = _deployment_runtime_env(worker, dict(deployment_env))
+        return (
+            compiled,
+            deployment_env,
+            runtime_env,
+            worker.updated_at.isoformat() if worker.updated_at else "deploy",
+        )
+
+    async with session_scope() as session:
+        compiled, deployment_env, runtime_env, version = await session.run_sync(
+            load_compile_and_prepare
+        )
+
+    package = await create_workflow_package_native(
+        workflow_id=uuid4(),
+        version=version,
+        filename=compiled.filename,
+        content_type="application/zip",
+        content=compiled.content,
+        entrypoint="worker.yaml",
+        created_by="worker-builder",
+    )
+    from onestep_control_plane_api.api.schemas import WorkerDeploymentCreateRequest
+
+    deployment = await create_worker_deployment_native(
+        WorkerDeploymentCreateRequest(
+            workflow_package_id=package.package_id,
+            worker_agent_id=UUID(request.worker_agent_id),
+            desired_status=request.desired_status,
+            env=deployment_env,
+        ),
+        created_by="worker-builder",
+        command_env=runtime_env,
+    )
+    return deployment.model_dump(mode="json")

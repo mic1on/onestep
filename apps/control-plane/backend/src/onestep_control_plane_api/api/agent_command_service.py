@@ -28,6 +28,7 @@ from onestep_control_plane_api.api.schemas import (
 )
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import AgentCommand, AgentSession, Instance, Service
+from onestep_control_plane_api.db.session import session_scope
 from onestep_control_plane_api.ops.observability import record_agent_command_outcome
 
 REDISPATCHABLE_COMMAND_STATUSES = frozenset({"pending", "dispatched"})
@@ -122,9 +123,7 @@ def _task_support_rejection(
         )
 
     supported_commands = {
-        command_kind
-        for command_kind in raw_supported_commands
-        if isinstance(command_kind, str)
+        command_kind for command_kind in raw_supported_commands if isinstance(command_kind, str)
     }
     if kind not in supported_commands:
         return (
@@ -636,8 +635,7 @@ async def reject_redelivery_for_unsupported_capability_async(
     command.finished_at = rejected_at
     command.error_code = "command_capability_missing_on_reconnect"
     command.error_message = (
-        "the reconnecting session does not advertise "
-        f"{capability}; queued delivery was abandoned"
+        f"the reconnecting session does not advertise {capability}; queued delivery was abandoned"
     )
     command.updated_at = rejected_at
     await session.commit()
@@ -837,6 +835,92 @@ def build_command_summary(command: AgentCommand) -> AgentCommandSummary:
     )
 
 
+@dataclass(frozen=True)
+class PendingCommandDispatch:
+    """Plain command data used after its creation work unit has closed."""
+
+    command_id: str
+    instance_id: UUID
+    kind: AgentCommandKind
+    args_json: dict[str, object]
+    timeout_s: int
+    created_at: datetime
+    node_name: str | None
+    session_id: str | None
+    created_by: str | None
+    reason: str | None
+    source_surface: AgentCommandSourceSurface
+    status: str
+    dispatched_at: datetime | None
+    updated_at: datetime
+
+
+def _pending_command_dispatch(
+    command: AgentCommand, *, node_name: str | None
+) -> PendingCommandDispatch:
+    return PendingCommandDispatch(
+        command_id=command.command_id,
+        instance_id=command.instance_id,
+        kind=command.kind,
+        args_json=dict(command.args_json or {}),
+        timeout_s=command.timeout_s,
+        created_at=command.created_at,
+        node_name=node_name,
+        session_id=command.session_id,
+        created_by=command.created_by,
+        reason=command.reason,
+        source_surface=command.source_surface,
+        status=command.status,
+        dispatched_at=command.dispatched_at,
+        updated_at=command.updated_at,
+    )
+
+
+def build_command_summary_from_dispatch(
+    command: PendingCommandDispatch,
+) -> AgentCommandSummary:
+    return AgentCommandSummary(
+        command_id=command.command_id,
+        instance_id=command.instance_id,
+        node_name=command.node_name,
+        session_id=command.session_id,
+        created_by=command.created_by,
+        reason=command.reason,
+        source_surface=command.source_surface,
+        kind=command.kind,
+        args=command.args_json,
+        timeout_s=command.timeout_s,
+        status=command.status,
+        ack_status=None,
+        result=None,
+        duration_ms=None,
+        error_code=None,
+        error_message=None,
+        created_at=command.created_at,
+        dispatched_at=command.dispatched_at,
+        acked_at=None,
+        finished_at=None,
+        updated_at=command.updated_at,
+    )
+
+
+def build_command_message_from_dispatch(
+    command: PendingCommandDispatch,
+) -> AgentCommandMessage:
+    return AgentCommandMessage(
+        type="command",
+        message_id=_new_message_id(),
+        sent_at=utcnow(),
+        payload=AgentCommandPayload(
+            command_id=command.command_id,
+            kind=command.kind,
+            args=command.args_json,
+            timeout_s=command.timeout_s,
+            created_at=command.created_at,
+        ),
+    )
+
+
 def reject_redelivery_for_unsupported_capability(
     db: Session,
     *,
@@ -975,9 +1059,7 @@ async def create_service_command_fanout(
                         outcome="rejected",
                         session_id=active_session.session_id,
                         reason_code="missing_capability",
-                        reason_message=(
-                            f"active session does not advertise {required_capability}"
-                        ),
+                        reason_message=(f"active session does not advertise {required_capability}"),
                     )
                 )
                 continue
@@ -1139,6 +1221,361 @@ async def create_service_command_fanout(
             if request.target_mode == "all_online" and not instances
             else None
         ),
+        counts=counts,
+        dispatched=groups["dispatched"],
+        queued=groups["queued"],
+        skipped=groups["skipped"],
+        rejected=groups["rejected"],
+    )
+
+
+async def create_instance_command_native(
+    *, instance_id: UUID, request: AgentCommandCreateRequest, audit: CommandAuditMetadata
+) -> AgentCommandSummary:
+    """Persist a command in an async work unit and enqueue only after commit."""
+    required = get_command_capability(request.kind)
+    async with session_scope() as session:
+        instance = await session.scalar(select(Instance).where(Instance.instance_id == instance_id))
+        if instance is None:
+            raise HTTPException(status_code=404, detail=f"instance {instance_id} was not found")
+        rows = list(
+            (
+                await session.scalars(
+                    select(AgentSession)
+                    .where(AgentSession.instance_id == instance_id)
+                    .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
+                )
+            ).all()
+        )
+        active = next((row for row in rows if row.status == "active"), None)
+        latest = rows[0] if rows else None
+        session_row = active or latest
+        if (
+            active is None
+            and request.delivery_mode == "queue_until_reconnect"
+            and session_row is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"instance {instance_id} has no prior control session; "
+                    "queue_until_reconnect requires a previously observed compatible session"
+                ),
+            )
+        if (
+            session_row is not None
+            and (active is not None or request.delivery_mode == "queue_until_reconnect")
+            and required not in session_row.accepted_capabilities_json
+        ):
+            qualifier = "active" if active is not None else "last known"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"instance {instance_id} {qualifier} session does not advertise "
+                    f"capability {required}"
+                ),
+            )
+        rejection = (
+            _task_support_rejection(instance, kind=request.kind, args=request.args)
+            if active is not None
+            else None
+        )
+        if rejection is not None:
+            raise HTTPException(status_code=409, detail=rejection[1])
+        node_name, service_id = instance.node_name, instance.service_id
+        has_active = active is not None
+
+    live = await agent_connection_registry.get(instance_id) if has_active else None
+    if not has_active and request.delivery_mode == "dispatch_now_only":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"instance {instance_id} has no active control session; reconnect the agent "
+                "before dispatching commands"
+            ),
+        )
+    if has_active and live is None and request.delivery_mode == "dispatch_now_only":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"instance {instance_id} has no live control connection; retry after reconnect "
+                "or choose queue_until_reconnect"
+            ),
+        )
+
+    now = utcnow()
+    async with session_scope() as session:
+        command = AgentCommand(
+            command_id=_new_command_id(),
+            service_id=service_id,
+            instance_id=instance_id,
+            created_by=audit.created_by,
+            reason=audit.reason,
+            source_surface=audit.source_surface,
+            kind=request.kind,
+            args_json=request.args,
+            timeout_s=request.timeout_s,
+            status="dispatched" if live is not None else "pending",
+            # Queued commands deliberately have no session_id. The known
+            # session is surfaced only in the target summary, matching the
+            # legacy command creation path.
+            session_id=live.session_id if live is not None else None,
+            dispatched_at=now if live is not None else None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(command)
+        pending = _pending_command_dispatch(command, node_name=node_name)
+    if live is not None:
+        await live.send_queue.put(
+            build_command_message_from_dispatch(pending).model_dump(mode="json")
+        )
+    return build_command_summary_from_dispatch(pending)
+
+
+async def create_service_command_fanout_native(
+    *,
+    service_name: str,
+    environment: str,
+    request: ServiceCommandFanoutRequest,
+    created_by: str | None,
+    source_surface: AgentCommandSourceSurface,
+) -> ServiceCommandFanoutResponse:
+    """Resolve targets, persist commands, then enqueue after the transaction."""
+    as_of = utcnow()
+    required = get_command_capability(request.kind)
+    async with session_scope() as session:
+        service = await session.scalar(
+            select(Service).where(Service.name == service_name, Service.environment == environment)
+        )
+        if service is None:
+            raise HTTPException(
+                status_code=404, detail=f"service {service_name}/{environment} was not found"
+            )
+        instances = list(
+            (
+                await session.scalars(
+                    select(Instance)
+                    .where(Instance.service_id == service.id)
+                    .order_by(
+                        Instance.last_seen_at.is_(None),
+                        Instance.last_seen_at.desc(),
+                        Instance.instance_id,
+                    )
+                )
+            ).all()
+        )
+        if request.target_mode == "selected_instances":
+            by_id = {item.instance_id: item for item in instances}
+            missing = [item for item in request.target_instance_ids if item not in by_id]
+            if missing:
+                missing_list = ", ".join(str(item) for item in missing)
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"instances [{missing_list}] were not found for service "
+                        f"{service_name}/{environment}"
+                    ),
+                )
+            instances = [by_id[item] for item in request.target_instance_ids]
+        else:
+            instances = [
+                item
+                for item in instances
+                if _get_instance_connectivity(item, as_of=as_of) == "online"
+            ]
+        ids = [item.instance_id for item in instances]
+        session_rows = (
+            list(
+                (
+                    await session.scalars(
+                        select(AgentSession)
+                        .where(AgentSession.instance_id.in_(ids))
+                        .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
+                    )
+                ).all()
+            )
+            if ids
+            else []
+        )
+        active_by_id: dict[UUID, AgentSession] = {}
+        latest_by_id: dict[UUID, AgentSession] = {}
+        for session_row in session_rows:
+            latest_by_id.setdefault(session_row.instance_id, session_row)
+            if session_row.status == "active":
+                active_by_id.setdefault(session_row.instance_id, session_row)
+        candidates = []
+        for item in instances:
+            active = active_by_id.get(item.instance_id)
+            latest = latest_by_id.get(item.instance_id)
+            candidates.append(
+                {
+                    "instance_id": item.instance_id,
+                    "service_id": item.service_id,
+                    "node_name": item.node_name,
+                    "connectivity": _get_instance_connectivity(item, as_of=as_of),
+                    "task_rejection": _task_support_rejection(
+                        item, kind=request.kind, args=request.args
+                    )
+                    if active
+                    else None,
+                    "active_session_id": active.session_id if active else None,
+                    "active_capabilities": list(active.accepted_capabilities_json)
+                    if active
+                    else [],
+                    "latest_session_id": latest.session_id if latest else None,
+                    "latest_capabilities": list(latest.accepted_capabilities_json)
+                    if latest
+                    else [],
+                }
+            )
+
+    groups: dict[str, list[ServiceCommandFanoutTargetSummary]] = {
+        "dispatched": [],
+        "queued": [],
+        "skipped": [],
+        "rejected": [],
+    }
+    pending_commands: list[tuple[dict[str, object], PendingCommandDispatch, object | None]] = []
+    for candidate in candidates:
+        instance_id = candidate["instance_id"]
+        active = candidate["active_session_id"] is not None
+        known_session_id = candidate["active_session_id"] or candidate["latest_session_id"]
+        outcome = reason_code = reason_message = None
+        if active and required not in candidate["active_capabilities"]:
+            outcome, reason_code = "rejected", "missing_capability"
+            reason_message = f"active session does not advertise {required}"
+        elif active and candidate["task_rejection"] is not None:
+            outcome = "rejected"
+            reason_code, reason_message = candidate["task_rejection"]
+        elif not active and request.offline_behavior != "queue":
+            outcome, reason_code = "skipped", "no_active_session"
+            reason_message = "instance has no active control session"
+        elif known_session_id is None:
+            outcome, reason_code = "rejected", "no_known_session"
+            reason_message = "instance has not established any prior control session"
+        elif not active and required not in candidate["latest_capabilities"]:
+            outcome, reason_code = "rejected", "missing_capability"
+            reason_message = f"last known session does not advertise {required}"
+        if outcome is not None:
+            groups[outcome].append(
+                ServiceCommandFanoutTargetSummary(
+                    instance_id=instance_id,
+                    node_name=candidate["node_name"],
+                    connectivity=candidate["connectivity"],
+                    session_id=known_session_id,
+                    outcome=outcome,
+                    reason_code=reason_code,
+                    reason_message=reason_message,
+                )
+            )
+            continue
+        live = await agent_connection_registry.get(instance_id) if active else None
+        if active and live is None and request.offline_behavior != "queue":
+            groups["skipped"].append(
+                ServiceCommandFanoutTargetSummary(
+                    instance_id=instance_id,
+                    node_name=candidate["node_name"],
+                    connectivity=candidate["connectivity"],
+                    session_id=known_session_id,
+                    outcome="skipped",
+                    reason_code="no_live_connection",
+                    reason_message=(
+                        "active session was recorded but no live connection is available"
+                    ),
+                )
+            )
+            continue
+        outcome = "dispatched" if live is not None else "queued"
+        now, command_id = utcnow(), _new_command_id()
+        delivery = PendingCommandDispatch(
+            command_id=command_id,
+            instance_id=instance_id,
+            kind=request.kind,
+            args_json=dict(request.args),
+            timeout_s=request.timeout_s,
+            created_at=now,
+            node_name=candidate["node_name"],
+            session_id=(
+                live.session_id if live is not None else known_session_id if active else None
+            ),
+            created_by=created_by,
+            reason=request.reason,
+            source_surface=source_surface,
+            status="dispatched" if live else "pending",
+            dispatched_at=now if live else None,
+            updated_at=now,
+        )
+        pending_commands.append((candidate, delivery, live))
+        groups[outcome].append(
+            ServiceCommandFanoutTargetSummary(
+                instance_id=instance_id,
+                node_name=candidate["node_name"],
+                connectivity=candidate["connectivity"],
+                session_id=live.session_id if live is not None else known_session_id,
+                command_id=command_id,
+                outcome=outcome,
+                reason_code=(
+                    "no_live_connection"
+                    if active and live is None
+                    else "no_active_session"
+                    if not active
+                    else None
+                ),
+                reason_message=(
+                    "active session was recorded but no live connection is available"
+                    if active and live is None
+                    else "instance is offline; command will wait for the next reconnect"
+                    if not active
+                    else None
+                ),
+            )
+        )
+
+    async with session_scope() as session:
+        for candidate, delivery, _live in pending_commands:
+            session.add(
+                AgentCommand(
+                    command_id=delivery.command_id,
+                    service_id=candidate["service_id"],
+                    instance_id=delivery.instance_id,
+                    created_by=delivery.created_by,
+                    reason=delivery.reason,
+                    source_surface=delivery.source_surface,
+                    kind=delivery.kind,
+                    args_json=delivery.args_json,
+                    timeout_s=delivery.timeout_s,
+                    status=delivery.status,
+                    # Keep queued durable commands detached from an old session.
+                    # The target summary still carries the last known session ID.
+                    session_id=delivery.session_id if delivery.status == "dispatched" else None,
+                    dispatched_at=delivery.dispatched_at,
+                    created_at=delivery.created_at,
+                    updated_at=delivery.updated_at,
+                )
+            )
+    for _candidate, delivery, live in pending_commands:
+        if live is not None:
+            await live.send_queue.put(
+                build_command_message_from_dispatch(delivery).model_dump(mode="json")
+            )
+
+    counts = ServiceCommandFanoutCounts(
+        dispatched=len(groups["dispatched"]),
+        queued=len(groups["queued"]),
+        skipped=len(groups["skipped"]),
+        rejected=len(groups["rejected"]),
+        total=len(candidates),
+    )
+    no_online = request.target_mode == "all_online" and not candidates
+    return ServiceCommandFanoutResponse(
+        kind=request.kind,
+        target_mode=request.target_mode,
+        offline_behavior=request.offline_behavior,
+        noop_reason_code="no_online_instances" if no_online else None,
+        noop_reason_message="service has no online instances eligible for all_online command fanout"
+        if no_online
+        else None,
         counts=counts,
         dispatched=groups["dispatched"],
         queued=groups["queued"],

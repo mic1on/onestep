@@ -62,6 +62,10 @@ from onestep_control_plane_api.api.security import (
     hash_worker_agent_token,
     validate_worker_agent_registration_token_value,
 )
+from onestep_control_plane_api.api.worker_agent_connection_registry import (
+    LiveWorkerAgentConnection,
+    worker_agent_connection_registry,
+)
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     WorkerAgent,
@@ -71,6 +75,7 @@ from onestep_control_plane_api.db.models import (
     WorkerDeploymentEvent,
     WorkflowPackage,
 )
+from onestep_control_plane_api.db.session import session_scope
 
 SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION = "1"
 DEFAULT_WORKER_AGENT_HEARTBEAT_INTERVAL_S = 30
@@ -243,13 +248,9 @@ def _handle_worker_agent_hello_work_unit(
     """
 
     if message.payload.protocol_version != SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION:
-        raise ValueError(
-            f"protocol_version={message.payload.protocol_version} is not supported"
-        )
+        raise ValueError(f"protocol_version={message.payload.protocol_version} is not supported")
     if message.payload.worker_agent_id != worker_agent.worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
 
     accepted_capabilities = _accepted_capabilities(message.payload.capabilities)
     session_id = _new_session_id()
@@ -369,9 +370,7 @@ async def apply_worker_agent_heartbeat_async(
     """
 
     if message.payload.worker_agent_id != worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
     await session.execute(
         update(WorkerAgent)
         .where(WorkerAgent.worker_agent_id == worker_agent_id)
@@ -456,9 +455,7 @@ def apply_worker_agent_heartbeat(
     received_at,
 ) -> None:
     if message.payload.worker_agent_id != worker_agent.worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
     worker_agent.status = "online"
     worker_agent.used_slots = message.payload.used_slots
     worker_agent.last_seen_at = received_at
@@ -899,6 +896,266 @@ async def dispatch_worker_agent_command_async(
     )
 
 
+async def create_workflow_package_native(
+    *,
+    workflow_id: UUID,
+    version: str,
+    filename: str,
+    content_type: str,
+    content: bytes,
+    entrypoint: str | None,
+    created_by: str,
+) -> WorkflowPackageSummary:
+    """Persist a package without carrying a synchronous Session into an async route."""
+    package_id = uuid4()
+    checksum = hashlib.sha256(content).hexdigest()
+    manifest = _read_workflow_package_manifest(content)
+    resolved_entrypoint = _resolve_workflow_package_entrypoint(entrypoint, manifest)
+    storage_dir = _package_storage_dir()
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = storage_dir / f"{package_id}.zip"
+    storage_path.write_bytes(content)
+    package = WorkflowPackage(
+        package_id=package_id,
+        workflow_id=workflow_id,
+        version=version,
+        filename=filename,
+        content_type=content_type,
+        checksum_sha256=checksum,
+        size_bytes=len(content),
+        storage_path=str(storage_path),
+        entrypoint=resolved_entrypoint,
+        metadata_json=({"onestep_package_manifest": manifest} if manifest is not None else {}),
+        created_by=created_by,
+    )
+    async with session_scope() as session:
+        session.add(package)
+        await session.flush()
+        summary = build_workflow_package_summary(package)
+    return summary
+
+
+async def _dispatch_deployment_command_native(
+    *,
+    delivery: PendingWorkerCommandDelivery,
+    connection: LiveWorkerAgentConnection,
+) -> None:
+    """Commit dispatch state and its audit event before queueing the frame."""
+    async with session_scope() as session:
+        command = await session.scalar(
+            select(WorkerAgentCommand).where(WorkerAgentCommand.command_id == delivery.command_id)
+        )
+        if command is None:
+            return
+        now = utcnow()
+        command.status = "dispatched"
+        command.session_id = connection.session_id
+        command.dispatched_at = now
+        command.updated_at = now
+        if command.deployment_id is not None:
+            record_worker_deployment_event(
+                session,
+                deployment_id=command.deployment_id,
+                worker_agent_id=command.worker_agent_id,
+                event_type="command_dispatched",
+                message=f"{command.kind} command dispatched",
+                payload={
+                    "command_id": str(command.command_id),
+                    "kind": command.kind,
+                    "session_id": connection.session_id,
+                },
+            )
+    # The durable status and audit event are committed and the session is
+    # closed before the connection queue is touched.
+    current_connection = await worker_agent_connection_registry.get(connection.worker_agent_id)
+    if current_connection is not connection:
+        # The durable command remains redeliverable. A reconnecting worker will
+        # receive it from the normal pending-command listing.
+        return
+    await connection.send_queue.put(
+        build_worker_agent_command_message_from_delivery(delivery).model_dump(mode="json")
+    )
+
+
+async def _create_worker_deployment_command_native(
+    *,
+    deployment_id: UUID | None,
+    request: WorkerDeploymentCreateRequest | None = None,
+    created_by: str | None = None,
+    command_kind: str | None = None,
+    command_env: dict[str, str] | None = None,
+) -> WorkerDeploymentSummary:
+    """Create or control a deployment using short, transaction-owned work units."""
+    delivery: PendingWorkerCommandDelivery | None = None
+    async with session_scope() as session:
+        if request is not None:
+            worker_agent = await session.scalar(
+                select(WorkerAgent).where(WorkerAgent.worker_agent_id == request.worker_agent_id)
+            )
+            if worker_agent is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="worker agent not found"
+                )
+            package = await session.scalar(
+                select(WorkflowPackage).where(
+                    WorkflowPackage.package_id == request.workflow_package_id
+                )
+            )
+            if package is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"workflow package {request.workflow_package_id} was not found",
+                )
+            now = utcnow()
+            deployment = WorkerDeployment(
+                deployment_id=uuid4(),
+                workflow_package_id=package.package_id,
+                worker_agent_id=worker_agent.worker_agent_id,
+                desired_status=request.desired_status,
+                observed_status="assigned",
+                execution_mode=worker_agent.execution_mode,
+                params_json=request.params,
+                env_json=request.env,
+                credential_refs_json=request.credential_refs,
+                package_checksum=package.checksum_sha256,
+                assigned_at=now,
+                created_by=created_by or "system",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(deployment)
+            record_worker_deployment_event(
+                session,
+                deployment_id=deployment.deployment_id,
+                worker_agent_id=deployment.worker_agent_id,
+                event_type="deployment_created",
+                observed_status=deployment.observed_status,
+                message="deployment created",
+                payload={
+                    "workflow_package_id": str(package.package_id),
+                    "desired_status": deployment.desired_status,
+                },
+            )
+            if deployment.desired_status == "running":
+                command_kind = command_kind or "start_deployment"
+                args_json: dict[str, object] = {"deployment_id": str(deployment.deployment_id)}
+                if command_kind in {"start_deployment", "restart_deployment"}:
+                    args_json = _deployment_package_args(
+                        deployment=deployment, package=package, env=command_env
+                    )
+                command = WorkerAgentCommand(
+                    command_id=uuid4(),
+                    worker_agent_id=deployment.worker_agent_id,
+                    deployment_id=deployment.deployment_id,
+                    kind=command_kind,
+                    args_json=args_json,
+                    timeout_s=30,
+                    status="pending",
+                )
+                session.add(command)
+                await session.flush()
+                record_worker_deployment_event(
+                    session,
+                    deployment_id=deployment.deployment_id,
+                    worker_agent_id=deployment.worker_agent_id,
+                    event_type="command_created",
+                    observed_status=deployment.observed_status,
+                    message=f"{command_kind} command created",
+                    payload={"command_id": str(command.command_id), "kind": command_kind},
+                )
+                delivery = _to_pending_delivery(command)
+        else:
+            deployment = await session.scalar(
+                select(WorkerDeployment).where(WorkerDeployment.deployment_id == deployment_id)
+            )
+            if deployment is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"worker deployment {deployment_id} was not found",
+                )
+            package = None
+            if command_kind in {"start_deployment", "restart_deployment"}:
+                package = await session.scalar(
+                    select(WorkflowPackage).where(
+                        WorkflowPackage.package_id == deployment.workflow_package_id
+                    )
+                )
+                if package is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"workflow package {deployment.workflow_package_id} was not found",
+                    )
+            if command_kind == "stop_deployment":
+                deployment.desired_status = "stopped"
+                deployment.observed_status = "stopping"
+            elif command_kind == "restart_deployment":
+                deployment.desired_status = "running"
+                deployment.observed_status = "assigned"
+            deployment.updated_at = utcnow()
+            args_json = {"deployment_id": str(deployment.deployment_id)}
+            if command_kind in {"start_deployment", "restart_deployment"}:
+                assert package is not None
+                args_json = _deployment_package_args(
+                    deployment=deployment, package=package, env=command_env
+                )
+            command = WorkerAgentCommand(
+                command_id=uuid4(),
+                worker_agent_id=deployment.worker_agent_id,
+                deployment_id=deployment.deployment_id,
+                kind=command_kind or "stop_deployment",
+                args_json=args_json,
+                timeout_s=30,
+                status="pending",
+            )
+            session.add(command)
+            await session.flush()
+            record_worker_deployment_event(
+                session,
+                deployment_id=deployment.deployment_id,
+                worker_agent_id=deployment.worker_agent_id,
+                event_type="command_created",
+                observed_status=deployment.observed_status,
+                message=f"{command.kind} command created",
+                payload={"command_id": str(command.command_id), "kind": command.kind},
+            )
+            delivery = _to_pending_delivery(command)
+        summary = build_worker_deployment_summary(deployment)
+        dispatch_worker_agent_id = deployment.worker_agent_id
+
+    if delivery is not None:
+        connection = await worker_agent_connection_registry.get(dispatch_worker_agent_id)
+        if connection is not None:
+            # Update dispatch metadata in a separate work unit. The helper
+            # rechecks the live session before enqueueing after commit.
+            await _dispatch_deployment_command_native(
+                delivery=delivery,
+                connection=connection,
+            )
+    return summary
+
+
+async def create_worker_deployment_native(
+    request: WorkerDeploymentCreateRequest,
+    *,
+    created_by: str,
+    command_env: dict[str, str] | None = None,
+) -> WorkerDeploymentSummary:
+    return await _create_worker_deployment_command_native(
+        deployment_id=None,
+        request=request,
+        created_by=created_by,
+        command_env=command_env,
+    )
+
+
+async def control_worker_deployment_native(
+    deployment_id: UUID, *, command_kind: str
+) -> WorkerDeploymentSummary:
+    return await _create_worker_deployment_command_native(
+        deployment_id=deployment_id, command_kind=command_kind
+    )
+
+
 def handle_worker_agent_command_ack(
     db: Session,
     *,
@@ -968,9 +1225,7 @@ def _apply_worker_command_failure_to_deployment(
     if command.deployment_id is None:
         return
     deployment = db.scalar(
-        select(WorkerDeployment).where(
-            WorkerDeployment.deployment_id == command.deployment_id
-        )
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == command.deployment_id)
     )
     if deployment is None:
         return
@@ -990,9 +1245,7 @@ def _apply_worker_command_success_to_deployment(
     if command.deployment_id is None:
         return
     deployment = db.scalar(
-        select(WorkerDeployment).where(
-            WorkerDeployment.deployment_id == command.deployment_id
-        )
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == command.deployment_id)
     )
     if deployment is None:
         return
@@ -1505,9 +1758,7 @@ def create_workflow_package(
         storage_path=str(storage_path),
         entrypoint=resolved_entrypoint,
         metadata_json=(
-            {"onestep_package_manifest": package_manifest}
-            if package_manifest is not None
-            else {}
+            {"onestep_package_manifest": package_manifest} if package_manifest is not None else {}
         ),
         created_by=created_by,
     )
