@@ -10,7 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from onestep_control_plane_api.api.agent_connection_registry import agent_connection_registry
+from onestep_control_plane_api.api.agent_connection_registry import (
+    LiveAgentConnection,
+    agent_connection_registry,
+)
 from onestep_control_plane_api.api.common import utcnow
 from onestep_control_plane_api.api.schemas import (
     TASK_SCOPED_COMMAND_KINDS,
@@ -20,6 +23,7 @@ from onestep_control_plane_api.api.schemas import (
     AgentCommandPayload,
     AgentCommandSourceSurface,
     AgentCommandSummary,
+    Environment,
     InstanceConnectivity,
     ServiceCommandFanoutCounts,
     ServiceCommandFanoutRequest,
@@ -28,6 +32,7 @@ from onestep_control_plane_api.api.schemas import (
 )
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import AgentCommand, AgentSession, Instance, Service
+from onestep_control_plane_api.db.session import session_scope
 from onestep_control_plane_api.ops.observability import record_agent_command_outcome
 
 REDISPATCHABLE_COMMAND_STATUSES = frozenset({"pending", "dispatched"})
@@ -122,9 +127,7 @@ def _task_support_rejection(
         )
 
     supported_commands = {
-        command_kind
-        for command_kind in raw_supported_commands
-        if isinstance(command_kind, str)
+        command_kind for command_kind in raw_supported_commands if isinstance(command_kind, str)
     }
     if kind not in supported_commands:
         return (
@@ -144,12 +147,12 @@ def get_instance_or_404(db: Session, instance_id: UUID) -> Instance:
     return instance
 
 
-def _get_active_session_for_instance(
-    db: Session,
+async def _get_active_session_for_instance(
+    db: AsyncSession,
     *,
     instance_id: UUID,
 ) -> AgentSession | None:
-    return db.scalar(
+    return await db.scalar(
         select(AgentSession)
         .where(
             AgentSession.instance_id == instance_id,
@@ -160,12 +163,12 @@ def _get_active_session_for_instance(
     )
 
 
-def _get_latest_session_for_instance(
-    db: Session,
+async def _get_latest_session_for_instance(
+    db: AsyncSession,
     *,
     instance_id: UUID,
 ) -> AgentSession | None:
-    return db.scalar(
+    return await db.scalar(
         select(AgentSession)
         .where(AgentSession.instance_id == instance_id)
         .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
@@ -173,20 +176,22 @@ def _get_latest_session_for_instance(
     )
 
 
-def _get_active_sessions_for_instances(
-    db: Session,
+async def _get_active_sessions_for_instances(
+    db: AsyncSession,
     *,
     instance_ids: list[UUID],
 ) -> dict[UUID, AgentSession]:
     if not instance_ids:
         return {}
-    sessions = db.scalars(
-        select(AgentSession)
-        .where(
-            AgentSession.instance_id.in_(instance_ids),
-            AgentSession.status == "active",
+    sessions = (
+        await db.scalars(
+            select(AgentSession)
+            .where(
+                AgentSession.instance_id.in_(instance_ids),
+                AgentSession.status == "active",
+            )
+            .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
         )
-        .order_by(AgentSession.connected_at.desc(), AgentSession.session_id.desc())
     ).all()
     active_sessions: dict[UUID, AgentSession] = {}
     for session in sessions:
@@ -194,20 +199,22 @@ def _get_active_sessions_for_instances(
     return active_sessions
 
 
-def _get_latest_sessions_for_instances(
-    db: Session,
+async def _get_latest_sessions_for_instances(
+    db: AsyncSession,
     *,
     instance_ids: list[UUID],
 ) -> dict[UUID, AgentSession]:
     if not instance_ids:
         return {}
-    sessions = db.scalars(
-        select(AgentSession)
-        .where(AgentSession.instance_id.in_(instance_ids))
-        .order_by(
-            AgentSession.instance_id,
-            AgentSession.connected_at.desc(),
-            AgentSession.session_id.desc(),
+    sessions = (
+        await db.scalars(
+            select(AgentSession)
+            .where(AgentSession.instance_id.in_(instance_ids))
+            .order_by(
+                AgentSession.instance_id,
+                AgentSession.connected_at.desc(),
+                AgentSession.session_id.desc(),
+            )
         )
     ).all()
     latest_sessions: dict[UUID, AgentSession] = {}
@@ -253,8 +260,8 @@ def _mark_command_rejected_without_delivery(
     return command
 
 
-def create_command(
-    db: Session,
+async def create_command(
+    db: AsyncSession,
     *,
     instance: Instance,
     request: AgentCommandCreateRequest,
@@ -264,7 +271,8 @@ def create_command(
     created_at = created_at or utcnow()
     command = AgentCommand(
         command_id=_new_command_id(),
-        service=instance.service,
+        service_id=instance.service_id,
+        instance=instance,
         instance_id=instance.instance_id,
         created_by=audit.created_by,
         reason=audit.reason,
@@ -277,20 +285,20 @@ def create_command(
         updated_at=created_at,
     )
     db.add(command)
-    db.commit()
-    db.refresh(command)
+    await db.flush()
     return command
 
 
-async def create_instance_command(
-    db: Session,
+async def _create_instance_command(
+    db: AsyncSession,
     *,
     instance: Instance,
     request: AgentCommandCreateRequest,
     audit: CommandAuditMetadata,
+    live_connection: LiveAgentConnection | None,
 ) -> AgentCommand:
     required_capability = get_command_capability(request.kind)
-    active_session = _get_active_session_for_instance(db, instance_id=instance.instance_id)
+    active_session = await _get_active_session_for_instance(db, instance_id=instance.instance_id)
 
     if active_session is not None:
         if required_capability not in active_session.accepted_capabilities_json:
@@ -314,7 +322,6 @@ async def create_instance_command(
                 detail=detail,
             )
 
-        live_connection = await agent_connection_registry.get(instance.instance_id)
         if live_connection is None:
             if request.delivery_mode == "dispatch_now_only":
                 raise HTTPException(
@@ -325,25 +332,20 @@ async def create_instance_command(
                     ),
                 )
 
-            return create_command(
+            return await create_command(
                 db,
                 instance=instance,
                 request=request,
                 audit=audit,
             )
 
-        command = create_command(
+        command = await create_command(
             db,
             instance=instance,
             request=request,
             audit=audit,
         )
-        command = mark_command_dispatched(
-            db,
-            command=command,
-            session_id=live_connection.session_id,
-        )
-        await live_connection.send_queue.put(build_command_message(command).model_dump(mode="json"))
+        _set_command_dispatched(command, session_id=live_connection.session_id)
         return command
 
     if request.delivery_mode == "dispatch_now_only":
@@ -355,7 +357,7 @@ async def create_instance_command(
             ),
         )
 
-    latest_session = _get_latest_session_for_instance(db, instance_id=instance.instance_id)
+    latest_session = await _get_latest_session_for_instance(db, instance_id=instance.instance_id)
     if latest_session is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -374,7 +376,7 @@ async def create_instance_command(
             ),
         )
 
-    return create_command(
+    return await create_command(
         db,
         instance=instance,
         request=request,
@@ -636,8 +638,7 @@ async def reject_redelivery_for_unsupported_capability_async(
     command.finished_at = rejected_at
     command.error_code = "command_capability_missing_on_reconnect"
     command.error_message = (
-        "the reconnecting session does not advertise "
-        f"{capability}; queued delivery was abandoned"
+        f"the reconnecting session does not advertise {capability}; queued delivery was abandoned"
     )
     command.updated_at = rejected_at
     await session.commit()
@@ -876,20 +877,22 @@ def _build_service_command_target_summary(
     )
 
 
-def _list_fanout_target_instances(
-    db: Session,
+async def _list_fanout_target_instances(
+    db: AsyncSession,
     *,
     service: Service,
     request: ServiceCommandFanoutRequest,
     as_of: datetime,
 ) -> list[Instance]:
-    instances = db.scalars(
-        select(Instance)
-        .where(Instance.service_id == service.id)
-        .order_by(
-            Instance.last_seen_at.is_(None),
-            Instance.last_seen_at.desc(),
-            Instance.instance_id,
+    instances = (
+        await db.scalars(
+            select(Instance)
+            .where(Instance.service_id == service.id)
+            .order_by(
+                Instance.last_seen_at.is_(None),
+                Instance.last_seen_at.desc(),
+                Instance.instance_id,
+            )
         )
     ).all()
 
@@ -922,22 +925,26 @@ def _list_fanout_target_instances(
     ]
 
 
-async def create_service_command_fanout(
-    db: Session,
+async def _create_service_command_fanout(
+    db: AsyncSession,
     *,
     service: Service,
     request: ServiceCommandFanoutRequest,
     created_by: str | None,
     source_surface: AgentCommandSourceSurface,
+    connections: dict[UUID, LiveAgentConnection],
+    deliveries: list[tuple[LiveAgentConnection, dict[str, object]]],
 ) -> ServiceCommandFanoutResponse:
     as_of = utcnow()
-    instances = _list_fanout_target_instances(db, service=service, request=request, as_of=as_of)
+    instances = await _list_fanout_target_instances(
+        db, service=service, request=request, as_of=as_of
+    )
     instance_ids = [instance.instance_id for instance in instances]
-    active_sessions_by_instance_id = _get_active_sessions_for_instances(
+    active_sessions_by_instance_id = await _get_active_sessions_for_instances(
         db,
         instance_ids=instance_ids,
     )
-    latest_sessions_by_instance_id = _get_latest_sessions_for_instances(
+    latest_sessions_by_instance_id = await _get_latest_sessions_for_instances(
         db,
         instance_ids=instance_ids,
     )
@@ -975,9 +982,7 @@ async def create_service_command_fanout(
                         outcome="rejected",
                         session_id=active_session.session_id,
                         reason_code="missing_capability",
-                        reason_message=(
-                            f"active session does not advertise {required_capability}"
-                        ),
+                        reason_message=(f"active session does not advertise {required_capability}"),
                     )
                 )
                 continue
@@ -1001,10 +1006,10 @@ async def create_service_command_fanout(
                 )
                 continue
 
-            live_connection = await agent_connection_registry.get(instance.instance_id)
+            live_connection = connections.get(instance.instance_id)
             if live_connection is None:
                 if request.offline_behavior == "queue":
-                    command = create_command(
+                    command = await create_command(
                         db,
                         instance=instance,
                         request=command_request,
@@ -1038,19 +1043,15 @@ async def create_service_command_fanout(
                     )
                 continue
 
-            command = create_command(
+            command = await create_command(
                 db,
                 instance=instance,
                 request=command_request,
                 audit=audit,
             )
-            command = mark_command_dispatched(
-                db,
-                command=command,
-                session_id=live_connection.session_id,
-            )
-            await live_connection.send_queue.put(
-                build_command_message(command).model_dump(mode="json")
+            _set_command_dispatched(command, session_id=live_connection.session_id)
+            deliveries.append(
+                (live_connection, build_command_message(command).model_dump(mode="json"))
             )
             groups["dispatched"].append(
                 _build_service_command_target_summary(
@@ -1092,7 +1093,7 @@ async def create_service_command_fanout(
                 )
                 continue
 
-            command = create_command(
+            command = await create_command(
                 db,
                 instance=instance,
                 request=command_request,
@@ -1145,3 +1146,74 @@ async def create_service_command_fanout(
         skipped=groups["skipped"],
         rejected=groups["rejected"],
     )
+
+
+def _set_command_dispatched(command: AgentCommand, *, session_id: str) -> None:
+    now = utcnow()
+    command.session_id = session_id
+    command.dispatched_at = now
+    command.status = "dispatched"
+    command.updated_at = now
+
+
+async def create_instance_command(
+    *,
+    instance_id: UUID,
+    request: AgentCommandCreateRequest,
+    audit: CommandAuditMetadata,
+) -> AgentCommandSummary:
+    connection = await agent_connection_registry.get(instance_id)
+    async with session_scope() as session:
+        instance = await session.scalar(select(Instance).where(Instance.instance_id == instance_id))
+        if instance is None:
+            raise HTTPException(status_code=404, detail=f"instance {instance_id} was not found")
+        command = await _create_instance_command(
+            session,
+            instance=instance,
+            request=request,
+            audit=audit,
+            live_connection=connection,
+        )
+        summary = build_command_summary(command)
+        message = (
+            build_command_message(command).model_dump(mode="json")
+            if command.status == "dispatched"
+            else None
+        )
+    # Only plain data survives the work unit; enqueue may wait indefinitely.
+    if message is not None and connection is not None:
+        await connection.send_queue.put(message)
+    return summary
+
+
+async def create_service_command_fanout(
+    *,
+    service_name: str,
+    environment: Environment,
+    request: ServiceCommandFanoutRequest,
+    created_by: str | None,
+    source_surface: AgentCommandSourceSurface,
+) -> ServiceCommandFanoutResponse:
+    connections = await agent_connection_registry.snapshot()
+    deliveries: list[tuple[LiveAgentConnection, dict[str, object]]] = []
+    async with session_scope() as session:
+        service = await session.scalar(
+            select(Service).where(Service.name == service_name, Service.environment == environment)
+        )
+        if service is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"service {service_name}/{environment} was not found",
+            )
+        response = await _create_service_command_fanout(
+            session,
+            service=service,
+            request=request,
+            created_by=created_by,
+            source_surface=source_surface,
+            connections=connections,
+            deliveries=deliveries,
+        )
+    for connection, message in deliveries:
+        await connection.send_queue.put(message)
+    return response

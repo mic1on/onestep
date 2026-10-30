@@ -43,5 +43,9 @@ class AgentConnectionRegistry:
         async with self._lock:
             return self._connections.get(instance_id)
 
+    async def snapshot(self) -> dict[UUID, LiveAgentConnection]:
+        async with self._lock:
+            return dict(self._connections)
+
 
 agent_connection_registry = AgentConnectionRegistry()

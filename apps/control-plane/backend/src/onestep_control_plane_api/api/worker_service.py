@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -14,18 +15,16 @@ from onestep_control_plane_api.api.connector_service import (
 )
 from onestep_control_plane_api.api.schemas import (
     WorkerCreateRequest,
+    WorkerDeploymentCreateRequest,
     WorkerDeployRequest,
     WorkerUpdateRequest,
 )
-from onestep_control_plane_api.api.worker_agent_connection_registry import (
-    worker_agent_connection_registry,
-)
 from onestep_control_plane_api.api.worker_agent_service import (
     build_worker_deployment_summary,
-    create_start_deployment_command,
-    create_worker_deployment,
-    create_workflow_package,
-    dispatch_worker_agent_command,
+    create_worker_deployment_async,
+    create_worker_deployment_command_async,
+    create_workflow_package_async,
+    dispatch_worker_deployment_command,
     get_workflow_package_or_404,
     get_workflow_package_path_or_404,
 )
@@ -35,6 +34,7 @@ from onestep_control_plane_api.api.worker_compiler import (
     merge_package,
 )
 from onestep_control_plane_api.db.models import Worker
+from onestep_control_plane_api.db.session import session_scope
 
 DEFAULT_REPORTING_CONFIG: dict[str, object] = {"mode": "platform", "endpoint_url": None}
 
@@ -190,8 +190,8 @@ def create_worker(db: Session, request: WorkerCreateRequest) -> dict[str, object
     existing = db.scalar(select(Worker).where(Worker.name == request.name))
     if existing is not None:
         raise HTTPException(status_code=409, detail="worker name already exists")
-    reporting_enabled, reporting_config, reporting_secret_encrypted = (
-        _prepare_reporting_for_create(request)
+    reporting_enabled, reporting_config, reporting_secret_encrypted = _prepare_reporting_for_create(
+        request
     )
     worker = Worker(
         id=uuid4(),
@@ -300,49 +300,53 @@ def compile_worker_package_for_download(db: Session, worker_id: UUID) -> Compile
 
 
 async def deploy_worker(
-    db: Session,
     worker_id: UUID,
     request: WorkerDeployRequest,
 ) -> dict[str, object]:
-    worker = get_worker_or_404(db, worker_id)
-    compiled_package = compile_worker_package(db, worker)
-
-    merged_pkg = create_workflow_package(
-        db,
-        workflow_id=uuid4(),
-        version=worker.updated_at.isoformat() if worker.updated_at else "deploy",
-        filename=compiled_package.filename,
-        content_type="application/zip",
-        content=compiled_package.content,
-        entrypoint="worker.yaml",
-        created_by="worker-builder",
-    )
-    from onestep_control_plane_api.api.schemas import WorkerDeploymentCreateRequest
-
-    deployment_env = request.env if request.env is not None else worker.env_json
-    deployment = create_worker_deployment(
-        db,
-        WorkerDeploymentCreateRequest(
-            workflow_package_id=str(merged_pkg.package_id),
-            worker_agent_id=request.worker_agent_id,
-            desired_status=request.desired_status,
-            env=deployment_env,
-        ),
-        created_by="worker-builder",
-    )
-    if deployment.desired_status == "running":
-        command = create_start_deployment_command(
-            db,
-            deployment=deployment,
-            package=merged_pkg,
-            env=_deployment_runtime_env(worker, deployment_env),
-        )
-        live_connection = await worker_agent_connection_registry.get(deployment.worker_agent_id)
-        if live_connection is not None:
-            await dispatch_worker_agent_command(
-                db,
-                command=command,
-                send_queue=live_connection.send_queue,
-                session_id=live_connection.session_id,
+    delivery = None
+    merged_package_path = None
+    try:
+        async with session_scope() as session:
+            worker = await session.get(Worker, worker_id)
+            if worker is None:
+                raise HTTPException(status_code=404, detail="worker not found")
+            # This commit-free compiler is also used by the synchronous download route.
+            compiled_package = await session.run_sync(lambda db: compile_worker_package(db, worker))
+            merged_pkg = await create_workflow_package_async(
+                session,
+                workflow_id=uuid4(),
+                version=worker.updated_at.isoformat() if worker.updated_at else "deploy",
+                filename=compiled_package.filename,
+                content_type="application/zip",
+                content=compiled_package.content,
+                entrypoint="worker.yaml",
+                created_by="worker-builder",
             )
-    return build_worker_deployment_summary(deployment).model_dump()
+            merged_package_path = Path(merged_pkg.storage_path)
+            deployment_env = request.env if request.env is not None else worker.env_json
+            deployment = await create_worker_deployment_async(
+                session,
+                WorkerDeploymentCreateRequest(
+                    workflow_package_id=str(merged_pkg.package_id),
+                    worker_agent_id=request.worker_agent_id,
+                    desired_status=request.desired_status,
+                    env=deployment_env,
+                ),
+                created_by="worker-builder",
+            )
+            if deployment.desired_status == "running":
+                delivery = await create_worker_deployment_command_async(
+                    session,
+                    deployment=deployment,
+                    package=merged_pkg,
+                    kind="start_deployment",
+                    env=_deployment_runtime_env(worker, deployment_env),
+                )
+            summary = build_worker_deployment_summary(deployment).model_dump()
+    except BaseException:
+        if merged_package_path is not None:
+            # A rolled-back package row must not leave an orphaned archive.
+            merged_package_path.unlink(missing_ok=True)
+        raise
+    await dispatch_worker_deployment_command(delivery)
+    return summary

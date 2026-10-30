@@ -2,19 +2,16 @@
 
 Two APIs live side by side here.
 
-Synchronous (legacy, unchanged)
-    The functions taking a synchronous ``Session`` keep serving the HTTP
-    routers and ``worker_service`` unchanged.
+Synchronous
+    Functions taking a synchronous ``Session`` serve the synchronous HTTP
+    routes and existing synchronous callers.
 
-Native-async (the WS work units)
+Native-async (command/deployment HTTP routes and WS work units)
     The ``*_async`` functions each run one short database work unit on the
     caller's :class:`~sqlalchemy.ext.asyncio.AsyncSession` from the
-    worker-agent WebSocket handler. Each is the entire work unit its caller
-    runs inside one :func:`onestep_control_plane_api.db.session.session_scope`,
-    so they must not commit on their own — the caller's work unit owns the
-    transaction (the #206 lesson). They return plain data (dataclasses,
-    strings, booleans) so nothing reads ORM attributes after the transaction
-    closed.
+    HTTP or WebSocket handler. Helpers do not commit on their own — the
+    caller's session_scope owns the transaction. ORM results must be converted
+    to plain data inside that scope; queue operations happen after it closes.
 
     Where the surrounding logic is shared with synchronous callers it lives in
     a ``_sync``-style helper invoked through ``AsyncSession.run_sync`` (the
@@ -62,6 +59,9 @@ from onestep_control_plane_api.api.security import (
     hash_worker_agent_token,
     validate_worker_agent_registration_token_value,
 )
+from onestep_control_plane_api.api.worker_agent_connection_registry import (
+    worker_agent_connection_registry,
+)
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     WorkerAgent,
@@ -71,6 +71,7 @@ from onestep_control_plane_api.db.models import (
     WorkerDeploymentEvent,
     WorkflowPackage,
 )
+from onestep_control_plane_api.db.session import session_scope
 
 SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION = "1"
 DEFAULT_WORKER_AGENT_HEARTBEAT_INTERVAL_S = 30
@@ -149,7 +150,7 @@ def _accepted_capabilities(requested: list[str]) -> list[str]:
 
 
 def record_worker_deployment_event(
-    db: Session,
+    db: Session | AsyncSession,
     *,
     deployment_id: UUID,
     worker_agent_id: UUID,
@@ -243,13 +244,9 @@ def _handle_worker_agent_hello_work_unit(
     """
 
     if message.payload.protocol_version != SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION:
-        raise ValueError(
-            f"protocol_version={message.payload.protocol_version} is not supported"
-        )
+        raise ValueError(f"protocol_version={message.payload.protocol_version} is not supported")
     if message.payload.worker_agent_id != worker_agent.worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
 
     accepted_capabilities = _accepted_capabilities(message.payload.capabilities)
     session_id = _new_session_id()
@@ -369,9 +366,7 @@ async def apply_worker_agent_heartbeat_async(
     """
 
     if message.payload.worker_agent_id != worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
     await session.execute(
         update(WorkerAgent)
         .where(WorkerAgent.worker_agent_id == worker_agent_id)
@@ -456,9 +451,7 @@ def apply_worker_agent_heartbeat(
     received_at,
 ) -> None:
     if message.payload.worker_agent_id != worker_agent.worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
     worker_agent.status = "online"
     worker_agent.used_slots = message.payload.used_slots
     worker_agent.last_seen_at = received_at
@@ -633,8 +626,8 @@ def _deployment_package_args(
     }
 
 
-def create_worker_deployment_command(
-    db: Session,
+def _add_worker_deployment_command(
+    db: Session | AsyncSession,
     *,
     deployment: WorkerDeployment,
     kind: str,
@@ -667,9 +660,56 @@ def create_worker_deployment_command(
         message=f"{kind} command created",
         payload={"command_id": str(command.command_id), "kind": kind},
     )
+    return command
+
+
+def create_worker_deployment_command(
+    db: Session,
+    *,
+    deployment: WorkerDeployment,
+    kind: str,
+    package: WorkflowPackage | None = None,
+    env: dict[str, str] | None = None,
+    timeout_s: int = 30,
+) -> WorkerAgentCommand:
+    command = _add_worker_deployment_command(
+        db,
+        deployment=deployment,
+        kind=kind,
+        package=package,
+        env=env,
+        timeout_s=timeout_s,
+    )
     db.commit()
     db.refresh(command)
     return command
+
+
+async def create_worker_deployment_command_async(
+    session: AsyncSession,
+    *,
+    deployment: WorkerDeployment,
+    kind: str,
+    package: WorkflowPackage | None = None,
+    env: dict[str, str] | None = None,
+) -> PendingWorkerCommandDelivery:
+    if kind == "stop_deployment":
+        deployment.desired_status = "stopped"
+        deployment.observed_status = "stopping"
+        deployment.updated_at = utcnow()
+    elif kind == "restart_deployment":
+        deployment.desired_status = "running"
+        deployment.observed_status = "assigned"
+        deployment.updated_at = utcnow()
+    command = _add_worker_deployment_command(
+        session,
+        deployment=deployment,
+        kind=kind,
+        package=package,
+        env=env,
+    )
+    await session.flush()
+    return _to_pending_delivery(command)
 
 
 def create_start_deployment_command(
@@ -728,39 +768,8 @@ def create_restart_deployment_command(
     )
 
 
-async def dispatch_worker_agent_command(
-    db: Session,
-    *,
-    command: WorkerAgentCommand,
-    send_queue,
-    session_id: str,
-) -> WorkerAgentCommand:
-    now = utcnow()
-    command.status = "dispatched"
-    command.session_id = session_id
-    command.dispatched_at = now
-    command.updated_at = now
-    if command.deployment_id is not None:
-        record_worker_deployment_event(
-            db,
-            deployment_id=command.deployment_id,
-            worker_agent_id=command.worker_agent_id,
-            event_type="command_dispatched",
-            message=f"{command.kind} command dispatched",
-            payload={
-                "command_id": str(command.command_id),
-                "kind": command.kind,
-                "session_id": session_id,
-            },
-        )
-    db.commit()
-    db.refresh(command)
-    await send_queue.put(build_worker_agent_command_message(command).model_dump(mode="json"))
-    return command
-
-
 def _mark_worker_agent_command_dispatched(
-    db: Session,
+    db: Session | AsyncSession,
     *,
     command: WorkerAgentCommand,
     session_id: str,
@@ -875,28 +884,34 @@ async def reject_worker_agent_command_without_delivery_async(
 
 
 async def dispatch_worker_agent_command_async(
-    session: AsyncSession,
     *,
     delivery: PendingWorkerCommandDelivery,
     send_queue,
     session_id: str,
 ) -> None:
-    """Mark one listed command dispatched, then enqueue the outbound frame.
+    """Commit and release the dispatch work unit before waiting on the queue."""
 
-    The database write commits before the frame is queued: the work unit ends
-    first, so no transaction is held across the network send and the worker
-    never sees a command whose dispatch row is not yet committed. The frame is
-    built from the plain delivery data, not from ORM state.
-    """
-
-    await mark_worker_agent_command_dispatched_async(
-        session,
-        command_id=delivery.command_id,
-        session_id=session_id,
-    )
+    async with session_scope() as session:
+        await mark_worker_agent_command_dispatched_async(
+            session,
+            command_id=delivery.command_id,
+            session_id=session_id,
+        )
     await send_queue.put(
         build_worker_agent_command_message_from_delivery(delivery).model_dump(mode="json")
     )
+
+
+async def dispatch_worker_deployment_command(delivery: PendingWorkerCommandDelivery | None) -> None:
+    if delivery is None:
+        return
+    connection = await worker_agent_connection_registry.get(delivery.worker_agent_id)
+    if connection is not None:
+        await dispatch_worker_agent_command_async(
+            delivery=delivery,
+            send_queue=connection.send_queue,
+            session_id=connection.session_id,
+        )
 
 
 def handle_worker_agent_command_ack(
@@ -968,9 +983,7 @@ def _apply_worker_command_failure_to_deployment(
     if command.deployment_id is None:
         return
     deployment = db.scalar(
-        select(WorkerDeployment).where(
-            WorkerDeployment.deployment_id == command.deployment_id
-        )
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == command.deployment_id)
     )
     if deployment is None:
         return
@@ -990,9 +1003,7 @@ def _apply_worker_command_success_to_deployment(
     if command.deployment_id is None:
         return
     deployment = db.scalar(
-        select(WorkerDeployment).where(
-            WorkerDeployment.deployment_id == command.deployment_id
-        )
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == command.deployment_id)
     )
     if deployment is None:
         return
@@ -1474,8 +1485,7 @@ def build_worker_agent_summary(worker_agent: WorkerAgent) -> WorkerAgentSummary:
     )
 
 
-def create_workflow_package(
-    db: Session,
+def _build_workflow_package(
     *,
     workflow_id: UUID,
     version: str,
@@ -1505,15 +1515,66 @@ def create_workflow_package(
         storage_path=str(storage_path),
         entrypoint=resolved_entrypoint,
         metadata_json=(
-            {"onestep_package_manifest": package_manifest}
-            if package_manifest is not None
-            else {}
+            {"onestep_package_manifest": package_manifest} if package_manifest is not None else {}
         ),
+        created_by=created_by,
+    )
+    return package
+
+
+def create_workflow_package(
+    db: Session,
+    *,
+    workflow_id: UUID,
+    version: str,
+    filename: str,
+    content_type: str,
+    content: bytes,
+    entrypoint: str | None,
+    created_by: str,
+) -> WorkflowPackage:
+    package = _build_workflow_package(
+        workflow_id=workflow_id,
+        version=version,
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        entrypoint=entrypoint,
         created_by=created_by,
     )
     db.add(package)
     db.commit()
     db.refresh(package)
+    return package
+
+
+async def create_workflow_package_async(
+    session: AsyncSession,
+    *,
+    workflow_id: UUID,
+    version: str,
+    filename: str,
+    content_type: str,
+    content: bytes,
+    entrypoint: str | None,
+    created_by: str,
+) -> WorkflowPackage:
+    package = _build_workflow_package(
+        workflow_id=workflow_id,
+        version=version,
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        entrypoint=entrypoint,
+        created_by=created_by,
+    )
+    session.add(package)
+    storage_path = Path(package.storage_path)
+    try:
+        await session.flush()
+    except BaseException:
+        storage_path.unlink(missing_ok=True)
+        raise
     return package
 
 
@@ -1628,14 +1689,14 @@ def build_workflow_package_summary(package: WorkflowPackage) -> WorkflowPackageS
     )
 
 
-def create_worker_deployment(
-    db: Session,
+def _add_worker_deployment(
+    db: Session | AsyncSession,
     request: WorkerDeploymentCreateRequest,
     *,
+    worker_agent: WorkerAgent,
+    package: WorkflowPackage,
     created_by: str,
 ) -> WorkerDeployment:
-    worker_agent = get_worker_agent_or_404(db, request.worker_agent_id)
-    package = get_workflow_package_or_404(db, request.workflow_package_id)
     now = utcnow()
     deployment = WorkerDeployment(
         deployment_id=uuid4(),
@@ -1666,8 +1727,58 @@ def create_worker_deployment(
             "desired_status": deployment.desired_status,
         },
     )
-    db.commit()
-    db.refresh(deployment)
+    return deployment
+
+
+async def create_worker_deployment_async(
+    session: AsyncSession,
+    request: WorkerDeploymentCreateRequest,
+    *,
+    created_by: str,
+) -> WorkerDeployment:
+    worker_agent = await session.scalar(
+        select(WorkerAgent).where(WorkerAgent.worker_agent_id == request.worker_agent_id)
+    )
+    if worker_agent is None:
+        raise HTTPException(
+            status_code=404, detail=f"worker agent {request.worker_agent_id} was not found"
+        )
+    package = await get_workflow_package_or_404_async(session, request.workflow_package_id)
+    deployment = _add_worker_deployment(
+        session,
+        request,
+        worker_agent=worker_agent,
+        package=package,
+        created_by=created_by,
+    )
+    # Flush the parent before inserting the command/events (no ORM relationship orders them).
+    await session.flush()
+    return deployment
+
+
+async def get_workflow_package_or_404_async(
+    session: AsyncSession,
+    package_id: UUID,
+) -> WorkflowPackage:
+    package = await session.scalar(
+        select(WorkflowPackage).where(WorkflowPackage.package_id == package_id)
+    )
+    if package is None:
+        raise HTTPException(status_code=404, detail=f"workflow package {package_id} was not found")
+    return package
+
+
+async def get_worker_deployment_or_404_async(
+    session: AsyncSession,
+    deployment_id: UUID,
+) -> WorkerDeployment:
+    deployment = await session.scalar(
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == deployment_id)
+    )
+    if deployment is None:
+        raise HTTPException(
+            status_code=404, detail=f"worker deployment {deployment_id} was not found"
+        )
     return deployment
 
 

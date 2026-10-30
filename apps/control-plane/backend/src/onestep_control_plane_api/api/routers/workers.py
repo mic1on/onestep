@@ -111,6 +111,5 @@ def download_worker_package_endpoint(
 async def deploy_worker_endpoint(
     worker_id: UUID,
     request: WorkerDeployRequest,
-    db: Session = Depends(get_db_session),
 ) -> dict:
-    return await deploy_worker(db, worker_id, request)
+    return await deploy_worker(worker_id, request)
