@@ -100,4 +100,5 @@ When updating this file, preserve this bar for all agents and keep entries conci
 
 ## MongoDB live CI
 
-- The MongoDB 8.0 live and stepdown jobs use `ubuntu-22.04` (currently kernel 6.8): MongoDB aborts on kernels >= 6.19 due to SERVER-121912. Containers share the host kernel, so changing the image's base OS cannot fix it. `scripts/start-mongodb-replica-set.sh` waits for ping and primary with explicit exit codes and prints container state/logs on startup failure. Revisit the runner pin when upstream supports the newer kernel.
+- The MongoDB 8.0 live/stepdown jobs and the main CI integration job use `ubuntu-22.04` (currently kernel 6.8): MongoDB aborts on kernels >= 6.19 due to SERVER-121912. Containers share the host kernel, so changing the image's base OS cannot fix it. `scripts/start-mongodb-replica-set.sh` waits for ping and primary with explicit exit codes and prints container state/logs on startup failure. Revisit the runner pin when upstream supports the newer kernel.
+- `scripts/run-integration-tests.sh` must capture setup exports in a separate assignment before `eval`: `eval "$(...)"` masks setup failure and runs tests without service variables. It prints Compose state/logs before cleanup on failure; `tests/test_integration_runner_script.py` exercises failure propagation and cleanup without starting Docker.

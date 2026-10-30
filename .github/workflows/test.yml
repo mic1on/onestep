@@ -71,7 +71,8 @@ jobs:
 
   integration:
     name: Integration (py3.11)
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 aborts on host kernels >= 6.19 (SERVER-121912).
+    runs-on: ubuntu-22.04
     needs:
       - unit
       - worker-image
