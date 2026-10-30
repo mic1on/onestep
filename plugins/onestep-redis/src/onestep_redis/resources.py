@@ -29,6 +29,7 @@ _REDIS_STREAM_FIELDS = frozenset(
         "create_group",
         "maxlen",
         "approximate_trim",
+        "reclaim_idle_ms",
     }
 )
 _REDIS_CATALOG = ResourceCatalogEntry(
@@ -63,6 +64,7 @@ _REDIS_STREAM_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("create_group", "boolean", default=True),
         ResourceCatalogField("maxlen", "integer"),
         ResourceCatalogField("approximate_trim", "boolean", default=True),
+        ResourceCatalogField("reclaim_idle_ms", "integer", default=60000),
     ),
     topology_fields=("stream", "group", "consumer", "batch_size", "poll_interval_s"),
 )
@@ -109,4 +111,5 @@ def _build_redis_stream(ctx: ResourceBuildContext, spec: Mapping[str, Any]) -> A
         create_group=spec.get("create_group", True),
         maxlen=spec.get("maxlen"),
         approximate_trim=spec.get("approximate_trim", True),
+        reclaim_idle_ms=spec.get("reclaim_idle_ms", 60000),
     )

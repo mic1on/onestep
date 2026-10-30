@@ -87,3 +87,16 @@ cancellation only; external side effects must stay idempotent on
 Batch table-sink semantics, temporary-table permission requirements and
 packet-size handling are documented in
 [SQL batch correctness](../../docs/guide/sql-batch-correctness.md).
+
+Table-queue sources keep zero-based retry counts by row key within the source
+instance. `retry()` increments the count before applying the configured `nack` update;
+`release_unstarted()` applies `nack` without incrementing it. A successful `ack()` or
+`complete()` clears the count. Terminal `fail()` still applies the user-configured
+`nack`: if that row still matches `where`, later claims retain the exhausted count and
+continue taking the failure/DLQ path on failure rather than restarting the retry budget. Rows
+made ineligible by failure (or deleted) have their local count removed.
+
+A new source instance/process starts at zero, and another worker has its own local
+count; this is a local retry budget, not durable cross-worker execution state. Use tracked
+execution for persistent attempts and leases. Table-queue `claim`/`ack`/`nack` SQL and
+the separate incremental/tracked-execution retry protocols are unchanged.

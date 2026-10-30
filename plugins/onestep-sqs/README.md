@@ -104,3 +104,11 @@ resources:
     arn: arn:aws:sns:us-east-1:123456789012:events
     subject: onestep-event
 ```
+
+`Envelope.attempts` adds `max(0, ApproximateReceiveCount - 1)` to the count encoded by
+the publisher. SQS's one-based receive count survives consumer restarts and includes
+visibility expiry and unstarted-message release, not just framework retries. This
+makes `MaxAttempts` and exponential backoff use broker delivery history. The terminal
+action still follows `on_fail`: use `delete` (or a broker redrive policy) when the
+message must leave the source; `release`/`leave` intentionally allow redelivery.
+See [SQS ReceiveMessage](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_ReceiveMessage.html).

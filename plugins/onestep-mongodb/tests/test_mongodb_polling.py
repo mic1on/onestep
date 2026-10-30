@@ -453,3 +453,49 @@ async def test_owned_client_is_lazy_and_closes_once(monkeypatch) -> None:
     await connector.close()
     await connector.close()
     assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_polling_retry_budget_survives_generations_and_release():
+    from onestep import MaxAttempts, OneStepApp, ExponentialBackoff
+    from onestep.runtime.runner import TaskRunner
+
+    document = {"_id": ObjectId("64b64c1234567890abcdef12")}
+    connector = MongoDBConnector("mongodb://local", database="app", client=FakeClient(FakeCollection([document])))
+    store = RecordingStore()
+    source = connector.poll_collection("events", state=store)
+    app = OneStepApp("mongodb-polling-attempts")
+
+    @app.task(source=source, retry=MaxAttempts(3))
+    async def poison(ctx, payload):
+        raise ValueError("poison")
+
+    runner = TaskRunner(app, app.tasks[0])
+    for attempt in range(3):
+        delivery, = await source.fetch(1)
+        assert delivery.envelope.attempts == attempt
+        assert ExponentialBackoff(max_attempts=10).on_error(delivery.envelope, ValueError(), None).delay_s == 2 ** attempt
+        await delivery.release_unstarted()
+        delivery, = await source.fetch(1)
+        assert delivery.envelope.attempts == attempt
+        await runner._handle_delivery(delivery)
+    assert decode_state(store.loaded) == [document["_id"]]
+    assert source._tracker._retry_attempts == {}
+    await source.close()
+
+
+@pytest.mark.asyncio
+async def test_polling_retry_attempts_reset_only_with_new_source():
+    document = {"_id": ObjectId("64b64c1234567890abcdef12")}
+    connector = MongoDBConnector("mongodb://local", database="app", client=FakeClient(FakeCollection([document])))
+    store = RecordingStore()
+    source = connector.poll_collection("events", state=store)
+    delivery, = await source.fetch(1)
+    await delivery.retry()
+    retried, = await source.fetch(1)
+    assert retried.envelope.attempts == 1
+    restarted = connector.poll_collection("events", state=store)
+    fresh, = await restarted.fetch(1)
+    assert fresh.envelope.attempts == 0
+    await retried.ack()
+    assert source._tracker._retry_attempts == {}

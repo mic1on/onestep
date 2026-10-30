@@ -1962,6 +1962,10 @@
           "type": "number",
           "default": 1.0
         },
+        "reclaim_idle_ms": {
+          "type": "integer",
+          "default": 60000
+        },
         "start_id": {
           "type": "string",
           "default": "$"

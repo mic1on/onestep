@@ -135,3 +135,10 @@ Cloudflare Queues enforces these limits (see the
 - Per-queue throughput: 5,000 messages/second.
 
 Delivery is at-least-once, so make handlers idempotent when duplicates matter.
+
+`Envelope.attempts` adds `max(0, message.attempts - 1)` to any publisher-encoded
+attempt history. The pull API count is one-based and survives consumer restarts;
+visibility expiry and explicit release also consume broker deliveries. Retry policies
+therefore reach their terminal action, which still follows `on_fail`: `ack` removes
+the message, while `retry`/`leave` intentionally permit further broker redelivery.
+See [Pull Queue Messages](https://developers.cloudflare.com/api/resources/queues/subresources/messages/methods/pull/).
