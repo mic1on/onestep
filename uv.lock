@@ -1958,7 +1958,7 @@ provides-extras = ["control-plane", "yaml", "mysql", "postgres", "sql", "sqlite"
 
 [[package]]
 name = "onestep-cf-queues"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "plugins/onestep-cf-queues" }
 dependencies = [
     { name = "cloudflare" },
@@ -2027,7 +2027,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-control-plane"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "plugins/onestep-control-plane" }
 dependencies = [
     { name = "onestep" },
@@ -2096,7 +2096,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-feishu-bitable"
-version = "0.6.1"
+version = "0.6.2"
 source = { editable = "plugins/onestep-feishu-bitable" }
 dependencies = [
     { name = "onestep" },
@@ -2122,7 +2122,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-kafka"
-version = "0.1.3"
+version = "0.1.4"
 source = { directory = "plugins/onestep-kafka" }
 dependencies = [
     { name = "aiokafka", marker = "python_full_version >= '3.10'" },
@@ -2140,7 +2140,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-mongodb"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "plugins/onestep-mongodb" }
 dependencies = [
     { name = "onestep" },
@@ -2271,7 +2271,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-redis"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "plugins/onestep-redis" }
 dependencies = [
     { name = "onestep" },
@@ -2310,7 +2310,7 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "onestep-sql"
-version = "0.7.1"
+version = "0.7.2"
 source = { editable = "plugins/onestep-sql" }
 dependencies = [
     { name = "aiosqlite" },
@@ -2378,7 +2378,7 @@ provides-extras = ["mysql", "postgres", "sqlite", "all", "test", "dev"]
 
 [[package]]
 name = "onestep-sqs"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "plugins/onestep-sqs" }
 dependencies = [
     { name = "boto3" },

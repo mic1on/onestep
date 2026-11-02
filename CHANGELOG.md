@@ -38,6 +38,54 @@
 
 - **移除 macOS 桌面应用（#236）；`examples/` 并入 `example/`（#231）。**
 
+## onestep-sql 0.7.2
+
+MySQL binlog CDC 的确认与恢复契约（#264），以及 TableQueue 重试预算跨失败保留（#263）。
+
+- **`mysql_binlog` 按完整连续前缀确认并恢复。** 游标 `{file, pos}` 只在 event 的全部行完成后推进；游标存储写入失败或被取消时，内存中的未完成屏障保留、可再次结算。`retry()` 将原记录放入本地重投队列、保留游标屏障并递增 `Envelope.attempts`（`MaxAttempts` 因此可达终态）；`release_unstarted()` 重投未启动记录不计次；终态 `fail()` 完成该行结算，配置死信输出时先成功写入死信再推进游标。进程重启后从持久化游标重放未完整确认的 event，尝试次数从零开始（已成功的行可能重复执行，handler 与 sink 需幂等）。`blocking=True` 由非阻塞读取加 `poll_interval_s` 轮询实现，暂停或关闭不必等待下一条数据库变更。
+
+- **TableQueue 重试预算按行保留。** `retry()` 在应用配置的 `nack` 更新前递增该行计数，`release_unstarted()` 应用 `nack` 但不递增；`ack()`/`complete()` 清除计数。终态 `fail()` 仍应用用户配置的 `nack`：行仍匹配 `where` 时保留已耗尽的计数并继续走失败/DLQ 路径，而不是重置重试预算。claim/ack/nack SQL 与增量/tracked-execution 协议不变。
+
+## onestep-redis 0.2.3
+
+Stream 交付语义、租约 fencing 与停止路径修复（#263）。
+
+- **交付与租约语义。** 抓取的条目本地预留，后续 fetch 不会执行同一活跃 delivery；重试在延迟期间保留 PEL 条目；ACK、重试与续租原子校验 PEL 消费者与投递计数，过期 handler 无法确认已被其他 worker 回收的消息；`Envelope.attempts` 暴露 `encoded_attempts + times_delivered - 1`，计数存于 PEL、跨 worker 重启保留。
+
+- **过期条目回收。** 每次 fetch 执行一次有界 `XAUTOCLAIM` 扫描（游标跨调用延续，受 `batch_size` 与 fetch 上限约束），回收任意消费者（含已死亡进程）的过期条目；`reclaim_idle_ms` 可配（默认 60000），活跃与排队 delivery 每 1/3 间隔续租。
+
+- **停止路径修复。** 队列锁改在运行中的事件循环初始化；每次 broker 读取有界（≤1 秒，`block_ms: 0` 也不例外），drain/pause/shutdown 不再被阻塞读卡住、可正常排空 fetch。
+
+## onestep-kafka 0.1.4
+
+提交跟踪与分区边界 fencing（#263）。
+
+- **完成前缀提交。** 提交跟踪跟随实际抓取记录的完成前缀，compacted offset 与事务标记空隙不再阻塞进度；未完成记录保持屏障，即使后续记录成功。
+
+- **分区撤销/分配 fencing。** 分区边界清除该分区的跟踪并 fence 旧 delivery：旧 handler 无法在新分配下提交或排队重试。重试保留原始记录本地重投并递增 `attempts`，不回绕其他活跃记录、不发布替换消息；原 offset 在成功或终态失败前保持未提交。
+
+- **重试预算语义。** Kafka 不存储投递计数：本地重试计数在进程重启或分区重分配后按 envelope 的 attempts 重置，是每次连续分配期内的预算，不是持久生命周期上限；跨断连边界需要 broker 死信策略。
+
+## onestep-mongodb 0.1.3
+
+重试预算按 cursor/resume token 保留（#263）。polling 与 change-stream 源在源实例内保留 0 基重试计数；generation 失效与重放保留计数，释放未启动 delivery 不计次；只有对应连续前缀被持久确认或终态跳过才移除计数。新实例/进程从零开始并从持久游标恢复，`MaxAttempts` 约束源生命周期内的重试；未解析游标之后的行可能重放，handler 需幂等。
+
+## onestep-sqs 0.2.5
+
+重试预算使用 broker 投递历史（#263）。`Envelope.attempts` 在 publisher 编码的计数之上叠加 `max(0, ApproximateReceiveCount - 1)`：SQS 的 1 基接收计数跨消费者重启保留，且包含可见性过期与未启动消息的释放，不只是框架重试。`MaxAttempts` 与指数退避因此使用真实 broker 交付历史；终态动作仍遵循 `on_fail`（消息必须离开源时用 `delete` 或 broker redrive）。
+
+## onestep-cf-queues 0.2.1
+
+重试预算使用 broker 投递历史（#263）。`Envelope.attempts` 在 publisher 编码的计数之上叠加 `max(0, message.attempts - 1)`（Pull API 计数，1 基、跨消费者重启保留，可见性过期与显式释放同样消耗 broker 交付）。`MaxAttempts` 与退避因此使用真实交付历史；终态动作仍遵循 `on_fail`。
+
+## onestep-feishu-bitable 0.6.2
+
+游标 fence 与重试保留（#263）。增量 delivery 保留游标位置直到确认或永久失败；重试复用已抓取 payload 并递增 `Envelope.attempts`，暂停期间释放未启动 delivery 不消耗尝试次数；失败或已释放的行阻止持久游标越过它，即使后续行成功。停止批次不再丢弃 token（改为 requeue），重试真正重读并回绕读游标，前缀提交不再被卡死；永久失败是终态跳过并推进已解析前缀。重试 payload 与计数在源实例内，进程重启后从持久游标重读、计数归零，`max_attempts` 约束源生命周期内的重试，handler 需幂等。
+
+## onestep-control-plane 0.2.1
+
+- **上报 `telemetry.custom_metrics` 能力（#267）。** WS sender 的默认遥测能力列表加入 `telemetry.custom_metrics`，与控制面自定义指标上报协商兼容。
+
 ## onestep-sql 0.7.1
 
 批内唯一校验改为按块调用驱动，减少逐行等待，并遵守真实包大小限制（#228）。
