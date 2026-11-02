@@ -86,6 +86,16 @@ Stream 交付语义、租约 fencing 与停止路径修复（#263）。
 
 - **上报 `telemetry.custom_metrics` 能力（#267）。** WS sender 的默认遥测能力列表加入 `telemetry.custom_metrics`，与控制面自定义指标上报协商兼容。
 
+## onestep-worker-agent 0.1.5
+
+命令结果恢复与进程生命周期监督（#261）。
+
+- **命令结果恢复。** 每条命令在执行前落盘 `work_dir/commands/`，终态结果先持久化再上报；重复命令 ID 直接返回已有结果，同一部署的不同命令串行执行。Agent 上报 `agent.command_recovery` 能力，控制面只向具备该能力的 agent 重投已接受命令。被中断的准备以 `cancelled` 结束；匹配 runtime 仍在运行的 start 恢复为 `succeeded`。启动门打开前先持久化 worker PID，之前的崩溃不会产生未跟踪的业务 worker；断连取消会 kill 并等待安装/检查进程，POSIX 上 agent 自身异常退出时终止准备进程组。
+
+- **进程组回收与僵尸识别。** leader 退出后回收托管进程组并保留 stop 结果；准备子进程被回收，识别 Linux 僵尸状态。
+
+- **退出事件可靠送达。** 退出事件保留在 `work_dir/exit-events.json` 直到控制面确认回执（跨重连与 agent 重启）；心跳时核查恢复的 PID；延迟到达的 start 结果不能覆盖同一 runtime 已记录的退出。
+
 ## onestep-sql 0.7.1
 
 批内唯一校验改为按块调用驱动，减少逐行等待，并遵守真实包大小限制（#228）。
