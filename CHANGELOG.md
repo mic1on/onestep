@@ -96,6 +96,16 @@ Stream 交付语义、租约 fencing 与停止路径修复（#263）。
 
 - **退出事件可靠送达。** 退出事件保留在 `work_dir/exit-events.json` 直到控制面确认回执（跨重连与 agent 重启）；心跳时核查恢复的 PID；延迟到达的 start 结果不能覆盖同一 runtime 已记录的退出。
 
+## @mic1on/onestep-client 0.1.1
+
+TS 客户端与 Python 端的行为对齐（#259、#260、#268），npm 单独发布。
+
+- **JSON 持久化与过期摘要对齐 Python（#255、#256、#257，经 #268）。** 保留解码后的 JSON 标量字符串、写入规范 PyFloat JSON、保留过期时间的微秒与时区偏移；提交路径与双向 Python 回放用真实 PostgreSQL worker 覆盖测试，并文档化 JSONB 规范化与遗留键限制。
+
+- **文本结果无损（#260）。** 强制文本结果格式（即使配置 `poolOptions.binary`），Node 22 包输出纳入测试。
+
+- **执行游标保留 PostgreSQL 微秒（#260）。** `timestamptz` 以文本解析，在任何驱动 Date/二进制转换前保留原始微秒。
+
 ## onestep-sql 0.7.1
 
 批内唯一校验改为按块调用驱动，减少逐行等待，并遵守真实包大小限制（#228）。

@@ -1,6 +1,6 @@
 {
   "name": "@mic1on/onestep-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript ExecutionClient for onestep tracked execution (the worker stays Python).",
   "type": "module",
   "license": "MIT",
