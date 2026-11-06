@@ -26,6 +26,17 @@ source = feishu.incremental(
 rejects cursor sorting. Increase it only for tables where a full fallback scan
 is acceptable.
 
+Incremental deliveries retain their cursor position until acknowledged or permanently
+failed. Retries reuse the fetched payload and increment `Envelope.attempts`; releasing
+an unstarted delivery (for example during pause) does not consume an attempt. A failed
+or released row blocks durable cursor advancement past it even if later rows succeed.
+Permanent failure is a terminal skip and advances the resolved cursor prefix.
+
+Retry payloads and attempt counts live in the source instance. After a process restart,
+the source reads again from the durable cursor with attempts reset to zero; successful
+rows behind an unresolved row can be replayed. Handlers must remain idempotent, and
+`max_attempts` bounds retries within a source lifetime, not across process restarts.
+
 YAML resource types registered by the plugin:
 
 - `feishu_bitable`

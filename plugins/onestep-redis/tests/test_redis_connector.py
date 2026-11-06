@@ -76,6 +76,8 @@ class TestRedisStreamQueue:
 
         # Mock Redis client
         mock_redis = AsyncMock()
+        mock_redis.xautoclaim.return_value = [b"0-0", [], []]
+        mock_redis.eval.return_value = 1
         mock_redis.xgroup_create = AsyncMock()
         mock_redis.xadd = AsyncMock()
         mock_redis.xreadgroup = AsyncMock()
@@ -86,7 +88,6 @@ class TestRedisStreamQueue:
         with patch.object(connector, 'acquire', return_value=mock_redis):
             # Real Redis returns [[stream, []]] when there are no pending messages.
             mock_redis.xreadgroup = AsyncMock(side_effect=[
-                [[b"test-stream", []]],
                 [[b"test-stream", [
                     (b"123-0", {b"body": b'{"body": {"job": "test"}, "meta": {}, "attempts": 0}'}),
                 ]]],
@@ -103,8 +104,8 @@ class TestRedisStreamQueue:
 
             # Test ack
             await deliveries[0].ack()
-            mock_redis.xack.assert_called_once_with(
-                "test-stream", "test-group", b"123-0"
+            assert mock_redis.eval.call_args.args[2:] == (
+                "test-stream", "test-group", stream.consumer, b"123-0", "ack", 1
             )
 
     @pytest.mark.asyncio
@@ -114,9 +115,10 @@ class TestRedisStreamQueue:
         stream = connector.stream("test-stream")
 
         mock_redis = AsyncMock()
+        mock_redis.xautoclaim.return_value = [b"0-0", [], []]
+        mock_redis.eval.return_value = 1
         mock_redis.xgroup_create = AsyncMock()
         mock_redis.xreadgroup = AsyncMock(side_effect=[
-            [[b"test-stream", []]],
             [],
         ])
         mock_redis.aclose = AsyncMock()
@@ -133,6 +135,8 @@ class TestRedisStreamQueue:
         stream = connector.stream("test-stream", maxlen=1000)
 
         mock_redis = AsyncMock()
+        mock_redis.xautoclaim.return_value = [b"0-0", [], []]
+        mock_redis.eval.return_value = 1
         mock_redis.xgroup_create = AsyncMock()
         mock_redis.xadd = AsyncMock()
         mock_redis.aclose = AsyncMock()
@@ -153,6 +157,8 @@ class TestRedisStreamQueue:
         stream = connector.stream("test-stream", group="test-group", consumer="consumer-1")
 
         mock_redis = AsyncMock()
+        mock_redis.xautoclaim.return_value = [b"0-0", [], []]
+        mock_redis.eval.return_value = 1
         mock_redis.xgroup_create = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.aclose = AsyncMock()
@@ -163,7 +169,6 @@ class TestRedisStreamQueue:
             ]]
         ]
         mock_redis.xreadgroup = AsyncMock(side_effect=[
-            [[b"test-stream", []]],
             message,
             message,
         ])
@@ -179,29 +184,9 @@ class TestRedisStreamQueue:
             assert len(second) == 1
             assert second[0].payload == {"job": "retry"}
 
-            assert [call.kwargs for call in mock_redis.xreadgroup.call_args_list] == [
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": "0"},
-                    "count": 10,
-                    "block": 0,
-                },
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": ">"},
-                    "count": 10,
-                    "block": 1000,
-                },
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": "0"},
-                    "count": 10,
-                    "block": 0,
-                },
-            ]
+            assert second[0].envelope.attempts == 1
+            assert mock_redis.xreadgroup.await_count == 1
+            await stream.close()
 
     @pytest.mark.asyncio
     async def test_fail_acknowledges_and_stops_redelivery(self):
@@ -210,6 +195,8 @@ class TestRedisStreamQueue:
         stream = connector.stream("test-stream", group="test-group", consumer="consumer-1")
 
         mock_redis = AsyncMock()
+        mock_redis.xautoclaim.return_value = [b"0-0", [], []]
+        mock_redis.eval.return_value = 1
         mock_redis.xgroup_create = AsyncMock()
         mock_redis.xack = AsyncMock()
         mock_redis.aclose = AsyncMock()
@@ -220,9 +207,7 @@ class TestRedisStreamQueue:
             ]]
         ]
         mock_redis.xreadgroup = AsyncMock(side_effect=[
-            [[b"test-stream", []]],
             message,
-            [[b"test-stream", []]],
             [],
         ])
 
@@ -231,38 +216,47 @@ class TestRedisStreamQueue:
             assert len(first) == 1
 
             await first[0].fail(RuntimeError("boom"))
-            mock_redis.xack.assert_called_once_with("test-stream", "test-group", b"123-0")
+            assert mock_redis.eval.call_args.args[-2] == "ack"
 
             second = await stream.fetch(10)
             assert second == []
 
-            assert [call.kwargs for call in mock_redis.xreadgroup.call_args_list] == [
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": "0"},
-                    "count": 10,
-                    "block": 0,
-                },
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": ">"},
-                    "count": 10,
-                    "block": 1000,
-                },
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": "0"},
-                    "count": 10,
-                    "block": 0,
-                },
-                {
-                    "groupname": "test-group",
-                    "consumername": "consumer-1",
-                    "streams": {"test-stream": ">"},
-                    "count": 10,
-                    "block": 1000,
-                },
-            ]
+            assert mock_redis.xreadgroup.await_count == 2
+            await stream.close()
+
+
+def test_construct_after_closed_loop_and_use_in_fresh_loops():
+    """Python 3.9 construction must not ask for an ambient event loop."""
+    import asyncio
+
+    async def previous_run():
+        pass
+
+    asyncio.run(previous_run())
+    connector = RedisConnector('redis://localhost')
+    stream = connector.stream('events')
+    assert stream._fetch_lock is None
+    assert stream._delivery_lock is None
+    assert stream._transport_lock is None
+    previous_locks = None
+
+    async def use_stream():
+        nonlocal previous_locks
+        client = AsyncMock()
+        client.xautoclaim.return_value = [b'0-0', [], []]
+        client.xreadgroup.return_value = [[b'events', [(b'1-0', {b'body': b'{}'})]]]
+        client.eval.return_value = 1
+        with patch.object(connector, 'acquire', return_value=client), patch.object(connector, 'release'):
+            delivery = (await stream.fetch(1))[0]
+            await delivery.start_processing()
+            await delivery.ack()
+            locks = (stream._fetch_lock, stream._delivery_lock, stream._transport_lock)
+            assert all(lock is not None for lock in locks)
+            if previous_locks is not None:
+                assert all(old is not new for old, new in zip(previous_locks, locks))
+            previous_locks = locks
+            await stream.close()
+            assert stream._heartbeat is None
+
+    asyncio.run(use_stream())
+    asyncio.run(use_stream())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -98,7 +99,19 @@ class _ContiguousGenerationTracker:
         self._pending: deque[_TrackedToken] = deque()
         self._outstanding: dict[int, int] = {}
         self._invalidated: set[int] = set()
+        self._retry_attempts: dict[str, int] = {}
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _token_key(token: Any) -> str:
+        return json.dumps(encode_state(token), sort_keys=True, separators=(",", ":"))
+
+    def attempts_for(self, token: Any) -> int:
+        return self._retry_attempts.get(self._token_key(token), 0)
+
+    def record_retry(self, token: Any, attempts: int) -> None:
+        key = self._token_key(token)
+        self._retry_attempts[key] = max(self._retry_attempts.get(key, 0), attempts + 1)
 
     @property
     def can_fetch(self) -> bool:
@@ -160,8 +173,10 @@ class _ContiguousGenerationTracker:
                 self._outstanding[tracked.generation] = max(
                     0, self._outstanding.get(tracked.generation, 1) - 1
                 )
-            for _ in prefix:
+            for item in prefix:
                 self._pending.popleft()
+                if item.advances:
+                    self._retry_attempts.pop(self._token_key(item.token), None)
             self._discard_settled_generations()
 
 
@@ -313,7 +328,7 @@ class MongoDBPollingSource(Source):
             token = tuple(document[field] for field in self.cursor)
             self._scan = token
             tracked = self._tracker.add(token)
-            deliveries.append(MongoDBPollingDelivery(self, Envelope(body=document, meta={"mongodb": {"database": self.connector.database_name, "collection": self.collection_name}}), tracked))
+            deliveries.append(MongoDBPollingDelivery(self, Envelope(body=document, meta={"mongodb": {"database": self.connector.database_name, "collection": self.collection_name}}, attempts=self._tracker.attempts_for(token)), tracked))
         return deliveries
 
     async def invalidate(self, tracked: _TrackedToken, *, delay_s: float | None = None) -> None:
@@ -347,7 +362,12 @@ class MongoDBPollingDelivery(Delivery):
     async def retry(self, *, delay_s: float | None = None) -> None:
         if self._terminal:
             return
-        await self._source.invalidate(self._tracked, delay_s=delay_s)
+        if delay_s:
+            await asyncio.sleep(delay_s)
+        if self._terminal:
+            return
+        self._source._tracker.record_retry(self._tracked.token, self.envelope.attempts)
+        await self._source.invalidate(self._tracked)
         await self._source._tracker.complete(self._tracked, advance=False)
         self._terminal = True
 
@@ -490,7 +510,7 @@ class MongoDBChangeStreamSource(Source):
             deliveries.append(
                 MongoDBChangeStreamDelivery(
                     self,
-                    Envelope(body=event, meta=meta),
+                    Envelope(body=event, meta=meta, attempts=self._tracker.attempts_for(token)),
                     tracked,
                 )
             )
@@ -532,7 +552,12 @@ class MongoDBChangeStreamDelivery(Delivery):
     async def retry(self, *, delay_s: float | None = None) -> None:
         if self._terminal:
             return
-        await self._source.invalidate(self._tracked, delay_s=delay_s)
+        if delay_s:
+            await asyncio.sleep(delay_s)
+        if self._terminal:
+            return
+        self._source._tracker.record_retry(self._tracked.token, self.envelope.attempts)
+        await self._source.invalidate(self._tracked)
         await self._source._tracker.complete(self._tracked, advance=False)
         self._terminal = True
 

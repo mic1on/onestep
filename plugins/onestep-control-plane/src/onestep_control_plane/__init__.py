@@ -6,6 +6,7 @@ from typing import Any
 
 from onestep.reporter_registry import ReporterRegistry, ReporterSpecHandler
 
+from .presence import PRESENCE_PATH, PresenceBeacon
 from .reporter import ControlPlaneReporter, ControlPlaneReporterConfig
 from .ws import (
     AgentCommand,
@@ -63,6 +64,8 @@ __all__ = [
     "ControlPlaneWsSender",
     "ControlPlaneWsTransport",
     "DEFAULT_AGENT_CAPABILITIES",
+    "PRESENCE_PATH",
+    "PresenceBeacon",
     "WS_AGENT_SUBPROTOCOL",
     "WS_PROTOCOL_VERSION",
     "__version__",

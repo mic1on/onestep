@@ -30,6 +30,7 @@ import {
   ExecutionCancelled,
   ExecutionConflict,
   ExecutionExpired,
+  ExecutionEncodingError,
   ExecutionFailed,
   ExecutionNotFound,
   ExecutionNotReady,
@@ -97,25 +98,25 @@ function canonicalByteLength(value: unknown): number {
  *
  * `JSON.stringify` would turn `new PyFloat(1.0)` into `1` (or into a stray
  * object), which would disagree with the digest and hand the Python worker an
- * int where a float was promised. Unwrapping PyFloat to its numeric value
- * first keeps the stored bytes consistent with the digest.
+ * int where a float was promised. Use the digest encoder for storage too.
  */
 function toJsonText(value: unknown): string {
-  return JSON.stringify(unwrapPyFloats(value));
+  return canonicalize(value as never);
 }
 
-/** Recursively replace PyFloat wrappers with their numeric values. */
-function unwrapPyFloats(value: unknown): unknown {
-  if (value instanceof PyFloat) return value.value;
-  if (Array.isArray(value)) return value.map(unwrapPyFloats);
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = unwrapPyFloats(v);
+/** The submit API accepts JSON values plus explicit floats, not capture tags. */
+function assertSubmissionValue(value: unknown): void {
+  if (value instanceof PyFloat || value === null || typeof value !== 'object') return;
+  if (!Array.isArray(value)) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new ExecutionEncodingError('execution values must be plain JSON or PyFloat; Python capture types are unsupported');
     }
-    return out;
+    if (Object.hasOwn(value, '$onestep')) {
+      throw new ExecutionEncodingError('the $onestep capture tag is unsupported in TypeScript submissions');
+    }
   }
-  return value;
+  for (const child of Object.values(value)) assertSubmissionValue(child);
 }
 
 export class ExecutionClient {
@@ -178,13 +179,14 @@ export class ExecutionClient {
       throw new RangeError('delay_s must be finite and >= 0');
     }
 
+    // Capture types require Python's tagged codec; never guess from an object.
+    assertSubmissionValue(payload);
+    assertSubmissionValue(metadata);
     // Size guards, matching the server's own limits and error type.
     if (canonicalByteLength(payload) > this.maxPayloadBytes) {
-      const { ExecutionEncodingError } = await import('./errors.ts');
       throw new ExecutionEncodingError('execution payload exceeds the configured limit');
     }
     if (canonicalByteLength(metadata) > this.maxMetadataBytes) {
-      const { ExecutionEncodingError } = await import('./errors.ts');
       throw new ExecutionEncodingError('execution metadata exceeds the configured limit');
     }
 
@@ -197,8 +199,9 @@ export class ExecutionClient {
       expiresAt,
     });
 
-    // Persist the payload as canonical JSON so the bytes the digest covers are
-    // the bytes stored. Using plain JSON.stringify here would be subtly wrong:
+    // Bind canonical JSON so the write uses the same encoding as the digest.
+    // JSONB may still normalize numbers (notably -0 and exponent notation).
+    // Using plain JSON.stringify here would be subtly wrong:
     // it drops PyFloat intent (1.0 -> 1), so a caller passing PyFloat would
     // have its digest computed over "1.0" while the row stored "1". The Python
     // worker would then see an int where the digest implied a float.
@@ -523,23 +526,33 @@ function assertUuid(value: string, field: string): void {
 }
 
 /**
- * Normalize an expiry to Python `isoformat()` in UTC.
+ * Normalize an expiry to Python datetime.isoformat(), retaining its offset.
  *
  * The server rejects naive datetimes (src/onestep/execution.py:70-77) and the
- * MySQL dialect converts to UTC before binding, so the client must send an
- * unambiguous aware instant.
+ * digest includes the original offset. Do not use Date: it both converts to UTC
+ * and truncates the microseconds that participate in the submission digest.
  */
 function normalizeExpiresAt(value: string | null): string | null {
   if (value === null) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error('expires_at must be a valid datetime');
-  }
   // Require an explicit offset or Z, matching the server's aware-only rule.
   if (!/([+-]\d{2}:\d{2}|Z)$/.test(value)) {
     throw new Error('expires_at must be timezone-aware (include an offset or Z)');
   }
-  return date.toISOString().replace(/\.\d{3}Z$/, (m) => m.replace('.000Z', 'Z')).replace(/Z$/, '+00:00');
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) throw new Error('expires_at must be a valid datetime with at most six fractional digits');
+  const [, year, month, day, hour, minute, second = '00', fraction = '', offset] = match;
+  const y = Number(year);
+  const m = Number(month);
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (y < 1 || m < 1 || m > 12 || Number(day) < 1 || Number(day) > days[m - 1]
+      || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59
+      || (offset !== 'Z' && (Number(offset.slice(1, 3)) > 23 || Number(offset.slice(4)) > 59))) {
+    throw new Error('expires_at must be a valid datetime');
+  }
+  const micros = Number(fraction) === 0 ? '' : '.' + fraction.padEnd(6, '0');
+  const zone = offset === 'Z' || offset === '-00:00' ? '+00:00' : offset;
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}${micros}${zone}`;
 }
 
 /** Detect a unique-constraint violation across both supported drivers. */

@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import time
 import os
 import sys
+from datetime import datetime
 
 DSN = os.environ.get(
     "ONESTEP_E2E_DSN",
@@ -66,6 +68,59 @@ async def reset() -> int:
     return 0
 
 
+def describe_types(value):
+    """Expose Python numeric types, which JS numbers cannot distinguish."""
+    if isinstance(value, dict):
+        return {key: describe_types(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [describe_types(item) for item in value]
+    return {"type": type(value).__name__, "repr": repr(value)}
+
+
+async def interop() -> int:
+    """Exercise the production Python client using the original JSON spelling."""
+    from onestep.execution import ExecutionClient, ExecutionConflict
+
+    requests = json.load(sys.stdin)
+    backend = _backend()
+    await backend.open()
+    results = []
+    try:
+        for request in requests:
+            client = ExecutionClient(backend, namespace=request["namespace"])
+            if request.get("operation") == "get":
+                execution = await client.get(request["id"])
+                assert execution is not None
+            else:
+                payload = json.loads(request["payloadJson"])
+                metadata = json.loads(request["metadataJson"])
+                if request.get("operation") == "resubmit-stored":
+                    stored = await client.get(request["id"])
+                    assert stored is not None
+                    payload, metadata = stored.payload, stored.metadata
+                expiry = request.get("expiresAt")
+                try:
+                    execution = await client.submit(
+                        request["taskName"], payload, metadata=metadata,
+                        idempotency_key=request["idempotencyKey"],
+                        delay_s=request.get("delayS"),
+                        expires_at=None if expiry is None else datetime.fromisoformat(expiry.replace("Z", "+00:00")),
+                    )
+                except ExecutionConflict:
+                    if not request.get("expectConflict"):
+                        raise
+                    results.append({"conflict": True})
+                    continue
+                assert not request.get("expectConflict"), "expected an idempotency conflict"
+            results.append({"id": str(execution.id), "payloadTypes": describe_types(execution.payload),
+                            "metadataTypes": describe_types(execution.metadata),
+                            "expiresAt": execution.expires_at.isoformat() if execution.expires_at else None})
+    finally:
+        await backend.close()
+    print(json.dumps(results))
+    return 0
+
+
 def run(task_name: str, wait_seconds: float) -> int:
     """Claim and execute pending work as a real onestep worker would.
 
@@ -93,7 +148,9 @@ def run(task_name: str, wait_seconds: float) -> int:
     @app.task(name=task_name, source=source)
     async def handle(ctx, payload):
         # A real handler: echo the payload with a marker the test asserts on.
-        return {"echo": payload, "worker": "python"}
+        if task_name == "e2e.json":
+            return payload
+        return {"echo": payload, "worker": "python", "types": describe_types(payload)}
 
     # Run the worker loop briefly, then stop. `app.run()` is a blocking call
     # that owns its own event loop, so the stop timer is armed from a thread.
@@ -112,7 +169,7 @@ def run(task_name: str, wait_seconds: float) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["setup", "reset", "run"])
+    parser.add_argument("command", choices=["setup", "reset", "run", "interop"])
     parser.add_argument("--task", default="e2e.echo")
     parser.add_argument("--wait", type=float, default=6.0)
     args = parser.parse_args()
@@ -121,6 +178,8 @@ def main() -> int:
         return asyncio.run(setup())
     if args.command == "reset":
         return asyncio.run(reset())
+    if args.command == "interop":
+        return asyncio.run(interop())
     return run(args.task, args.wait)
 
 

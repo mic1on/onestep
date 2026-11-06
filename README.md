@@ -724,6 +724,42 @@ async def sync_users(ctx, payload):
 For identity, multi-replica guidance, env vars, and a local demo, see
 [`docs/stable-instance-identity.md`](docs/stable-instance-identity.md).
 
+### Instance liveness while the event loop is blocked
+
+The reporter's heartbeat loop and every task handler share one asyncio event
+loop. A handler that makes a blocking call (`requests`, `boto3`, `pandas`,
+`time.sleep`) starves that loop, so no heartbeat reaches the control plane while
+the call runs — and an instance that is alive and working gets reported
+`offline`, then `online` again when the call returns.
+
+Since `onestep-control-plane` 0.2.0 the reporter covers that window with a
+presence beacon: a daemon thread that watches a timestamp the loop updates on
+every heartbeat and POSTs `/api/v1/agents/presence` **only** once the loop has
+been silent for longer than its grace window. While the loop is healthy the
+thread sends nothing at all, so a normal deployment behaves exactly as before.
+
+The beacon advances `last_seen_at` and nothing else: it carries no sequence,
+health or task-control state, so it cannot reorder or overwrite real telemetry.
+It also does not hide a genuine reporting outage — an agent whose WebSocket is
+broken while its loop is healthy keeps touching the timestamp and stays silent,
+and is still reported `offline`.
+
+Blocking handlers are still worth fixing (`asyncio.to_thread()`, a real async
+client): the beacon keeps the instance shown as online, but a blocked loop also
+delays task throughput and command responses such as `ping` or `drain`.
+
+Controls, all optional:
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `ONESTEP_CONTROL_PLANE_PRESENCE_ENABLED` | `true` | Set to `false` to disable the beacon. |
+| `ONESTEP_CONTROL_PLANE_PRESENCE_INTERVAL_S` | `heartbeat_interval_s` | Poll interval once the loop is stalled. |
+| `ONESTEP_CONTROL_PLANE_PRESENCE_GRACE_S` | `2 x presence_interval_s` (so `2 x heartbeat_interval_s` by default) | Loop silence that counts as stalled; must be `>= 2 x` the interval. |
+
+Upgrade order is not constrained: an older control plane without the route
+answers `404`, the beacon logs once and disables itself, and the WebSocket
+heartbeat keeps working as before.
+
 ## Examples
 
 Runnable examples live in [`example/`](example/README.md). Highlights:

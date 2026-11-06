@@ -76,6 +76,62 @@ ack={"status": "completed"}     # completed
 nack={"status": "failed"}       # failed
 ```
 
+### Single-Transaction Completion: complete()
+
+For a table-queue delivery, `update_current_row(values)` and `ack()` are two
+separate transactions: if the process crashes between them, a row is left with
+business columns written but no ack. Most `where` clauses mask this, but it is
+one of the root causes of the at-least-once duplication window.
+
+`complete(values)` merges the row write-back and the acknowledgement into a
+**single database transaction**: it first `UPDATE`s the business columns and
+then `UPDATE`s the ack column(s) in the same transaction, committing only when
+both succeed.
+
+```python
+@app.task(source=source, emit=sink)
+async def process_order(ctx, row):
+    # Write business columns and ack completion (e.g. status = 1 / 'done')
+    # in one transaction
+    await ctx.complete({"score": row["id"] * 10})
+    return {
+        "id": row["id"],
+        "status": "done"
+    }
+```
+
+It can also be called directly on the delivery: `await delivery.complete(values)`.
+
+#### Relationship to the Two-Step API
+
+- **Purely additive**: `complete(values)` is a new API; the old
+  `update_current_row(values)` + `ack()` two-step usage is unchanged.
+- With `ack={}`, `complete(values)` is equivalent to
+  `update_current_row(values)`: only the business-column `UPDATE` remains.
+- When both `values` and `ack` are empty, nothing is written.
+
+#### Atomicity and Idempotency
+
+- **Atomicity**: if `complete()` fails midway (e.g. the second statement
+  errors), the whole transaction rolls back — neither write takes effect, the
+  row stays in the claim state, and the normal failure path (`nack` / retry)
+  applies. A half-applied "business columns written, ack missing" row cannot
+  occur.
+- **Ack idempotency**: on success, `complete()` sets `_complete_ack_applied`
+  on the delivery. The executor still calls `delivery.ack()` by convention
+  after the handler returns; that call is then skipped instead of issuing a
+  redundant `UPDATE`. (Even without the skip, re-writing the ack is
+  idempotent — this just saves one write.)
+- The envelope body only mirrors the business `values`; ack columns are queue
+  bookkeeping and never leak into the body.
+- Lint note: `onestep check` warns when `claim` is non-empty while `nack` is
+  empty (issue #180) — failed rows would silently stick in the claim state;
+  `complete()` does not change that semantics.
+
+> The API is provided by the shared implementation in `onestep-sql`
+> (`onestep_sql/_shared/table_queue.py`) and behaves identically across the
+> MySQL, PostgreSQL, and SQLite backends.
+
 ## Incremental Sync
 
 Time-based incremental data sync with `(updated_at, id)` cursors, suitable for data warehouse scenarios.
@@ -455,6 +511,38 @@ async def handle_row_change(ctx, row):
 | `blocking` | `False` | Whether to block waiting for new events |
 
 Install `onestep-sql[mysql]` which includes `mysql-replication`. Requires MySQL with binlog enabled and `ROW` format.
+
+#### Acknowledgement and Recovery
+
+`mysql_binlog` persists `{file, pos}` as the complete contiguous prefix of
+binlog events. Even when rows of the same event are fetched in batches and
+processed out of order, the cursor can only advance to the end of that event
+after all of them complete. If the cursor store write fails or is cancelled,
+the in-memory unfinished barrier is kept so settlement can be retried.
+
+- `retry()` puts the record back into a local redelivery queue, keeps the
+  cursor barrier, and increments `Envelope.attempts`. `MaxAttempts` can thus
+  reach its terminal state; the retry delay only controls when the record is
+  delivered again and never blocks the settlement call.
+- `release_unstarted()` redelivers records that never started, without
+  incrementing the attempt count.
+- Terminal `fail()` settles the row. When a dead-letter output is configured,
+  the runtime writes the dead letter successfully first and only then advances
+  the cursor; without one, a terminal failure means the record is dropped.
+  Tasks that must retain failed data should configure a dead-letter output.
+- The redelivery queue and attempt counters live only in the current process.
+  After a restart (or closing and reopening the source), events not fully
+  acknowledged are replayed from the persisted cursor with attempt counts
+  reset to zero — rows that already succeeded may execute again; handlers and
+  sinks must be idempotent. Calling settlement methods repeatedly on a single
+  delivery neither redelivers twice nor crosses over to a new delivery.
+
+`blocking=True` waits when there are no records; internally the source uses
+non-blocking binlog reads with async polling at `poll_interval_s` intervals,
+so pausing or shutting down never waits for the next database change. If the
+fetch is cancelled, reads that already started are retained by the source and
+delivered once fetching resumes; on close it waits for the current read to
+finish before closing the connection.
 
 ## PostgreSQL Tracked Long-Running Execution
 

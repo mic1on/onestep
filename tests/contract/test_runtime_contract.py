@@ -31,8 +31,10 @@ from onestep import (
 )
 from onestep.connectors.base import Delivery, Sink, Source
 from onestep.envelope import Envelope
+from onestep.events import TaskEvent
 from onestep.execution import ExecutionErrorDetail
 from onestep.runtime import TaskRunner
+from onestep.runtime.executor import DeliveryExecutor
 from onestep.task import EmitBinding, EmitRoute, TaskHooks
 
 
@@ -1240,6 +1242,195 @@ def test_multi_sink_send_is_not_transactional_when_later_sink_fails_contract() -
         first_batch = await first_sink.fetch(1)
         assert failing_sink.calls == 1
         assert [delivery.payload for delivery in first_batch] == [{"value": 2}]
+
+    asyncio.run(scenario())
+
+
+def test_sink_stage_failure_exposes_replay_window_in_events_and_control_plane_contract() -> None:
+    async def scenario() -> None:
+        steps: list[str] = []
+        event_meta: list[tuple[str, dict]] = []
+        app = OneStepApp("sink-replay-window")
+        first = _RecordingSink("first")
+        failing = _AlwaysFailSink("second")
+
+        @app.on_event
+        def event(item):
+            event_meta.append((item.kind.value, item.meta))
+
+        @app.task(
+            emit=[first, failing],
+            retry=MaxAttempts(max_attempts=2, delay_s=0),
+        )
+        async def consume(ctx, payload):
+            return payload
+
+        delivery = _RecordingManagedDelivery({"id": 1}, steps)
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        retried = [meta for kind, meta in event_meta if kind == "retried"]
+        assert len(retried) == 1
+        assert retried[0]["sinks_succeeded"] == ["first"]
+        assert retried[0]["sinks_remaining"] == ["second"]
+        # The failure-event meta is seeded from the envelope meta (merge, not
+        # wholesale replacement).
+        assert retried[0]["onestep.execution"]["id"] == str(delivery.execution_id)
+        started = [meta for kind, meta in event_meta if kind == "started"]
+        assert "sinks_succeeded" not in started[0]
+
+        completion = delivery.completions[0]
+        assert completion.status is ExecutionStatus.RETRYING
+        assert completion.error == ExecutionErrorDetail(
+            kind="error",
+            exception_type="RuntimeError",
+            stage="sink",
+            sinks_succeeded="first",
+            sinks_remaining="second",
+        )
+        assert [envelope.body for envelope in first.envelopes] == [{"id": 1}]
+        assert failing.calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_outcome_sinks_succeeded_equals_selected_sinks_on_full_success_contract() -> None:
+    async def scenario() -> None:
+        events: list[TaskEvent] = []
+        first = _RecordingSink("first")
+        second = _RecordingSink("second")
+        app = OneStepApp("sinks-succeeded-success")
+
+        @app.task(emit=[first, second])
+        async def consume(ctx, payload):
+            return payload
+
+        async def emit_event(event):
+            events.append(event)
+
+        executor = DeliveryExecutor(app, app.tasks[0], emit_event=emit_event)
+        outcome = await executor.execute(_StubDelivery({"id": 1}))
+
+        assert outcome.completion == "succeeded"
+        assert outcome.sinks_succeeded == outcome.selected_sinks == ["first", "second"]
+        assert [envelope.body for envelope in first.envelopes] == [{"id": 1}]
+        assert [envelope.body for envelope in second.envelopes] == [{"id": 1}]
+        succeeded = events[-1]
+        assert succeeded.kind is TaskEventKind.SUCCEEDED
+        assert "sinks_succeeded" not in succeeded.meta
+        assert "sinks_remaining" not in succeeded.meta
+
+    asyncio.run(scenario())
+
+
+def test_transform_failure_keeps_sink_replay_fields_absent_contract() -> None:
+    async def scenario() -> None:
+        event_meta: list[tuple[str, dict]] = []
+        app = OneStepApp("transform-failure-window")
+        first = _RecordingSink("first")
+
+        @app.on_event
+        def event(item):
+            event_meta.append((item.kind.value, item.meta))
+
+        def fail_transform(ctx, payload, result):
+            raise RuntimeError("transform failed before sink dispatch")
+
+        @app.task(
+            emit=[first, EmitBinding(sink=_RecordingSink("second"), transform=fail_transform)],
+            retry=NoRetry(),
+        )
+        async def consume(ctx, payload):
+            return payload
+
+        delivery = _RecordingManagedDelivery({"id": 1}, [])
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        failed = [meta for kind, meta in event_meta if kind == "failed"]
+        assert len(failed) == 1
+        assert "sinks_succeeded" not in failed[0]
+        assert "sinks_remaining" not in failed[0]
+        completion = delivery.completions[0]
+        assert completion.status is ExecutionStatus.FAILED
+        assert completion.error == ExecutionErrorDetail(
+            kind="error",
+            exception_type="RuntimeError",
+            stage="transform",
+        )
+        assert first.envelopes == []
+
+    asyncio.run(scenario())
+
+
+def test_first_sink_failure_still_applies_retry_and_reports_empty_replay_lists_contract() -> None:
+    async def scenario() -> None:
+        steps: list[str] = []
+        event_meta: list[tuple[str, dict]] = []
+        app = OneStepApp("first-sink-replay-window")
+        failing = _AlwaysFailSink("first")
+        second = _RecordingSink("second")
+
+        @app.on_event
+        def event(item):
+            event_meta.append((item.kind.value, item.meta))
+
+        @app.task(
+            emit=[failing, second],
+            retry=MaxAttempts(max_attempts=2, delay_s=0),
+        )
+        async def consume(ctx, payload):
+            return payload
+
+        delivery = _RecordingManagedDelivery({"id": 1}, steps)
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        # The delivery action is applied despite zero succeeded sinks; a
+        # crash here used to swallow the retry entirely.
+        completion = delivery.completions[0]
+        assert completion.status is ExecutionStatus.RETRYING
+        assert "managed:retrying" in steps
+
+        retried = [meta for kind, meta in event_meta if kind == "retried"]
+        assert len(retried) == 1
+        assert retried[0]["sinks_succeeded"] == []
+        assert retried[0]["sinks_remaining"] == ["first", "second"]
+
+        # The empty-string public-failure value maps to an absent detail
+        # field; ExecutionErrorDetail must never see an empty text value.
+        assert completion.error is not None
+        assert completion.error.sinks_succeeded is None
+        assert completion.error.sinks_remaining == "first,second"
+        assert second.envelopes == []
+
+    asyncio.run(scenario())
+
+
+def test_single_sink_failure_failed_path_reports_none_succeeded_detail_contract() -> None:
+    async def scenario() -> None:
+        event_meta: list[tuple[str, dict]] = []
+        app = OneStepApp("single-sink-replay-window")
+        failing = _AlwaysFailSink("only")
+
+        @app.on_event
+        def event(item):
+            event_meta.append((item.kind.value, item.meta))
+
+        @app.task(emit=[failing], retry=NoRetry())
+        async def consume(ctx, payload):
+            return payload
+
+        delivery = _RecordingManagedDelivery({"id": 1}, [])
+        await TaskRunner(app, app.tasks[0])._handle_delivery(delivery)
+
+        failed = [meta for kind, meta in event_meta if kind == "failed"]
+        assert len(failed) == 1
+        assert failed[0]["sinks_succeeded"] == []
+        assert failed[0]["sinks_remaining"] == ["only"]
+
+        completion = delivery.completions[0]
+        assert completion.status is ExecutionStatus.FAILED
+        assert completion.error is not None
+        assert completion.error.sinks_succeeded is None
+        assert completion.error.sinks_remaining == "only"
 
     asyncio.run(scenario())
 

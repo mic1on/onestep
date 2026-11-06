@@ -29,6 +29,9 @@ Current intent:
 - Route: `GET /api/v1/agents/ws`
 - Scheme: `ws` for local dev, `wss` for real deployments
 
+One HTTP endpoint sits beside the socket, deliberately outside it: the presence
+beacon at `POST /api/v1/agents/presence`. See section 23.
+
 ## 5. Authentication
 
 The WS handshake uses the same ingest token model as the historical HTTP agent
@@ -403,3 +406,43 @@ command_result --------------------> mark succeeded
 - HTTP auth APIs remain unchanged
 - HTTP health APIs remain unchanged
 - historical HTTP agent ingestion endpoints are replaced by WS in the target design
+
+### 23.1 Presence beacon (`POST /api/v1/agents/presence`)
+
+The one exception to "telemetry enters only through the socket". The heartbeat
+loop and every task handler share one asyncio event loop, so a handler making a
+blocking call starves the heartbeat — and a blocked loop cannot answer WS
+ping/pong either, so the socket itself dies (uvicorn's default 20 s ping
+timeout) before the offline window elapses. A liveness probe carried over the
+same socket therefore cannot report the case it exists for.
+
+The reporter plugin (`onestep-control-plane` >= 0.2.0) runs a daemon thread that
+POSTs here only once the loop has been silent past its grace window; while the
+loop is healthy it sends nothing.
+
+- Auth: `Authorization: Bearer <ingest token>`, same token as the WS handshake
+- Body: `{"service": <ServiceDescriptor>, "sent_at": <ISO-8601>}` — deliberately
+  **not** an `IngestionEnvelope`: there is no `sequence`, and `sequence` in the
+  body is rejected (`422`)
+- Response: the standard accepted envelope, `202`
+  `{"status": "accepted", "received_at": ...}`
+- Side effect: `instances.last_seen_at` only, and monotonically (an out-of-order
+  or clock-skewed beacon never moves it backwards)
+- Not touched: `last_heartbeat_sequence`, `last_heartbeat_sent_at`, `status`,
+  `app_snapshot_json`. The frame carries no health, so it can neither reorder
+  the heartbeat stream nor overwrite the last task-control snapshot
+
+Consequences worth stating explicitly:
+
+- `connectivity` keeps its three values (`online` / `offline` / `never_reported`)
+  and the console needs no change. A stalled instance reads as online; "cannot
+  accept commands right now" is already carried by the session and command
+  channels.
+- A process whose loop is healthy but whose socket is broken keeps touching the
+  beacon's timestamp and stays silent, so it is still reported `offline`. Loss
+  of reporting ability is not masked by a liveness probe.
+- An older control plane without this route answers `404`; the reporter logs once
+  and disables the beacon, leaving the WS heartbeat as the only liveness signal.
+  The plugin can therefore be upgraded before the plane.
+- `409` means the `instance_id` is bound to a different service/environment.
+  That is a real misconfiguration and the beacon stops.

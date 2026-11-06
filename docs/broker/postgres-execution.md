@@ -508,6 +508,8 @@ YAML resource 的生命周期由 app resource 管理器处理。
 0 < heartbeat_interval_s <= lease_duration_s / 3
 ```
 
+上面的建议仍然成立：阻塞事件循环会同时拖慢任务吞吐和命令响应（`ping`、`drain`、`pause_task` 都要等循环回到可调度状态）。但它不再会让控制面把实例误判为离线——`onestep-control-plane` 0.2.0 起，reporter 会启动一条独立守护线程（presence beacon），只在**主循环心跳迟到**时才补发一次 HTTP 心跳，仅推进控制面的 `last_seen_at`。健康时该线程不发任何请求，因此不改变现有部署行为；卡顿期间实例保持"在线"，而"暂时无法执行命令"由既有的 session / 命令通道状态体现。
+
 多个 worker 副本可以使用同一 source 配置，但 `worker_id` 应使用 pod name、hostname 或其他实例唯一标识，便于诊断 lease 和 attempt。
 
 多进程或 pre-fork 部署时，推荐每个进程使用
@@ -726,3 +728,20 @@ ORDER BY attempt_no;
 5. 如果恢复到新版本，先执行 smoke test，再重新放开业务提交。
 
 旧版本 worker 不会处理新 execution 表中的任务，因此回滚期间不要让新 execution 继续进入数据库，除非已经准备了对应的新版本 worker。
+
+
+### 自动 emit 前的结果校验
+
+SQL tracked execution（PostgreSQL 和 MySQL）在 handler、成功 hook 和 emit
+transform 完成后、第一次自动 emit 之前，使用与完成确认相同的编码器和
+`max_result_bytes` 限制预检 handler 的返回值。返回值无法编码或超限时，
+失败阶段为 `result_validation`，本次不会调用任何自动 emit sink；重试仍由任务的
+retry policy 决定。缩小 transform 输出不会降低持久化 handler result 的大小。
+
+完成确认仍会重新校验，以覆盖直接调用 backend 的客户端以及预检后的值变更。
+自定义 managed delivery 可实现可选的异步 `validate_execution_result(result)`；
+没有该方法的已有 delivery 保持兼容。
+
+此校验不提供跨 sink 与 execution 状态表的原子事务，也不能撤回 handler/hook
+内主动调用 `ctx.emit()` 等已发生的副作用。成功写入后发生网络、取消或确认错误
+仍可能重放；下游仍需幂等。

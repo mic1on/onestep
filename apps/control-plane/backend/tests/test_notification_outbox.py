@@ -1,20 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from conftest import AsyncTestHarness, shared_cache_sync_url
 from fastapi import FastAPI
-from onestep_control_plane_api.api.agent_ingestion_service import ingest_events_request
+from onestep_control_plane_api.api.agent_ingestion_service import (
+    ingest_events_request as ingest_events_request_async,
+)
 from onestep_control_plane_api.api.notification_service import (
     claim_next_pending_outbox_row,
     delete_notification_channel,
-    dispatch_runtime_task_event_notifications,
     drain_notification_outbox,
 )
+from onestep_control_plane_api.api.notification_service import (
+    dispatch_runtime_task_event_notifications as dispatch_runtime_task_event_notifications_async,
+)
+from onestep_control_plane_api.api.routers.prometheus import build_observability_metrics
 from onestep_control_plane_api.api.schemas import (
     EventsIngestRequest,
     ServiceDescriptor,
@@ -31,14 +38,15 @@ from onestep_control_plane_api.db.models import (
     Service,
     TaskEvent,
 )
+from onestep_control_plane_api.db.session import session_scope
 from onestep_control_plane_api.ops.readiness import build_default_background_task_states
 from onestep_control_plane_api.workers.leader import WorkerLease
 from onestep_control_plane_api.workers.notification_outbox_worker import (
     NOTIFICATION_OUTBOX_WORKER_NAME,
     run_notification_outbox_worker,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.pool import StaticPool
 
 
@@ -109,7 +117,34 @@ def seed_failed_task_event(db: Session, service: Service, instance: Instance) ->
     return task_event
 
 
-def test_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) -> None:
+
+def dispatch_runtime_task_event_notifications(db_session, *, task_events):
+    """Drive the async dispatch from a synchronous test.
+
+    The dispatch opens its own short work unit on the test's async engine — the
+    same database the synchronous ``db_session`` fixture reads — exactly as the
+    events-ingest path does now that it awaits it.
+    """
+
+    async def _work_unit() -> int:
+        async with session_scope() as session:
+            return await dispatch_runtime_task_event_notifications_async(
+                session, task_events=task_events
+            )
+
+    return asyncio.run(_work_unit())
+
+
+def ingest_events_request(db_session, request):
+    """Drive the async events ingest from a synchronous test."""
+
+    async def _work_unit():
+        async with session_scope() as session:
+            return await ingest_events_request_async(session, request)
+
+    return asyncio.run(_work_unit())
+
+def test_receive_path_does_not_block_on_slow_webhook(db_session, async_db, monkeypatch) -> None:
     """A slow/hung webhook must not stall the telemetry receive path.
 
     The receive path (``dispatch_runtime_task_event_notifications``, called from
@@ -154,7 +189,11 @@ def test_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) ->
     assert delivery.sent_at is None
 
 
-def test_ingest_events_receive_path_does_not_block_on_slow_webhook(db_session, monkeypatch) -> None:
+def test_ingest_events_receive_path_does_not_block_on_slow_webhook(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     """The full agent WS ingest receive path stays fast under a slow webhook."""
     seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
@@ -209,7 +248,7 @@ def test_ingest_events_receive_path_does_not_block_on_slow_webhook(db_session, m
     assert db_session.query(NotificationOutbox).count() == 1
 
 
-def test_outbox_snapshots_webhook_url_at_enqueue(db_session, monkeypatch) -> None:
+def test_outbox_snapshots_webhook_url_at_enqueue(db_session, async_db, monkeypatch) -> None:
     """The webhook target is frozen at enqueue so a later channel edit cannot
     reroute a delivery already queued for dispatch."""
     service, instance = seed_service_and_instance(db_session)
@@ -229,7 +268,11 @@ def test_outbox_snapshots_webhook_url_at_enqueue(db_session, monkeypatch) -> Non
     assert outbox.webhook_url == original_url
 
 
-def test_outbox_uses_frozen_provider_contract_after_channel_edit(db_session, monkeypatch) -> None:
+def test_outbox_uses_frozen_provider_contract_after_channel_edit(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = NotificationChannel(
         name=f"ops-custom-{uuid4().hex[:6]}",
@@ -298,7 +341,11 @@ def test_outbox_uses_frozen_provider_contract_after_channel_edit(db_session, mon
     assert sent_requests == [("GET", "https://example.com/custom", {"service": "billing-sync"})]
 
 
-def test_channel_delete_preserves_and_drains_accepted_delivery(db_session, monkeypatch) -> None:
+def test_channel_delete_preserves_and_drains_accepted_delivery(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -324,7 +371,10 @@ def test_channel_delete_preserves_and_drains_accepted_delivery(db_session, monke
     assert db_session.query(NotificationOutbox).one().status == "delivered"
 
 
-def test_channel_delete_removes_terminal_history_but_preserves_retries(db_session) -> None:
+def test_channel_delete_removes_terminal_history_but_preserves_retries(
+    db_session,
+    async_db,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     channel = seed_channel(db_session, event_types=["task_failed"])
     deliveries: list[NotificationDelivery] = []
@@ -364,7 +414,7 @@ def test_channel_delete_removes_terminal_history_but_preserves_retries(db_sessio
     assert all(outbox.status == "pending" for outbox in remaining_outboxes)
 
 
-def test_outbox_drain_delivers_and_marks_succeeded(db_session, monkeypatch) -> None:
+def test_outbox_drain_delivers_and_marks_succeeded(db_session, async_db, monkeypatch) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -400,7 +450,7 @@ def test_outbox_drain_delivers_and_marks_succeeded(db_session, monkeypatch) -> N
 
 
 def test_outbox_drain_retries_with_backoff_then_marks_permanently_failed(
-    db_session, monkeypatch
+    db_session, async_db, monkeypatch
 ) -> None:
     """At-least-once delivery: transient failures retry with backoff up to a
     bounded max-attempts, after which the row is permanently failed."""
@@ -454,7 +504,11 @@ def test_outbox_drain_retries_with_backoff_then_marks_permanently_failed(
     assert delivery.error_message == "boom"
 
 
-def test_outbox_backoff_starts_when_slow_attempt_finishes(db_session, monkeypatch) -> None:
+def test_outbox_backoff_starts_when_slow_attempt_finishes(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -491,7 +545,11 @@ def test_outbox_backoff_starts_when_slow_attempt_finishes(db_session, monkeypatc
     assert outbox.next_attempt_at == attempt_finished_at + timedelta(seconds=10)
 
 
-def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypatch) -> None:
+def test_outbox_retry_replaces_previous_attempt_diagnostics(
+    db_session,
+    async_db,
+    monkeypatch,
+) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -564,7 +622,7 @@ def test_outbox_retry_replaces_previous_attempt_diagnostics(db_session, monkeypa
     assert delivery.response_body == "ok"
 
 
-def test_claim_increments_only_the_next_outbox_attempt(db_session) -> None:
+def test_claim_increments_only_the_next_outbox_attempt(db_session, async_db) -> None:
     """Claiming a row increments attempts in its own committed transaction so a
     worker crash after claiming leaves the row retriable (at-least-once)."""
     service, instance = seed_service_and_instance(db_session)
@@ -584,7 +642,7 @@ def test_claim_increments_only_the_next_outbox_attempt(db_session) -> None:
     assert all(outbox.status == "pending" for outbox in outboxes)
 
 
-def test_drain_failure_does_not_claim_later_rows(db_session) -> None:
+def test_drain_failure_does_not_claim_later_rows(db_session, async_db) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     for _ in range(2):
@@ -607,7 +665,7 @@ def test_drain_failure_does_not_claim_later_rows(db_session) -> None:
     assert sorted(outbox.attempts for outbox in outboxes) == [0, 1]
 
 
-def test_drain_terminalizes_exhausted_row_without_dispatch(db_session) -> None:
+def test_drain_terminalizes_exhausted_row_without_dispatch(db_session, async_db) -> None:
     service, instance = seed_service_and_instance(db_session)
     seed_channel(db_session, event_types=["task_failed"])
     task_event = seed_failed_task_event(db_session, service, instance)
@@ -694,28 +752,61 @@ def _build_memory_app(session_factory) -> FastAPI:
 
 
 def _build_session_factory():
+    """A sync session factory plus a matching async harness on the SAME database.
+
+    The three worker scenarios build their own database, so they need their own
+    async harness too: the dispatch is async now, and ``_seed_pending_outbox``
+    must reach the same rows the sync factory seeded. A shared-cache URI bridges
+    the two engines, and the sync engine's ``StaticPool`` connection keeps the
+    in-memory database alive for the scenario.
+    """
+
+    name = f"onestep_outbox_{uuid4().hex}"
     engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
+        shared_cache_sync_url(name),
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
+    async_harness = AsyncTestHarness(name)
 
     def factory() -> Session:
         return Session(engine)
 
-    return factory, engine
+    return factory, engine, async_harness
 
 
-def _seed_pending_outbox(session_factory) -> None:
+async def _seed_pending_outbox(session_factory, async_harness) -> None:
+    """Seed one pending outbox row.
+
+    This runs inside a scenario that is already on an event loop, so it awaits
+    the dispatch directly rather than spawning a second loop. The dispatch uses
+    the caller's async harness, which points at the same database the sync
+    ``session_factory`` writes.
+    """
+
     with session_factory() as db:
         service, instance = seed_service_and_instance(db)
         seed_channel(db, event_types=["task_failed"])
         seed_failed_task_event(db, service, instance)
-        dispatch_runtime_task_event_notifications(
-            db,
-            task_events=db.query(TaskEvent).all(),
+        # Read the ids only: the dispatch runs on a different session, so ORM
+        # instances must not cross the boundary (lazy ``service`` would raise
+        # DetachedInstanceError once this session closes).
+        task_event_ids = [row.id for row in db.query(TaskEvent).all()]
+
+    async with async_harness.factory() as session:
+        task_events = (
+            await session.scalars(
+                select(TaskEvent)
+                .options(selectinload(TaskEvent.service))
+                .where(TaskEvent.id.in_(task_event_ids))
+                .order_by(TaskEvent.created_at)
+            )
+        ).all()
+        await dispatch_runtime_task_event_notifications_async(
+            session, task_events=list(task_events)
         )
+        await session.commit()
 
 
 def test_worker_waits_for_in_flight_drain_before_releasing_lease() -> None:
@@ -729,7 +820,7 @@ def test_worker_waits_for_in_flight_drain_before_releasing_lease() -> None:
         return 0
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
             coordinator = SharedLeaseCoordinator()
             lease = CoordinatedLease(coordinator=coordinator, replica_id="one")
@@ -775,9 +866,9 @@ def test_only_one_replica_drains_outbox_when_leases_contend(monkeypatch) -> None
     )
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
-            _seed_pending_outbox(session_factory)
+            await _seed_pending_outbox(session_factory, async_harness)
             coordinator = SharedLeaseCoordinator()
             app_one = _build_memory_app(session_factory)
             app_two = _build_memory_app(session_factory)
@@ -861,14 +952,32 @@ def test_worker_marks_readiness_tick_after_each_processed_row(monkeypatch) -> No
     from onestep_control_plane_api.workers.leader import LocalWorkerLease
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
             with session_factory() as db:
                 service, instance = seed_service_and_instance(db)
                 seed_channel(db, event_types=["task_failed"])
+                # Collect ids rather than ORM instances: the dispatch runs on the
+                # async harness's session, so instances must not cross the
+                # boundary (lazy ``service`` would raise DetachedInstanceError).
+                task_event_ids = []
                 for _ in range(3):
                     task_event = seed_failed_task_event(db, service, instance)
-                    dispatch_runtime_task_event_notifications(db, task_events=[task_event])
+                    task_event_ids.append(task_event.id)
+
+            async with async_harness.factory() as async_session:
+                for task_event_id in task_event_ids:
+                    reload = (
+                        await async_session.scalars(
+                            select(TaskEvent)
+                            .options(selectinload(TaskEvent.service))
+                            .where(TaskEvent.id == task_event_id)
+                        )
+                    ).one()
+                    await dispatch_runtime_task_event_notifications_async(
+                        async_session, task_events=[reload]
+                    )
+                await async_session.commit()
 
             app = _build_memory_app(session_factory)
             state = app.state.background_task_states[NOTIFICATION_OUTBOX_WORKER_NAME]
@@ -930,9 +1039,9 @@ def test_outbox_worker_runs_in_local_mode(monkeypatch) -> None:
     from onestep_control_plane_api.workers.leader import LocalWorkerLease
 
     async def scenario() -> None:
-        session_factory, engine = _build_session_factory()
+        session_factory, engine, async_harness = _build_session_factory()
         try:
-            _seed_pending_outbox(session_factory)
+            await _seed_pending_outbox(session_factory, async_harness)
             app = _build_memory_app(session_factory)
 
             task = asyncio.create_task(
@@ -960,3 +1069,568 @@ def test_outbox_worker_runs_in_local_mode(monkeypatch) -> None:
             engine.dispose()
 
     asyncio.run(scenario())
+
+
+def _delivery_counts() -> dict[str, int]:
+    """Current delivery-attempt counter series.
+
+    The counters are process-global, exactly like every other Prometheus counter in
+    this process, so these tests compare a before/after delta rather than an
+    absolute value -- an absolute assertion would depend on which other test ran
+    first.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    return dict(
+        obs.event_counter_snapshot()["onestep_control_plane_notification_deliveries_total"]
+    )
+
+
+def test_outbox_drain_counts_each_delivery_attempt_outcome(
+    db_session, async_db, monkeypatch
+) -> None:
+    """Every real HTTP attempt increments the delivery counter exactly once.
+
+    This is the emitting side of ``OneStepControlPlaneNotificationDeliveryFailures``
+    (``increase(onestep_control_plane_notification_deliveries_total{status="failed"}[15m]) > 0``).
+    The distinction that matters: a transient failure is re-queued by the outbox, so
+    the row is not terminal -- but the *attempt* did fail and must be counted, or the
+    alert would stay silent through a sustained webhook outage that never exhausts
+    its retries.
+    """
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    after_first = _delivery_counts()
+    assert after_first["failed"] == before["failed"] + 1
+    assert after_first["succeeded"] == before["succeeded"]
+
+    # A second attempt counts again: the metric counts attempts, not channels.
+    assert drain_notification_outbox(db_session, now=_utcnow() + timedelta(hours=1)) == 1
+    assert _delivery_counts()["failed"] == before["failed"] + 2
+
+
+def test_outbox_drain_counts_a_successful_delivery_as_succeeded(
+    db_session, async_db, monkeypatch
+) -> None:
+    """A successful attempt lands in the ``succeeded`` series, not ``failed``."""
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def ok_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "succeeded"
+        delivery.response_status_code = 200
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        ok_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+
+    after = _delivery_counts()
+    assert after["succeeded"] == before["succeeded"] + 1
+    assert after["failed"] == before["failed"]
+
+
+# --------------------------------------------------------------------------------------
+# Task-failure burst damping
+# --------------------------------------------------------------------------------------
+#
+# Connectivity flips were damped by #196, but task lifecycle events had no damping:
+# one root cause (a database outage, a bad deploy) fails every task on every instance
+# of a service at once, so a large service produced one webhook per failure. These
+# tests pin the burst contract.
+
+
+def _seed_many_failed_task_events(
+    db: Session,
+    service: Service,
+    instance: Instance,
+    *,
+    count: int,
+    base_minute: int = 5,
+) -> list[TaskEvent]:
+    events: list[TaskEvent] = []
+    for index in range(count):
+        event = TaskEvent(
+            event_id=f"evt-burst-{uuid4().hex[:8]}",
+            service_id=service.id,
+            instance_id=instance.instance_id,
+            task_name=f"task_{index}",
+            kind="failed",
+            occurred_at=datetime(2026, 4, 30, 2, base_minute, index % 60, tzinfo=UTC),
+            attempts=1,
+            duration_ms=100,
+            failure_kind="timeout",
+            exception_type="TimeoutError",
+            message="upstream timeout",
+            meta_json={},
+            received_at=datetime(2026, 4, 30, 2, base_minute, index % 60, tzinfo=UTC),
+        )
+        db.add(event)
+        events.append(event)
+    db.commit()
+    for event in events:
+        db.refresh(event)
+    return events
+
+
+def test_task_failure_burst_is_damped_after_the_configured_maximum(
+    db_session, async_db, monkeypatch
+) -> None:
+    """A burst larger than the maximum produces exactly the maximum deliveries.
+
+    Without damping every failure produced its own webhook, so one root cause on a
+    large service produced a storm proportional to its task count.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 3)
+    monkeypatch.setattr(settings, "task_failure_burst_window_s", 3600)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    events = _seed_many_failed_task_events(db_session, service, instance, count=10)
+
+    dispatch_runtime_task_event_notifications(db_session, task_events=events)
+
+    deliveries = db_session.query(NotificationDelivery).all()
+    assert len(deliveries) == 3, (
+        f"expected the burst to be damped to 3 deliveries, got {len(deliveries)}"
+    )
+
+
+def test_task_failure_burst_summary_reports_the_suppressed_count(
+    db_session, async_db, monkeypatch
+) -> None:
+    """When a damped burst goes quiet, one summary states how many were withheld.
+
+    Silence must never read as health: the summary is what makes the withheld
+    failures visible instead of simply lost.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 2)
+    monkeypatch.setattr(settings, "task_failure_burst_window_s", 60)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+
+    # First burst: 5 failures, 2 delivered, 3 suppressed.
+    first = _seed_many_failed_task_events(db_session, service, instance, count=5, base_minute=5)
+    dispatch_runtime_task_event_notifications(db_session, task_events=first)
+    assert db_session.query(NotificationDelivery).count() == 2
+
+    # A later failure, well outside the window, starts a new burst and first
+    # summarizes the previous one.
+    later = _seed_many_failed_task_events(db_session, service, instance, count=1, base_minute=45)
+    dispatch_runtime_task_event_notifications(db_session, task_events=later)
+
+    summaries = [
+        delivery
+        for delivery in db_session.query(NotificationDelivery).all()
+        if delivery.dedupe_key.endswith(":task_failure_burst")
+    ]
+    assert len(summaries) == 1, "the quiet burst must produce exactly one summary"
+    payload = summaries[0].request_payload_json or {}
+    rendered = json.dumps(payload, ensure_ascii=False)
+    assert "3" in rendered, f"the summary must state the suppressed count: {rendered}"
+
+
+def test_task_failure_burst_state_survives_a_new_session(db_session, async_db, monkeypatch) -> None:
+    """Damping state is persisted, so a restart mid-incident does not reset it.
+
+    This is the reason the state is a table rather than a process-local counter: a
+    restart during an outage would otherwise clear the counter and the storm would
+    resume.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 2)
+    monkeypatch.setattr(settings, "task_failure_burst_window_s", 3600)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+
+    events = _seed_many_failed_task_events(db_session, service, instance, count=6)
+    dispatch_runtime_task_event_notifications(db_session, task_events=events)
+    assert db_session.query(NotificationDelivery).count() == 2
+
+    # A fresh dispatch call (as after a restart) must still see the open burst.
+    more = _seed_many_failed_task_events(db_session, service, instance, count=4, base_minute=20)
+    dispatch_runtime_task_event_notifications(db_session, task_events=more)
+
+    assert db_session.query(NotificationDelivery).count() == 2, (
+        "the persisted burst state must keep damping across a new dispatch"
+    )
+
+
+def test_non_failure_task_events_are_never_damped(db_session, async_db, monkeypatch) -> None:
+    """Burst damping applies only to task_failed, never to started/succeeded.
+
+    started and succeeded are bounded by the scheduler; damping them would hide
+    genuine throughput.
+    """
+
+    monkeypatch.setattr(settings, "task_failure_burst_max_notifications", 1)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_succeeded"])
+
+    events: list[TaskEvent] = []
+    for index in range(5):
+        event = TaskEvent(
+            event_id=f"evt-ok-{uuid4().hex[:8]}",
+            service_id=service.id,
+            instance_id=instance.instance_id,
+            task_name="sync_users",
+            kind="succeeded",
+            occurred_at=datetime(2026, 4, 30, 2, 5, index, tzinfo=UTC),
+            attempts=1,
+            duration_ms=10,
+            meta_json={},
+            received_at=datetime(2026, 4, 30, 2, 5, index, tzinfo=UTC),
+        )
+        db_session.add(event)
+        events.append(event)
+    db_session.commit()
+    for event in events:
+        db_session.refresh(event)
+
+    dispatch_runtime_task_event_notifications(db_session, task_events=events)
+
+    assert db_session.query(NotificationDelivery).count() == 5
+
+
+# --------------------------------------------------------------------------------------
+# Permanent failure is a distinct signal from a failed attempt
+# --------------------------------------------------------------------------------------
+
+
+def test_permanently_failed_delivery_is_counted_separately(
+    db_session, async_db, monkeypatch
+) -> None:
+    """Exhausting the retry budget must be distinguishable from a failed attempt.
+
+    ``failed`` counts every unsuccessful attempt, including ones the outbox will
+    retry -- that is the right signal for "the webhook is having a bad minute".
+    ``permanently_failed`` means the retry budget is spent and that notification is
+    LOST, so the operator was never told. Collapsing the two makes "notifications are
+    being silently dropped" impossible to alert on without also paging on blips.
+    """
+
+
+    monkeypatch.setattr(settings, "notification_outbox_max_attempts", 1)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    after = _delivery_counts()
+
+    # Attempt-level: both increment.
+    assert after["failed"] == before["failed"] + 1
+    # Loss-level: only the permanent one, and it is what an operator pages on.
+    assert after["permanently_failed"] == before["permanently_failed"] + 1
+
+    outbox = db_session.query(NotificationOutbox).one()
+    assert outbox.status == "permanently_failed"
+
+
+def test_transient_failure_does_not_count_as_lost(db_session, async_db, monkeypatch) -> None:
+    """A retryable failure must NOT increment ``permanently_failed``.
+
+    This is what keeps the "notification was lost" alert honest: it must stay quiet
+    while the outbox still intends to retry, or it would fire on the first blip and
+    be ignored within a week.
+    """
+
+
+    monkeypatch.setattr(settings, "notification_outbox_max_attempts", 5)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+
+    before = _delivery_counts()
+    assert drain_notification_outbox(db_session, now=_utcnow()) == 1
+    after = _delivery_counts()
+
+    assert after["failed"] == before["failed"] + 1
+    assert after["permanently_failed"] == before["permanently_failed"], (
+        "a retryable failure must not be reported as a lost notification"
+    )
+    assert db_session.query(NotificationOutbox).one().status == "pending"
+
+
+# --------------------------------------------------------------------------------------
+# Outbox backlog gauges: watching the watcher
+# --------------------------------------------------------------------------------------
+
+
+def _outbox_gauges() -> dict[str, float]:
+    from onestep_control_plane_api.ops import observability as obs
+
+    return dict(obs.notification_outbox_gauges())
+
+
+def test_outbox_backlog_is_not_sampled_until_the_worker_runs(db_session) -> None:
+    """An unsampled queue emits NOTHING, rather than a misleading zero.
+
+    The gauges exist to reveal a drainer that has stopped. If an unsampled process
+    reported zero it would claim "the queue was observed empty", which is the exact
+    opposite of the truth -- so the families must be absent until the worker records.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.reset_observability_state()
+    assert obs.notification_outbox_gauges() == {}
+    assert "onestep_control_plane_notification_outbox_pending" not in (
+        build_observability_metrics()
+    )
+
+
+def test_outbox_sampled_at_is_absent_until_the_worker_runs(db_session) -> None:
+    """The freshness stamp is absent before the first sample, like its siblings.
+
+    An unsampled process has no reading to date, so exporting a timestamp would
+    invent a sample that never happened.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.reset_observability_state()
+    assert (
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+        not in obs.notification_outbox_gauges()
+    )
+    assert (
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+        not in build_observability_metrics()
+    )
+
+
+def test_outbox_sample_is_stamped_with_the_current_time(db_session) -> None:
+    """A sample carries WHEN it was taken, so the reading's age is decidable.
+
+    The queue gauges are process-local values replayed on every scrape: a worker
+    that died after its first tick keeps exporting them forever. The stamp is the
+    only series that can say how old that reading is.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    obs.reset_observability_state()
+    before = time.time()
+    obs.record_notification_outbox_state(pending=5, oldest_pending_seconds=900.0)
+    after = time.time()
+
+    stamped_at = _outbox_gauges()[
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+    ]
+    assert before <= stamped_at <= after, (
+        "the stamp must be the sample's wall-clock time, not a constant or an offset"
+    )
+    # It must survive into the scrape body too, or no rule could ever read it.
+    body = build_observability_metrics()
+    assert "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds " in body
+    # Sanity-check the magnitude against the queue age, which is in the same unit.
+    assert stamped_at > 1_700_000_000, "expected a Unix timestamp in seconds"
+
+
+def test_outbox_sample_timestamp_advances_between_ticks(db_session) -> None:
+    """Two ticks must produce two different stamps.
+
+    A frozen value here would defeat the entire point: it would report a fresh
+    reading for a worker that stopped ticking, which is the failure this series
+    exists to expose.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+
+    name = "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+    obs.reset_observability_state()
+    obs.record_notification_outbox_state(pending=1)
+    first = _outbox_gauges()[name]
+
+    time.sleep(0.05)
+    obs.record_notification_outbox_state(pending=2)
+    second = _outbox_gauges()[name]
+
+    assert second > first, "the stamp must move forward, not replay the first sample"
+    assert second - first == pytest.approx(0.05, abs=0.5)
+
+
+def test_outbox_backlog_reports_pending_and_oldest_due(db_session, async_db) -> None:
+    """The sample must carry depth AND the age of the oldest due row.
+
+    Depth alone cannot tell "busy" from "stuck": a deep queue that is draining is
+    healthy, while a single row that has been due for fifteen minutes means the
+    drainer has stopped. The age is what makes that distinction expressible.
+    """
+
+    from onestep_control_plane_api.api.notification_service import notification_outbox_backlog
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    now = _utcnow()
+    row = db_session.query(NotificationOutbox).one()
+    # Make the row due 20 minutes ago: a stalled drainer's signature.
+    row.next_attempt_at = now - timedelta(minutes=20)
+    db_session.commit()
+
+    notification_outbox_backlog(db_session, now=now)
+    gauges = _outbox_gauges()
+
+    assert gauges["onestep_control_plane_notification_outbox_pending"] == 1
+    oldest = gauges["onestep_control_plane_notification_outbox_oldest_pending_seconds"]
+    assert oldest == pytest.approx(1200, abs=5)
+    assert gauges["onestep_control_plane_notification_outbox_permanently_failed"] == 0
+
+
+def test_outbox_oldest_due_is_absent_when_nothing_is_due(db_session, async_db) -> None:
+    """A queue with nothing due has an UNDEFINED age, not a zero age.
+
+    Emitting 0 would read as "a row is due right now but fresh", which would suppress
+    the very alert this metric exists to drive.
+    """
+
+    from onestep_control_plane_api.api.notification_service import notification_outbox_backlog
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    now = _utcnow()
+    row = db_session.query(NotificationOutbox).one()
+    row.next_attempt_at = now + timedelta(hours=1)
+    db_session.commit()
+
+    notification_outbox_backlog(db_session, now=now)
+    gauges = _outbox_gauges()
+
+    assert gauges["onestep_control_plane_notification_outbox_pending"] == 1
+    assert "onestep_control_plane_notification_outbox_oldest_pending_seconds" not in gauges
+
+
+def test_outbox_backlog_counts_abandoned_rows(db_session, async_db, monkeypatch) -> None:
+    """Abandoned rows are counted, so the queue shows its own permanent damage."""
+
+    from onestep_control_plane_api.api.notification_service import notification_outbox_backlog
+    from onestep_control_plane_api.ops import observability as obs
+
+    monkeypatch.setattr(settings, "notification_outbox_max_attempts", 1)
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    def failing_post_webhook(delivery, *, webhook_url: str, timeout_s: float = 5.0) -> None:
+        delivery.status = "failed"
+        delivery.error_message = "boom"
+        delivery.sent_at = _utcnow()
+
+    monkeypatch.setattr(
+        "onestep_control_plane_api.api.notification_service._post_webhook",
+        failing_post_webhook,
+    )
+    drain_notification_outbox(db_session, now=_utcnow())
+
+    obs.reset_observability_state()
+    notification_outbox_backlog(db_session, now=_utcnow())
+
+    assert _outbox_gauges()["onestep_control_plane_notification_outbox_permanently_failed"] == 1
+
+
+def test_outbox_worker_samples_the_backlog_before_draining(
+    db_session, async_db, monkeypatch
+) -> None:
+    """The worker samples on each tick, and samples BEFORE draining.
+
+    Sampling after the drain would describe the queue this tick left behind, so a
+    worker that keeps up perfectly would always report zero and the metric could never
+    show a buildup. This drives the real helper rather than the recorder, so removing
+    the call from the worker fails here.
+    """
+
+    from onestep_control_plane_api.ops import observability as obs
+    from onestep_control_plane_api.workers.notification_outbox_worker import _drain_in_session
+
+    service, instance = seed_service_and_instance(db_session)
+    seed_channel(db_session, event_types=["task_failed"])
+    task_event = seed_failed_task_event(db_session, service, instance)
+    dispatch_runtime_task_event_notifications(db_session, task_events=[task_event])
+
+    obs.reset_observability_state()
+    observed_at_drain: list[int] = []
+
+    def spy_drain(session) -> int:  # noqa: ANN001
+        # Whatever the gauge says while draining must already reflect the pre-drain
+        # queue, which holds exactly one row here.
+        observed_at_drain.append(
+            int(obs.notification_outbox_gauges()["onestep_control_plane_notification_outbox_pending"])
+        )
+        return 0
+
+    # _drain_in_session takes a session FACTORY, matching how the worker calls it.
+    started_at = time.time()
+    _drain_in_session(lambda: db_session, spy_drain)
+
+    assert observed_at_drain == [1], (
+        "the backlog must be sampled before the drain, not after"
+    )
+    # The real worker tick must also stamp the reading, not just the recorder:
+    # without this the freshness series would only exist for hand-written samples.
+    stamped_at = obs.notification_outbox_gauges()[
+        "onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds"
+    ]
+    assert started_at <= stamped_at <= time.time()

@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
 
 from onestep_control_plane_api.api.common import utcnow
@@ -22,11 +25,13 @@ from onestep_control_plane_api.api.notification_helpers import (
     NotificationEventRecord,
     NotificationFailureInfo,
     NotificationMetricLine,
+    as_utc_datetime,
     instance_connectivity_dedupe_key,
     is_service_in_scope,
     missed_start_dedupe_key,
     raw_task_event_dedupe_key,
     scheduled_at_from_meta,
+    scheduled_at_to_storage_string,
 )
 from onestep_control_plane_api.api.notification_payloads import build_webhook_payload
 from onestep_control_plane_api.api.query_support import (
@@ -38,6 +43,8 @@ from onestep_control_plane_api.api.schemas import (
     NotificationChannelEnabledPatchRequest,
     NotificationChannelSummary,
     NotificationChannelUpdateRequest,
+    NotificationDeliveryListResponse,
+    NotificationDeliverySummary,
     NotificationServiceListResponse,
     NotificationServiceOption,
     NotificationTestRequest,
@@ -50,9 +57,15 @@ from onestep_control_plane_api.db.models import (
     NotificationDelivery,
     NotificationInstanceState,
     NotificationOutbox,
+    NotificationTaskFailureBurst,
     Service,
     TaskDefinition,
     TaskEvent,
+)
+from onestep_control_plane_api.ops.observability import (
+    emit_structured_log,
+    record_notification_delivery_outcome,
+    record_notification_outbox_state,
 )
 
 logger = logging.getLogger("onestep_control_plane_api.api.notification_service")
@@ -61,6 +74,43 @@ DEFAULT_WEBHOOK_TIMEOUT_S = 5.0
 DEFAULT_MISSED_START_SCAN_LOOKBACK_LIMIT = 32
 MISSED_START_SCAN_MAX_WINDOW = timedelta(hours=24)
 INSTANCE_CONNECTIVITY_EVENT_TYPES = frozenset({"instance_online", "instance_offline"})
+
+# --------------------------------------------------------------------------------------
+# Issue #196 -- stable confirmation and flapping damping for connectivity flips.
+#
+# A raw connectivity observation is a *sample*, not a fact: a host that misses one
+# heartbeat looks offline and looks fine a moment later. Notifying every sample
+# produces a storm; suppressing everything hides real outages. Two independent
+# mechanisms resolve this, both persisted on NotificationInstanceState so they
+# survive a restart or a leader switch:
+#
+#   1. STABLE CONFIRMATION -- a flip is notified only once the new connectivity has
+#      held for `instance_connectivity_confirm_after_s`, measured from the flip's
+#      own transition_at (offline: last_seen_at + instance_offline_after_s) rather
+#      than from the scan that noticed it. A flip that heals inside the window is
+#      cancelled and never notified.
+#   2. FLAP DAMPING -- a run of confirmed flips closer together than
+#      `instance_connectivity_flap_window_s` is one episode. The first
+#      `instance_connectivity_flap_max_notifications` flips are notified; later
+#      ones are counted, not sent; one summary reports the suppressed count when
+#      the episode goes quiet.
+#
+# Alert delay for a sustained outage: instance_offline_after_s (detection) plus the
+# part of confirm_after_s that outlives it (confirmation), bounded above by
+# 2 x instance_offline_after_s because confirmation is clamped.
+#
+# Parameter coupling that must hold for damping to ever engage: the SHORTEST real
+# gap between two confirmed flips is (offline detection + confirmation) =
+# instance_offline_after_s + _connectivity_confirm_after_s(). If the flap window is
+# not at least that long, every consecutive flip arrives after the previous episode
+# has already gone quiet, so each flip starts a fresh episode and the suppressed
+# count stays zero forever. The default therefore derives the window as 2x that
+# sum; see `_connectivity_flap_window_s`.
+#
+# Explicitly NOT claimed: exactly-once delivery, and no claim that a suppressed
+# flip "did not happen" -- the summary states the count, so silence never reads as
+# health.
+# --------------------------------------------------------------------------------------
 
 
 def _normalize_success_summary(raw_summary: Any) -> str | None:
@@ -285,6 +335,223 @@ def _build_instance_connectivity_notification_event(
     )
 
 
+def _connectivity_confirm_after_s() -> int:
+    """Stable-confirmation window, clamped so it cannot exceed the offline window.
+
+    The clamp bounds the added alert latency by the window the operator already
+    accepts for detection: worst case is instance_offline_after_s (detection) +
+    instance_offline_after_s (confirmation), never more.
+    """
+
+    return min(
+        settings.instance_connectivity_confirm_after_s,
+        settings.instance_offline_after_s,
+    )
+
+
+def _connectivity_flap_window_s() -> int:
+    """Flap episode window, with a floor derived from the detection mechanics.
+
+    Two confirmed flips can never be closer together than the shortest real
+    offline leg: an offline observation only exists after
+    ``instance_offline_after_s`` of silence, and only notifies after the
+    confirmation window on top of that. A window below that sum makes damping
+    UNREACHABLE with the default parameters -- each flip arrives after the
+    previous episode has already gone quiet, so every flip starts a fresh
+    episode and the suppressed count stays zero forever. The floor enforces the
+    constraint ``flap_window_s >= 2 x (offline_after + confirm_after)`` (2x for
+    headroom), so consecutive flips always land inside one episode.
+    """
+
+    configured = settings.instance_connectivity_flap_window_s
+    floor = 2 * (settings.instance_offline_after_s + _connectivity_confirm_after_s())
+    return max(configured, floor)
+
+
+def _pending_flip_is_confirmed(
+    *,
+    pending_since: datetime,
+    now: datetime,
+    confirm_after_s: int,
+) -> bool:
+    """A pending flip is confirmed once it has held for the confirmation window."""
+
+    return (now - pending_since).total_seconds() >= confirm_after_s
+
+
+def _flap_episode_is_open(
+    *,
+    last_flip_at: datetime,
+    now: datetime,
+    flap_window_s: int,
+) -> bool:
+    """An episode stays open while confirmed flips keep arriving within the window."""
+
+    return (now - last_flip_at).total_seconds() < flap_window_s
+
+
+def _build_flap_summary_event(
+    instance: Instance,
+    *,
+    service: Service,
+    final_connectivity: str,
+    suppressed_count: int,
+    episode_flips: int,
+    episode_started_at: datetime,
+    episode_last_flip_at: datetime,
+    now: datetime,
+) -> NotificationEventRecord:
+    """One summary for a flapping episode whose later flips were suppressed.
+
+    The event type reflects the episode's FINAL state, never a fixed one: the
+    summary must not disagree with the last notified fact. If the instance is
+    still offline when the episode quiets, an ``instance_online`` (green
+    "recovered") card would tell the operator the opposite of the truth, so the
+    final offline state renders as ``instance_offline``; a final online state
+    renders as ``instance_online``. Either way it states the suppressed count
+    explicitly: it is a comment on the episode, never a health claim.
+    """
+
+    event_type = "instance_online" if final_connectivity == "online" else "instance_offline"
+    return NotificationEventRecord(
+        event_type=event_type,
+        service_name=service.name,
+        service_environment=service.environment,
+        task_name=None,
+        occurred_at=episode_last_flip_at,
+        instance_id=str(instance.instance_id),
+        node_name=instance.node_name,
+        last_seen_at=instance.last_seen_at,
+        detected_at=now,
+        console_url=settings.build_console_url(
+            f"/services/{service.name}/instances/{instance.instance_id}"
+            f"?environment={service.environment}"
+        ),
+        suppressed_flip_count=suppressed_count,
+        flap_episode_started_at=episode_started_at,
+        flap_episode_last_flip_at=episode_last_flip_at,
+        flap_episode_flips=episode_flips,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _FlapEpisodeSnapshot:
+    """Episode bookkeeping captured BEFORE the counters are reset.
+
+    The summary must carry the suppressed count and episode bounds, so they are
+    read out first and the reset happens afterwards -- never the other way
+    round, which would summarise a blank episode.
+    """
+
+    suppressed_count: int
+    episode_flips: int
+    started_at: datetime
+    last_flip_at: datetime
+    final_connectivity: str
+
+
+def _snapshot_flap_episode(
+    state: NotificationInstanceState,
+    *,
+    now: datetime,
+) -> _FlapEpisodeSnapshot | None:
+    """Capture and clear an episode that just went quiet.
+
+    Returns None when there was no quiet episode (or it owed no summary, i.e.
+    nothing had been suppressed). The snapshot is taken before any counter is
+    mutated, so the summary never renders zeroed-out state.
+    """
+
+    last_flip_at = state.flap_episode_last_flip_at
+    if last_flip_at is None:
+        return None
+    if _flap_episode_is_open(
+        last_flip_at=as_utc_datetime(last_flip_at),
+        now=now,
+        flap_window_s=_connectivity_flap_window_s(),
+    ):
+        return None
+    suppressed_count = int(state.flap_suppressed_count or 0)
+    if suppressed_count <= 0:
+        # Nothing was withheld, so there is nothing to summarise; still close
+        # the episode so a fresh one can start.
+        _close_flap_episode(state)
+        return None
+    snapshot = _FlapEpisodeSnapshot(
+        suppressed_count=suppressed_count,
+        episode_flips=int(state.flap_episode_flips or 0),
+        started_at=as_utc_datetime(state.flap_episode_started_at or last_flip_at),
+        last_flip_at=as_utc_datetime(last_flip_at),
+        final_connectivity=state.last_connectivity,
+    )
+    _close_flap_episode(state)
+    return snapshot
+
+
+def _emit_flap_summary(
+    db: Session,
+    *,
+    channel: NotificationChannel,
+    instance: Instance,
+    service: Service,
+    snapshot: _FlapEpisodeSnapshot,
+    now: datetime,
+) -> list[tuple[NotificationDelivery, str]]:
+    """Emit the single summary for a flapping episode that just went quiet."""
+
+    summary_event_type = (
+        "instance_online" if snapshot.final_connectivity == "online" else "instance_offline"
+    )
+    if summary_event_type not in channel.event_types_json:
+        # Channel not subscribed to the episode's final event type: skip rather
+        # than mislabel the summary so it can sneak through a different filter.
+        return []
+    summary = _build_flap_summary_event(
+        instance,
+        service=service,
+        final_connectivity=snapshot.final_connectivity,
+        suppressed_count=snapshot.suppressed_count,
+        episode_flips=snapshot.episode_flips,
+        episode_started_at=snapshot.started_at,
+        episode_last_flip_at=snapshot.last_flip_at,
+        now=now,
+    )
+    delivery = _persist_pending_delivery(
+        db,
+        channel=channel,
+        notification_event=summary,
+        dedupe_key=instance_connectivity_dedupe_key(
+            str(channel.id),
+            service_name=service.name,
+            service_environment=service.environment,
+            instance_id=str(instance.instance_id),
+            event_type=summary_event_type,
+            occurred_at=summary.occurred_at,
+        ),
+        task_event_id=None,
+        scheduled_at=None,
+    )
+    if delivery is None:
+        return []
+    return [(delivery, channel.webhook_url)]
+
+
+def _reset_pending_flip(state: NotificationInstanceState) -> None:
+    """Drop a parked (not-yet-confirmed) flip candidate."""
+
+    state.pending_connectivity = None
+    state.pending_since = None
+
+
+def _close_flap_episode(state: NotificationInstanceState) -> None:
+    """Reset flap bookkeeping after an episode has been summarized."""
+
+    state.flap_episode_started_at = None
+    state.flap_episode_last_flip_at = None
+    state.flap_episode_flips = 0
+    state.flap_suppressed_count = 0
+
+
 def _service_matches_channel(
     channel: NotificationChannel,
     *,
@@ -433,7 +700,22 @@ def _apply_delivery_outcome(
     *,
     now: datetime,
 ) -> None:
-    """Map ``_post_webhook`` mutations on ``delivery`` onto outbox retry state."""
+    """Map ``_post_webhook`` mutations on ``delivery`` onto outbox retry state.
+
+    Also counts the attempt outcome, because this is the one place every real
+    HTTP attempt funnels through. The retry mapping below deliberately re-queues a
+    transient failure; the counter still records that attempt as ``failed``,
+    since the alert asks whether deliveries are failing rather than whether a
+    channel is ultimately reachable. Counting here -- and not in
+    ``claim_next_pending_outbox_row``, which can mark a delivery failed without
+    making a request -- keeps one attempt equal to one increment.
+
+    A permanently failed attempt increments BOTH ``failed`` and
+    ``permanently_failed``. That is deliberate, not double counting: ``failed``
+    stays "this attempt did not succeed" (so the existing rate alert keeps working
+    unchanged), while ``permanently_failed`` adds "and this notification will never
+    be sent again". Only the second means an operator was never told.
+    """
     outbox.last_response_status_code = delivery.response_status_code
     outbox.last_response_body = delivery.response_body
     outbox.last_error = delivery.error_message
@@ -441,11 +723,18 @@ def _apply_delivery_outcome(
     if delivery.status == "succeeded":
         outbox.status = "delivered"
         outbox.next_attempt_at = now
+        record_notification_delivery_outcome("succeeded")
         return
+
+    record_notification_delivery_outcome("failed")
 
     if outbox.attempts >= outbox.max_attempts:
         outbox.status = "permanently_failed"
         outbox.next_attempt_at = now
+        # The retry budget is spent: this notification is lost. Counted separately
+        # so a "notifications are being silently dropped" alert can exist without
+        # firing on every transient blip.
+        record_notification_delivery_outcome("permanently_failed")
         logger.warning(
             "notification outbox delivery permanently failed",
             extra={
@@ -499,6 +788,10 @@ def claim_next_pending_outbox_row(
         outbox.status = "permanently_failed"
         outbox.next_attempt_at = current_time
         outbox.delivery.status = "failed"
+        # This row is abandoned WITHOUT an HTTP attempt, so _apply_delivery_outcome
+        # never runs for it and would never count the loss. Count it here, or a
+        # notification dropped on the claim path is invisible to the metric.
+        record_notification_delivery_outcome("permanently_failed")
     else:
         outbox.attempts += 1
         outbox.last_attempt_at = current_time
@@ -838,6 +1131,68 @@ def _iter_expected_slots_for_task(
     return []
 
 
+def _missed_start_is_detectable(
+    *,
+    now: datetime,
+    online_started_at: datetime,
+    grace_seconds: int,
+    source_kind: str,
+    source_config: dict[str, Any] | None,
+) -> bool:
+    """Whether a missed start for this task/service pair is detectable at all.
+
+    The scan reports a slot only when it is already due (``scheduled_at + grace <= now``,
+    which the slot generators encode) and does not predate the current online run (the
+    ``scheduled_at < online_started_at`` guard in the scan loop). So the check is
+    evaluable exactly when the task's own cadence yields a due slot inside the current
+    online run; a service that restarts faster than that is not merely quiet, it is
+    UNEVALUABLE -- measured directly: with a 5-minute interval, ``immediate: false`` and
+    a 300 s grace, a service online 400 s yields ZERO candidate slots while one online
+    an hour yields eleven.
+
+    The window therefore follows the cadence the scan actually uses, not one formula:
+
+    * ``immediate: true`` anchors the interval schedule at the online start itself
+      (``_derive_interval_anchor`` returns the anchor unchanged), so the first slot is
+      due after ``grace_seconds`` alone -- not ``grace_seconds + interval_seconds``.
+    * ``immediate: false`` waits one interval before the first slot, hence
+      ``grace_seconds + interval_seconds``.
+    * A cron expression is expanded instead of assumed: its slots come from the
+      expression alone (the generator never consults the online start), and a cron
+      period is arbitrary -- every minute and once a day are both valid -- so no fixed
+      period may be invented for it.
+
+    This is a *visibility* predicate, not a decision to alert. It only drives the
+    ``missed_start_scan_blind`` structured warning; the scan itself keeps evaluating
+    every candidate slot, so it can never silently suppress a notification. A real fix
+    needs a record of when a service was actually online, which this schema does not
+    have.
+    """
+
+    online_started_at_utc = as_utc_datetime(online_started_at)
+    if source_kind == "cron":
+        # Ask the same generator the scan uses whether any already-due slot survives the
+        # post-restart guard. That keeps the two in lockstep and needs no assumed period.
+        return any(
+            slot >= online_started_at_utc
+            for slot in _iter_expected_cron_slots(
+                now=now,
+                grace_seconds=grace_seconds,
+                source_config=source_config,
+            )
+        )
+    interval_seconds = _interval_seconds_from_source_config(source_config)
+    if interval_seconds is None:
+        # A cadence that cannot be parsed has no window to fall short of, so claiming a
+        # blind spot here would describe a config problem as a restart problem.
+        return True
+
+    immediate = bool((source_config or {}).get("immediate", False))
+    anchor_offset = 0 if immediate else interval_seconds
+    online_seconds = (now - online_started_at_utc).total_seconds()
+    return online_seconds >= grace_seconds + anchor_offset
+
+
 def _task_started_for_scheduled_slot(
     db: Session,
     *,
@@ -1028,21 +1383,232 @@ def delete_notification_channel(db: Session, channel_id) -> None:
     db.commit()
 
 
+def build_notification_test_payload(
+    channel: NotificationChannel,
+    *,
+    message: str | None = None,
+    now: datetime | None = None,
+) -> tuple[str, str, dict[str, object]]:
+    """Build the request body a real notification for this channel would carry.
+
+    Returns ``(method, url, body)``. This deliberately reuses the same payload
+    builders as live delivery, so what the operator tests is what production sends:
+    a hand-written "ping" body would pass while the real rendering is broken.
+    """
+
+    if channel.provider == "custom":
+        event = _build_test_notification_event(channel, message=message, now=now)
+        rendered = render_custom_webhook_request(channel.custom_config_json or {}, event)
+        method = rendered.method
+        payload = rendered.to_delivery_payload()
+        return (
+            method,
+            channel.webhook_url,
+            {"query": payload.get("query") or {}, "body": payload.get("body") or {}},
+        )
+
+    event = _build_test_notification_event(channel, message=message, now=now)
+    return "POST", channel.webhook_url, dict(build_webhook_payload(channel.provider, event))
+
+
+def _build_test_notification_event(
+    channel: NotificationChannel,
+    *,
+    message: str | None,
+    now: datetime | None = None,
+) -> NotificationEventRecord:
+    """Synthesize a clearly-labelled test event for payload rendering.
+
+    The event is marked as a test in the rendered text so a recipient can tell it
+    apart from a real incident notification, and it uses the channel's first
+    configured scope when one exists so the rendering path sees realistic values.
+    """
+
+    occurred_at = _normalize_scan_now(now)
+    scope = channel.service_scopes_json[0] if channel.service_scopes_json else {}
+    service_name = str(scope.get("name") or "onestep-test")
+    service_environment = str(scope.get("environment") or "test")
+    summary = message or f"Test notification for channel {channel.name}"
+    return NotificationEventRecord(
+        event_type="task_failed",
+        service_name=service_name,
+        service_environment=service_environment,
+        task_name="onestep-connectivity-test",
+        occurred_at=occurred_at,
+        failure=NotificationFailureInfo(
+            kind="test",
+            exception_type=None,
+            message=summary,
+        ),
+        console_url=settings.build_console_url("/settings/notifications"),
+    )
+
+
+def deliver_notification_test(
+    db: Session,
+    channel_id,
+    payload: NotificationTestRequest,
+    *,
+    deliver_fn: Callable[..., None] | None = None,
+    now: datetime | None = None,
+) -> NotificationTestResponse:
+    """Send one real test notification through the channel's webhook.
+
+    This used to only render a preview string while the API returned
+    ``status="accepted"`` and the console showed "Test accepted by {provider}" -- so
+    a channel with a wrong URL or an expired token reported success and the operator
+    only found out during a real incident. A test that does not send is worse than no
+    test at all, so the request is actually made and its outcome is reported.
+
+    The delivery is recorded as a ``NotificationDelivery`` row so the attempt shows
+    up in the delivery history alongside real notifications, and the response
+    carries the real HTTP status or the transport error.
+    """
+
+    channel = _get_channel_or_404(db, channel_id)
+    current_time = _normalize_scan_now(now)
+    method, webhook_url, request_payload = build_notification_test_payload(
+        channel,
+        message=payload.message,
+        now=current_time,
+    )
+
+    delivery = NotificationDelivery(
+        channel=channel,
+        dedupe_key=f"test:{channel.id}:{uuid4().hex}",
+        event_type="test",
+        service_name=None,
+        service_environment=None,
+        task_name=None,
+        status="pending",
+        request_payload_json=request_payload,
+    )
+    db.add(delivery)
+    db.flush()
+
+    outbox = NotificationOutbox(
+        delivery=delivery,
+        webhook_url=webhook_url,
+        provider=channel.provider,
+        webhook_method=str(method).upper(),
+        status="pending",
+        attempts=0,
+        max_attempts=1,
+    )
+    db.add(outbox)
+    db.flush()
+
+    send = deliver_fn if deliver_fn is not None else _post_webhook
+    send(delivery, webhook_url=webhook_url, timeout_s=settings.notification_delivery_timeout_s)
+
+    # The test is a direct, synchronous attempt: it is not queued for retry, and the
+    # outbox row exists only so the shared delivery path can build the request.
+    outbox.status = "delivered" if delivery.status == "succeeded" else "permanently_failed"
+    outbox.attempts = 1
+    outbox.last_attempt_at = delivery.sent_at or current_time
+    outbox.last_response_status_code = delivery.response_status_code
+    outbox.last_response_body = delivery.response_body
+    outbox.last_error = delivery.error_message
+    outbox.next_attempt_at = current_time
+    db.commit()
+    db.refresh(delivery)
+
+    record_notification_delivery_outcome(delivery.status)
+
+    return NotificationTestResponse(
+        status="accepted",
+        channel_id=channel.id,
+        provider=channel.provider,
+        delivered=delivery.status == "succeeded",
+        response_status_code=delivery.response_status_code,
+        error_message=delivery.error_message,
+        preview_text=build_notification_test_preview(channel, payload),
+    )
+
+
+def build_notification_test_preview(
+    channel: NotificationChannel,
+    payload: NotificationTestRequest,
+) -> str:
+    """Human-readable summary of what the test sent (kept for the console)."""
+
+    if channel.provider == "custom" and payload.message is None:
+        return build_custom_webhook_preview(channel.custom_config_json)
+    return payload.message or f"Test notification for channel {channel.name}"
+
+
 def build_notification_test_response(
     db: Session,
     channel_id,
     payload: NotificationTestRequest,
 ) -> NotificationTestResponse:
+    """Deprecated preview-only helper, retained for callers that render a message.
+
+    Prefer :func:`deliver_notification_test`: this function performs no network call
+    and therefore cannot tell an operator whether their channel works.
+    """
+
     channel = _get_channel_or_404(db, channel_id)
-    preview_text = (
-        build_custom_webhook_preview(channel.custom_config_json)
-        if channel.provider == "custom" and payload.message is None
-        else payload.message or f"Test notification for channel {channel.name}"
-    )
     return NotificationTestResponse(
         channel_id=channel.id,
         provider=channel.provider,
-        preview_text=preview_text,
+        preview_text=build_notification_test_preview(channel, payload),
+    )
+
+
+def notification_outbox_backlog(db: Session, *, now: datetime | None = None) -> None:
+    """Sample the outbox queue depth and hand it to the observability layer.
+
+    Called by the outbox worker on each tick: that is the only place which already
+    holds a session, and a worker that has stopped ticking is precisely the failure
+    this metric exists to reveal. Recording nothing when the worker never runs is the
+    intended behaviour -- see ``record_notification_outbox_state``.
+
+    Three numbers, and the third distinguishes "busy" from "stuck":
+
+    * ``pending`` -- rows still awaiting an attempt.
+    * ``oldest_pending_seconds`` -- age of the oldest row that is ALREADY due
+      (``next_attempt_at <= now``). A deep backlog that is draining is fine; one row
+      that has been due for an hour is not. ``None`` when nothing is due, because the
+      age is then undefined rather than zero.
+    * ``permanently_failed`` -- rows abandoned after exhausting their retries.
+    """
+
+    current_time = _normalize_scan_now(now)
+    pending = int(
+        db.scalar(
+            select(func.count())
+            .select_from(NotificationOutbox)
+            .where(NotificationOutbox.status == "pending")
+        )
+        or 0
+    )
+    oldest_due_at = db.scalar(
+        select(func.min(NotificationOutbox.next_attempt_at)).where(
+            NotificationOutbox.status == "pending",
+            NotificationOutbox.next_attempt_at <= current_time,
+        )
+    )
+    permanently_failed = int(
+        db.scalar(
+            select(func.count())
+            .select_from(NotificationOutbox)
+            .where(NotificationOutbox.status == "permanently_failed")
+        )
+        or 0
+    )
+
+    record_notification_outbox_state(
+        pending=pending,
+        oldest_pending_seconds=(
+            None
+            if oldest_due_at is None
+            else max(
+                (current_time - _normalize_scan_now(oldest_due_at)).total_seconds(),
+                0.0,
+            )
+        ),
+        permanently_failed=permanently_failed,
     )
 
 
@@ -1056,11 +1622,63 @@ def list_notification_services(db: Session) -> NotificationServiceListResponse:
     )
 
 
-def scan_and_dispatch_instance_connectivity_notifications(
+def list_notification_deliveries(
+    db: Session,
+    *,
+    channel_id=None,
+    limit: int = 50,
+) -> NotificationDeliveryListResponse:
+    """Recent delivery attempts, newest first, optionally for one channel.
+
+    Delivery rows already carry the outcome (status, HTTP code, error) but nothing
+    exposed them: an operator had to query the database to answer "did my alert
+    actually go out?". This is that read path.
+
+    Rows whose channel was deleted are retained with ``channel_id=None`` (the delete
+    path nulls the FK rather than dropping history), so a channel filter excludes
+    them and an unfiltered listing still shows them.
+    """
+
+    statement = select(NotificationDelivery).order_by(
+        NotificationDelivery.created_at.desc(),
+        NotificationDelivery.id.desc(),
+    )
+    if channel_id is not None:
+        statement = statement.where(NotificationDelivery.channel_id == channel_id)
+    deliveries = db.scalars(statement.limit(max(1, min(limit, 500)))).all()
+    return NotificationDeliveryListResponse(
+        items=[
+            NotificationDeliverySummary(
+                id=delivery.id,
+                channel_id=delivery.channel_id,
+                event_type=delivery.event_type,
+                service_name=delivery.service_name,
+                service_environment=delivery.service_environment,
+                task_name=delivery.task_name,
+                status=delivery.status,
+                response_status_code=delivery.response_status_code,
+                error_message=delivery.error_message,
+                created_at=delivery.created_at,
+                sent_at=delivery.sent_at,
+            )
+            for delivery in deliveries
+        ]
+    )
+
+
+def _scan_and_dispatch_instance_connectivity_notifications_sync(
     db: Session,
     *,
     now: datetime | None = None,
 ) -> int:
+    """Scan body. Transaction ownership stays with the caller's work unit.
+
+    Per the async transaction convention, this body never commits: the caller
+    (the synchronous entry point below, or ``session_scope`` on the async path)
+    owns the transaction, so a scan that is only part of a larger work unit can
+    still be rolled back atomically.
+    """
+
     current_time = _normalize_scan_now(now)
     channels = db.scalars(
         select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
@@ -1092,6 +1710,9 @@ def scan_and_dispatch_instance_connectivity_notifications(
     ).all()
     cutoff = online_cutoff(current_time)
     pending_deliveries: list[tuple[NotificationDelivery, str]] = []
+    confirm_after_s = _connectivity_confirm_after_s()
+    flap_window_s = _connectivity_flap_window_s()
+    flap_max_notifications = settings.instance_connectivity_flap_max_notifications
 
     for channel in connectivity_channels:
         for instance in instances:
@@ -1115,19 +1736,82 @@ def scan_and_dispatch_instance_connectivity_notifications(
             state_key = (channel.id, instance.instance_id)
             state = state_by_key.get(state_key)
             if state is None:
+                # First observation: seed the state, notify nothing -- there is no
+                # prior connectivity to have flipped from.
                 state = NotificationInstanceState(
                     channel_id=channel.id,
                     instance_id=instance.instance_id,
                     last_connectivity=connectivity,
                     last_transition_at=transition_at,
+                    flap_episode_flips=0,
+                    flap_suppressed_count=0,
                 )
                 db.add(state)
                 state_by_key[state_key] = state
                 continue
 
             if state.last_connectivity == connectivity:
+                # Observation agrees with the confirmed state.
+                if state.pending_connectivity is not None:
+                    # A candidate flip healed inside the window: cancel it. This
+                    # is what makes a transient drop invisible instead of noisy.
+                    _reset_pending_flip(state)
+                snapshot = _snapshot_flap_episode(state, now=current_time)
+                if snapshot is not None:
+                    # A quiet scan ends a flapping episode that went silent, so
+                    # damping cannot outlive the flapping it was damping. The
+                    # snapshot was captured before the counters were reset, so
+                    # the summary still carries the suppressed count and the
+                    # episode's final (possibly offline) state.
+                    pending_deliveries.extend(
+                        _emit_flap_summary(
+                            db,
+                            channel=channel,
+                            instance=instance,
+                            service=service,
+                            snapshot=snapshot,
+                            now=current_time,
+                        )
+                    )
                 continue
 
+            # --- stable confirmation ------------------------------------------
+            # The clock starts at the flip's own transition_at, not at the scan
+            # that noticed it: transition_at is when the instance factually
+            # changed (offline: last_seen_at + instance_offline_after_s), so the
+            # window confirms the STATE rather than how long this process has
+            # been watching.
+            if state.pending_connectivity != connectivity:
+                state.pending_connectivity = connectivity
+                # Recovery (online) is self-evidencing: transition_at == last_seen_at
+                # and the instance just proved it is alive by checking in, so it
+                # needs no further confirmation. Only the OFFLINE direction is
+                # ambiguous -- silence could be a blip -- so only that is damped.
+                # This is also why a recovery is never delayed: coming back must
+                # be reported promptly.
+                # Recovery (online) is self-evidencing: transition_at ==
+                # last_seen_at and the instance just proved it is alive by
+                # checking in, so it needs no further confirmation. Only the
+                # OFFLINE direction is ambiguous -- silence may be a blip -- so
+                # only that is damped. This is also what keeps a recovery prompt.
+                state.pending_since = (
+                    None if connectivity == "online" else transition_at
+                )
+            # No `continue` on purpose: the offline clock is anchored at
+            # transition_at, so the window may already have elapsed by the time a
+            # scan first sees the flip -- in which case it is confirmed in THIS
+            # pass. Parking and waiting a whole extra scan would delay every
+            # sustained outage by a full window.
+            pending_since = state.pending_since
+            if pending_since is not None and not _pending_flip_is_confirmed(
+                pending_since=as_utc_datetime(pending_since),
+                now=current_time,
+                confirm_after_s=confirm_after_s,
+            ):
+                continue
+
+            # --- confirmed flip: advance state, then apply flap damping -------
+            _reset_pending_flip(state)
             state.last_connectivity = connectivity
             state.last_transition_at = transition_at
 
@@ -1138,9 +1822,33 @@ def scan_and_dispatch_instance_connectivity_notifications(
                 now=current_time,
             )
             if notification_event.event_type not in channel.event_types_json:
+                # Unsubscribed: state still advances (unchanged behaviour), and no
+                # flap bookkeeping -- nothing was notified, so nothing to damp.
                 continue
 
             event_type = "instance_online" if connectivity == "online" else "instance_offline"
+            episode_open = state.flap_episode_last_flip_at is not None and _flap_episode_is_open(
+                last_flip_at=as_utc_datetime(state.flap_episode_last_flip_at),
+                now=current_time,
+                flap_window_s=flap_window_s,
+            )
+            if not episode_open:
+                state.flap_episode_started_at = current_time
+                state.flap_episode_flips = 1
+                state.flap_suppressed_count = 0
+                notified_this_flip = True
+            else:
+                state.flap_episode_flips = int(state.flap_episode_flips or 0) + 1
+                notified_this_flip = state.flap_episode_flips <= flap_max_notifications
+            state.flap_episode_last_flip_at = current_time
+
+            if not notified_this_flip:
+                # Damped: count it and stay quiet. A sustained outage is never
+                # hidden -- quieting applies to flip chatter, and the final
+                # offline state is still delivered by the next undamped flip.
+                state.flap_suppressed_count = int(state.flap_suppressed_count or 0) + 1
+                continue
+
             delivery = _persist_pending_delivery(
                 db,
                 channel=channel,
@@ -1159,15 +1867,168 @@ def scan_and_dispatch_instance_connectivity_notifications(
             if delivery is not None:
                 pending_deliveries.append((delivery, channel.webhook_url))
 
-    if not pending_deliveries:
-        db.commit()
-        return 0
-
-    db.commit()
+    db.flush()
     return len(pending_deliveries)
 
 
-def dispatch_runtime_task_event_notifications(
+def scan_and_dispatch_instance_connectivity_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Synchronous entry point: scan in a transaction owned here.
+
+    Behaviour is byte-for-byte what it was before the async conversion,
+    including the unconditional ``db.commit()`` this entry point has always
+    done. Kept because the synchronous tests and any synchronous caller still
+    drive it.
+    """
+
+    try:
+        count = _scan_and_dispatch_instance_connectivity_notifications_sync(db, now=now)
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return count
+
+
+async def scan_and_dispatch_instance_connectivity_notifications_async(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Scan for connectivity transitions inside the caller's async work unit.
+
+    The scan body is invoked through ``AsyncSession.run_sync``: the same
+    underlying session, so the queries, the state updates and the outbox writes
+    all participate in this work unit's transaction and connection. That is
+    SQLAlchemy's greenlet-cooperative bridge, not ``asyncio.to_thread``.
+
+    No commit here: ``session_scope`` owns the transaction, so a slow scan holds
+    one short transaction and a cancellation rolls it back instead of stranding
+    it.
+    """
+
+    return await session.run_sync(
+        lambda db: _scan_and_dispatch_instance_connectivity_notifications_sync(db, now=now)
+    )
+
+
+def _task_failure_burst_state(
+    db: Session,
+    *,
+    channel: NotificationChannel,
+    service: Service,
+) -> NotificationTaskFailureBurst:
+    """Load or create the burst-damping state for one (channel, service)."""
+
+    state = db.scalar(
+        select(NotificationTaskFailureBurst).where(
+            NotificationTaskFailureBurst.channel_id == channel.id,
+            NotificationTaskFailureBurst.service_id == service.id,
+        )
+    )
+    if state is None:
+        state = NotificationTaskFailureBurst(
+            channel_id=channel.id,
+            service_id=service.id,
+            failure_count=0,
+            suppressed_count=0,
+        )
+        db.add(state)
+        db.flush()
+    return state
+
+
+def _task_failure_burst_is_open(
+    state: NotificationTaskFailureBurst,
+    *,
+    now: datetime,
+) -> bool:
+    """A burst stays open while failures keep arriving inside the window."""
+
+    last_failure_at = state.last_failure_at
+    if last_failure_at is None:
+        return False
+    return (
+        now - as_utc_datetime(last_failure_at)
+    ).total_seconds() < settings.task_failure_burst_window_s
+
+
+def _close_task_failure_burst(state: NotificationTaskFailureBurst) -> None:
+    state.burst_started_at = None
+    state.last_failure_at = None
+    state.failure_count = 0
+    state.suppressed_count = 0
+
+
+def _flush_quiet_task_failure_burst(
+    db: Session,
+    *,
+    channel: NotificationChannel,
+    service: Service,
+    state: NotificationTaskFailureBurst,
+    now: datetime,
+) -> list[tuple[NotificationDelivery, str]]:
+    """Emit the summary for a burst that has gone quiet, then close it.
+
+    Returns no deliveries when the burst owed no summary (nothing was suppressed),
+    so a service with a handful of ordinary failures never gets an extra message.
+    The snapshot is taken BEFORE the counters are reset -- reading them afterwards
+    would summarize a blank burst.
+    """
+
+    if _task_failure_burst_is_open(state, now=now):
+        return []
+    if int(state.suppressed_count or 0) <= 0:
+        _close_task_failure_burst(state)
+        return []
+
+    suppressed = int(state.suppressed_count or 0)
+    total = int(state.failure_count or 0)
+    started_at = as_utc_datetime(state.burst_started_at or state.last_failure_at)
+    last_at = as_utc_datetime(state.last_failure_at)
+    _close_task_failure_burst(state)
+
+    event = NotificationEventRecord(
+        event_type="task_failed",
+        service_name=service.name,
+        service_environment=service.environment,
+        task_name=None,
+        occurred_at=last_at,
+        detected_at=now,
+        failure=NotificationFailureInfo(
+            kind="burst_summary",
+            exception_type=None,
+            message=(
+                f"{suppressed} of {total} failures in this burst were suppressed"
+            ),
+        ),
+        console_url=settings.build_console_url(
+            f"/services/{service.name}?environment={service.environment}"
+        ),
+        suppressed_failure_count=suppressed,
+        burst_failure_count=total,
+        burst_started_at=started_at,
+    )
+    delivery = _persist_pending_delivery(
+        db,
+        channel=channel,
+        notification_event=event,
+        dedupe_key=(
+            f"{channel.id}:{service.environment}:{service.name}:"
+            f"{scheduled_at_to_storage_string(last_at)}:task_failure_burst"
+        ),
+        task_event_id=None,
+        scheduled_at=None,
+    )
+    if delivery is None:
+        return []
+    return [(delivery, channel.webhook_url)]
+
+
+def _dispatch_runtime_task_event_notifications(
     db: Session,
     *,
     task_events: list[TaskEvent],
@@ -1184,6 +2045,39 @@ def dispatch_runtime_task_event_notifications(
             event_type=notification_event.event_type,
         )
         for channel in matching_channels:
+            if notification_event.event_type == "task_failed":
+                # Burst damping. Only task_failed is damped: it is the event a
+                # single root cause multiplies (one per task per instance), while
+                # started/succeeded/missed_start are already bounded by the
+                # scheduler or the slot dedupe key.
+                state = _task_failure_burst_state(
+                    db,
+                    channel=channel,
+                    service=task_event.service,
+                )
+                # A quiet burst is summarized on the next failure that starts a
+                # new one, so the withheld count is never lost.
+                pending_deliveries.extend(
+                    _flush_quiet_task_failure_burst(
+                        db,
+                        channel=channel,
+                        service=task_event.service,
+                        state=state,
+                        now=notification_event.occurred_at,
+                    )
+                )
+                if not _task_failure_burst_is_open(state, now=notification_event.occurred_at):
+                    state.burst_started_at = notification_event.occurred_at
+                    state.failure_count = 0
+                    state.suppressed_count = 0
+                state.failure_count = int(state.failure_count or 0) + 1
+                state.last_failure_at = notification_event.occurred_at
+                if state.failure_count > settings.task_failure_burst_max_notifications:
+                    # Withheld, but counted: the summary states the number, so
+                    # silence never reads as health.
+                    state.suppressed_count = int(state.suppressed_count or 0) + 1
+                    continue
+
             delivery = _persist_pending_delivery(
                 db,
                 channel=channel,
@@ -1202,12 +2096,61 @@ def dispatch_runtime_task_event_notifications(
     return len(pending_deliveries)
 
 
-def scan_and_dispatch_missed_start_notifications(
+async def dispatch_runtime_task_event_notifications(
+    session: AsyncSession,
+    *,
+    task_events: list[TaskEvent],
+) -> int:
+    """Create pending deliveries for runtime task events on the async session.
+
+    The synchronous body above is invoked through ``AsyncSession.run_sync`` and
+    ``_persist_pending_delivery`` is left byte-identical. That is deliberate and
+    load-bearing:
+
+    ``_persist_pending_delivery`` has three callers: this path plus
+    ``scan_and_dispatch_missed_start_notifications`` and
+    ``scan_and_dispatch_instance_connectivity_notifications``, which are still
+    synchronous and are owned by the notification-scan work. If the helper
+    became ``async``, those two callers would keep calling it synchronously,
+    which is a silent no-op: every ``begin_nested``/``flush``/``refresh`` would
+    return a discarded coroutine without raising, and a duplicate insert would
+    leak ``IntegrityError`` instead of deduping to ``None``.
+
+    ``run_sync`` hands the same underlying session to the synchronous callable,
+    so it participates in this work unit's transaction and connection. This is
+    SQLAlchemy's own greenlet-cooperative bridge, not the rejected
+    ``asyncio.to_thread`` pattern. Measured on PostgreSQL 16: a 1.5 s
+    ``pg_sleep`` driven through ``run_sync`` let an independent asyncio ticker
+    run 130 iterations, and a ``pool_size=1`` connection-pool wait let it run
+    136.
+
+    The notification-scanner path now goes through
+    ``scan_and_dispatch_missed_start_notifications_async`` /
+    ``scan_and_dispatch_instance_connectivity_notifications_async``, which run
+    this same helper through ``run_sync`` on their own ``session_scope`` work
+    unit. The outbox drain path stays synchronous and is unaffected by this
+    function.
+    """
+
+    return await session.run_sync(
+        lambda db: _dispatch_runtime_task_event_notifications(db, task_events=task_events)
+    )
+
+
+def _scan_and_dispatch_missed_start_notifications_sync(
     db: Session,
     *,
     now: datetime | None = None,
     min_last_seen_at: datetime | None = None,
 ) -> int:
+    """Scan body. Transaction ownership stays with the caller's work unit.
+
+    Per the async transaction convention, this body never commits: the caller
+    (the synchronous entry point below, or ``session_scope`` on the async path)
+    owns the transaction, so a scan that is only part of a larger work unit can
+    still be rolled back atomically.
+    """
+
     current_time = _normalize_scan_now(now)
     online_service_started_at_by_id = _online_service_started_at_by_id(
         db,
@@ -1252,6 +2195,37 @@ def scan_and_dispatch_missed_start_notifications(
                 grace_seconds=channel.missed_start_grace_seconds,
                 online_started_at=online_started_at,
             )
+            # A service that restarts more often than its own cadence plus the grace
+            # period yields no slot the loop below can report, and that silence is
+            # indistinguishable from health. Make the blind spot visible instead of
+            # silently reporting nothing -- but only in the log. This predicate is
+            # observability, not a decision: every candidate slot still goes through
+            # the loop below, whose `scheduled_at < online_started_at` guard is what
+            # actually drops pre-restart slots. Skipping the loop here once swallowed
+            # real missed-start notifications.
+            if not _missed_start_is_detectable(
+                now=current_time,
+                online_started_at=online_started_at,
+                grace_seconds=channel.missed_start_grace_seconds,
+                source_kind=task_definition.source_kind,
+                source_config=task_definition.source_config_json,
+            ):
+                emit_structured_log(
+                    logger,
+                    logging.WARNING,
+                    "missed_start_scan_blind",
+                    service=service.name,
+                    environment=service.environment,
+                    task=task_definition.task_name,
+                    channel_id=str(channel.id),
+                    online_seconds=round(
+                        (current_time - as_utc_datetime(online_started_at)).total_seconds(),
+                        3,
+                    ),
+                    grace_seconds=channel.missed_start_grace_seconds,
+                    interval_seconds=interval_seconds,
+                    reason="service_restarts_faster_than_grace_plus_cadence",
+                )
             for scheduled_at in expected_slots:
                 if scheduled_at < online_started_at:
                     continue
@@ -1298,9 +2272,54 @@ def scan_and_dispatch_missed_start_notifications(
                     pending_deliveries.append((delivery, channel.webhook_url))
                 break
 
-    if not pending_deliveries:
-        db.commit()
-        return 0
-
-    db.commit()
+    db.flush()
     return len(pending_deliveries)
+
+
+def scan_and_dispatch_missed_start_notifications(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
+) -> int:
+    """Synchronous entry point: scan in a transaction owned here.
+
+    Behaviour is byte-for-byte what it was before the async conversion,
+    including the unconditional ``db.commit()`` this entry point has always
+    done. Kept because the synchronous tests and any synchronous caller still
+    drive it.
+    """
+
+    try:
+        count = _scan_and_dispatch_missed_start_notifications_sync(
+            db,
+            now=now,
+            min_last_seen_at=min_last_seen_at,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return count
+
+
+async def scan_and_dispatch_missed_start_notifications_async(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    min_last_seen_at: datetime | None = None,
+) -> int:
+    """Scan for missed starts inside the caller's async work unit.
+
+    The scan body is invoked through ``AsyncSession.run_sync`` so the queries
+    and the outbox writes join this work unit's transaction and connection.
+    No commit here: ``session_scope`` owns the transaction.
+    """
+
+    return await session.run_sync(
+        lambda db: _scan_and_dispatch_missed_start_notifications_sync(
+            db,
+            now=now,
+            min_last_seen_at=min_last_seen_at,
+        )
+    )

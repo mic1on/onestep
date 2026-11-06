@@ -213,12 +213,6 @@ marimo/_lsp/
 __marimo__/
 .gstack/
 
-desktop/out/
-desktop/release/
-desktop/backend-build/
-desktop/backend-dist/
-desktop/test-results/
-desktop/playwright-report/
 frontend/test-results/
 frontend/playwright-report/
 frontend/playwright.local.config.ts

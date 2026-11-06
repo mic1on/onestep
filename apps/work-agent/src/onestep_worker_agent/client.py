@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import platform
+import random
 import sys
+import time
+from collections.abc import Coroutine
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import UUID, uuid4
 
@@ -12,6 +16,7 @@ import httpx
 import websockets
 
 from onestep_worker_agent import __version__
+from onestep_worker_agent.commands import CommandJournal, JournalSocket
 from onestep_worker_agent.config import AgentConfig
 from onestep_worker_agent.identity import AgentIdentity
 from onestep_worker_agent.packages import extract_package
@@ -21,6 +26,18 @@ from onestep_worker_agent.supervisor import (
     SubprocessSupervisor,
     resolve_onestep_executable,
 )
+
+# Reconnect policy for the control session.
+#
+# A failed session retries on a capped exponential budget, and the actual delay
+# is drawn uniformly from that budget so a fleet of agents that lost the plane
+# at the same moment does not retry in lockstep. A session that stayed up for
+# `_STABLE_CONNECTION_SECONDS` counts as healthy and resets the budget, so a
+# long-lived agent reconnects promptly after a one-off blip instead of waiting
+# out a delay inflated by an outage that is already over.
+_BASE_BACKOFF_SECONDS = 1.0
+_MAX_BACKOFF_SECONDS = 30.0
+_STABLE_CONNECTION_SECONDS = 30.0
 
 
 def _message_id() -> str:
@@ -50,7 +67,12 @@ async def register_agent(config: AgentConfig) -> AgentIdentity:
                 "execution_mode": "subprocess",
                 "max_concurrent_deployments": config.max_concurrent_deployments,
                 "labels": {},
-                "capabilities": ["deployment.start", "deployment.stop", "deployment.restart"],
+                "capabilities": [
+                    "deployment.start",
+                    "deployment.stop",
+                    "deployment.restart",
+                    "agent.command_recovery",
+                ],
                 "platform": {
                     "system": platform.system(),
                     "machine": platform.machine(),
@@ -80,7 +102,12 @@ def build_hello_message(
         "payload": {
             "protocol_version": "1",
             "worker_agent_id": str(worker_agent_id),
-            "capabilities": ["deployment.start", "deployment.stop", "deployment.restart"],
+            "capabilities": [
+                "deployment.start",
+                "deployment.stop",
+                "deployment.restart",
+                "agent.command_recovery",
+            ],
             "max_concurrent_deployments": max_concurrent_deployments,
             "used_slots": used_slots,
             "running_deployments": running_deployments,
@@ -119,16 +146,23 @@ async def run_control_loop(
     config: AgentConfig,
     identity: AgentIdentity,
     supervisor: SubprocessSupervisor,
+    rng: random.Random | None = None,
 ) -> None:
     ws_url = _worker_agent_ws_url(config.plane_url)
     headers = {"Authorization": f"Bearer {identity.connection_token}"}
+    # Full jitter over the current attempt budget. Agents that lost their
+    # session at the same moment (e.g. one plane restart) spread their retries
+    # instead of reconnecting in lockstep; the escalating budget keeps the
+    # mean delay growing so a down plane is not hammered in a tight loop.
+    # `rng` is injectable so tests can pin the jitter instead of sampling it.
+    jitter_source = rng if rng is not None else random.Random()
     async with httpx.AsyncClient(base_url=config.plane_url, timeout=60.0) as http_client:
         # Control-plane reliability depends on the agent reconnecting so the
         # plane can re-dispatch pending commands on each new `hello`. Keep
         # reconnecting with capped exponential backoff until shut down.
-        backoff = 1.0
-        max_backoff = 30.0
+        attempt_backoff = _BASE_BACKOFF_SECONDS
         while True:
+            session_started_at = _monotonic()
             try:
                 await _run_one_session(
                     ws_url=ws_url,
@@ -138,21 +172,112 @@ async def run_control_loop(
                     identity=identity,
                     supervisor=supervisor,
                 )
-                backoff = 1.0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - any session failure should retry
+                # A session that stayed up long enough was healthy, so an
+                # earlier outage must not keep inflating the next retry.
+                if _monotonic() - session_started_at >= _STABLE_CONNECTION_SECONDS:
+                    attempt_backoff = _BASE_BACKOFF_SECONDS
+                delay = _jittered_backoff_delay(attempt_backoff, jitter_source)
                 print(
                     "onestep-worker-agent: control session ended: "
-                    f"{exc}; reconnecting in {backoff:.0f}s"
+                    f"{exc}; reconnecting in {delay:.1f}s"
                 )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
+                await asyncio.sleep(delay)
+                attempt_backoff = min(attempt_backoff * 2, _MAX_BACKOFF_SECONDS)
             else:
                 # Clean session end (e.g. server-initiated close without error):
-                # reconnect immediately rather than silently exiting.
-                print("onestep-worker-agent: control session closed; reconnecting")
-                await asyncio.sleep(backoff)
+                # the plane ended the session on purpose, so reconnect promptly
+                # from the base budget rather than escalating the retry.
+                attempt_backoff = _BASE_BACKOFF_SECONDS
+                delay = _jittered_backoff_delay(attempt_backoff, jitter_source)
+                print(f"onestep-worker-agent: control session closed; reconnecting in {delay:.1f}s")
+                await asyncio.sleep(delay)
+
+
+def _monotonic() -> float:
+    """Monotonic seconds, behind a seam so tests can pin session lifetimes."""
+    return time.monotonic()
+
+
+def _jittered_backoff_delay(budget: float, rng: random.Random) -> float:
+    """Return a full-jitter reconnect delay within the current attempt budget.
+
+    The whole budget is randomized (`[0, budget]`) rather than nudged by a
+    small percentage: that is what spreads a fleet of agents that all lost
+    their session at the same instant. `budget` is the capped exponential
+    value, so the upper bound is still respected.
+    """
+    return rng.uniform(0.0, budget)
+
+
+async def _supervise_session(
+    receive_loop: Coroutine[Any, Any, None],
+    heartbeat_loop: Coroutine[Any, Any, None],
+) -> None:
+    """Run a session's receive loop and heartbeat sender as one supervised unit.
+
+    The session ends when either coroutine finishes:
+
+    * the receive loop ends normally (the plane sent a close frame) -> return,
+      so the caller takes its clean-close reconnect path;
+    * the heartbeat sender raises (e.g. the socket died between heartbeats) ->
+      re-raise, so the caller takes the same reconnect path as a dropped
+      receive loop. This is the supervision a bare ``create_task`` lacked: a
+      heartbeat failure used to leave the receive loop waiting forever.
+
+    Whichever coroutine finishes first, its companion is cancelled and awaited
+    before this coroutine returns or raises, so a session never leaves an
+    orphan task behind and never leaves a task exception unretrieved.
+    """
+    tasks = [asyncio.create_task(receive_loop), asyncio.create_task(heartbeat_loop)]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Checked in a fixed order (receive, then heartbeat) so that when both
+        # fail together the reported cause is stable rather than set-ordered.
+        for task in tasks:
+            if task.cancelled() or not task.done():
+                continue
+            failure = task.exception()
+            if failure is not None:
+                raise failure
+    finally:
+        # Also runs when this coroutine is cancelled: cancel whatever is still
+        # running and await it, so every task is finished and its exception
+        # retrieved before the session is left.
+        await _settle_session_tasks(tasks)
+
+
+async def _settle_session_tasks(tasks: list[asyncio.Task[None]]) -> None:
+    """Cancel and await every session task, then re-raise a pending cancellation.
+
+    A cancellation can land while the session is being settled (the agent is
+    being shut down). The tasks are cancelled at that point, so keep driving
+    them to completion instead of returning early and leaking an orphan, then
+    re-raise so the cancellation still reaches the caller.
+    """
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    cancellation: asyncio.CancelledError | None = None
+    for task in tasks:
+        while not task.done():
+            try:
+                # asyncio.wait never cancels the tasks it waits on, so it
+                # observes a cancellation aimed at the agent without
+                # abandoning the companion tasks.
+                await asyncio.wait({task})
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+                task.cancel()
+        # Reading each result marks a failure raised during settling as
+        # retrieved, so it cannot be reported as "exception was never
+        # retrieved" after the session is gone.
+        if not task.cancelled():
+            task.exception()
+    if cancellation is not None:
+        raise cancellation
 
 
 async def _run_one_session(
@@ -180,9 +305,13 @@ async def _run_one_session(
         # so we still stay alive against an older or stricter server.
         heartbeat_interval = _parse_hello_ack(await websocket.recv(), default=30)
 
+        await _flush_exit_events(websocket, supervisor)
+
         async def heartbeat_loop() -> None:
             while True:
                 await asyncio.sleep(heartbeat_interval)
+                supervisor.running_deployments()
+                await _flush_exit_events(websocket, supervisor)
                 await websocket.send(
                     json.dumps(
                         build_heartbeat_message(
@@ -193,8 +322,7 @@ async def _run_one_session(
                     )
                 )
 
-        heartbeat_task = asyncio.create_task(heartbeat_loop())
-        try:
+        async def receive_loop() -> None:
             async for raw_message in websocket:
                 message = json.loads(raw_message)
                 message_type = message.get("type")
@@ -213,8 +341,10 @@ async def _run_one_session(
                     supervisor=supervisor,
                     message=message,
                 )
-        finally:
-            heartbeat_task.cancel()
+
+        # Both loops belong to the same session: whichever ends or fails first
+        # ends the session, and the other is cancelled and awaited.
+        await _supervise_session(receive_loop(), heartbeat_loop())
 
 
 def _parse_hello_ack(raw_message: str | bytes, *, default: int) -> int:
@@ -264,6 +394,107 @@ async def _ack_unsupported_command(websocket, message: dict[str, object]) -> Non
 
 
 async def handle_control_message(
+    *,
+    websocket,
+    http_client,
+    config,
+    identity,
+    supervisor,
+    message,
+) -> None:
+    if message.get("type") == "deployment_event_ack":
+        supervisor.acknowledge_exit(str(message.get("payload", {}).get("event_id", "")))
+        return
+    payload = message.get("payload")
+    if message.get("type") != "command" or not isinstance(payload, dict):
+        return
+    command_id = str(payload.get("command_id") or "")
+    args = payload.get("args")
+    if not command_id or not isinstance(args, dict):
+        return
+    deployment_id = str(args.get("deployment_id") or "")
+    if not hasattr(supervisor, "command_journal"):
+        supervisor.command_journal = CommandJournal(config.work_dir / "commands")
+    journal = supervisor.command_journal
+    async with journal.lock(deployment_id):
+        record = journal.load(command_id)
+        if record is not None:
+            socket = JournalSocket(websocket, journal, record)
+            if "command_result" not in record["frames"] and not (
+                record["frames"].get("command_ack", {}).get("payload", {}).get("status")
+                == "rejected"
+            ):
+                # The process restarted during an accepted operation. A saved
+                # matching runtime proves start completed; all other interrupted
+                # operations terminate explicitly instead of being run twice.
+                runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
+                succeeded = runtime == record["runtime_instance_id"]
+                if payload.get("kind") == "stop_deployment" and runtime is None:
+                    succeeded = True
+                await _send_command_result(
+                    socket,
+                    command_id=command_id,
+                    status="succeeded" if succeeded else "cancelled",
+                    result={"runtime_instance_id": runtime} if runtime else None,
+                    error_code=None if succeeded else "agent_interrupted",
+                )
+            await socket.replay()
+            return
+        record = journal.begin(command_id, payload)
+        socket = JournalSocket(websocket, journal, record)
+        try:
+            await _execute_control_message(
+                websocket=socket,
+                http_client=http_client,
+                config=config,
+                identity=identity,
+                supervisor=supervisor,
+                message={
+                    **message,
+                    "payload": {**payload, "runtime_instance_id": record["runtime_instance_id"]},
+                },
+            )
+        except asyncio.CancelledError:
+            # The subprocess helpers finish kill+wait before cancellation gets
+            # here. Preserve a launched worker; release only a preparation slot.
+            runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
+            if runtime is None:
+                supervisor.release_slot(deployment_id)
+            succeeded = runtime == record["runtime_instance_id"]
+            if payload.get("kind") == "stop_deployment" and runtime is None:
+                succeeded = True
+            await _send_command_result(
+                socket,
+                command_id=command_id,
+                status="succeeded" if succeeded else "cancelled",
+                result={"runtime_instance_id": runtime} if runtime else None,
+                error_code=None if succeeded else "agent_interrupted",
+            )
+            raise
+        except Exception as exc:
+            await _send_command_result(
+                socket,
+                command_id=command_id,
+                status="failed",
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+            )
+
+
+async def _flush_exit_events(websocket, supervisor) -> None:
+    for event_id, event in list(getattr(supervisor, "exit_events", {}).items()):
+        code = event["returncode"]
+        await _send_deployment_event(
+            websocket,
+            deployment_id=event["deployment_id"],
+            event_type="exited",
+            observed_status="stopped" if code == 0 else "failed",
+            message=f"deployment process exited (returncode={code})",
+            payload={**event, "agent_event_id": event_id},
+        )
+
+
+async def _execute_control_message(
     *,
     websocket,
     http_client: httpx.AsyncClient,
@@ -335,6 +566,17 @@ async def _handle_start_deployment_command(
     credential_refs = _string_list(args.get("credential_refs"))
     timeout_s = _payload_timeout_s(payload)
 
+    existing_runtime = getattr(supervisor, "runtime_instance_id", lambda _: None)(deployment_id)
+    if existing_runtime is not None and not stop_existing_first:
+        await _send_command_ack(websocket, command_id=command_id, status="accepted")
+        await _send_command_result(
+            websocket,
+            command_id=command_id,
+            status="succeeded",
+            result={"runtime_instance_id": existing_runtime},
+        )
+        return
+
     if stop_existing_first:
         await supervisor.stop(deployment_id, grace_seconds=timeout_s)
 
@@ -352,7 +594,7 @@ async def _handle_start_deployment_command(
 
     await _send_command_ack(websocket, command_id=command_id, status="accepted")
     package_dir = config.work_dir / "deployments" / deployment_id / "package"
-    runtime_instance_id = str(uuid4())
+    runtime_instance_id = str(payload.get("runtime_instance_id") or uuid4())
     try:
         await _send_deployment_event(
             websocket,

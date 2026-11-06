@@ -5,15 +5,12 @@
  * plugins/onestep-sql/src/onestep_sql/postgres/execution_schema.py. Relevant
  * facts observed from a live `\d onestep_executions`:
  *
- *   - payload / metadata / result / error are `jsonb`. `pg` already parses
- *     jsonb into JS objects, so values must NOT be JSON.stringify'd on write
- *     (passing an object lets the driver encode it) and must tolerate arriving
- *     as either an object or a string.
- *   - timestamps are `timestamp with time zone`, so the driver returns Date
- *     objects. Losing sub-millisecond precision is acceptable here because the
- *     server compares timestamps as instants; only the *cursor* text has to
- *     round-trip, and that is re-derived from the value the server itself
- *     stored (see cursor.ts).
+ *   - payload / metadata / result / error are `jsonb`. Read them as decoded
+ *     JavaScript values, including string scalars. Writes bind canonical JSON
+ *     text with an explicit ::jsonb cast to retain PyFloat numeric spelling.
+ *   - timestamps are `timestamp with time zone`. Read them as text through
+ *     a pool-local parser so keyset cursors preserve all six fractional digits.
+ *     JavaScript Date truncates microseconds before row mapping can recover them.
  *
  * Uses its own pg.Pool. The `pg` module is an optional peer dependency.
  */
@@ -26,7 +23,12 @@ interface PgPool {
   end(): Promise<void>;
 }
 
+interface PgTypeParsers {
+  getTypeParser(oid: number, format?: string): (value: string) => unknown;
+}
+
 interface PgModule {
+  types: PgTypeParsers;
   Pool: new (config: Record<string, unknown>) => PgPool;
 }
 
@@ -35,7 +37,7 @@ export interface PostgresBackendOptions {
   connectionString: string;
   /** Maximum pooled connections. */
   max?: number;
-  /** Extra options forwarded to pg.Pool. */
+  /** Extra pool options; timestamp/JSON parsers and text result format are enforced. */
   poolOptions?: Record<string, unknown>;
   /** Injectable pg module (for tests); defaults to a dynamic import. */
   pgModule?: PgModule;
@@ -61,10 +63,23 @@ export class PostgresBackend implements Backend {
   /** Build a backend, loading `pg` dynamically. */
   static async create(options: PostgresBackendOptions): Promise<PostgresBackend> {
     const pg = options.pgModule ?? (await loadPg());
+    const inheritedTypes = (options.poolOptions?.types as PgTypeParsers | undefined) ?? pg.types;
     const pool = new pg.Pool({
       connectionString: options.connectionString,
       max: options.max ?? 10,
       ...(options.poolOptions ?? {}),
+      // Keep raw microseconds before any driver Date/binary conversion.
+      binary: false,
+      types: {
+        getTypeParser(oid: number, format?: string) {
+          // The tracked-execution schema uses TIMESTAMPTZ (OID 1184).
+          // JSON/JSONB must be decoded once, even with a caller raw-text parser.
+          // Keep caller parsers for other types; never mutate pg.types.
+          if (oid === 1184) return (value: string) => value;
+          if (oid === 114 || oid === 3802) return JSON.parse;
+          return inheritedTypes.getTypeParser(oid, format);
+        },
+      },
     });
     return new PostgresBackend(pool);
   }

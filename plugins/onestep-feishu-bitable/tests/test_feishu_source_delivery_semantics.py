@@ -6,7 +6,8 @@ from typing import Any
 
 import pytest
 
-from onestep import InMemoryCursorStore
+from onestep import InMemoryCursorStore, MaxAttempts, OneStepApp
+from onestep.runtime.runner import TaskRunner
 from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
 from onestep_feishu_bitable import FeishuBitableConnector
 
@@ -46,291 +47,201 @@ def _source(connector: FeishuBitableConnector, state: InMemoryCursorStore):
     )
 
 
-def test_release_unstarted_removes_token_without_advancing_durable_cursor() -> None:
+@pytest.mark.parametrize("count,index", [(1, 0), (3, 0), (3, 1), (3, 2)])
+@pytest.mark.parametrize("action", ["retry", "release_unstarted"])
+def test_unresolved_row_is_redelivered_without_replaying_successors(count, index, action) -> None:
     async def scenario() -> None:
-        connector, state, source = _make_source(_items(3))
+        connector, state, source = _make_source(_items(count))
         batch = await source.fetch(10)
-        assert [delivery.payload["record_id"] for delivery in batch] == [
-            "rec1",
-            "rec2",
-            "rec3",
-        ]
-
-        # The runtime drops the batch while pausing/stopping/draining.
-        for delivery in batch:
-            await delivery.release_unstarted()
-
-        # Released tokens are gone from the deque and nothing was committed.
-        assert list(source._pending) == []
-        assert source._acked == set()
-        assert await state.load("sync") is None
+        for i, delivery in enumerate(batch):
+            if i != index:
+                await delivery.ack()
+        expected_cursor = [10, f"rec{index}"] if index else None
+        assert await state.load("sync") == expected_cursor
+        await getattr(batch[index], action)()
+        # A retry/release is still a barrier even when every successor has acked.
+        assert await state.load("sync") == expected_cursor
+        resumed = await source.fetch(10)
+        assert [d.payload["record_id"] for d in resumed] == [f"rec{index + 1}"]
+        assert resumed[0].envelope.attempts == int(action == "retry")
+        assert await source.fetch(10) == []  # no duplicate while retry is in flight
+        await resumed[0].ack()
+        assert await state.load("sync") == [10, f"rec{count}"]
+        assert not source._pending
+        assert not source._tokens
+        assert not source._acked
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_released_batch_head_is_not_committed_by_later_ack() -> None:
-    async def scenario() -> None:
-        connector, state, source = _make_source(_items(2))
-        batch = await source.fetch(10)
-
-        # Ack the successor while the head is still pending: the prefix commit only
-        # ever advances from the deque head, so nothing is committed yet.
-        await batch[1].ack()
-        assert await state.load("sync") is None
-
-        # Releasing the head drops it without committing it, exposing the acked
-        # successor, which the prefix commit then writes on its own.
-        await batch[0].release_unstarted()
-        assert list(source._pending) == []
-        assert await state.load("sync") == [10, "rec2"]
-
-        # The released record was never committed, so it is still above the durable
-        # cursor boundary rather than being skipped as delivered.
-        assert source._committed_cursor == (10, "rec2")
-        await connector.close()
-
-    asyncio.run(scenario())
-
-
-def test_whole_batch_release_rereads_records_after_restart() -> None:
+@pytest.mark.parametrize("action", ["retry", "release_unstarted"])
+def test_restart_recovers_unresolved_row_before_acked_successors(action) -> None:
     async def scenario() -> None:
         connector, state, source = _make_source(_items(3))
-        batch = await source.fetch(10)
-        for delivery in batch:
-            await delivery.release_unstarted()
-        assert await state.load("sync") is None
-
-        # Restart against the same durable store: the range is re-read, so a
-        # pause/restart cannot silently skip the released records.
+        first, second, third = await source.fetch(10)
+        await first.ack()
+        await third.ack()
+        await getattr(second, action)()
+        assert await state.load("sync") == [10, "rec1"]
         restarted = _source(connector, state)
         resumed = await restarted.fetch(10)
-        assert [delivery.payload["record_id"] for delivery in resumed] == [
-            "rec1",
-            "rec2",
-            "rec3",
-        ]
-        assert await state.load("sync") is None
+        assert [d.payload["record_id"] for d in resumed] == ["rec2", "rec3"]
+        assert [d.envelope.attempts for d in resumed] == [0, 0]
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_fail_unblocks_prefix_commit_without_writing_cursor_directly() -> None:
+def test_pause_resume_releases_whole_batch_without_consuming_attempts() -> None:
     async def scenario() -> None:
         connector, state, source = _make_source(_items(3))
         batch = await source.fetch(10)
-
-        # The head record is permanently abandoned: the cursor must not freeze.
-        await batch[0].fail(RuntimeError("boom"))
+        for delivery in batch:
+            await delivery.release_unstarted()
         assert await state.load("sync") is None
-        assert list(source._pending) == [(10, "rec2"), (10, "rec3")]
-
-        # The abandoned record no longer blocks the prefix, so acking rec2 advances
-        # the cursor to rec2 rather than stalling forever.
-        await batch[1].ack()
-        assert await state.load("sync") == [10, "rec2"]
-
-        # Acking the tail advances it again, past the failed record.
-        await batch[2].ack()
+        resumed = await source.fetch(10)
+        assert [d.payload["record_id"] for d in resumed] == ["rec1", "rec2", "rec3"]
+        assert [d.envelope.attempts for d in resumed] == [0, 0, 0]
+        for delivery in resumed:
+            await delivery.ack()
         assert await state.load("sync") == [10, "rec3"]
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_fail_of_middle_record_does_not_freeze_cursor() -> None:
+def test_retry_delay_keeps_row_fenced_and_invisible_until_ready() -> None:
     async def scenario() -> None:
         connector, state, source = _make_source(_items(2))
-        batch = await source.fetch(10)
-
-        # Acking the tail while the head is still pending commits nothing: the prefix
-        # commit only ever advances from the deque head.
-        await batch[1].ack()
+        first, second = await source.fetch(10)
+        started = time.monotonic()
+        retrying = asyncio.create_task(first.retry(delay_s=0.02))
+        await asyncio.sleep(0)
+        await second.ack()
+        assert await source.fetch(10) == []
         assert await state.load("sync") is None
-
-        # Failing the head drops its token, which lets the already-acked successor be
-        # committed instead of stalling on the abandoned record.
-        await batch[0].fail(ValueError("permanent"))
-        assert await state.load("sync") == [10, "rec2"]
-        assert list(source._pending) == []
+        await retrying
+        assert time.monotonic() - started >= 0.02
+        redelivered = await source.fetch(10)
+        assert [d.payload["record_id"] for d in redelivered] == ["rec1"]
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_retry_does_not_commit_and_unblocks_the_prefix() -> None:
-    async def scenario() -> None:
-        connector, state, source = _make_source(_items(2))
-        batch = await source.fetch(10)
-
-        await batch[0].retry()
-        assert await state.load("sync") is None
-        assert list(source._pending) == [(10, "rec2")]
-
-        # The retried token no longer blocks the prefix commit for rec2.
-        await batch[1].ack()
-        assert await state.load("sync") == [10, "rec2"]
-        await connector.close()
-
-    asyncio.run(scenario())
-
-
-def test_retry_with_delay_sleeps_and_does_not_commit() -> None:
+def test_old_delivery_actions_cannot_settle_or_duplicate_a_new_attempt() -> None:
     async def scenario() -> None:
         connector, state, source = _make_source(_items(1))
-        batch = await source.fetch(10)
-
-        started = time.monotonic()
-        await batch[0].retry(delay_s=0.01)
-        elapsed = time.monotonic() - started
-
-        assert elapsed >= 0.01
+        original, = await source.fetch(10)
+        await asyncio.gather(original.retry(), original.retry(), original.release_unstarted())
+        replacement, = await source.fetch(10)
+        for action in (original.ack, original.fail, original.retry, original.release_unstarted):
+            await action()
         assert await state.load("sync") is None
-        assert list(source._pending) == []
+        assert await source.fetch(10) == []
+        assert replacement.envelope.attempts == 1
+        await replacement.ack()
+        await replacement.ack()
+        await replacement.retry()
+        assert await state.load("sync") == [10, "rec1"]
+        assert not source._tokens and not source._acked
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_release_retry_and_fail_are_idempotent() -> None:
+@pytest.mark.parametrize("action", ["ack", "fail"])
+def test_state_save_failure_retains_prefix_for_retry_and_restart(action) -> None:
+    class FailingStore(InMemoryCursorStore):
+        fail_save = True
+
+        async def save(self, key, value):
+            if self.fail_save:
+                raise OSError("state unavailable")
+            await super().save(key, value)
+
     async def scenario() -> None:
-        connector, state, source = _make_source(_items(3))
-        batch = await source.fetch(10)
-
-        # Releasing twice is harmless and keeps bookkeeping clean.
-        for delivery in batch:
-            await delivery.release_unstarted()
-            await delivery.release_unstarted()
-        assert list(source._pending) == []
-        assert source._acked == set()
+        state = FailingStore()
+        connector, _, source = _make_source(_items(2), state=state)
+        first, second = await source.fetch(10)
+        await second.ack()
+        with pytest.raises(OSError, match="state unavailable"):
+            await getattr(first, action)()
         assert await state.load("sync") is None
-
-        # Repeating every action on an already-removed token is also harmless and
-        # must not resurrect it into _acked or commit anything.
-        for delivery in batch:
-            await delivery.fail(RuntimeError("boom"))
-            await delivery.retry(delay_s=0.0)
-            await delivery.retry()
-        assert list(source._pending) == []
-        assert source._acked == set()
-        assert await state.load("sync") is None
+        assert source._committed_cursor is None
+        assert list(source._pending) == [(10, "rec1"), (10, "rec2")]
+        assert source._acked == {(10, "rec2")}
+        restarted = _source(connector, state)
+        assert len(await restarted.fetch(10)) == 2
+        await first.retry()
+        redelivered, = await source.fetch(10)
+        state.fail_save = False
+        await redelivered.ack()
+        assert await state.load("sync") == [10, "rec2"]
+        assert not source._tokens and not source._pending and not source._acked
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_idempotent_actions_do_not_corrupt_a_live_prefix() -> None:
+def test_cancelled_state_save_does_not_mutate_commit_position() -> None:
+    class SlowStore(InMemoryCursorStore):
+        async def save(self, key, value):
+            await asyncio.Future()
+
+    async def scenario() -> None:
+        connector, state, source = _make_source(_items(1), state=SlowStore())
+        first, = await source.fetch(1)
+        acking = asyncio.create_task(first.ack())
+        await asyncio.sleep(0)
+        acking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await acking
+        assert source._committed_cursor is None
+        assert await state.load("sync") is None
+        await first.retry()
+        redelivered, = await source.fetch(1)
+        assert redelivered.payload["record_id"] == "rec1"
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_terminal_failure_advances_only_a_resolved_prefix(index) -> None:
     async def scenario() -> None:
         connector, state, source = _make_source(_items(2))
         batch = await source.fetch(10)
-
-        await batch[0].ack()
-        # rec1 is the head, so acking it commits straight away.
-        assert await state.load("sync") == [10, "rec1"]
-
-        # Re-releasing/re-failing an already-committed token must not undo the commit
-        # nor resurrect the token in _acked.
-        await batch[0].release_unstarted()
-        await batch[0].fail(RuntimeError("boom"))
-        assert (10, "rec1") not in source._acked
-        assert await state.load("sync") == [10, "rec1"]
-
-        await batch[1].ack()
+        await batch[index].fail(RuntimeError("permanent"))
+        assert await state.load("sync") == ([10, "rec1"] if index == 0 else None)
+        await batch[1 - index].ack()
         assert await state.load("sync") == [10, "rec2"]
+        assert await _source(connector, state).fetch(10) == []
         await connector.close()
 
     asyncio.run(scenario())
 
 
-def test_concurrent_release_retry_and_fail_keep_state_consistent() -> None:
+def test_max_attempts_stops_poison_row_and_commits_terminal_tail() -> None:
     async def scenario() -> None:
-        connector, state, source = _make_source(_items(9))
-        batch = await source.fetch(10)
+        connector, state, source = _make_source(_items(1))
+        app = OneStepApp("feishu-retry-budget")
+        seen = []
 
-        async def hammer(delivery, index: int) -> None:
-            if index % 3 == 0:
-                await delivery.release_unstarted()
-                await delivery.fail(RuntimeError("boom"))
-            elif index % 3 == 1:
-                await delivery.retry(delay_s=0.001)
-                await delivery.release_unstarted()
-            else:
-                await delivery.fail(RuntimeError("boom"))
-                await delivery.retry()
+        @app.task(source=source, retry=MaxAttempts(max_attempts=3, delay_s=0))
+        async def poison(ctx, payload):
+            seen.append(payload["record_id"])
+            raise ValueError("poison row")
 
-        await asyncio.gather(
-            *(hammer(delivery, index) for index, delivery in enumerate(batch))
-        )
-
-        assert list(source._pending) == []
-        assert source._acked == set()
-        assert await state.load("sync") is None
-        await connector.close()
-
-    asyncio.run(scenario())
-
-
-def test_retry_rewinds_read_cursor_so_record_is_redelivered_in_process() -> None:
-    """A retried record must be visible to the very next poll, not only after restart.
-
-    ``fetch()`` advances the read cursor to the tail of the batch it returned, so
-    dropping the token alone would hide that row until the process restarted. The
-    transport returns every record and the source filters client-side against the read
-    cursor, which is exactly the path under test here.
-    """
-
-    async def scenario() -> None:
-        records = _items(3, cursor=10)
-        for record, cursor in zip(records, (10, 20, 30)):
-            record["fields"][CURSOR_FIELD] = cursor
-        connector = FeishuBitableConnector(app_id="app-id", app_secret="secret")
-
-        async def search_records(**kwargs: Any) -> dict[str, Any]:
-            return {"items": [dict(item) for item in records], "has_more": False}
-
-        connector.search_records = search_records  # type: ignore[method-assign]
-        state = InMemoryCursorStore()
-        source = _source(connector, state)
-
-        batch = await source.fetch(10)
-        assert [delivery.payload["record_id"] for delivery in batch] == [
-            "rec1",
-            "rec2",
-            "rec3",
-        ]
-
-        # The middle record fails retryably and the runtime retries it.
-        await batch[1].retry(delay_s=0.01)
-
-        # It no longer wedges the prefix commit and nothing was committed.
-        assert (20, "rec2") not in source._pending
-        assert await state.load("sync") is None
-
-        # The read cursor rewound to the record before it, so the next poll re-reads it.
-        assert source._fetched_cursor == (10, "rec1")
-        redelivered = await source.fetch(10)
-        assert "rec2" in [delivery.payload["record_id"] for delivery in redelivered]
-        await connector.close()
-
-    asyncio.run(scenario())
-
-
-def test_retry_never_rewinds_behind_durable_cursor() -> None:
-    """Rewinding behind the committed cursor would replay the whole range."""
-
-    async def scenario() -> None:
-        connector, state, source = _make_source(_items(3))
-        batch = await source.fetch(10)
-        await batch[0].ack()
-        committed = source._committed_cursor
-        assert committed is not None
-        fetched_before = source._fetched_cursor
-
-        # Retrying an already-committed token must not move the read cursor back.
-        await batch[0].retry()
-        assert source._committed_cursor == committed
-        assert source._fetched_cursor == fetched_before
+        runner = TaskRunner(app, app.tasks[0])
+        for attempt in range(3):
+            delivery, = await source.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            await runner._handle_delivery(delivery)
+        assert seen == ["rec1", "rec1", "rec1"]
+        assert await source.fetch(1) == []
+        assert await state.load("sync") == [10, "rec1"]
         await connector.close()
 
     asyncio.run(scenario())

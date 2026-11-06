@@ -3,6 +3,9 @@ from fastapi import APIRouter
 from onestep_control_plane_api.api.routers.agent_install import (
     router as agent_install_router,
 )
+from onestep_control_plane_api.api.routers.agent_presence import (
+    router as agent_presence_router,
+)
 from onestep_control_plane_api.api.routers.agent_ws import router as agent_ws_router
 from onestep_control_plane_api.api.routers.auth import router as auth_router
 from onestep_control_plane_api.api.routers.commands import router as commands_router
@@ -35,5 +38,6 @@ router.include_router(resource_catalog_router)
 router.include_router(workers_router)
 router.include_router(worker_agents_router)
 router.include_router(worker_agent_ws_router)
+router.include_router(agent_presence_router)
 router.include_router(agent_ws_router)
 router.include_router(ui_ws_router)

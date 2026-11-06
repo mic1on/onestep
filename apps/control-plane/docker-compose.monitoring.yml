@@ -1,0 +1,136 @@
+# Monitoring stack for the OneStep control plane: Prometheus + Alertmanager +
+# blackbox exporter + postgres_exporter.
+#
+# WHY THIS FILE EXISTS
+#
+# `monitoring/prometheus/rules/control-plane.yml` shipped twelve alert rules that
+# referenced three scrape jobs by name, but no Prometheus config anywhere in the
+# repo had a `rule_files` entry or defined those jobs. The rules were therefore
+# never loaded and never evaluated -- correct on paper, inert in practice. This
+# stack is what makes them live.
+#
+# USAGE
+#
+#   cd apps/control-plane
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+#
+# The stack expects the control plane stack from `docker-compose.yml` (or
+# `docker-compose.deploy.yml`) to be running: it scrapes `plane:8000` and
+# `postgres:5432` by service name on the same compose network.
+#
+# REQUIRED SETTINGS
+#
+#   ONESTEP_CP_INGEST_TOKENS  -- already required by the control plane; the first
+#                                token is reused as the /metrics bearer token.
+#                                Prometheus cannot expand env vars inside its own
+#                                config, so the entrypoint writes the token to a
+#                                file that `credentials_file` reads.
+#   ONESTEP_CP_POSTGRES_*     -- already required by the control plane; reused by
+#                                postgres_exporter to connect.
+#
+# NOTIFICATION TARGET
+#
+#   Alertmanager posts to the `default-webhook` receiver in
+#   `monitoring/alertmanager/alertmanager.yml`. Edit that URL for your own
+#   endpoint. The shipped default cannot resolve, by design.
+#
+# All three monitoring ports bind to 127.0.0.1 only. Prometheus and Alertmanager
+# have no authentication of their own, so exposing them on a public interface
+# would publish your whole metric history and your alert configuration.
+
+x-monitoring-restart: &monitoring-restart
+  restart: unless-stopped
+
+services:
+  prometheus:
+    <<: *monitoring-restart
+    image: prom/prometheus:v2.53.0
+    depends_on:
+      plane:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        # Prometheus has no env-var expansion in its config, so the /metrics bearer
+        # token is materialised as a file that `credentials_file` can read.
+        # `cut -d, -f1` takes the first token from the comma-separated list, which
+        # is the same value the control plane accepts.
+        printf '%s' "$${ONESTEP_CP_INGEST_TOKENS%%,*}" > /etc/prometheus/ingest_token
+        chmod 0400 /etc/prometheus/ingest_token
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=15d \
+          --web.enable-lifecycle
+    environment:
+      ONESTEP_CP_INGEST_TOKENS: ${ONESTEP_CP_INGEST_TOKENS:?set ONESTEP_CP_INGEST_TOKENS}
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${ONESTEP_CP_PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  alertmanager:
+    <<: *monitoring-restart
+    image: prom/alertmanager:v0.27.0
+    depends_on:
+      prometheus:
+        condition: service_started
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      # Mounted directly rather than templated at start: the file IS the config, so
+      # what you read in the repo is exactly what runs. Set your notification
+      # webhook by editing the `default-webhook` receiver's `url`. The shipped
+      # default is a reserved `.invalid` host (RFC 2606), which fails loudly at
+      # delivery time instead of silently accepting and dropping alerts.
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ONESTEP_CP_ALERTMANAGER_PORT:-9093}:9093"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  blackbox-exporter:
+    <<: *monitoring-restart
+    image: prom/blackbox-exporter:v0.25.0
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    volumes:
+      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    # Not published: only Prometheus needs to reach it, over the compose network.
+    expose:
+      - "9115"
+
+  postgres-exporter:
+    <<: *monitoring-restart
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # `pg_up` from this exporter is what OneStepControlPlanePostgresDown reads.
+      # sslmode=disable matches the bundled postgres service, which does not
+      # terminate TLS; a managed database should override this.
+      DATA_SOURCE_NAME: >-
+        postgresql://${ONESTEP_CP_POSTGRES_USER:-postgres}:${ONESTEP_CP_POSTGRES_PASSWORD:?set ONESTEP_CP_POSTGRES_PASSWORD}@postgres:5432/${ONESTEP_CP_POSTGRES_DB:-onestep_control_plane}?sslmode=disable
+    expose:
+      - "9187"
+
+volumes:
+  prometheus-data:
+  alertmanager-data:

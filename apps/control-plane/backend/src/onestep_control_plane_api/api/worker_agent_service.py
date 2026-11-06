@@ -1,3 +1,28 @@
+"""Worker-agent deployment and WebSocket bookkeeping service.
+
+Two APIs live side by side here.
+
+Synchronous (legacy, unchanged)
+    The functions taking a synchronous ``Session`` keep serving the HTTP
+    routers and ``worker_service`` unchanged.
+
+Native-async (the WS work units)
+    The ``*_async`` functions each run one short database work unit on the
+    caller's :class:`~sqlalchemy.ext.asyncio.AsyncSession` from the
+    worker-agent WebSocket handler. Each is the entire work unit its caller
+    runs inside one :func:`onestep_control_plane_api.db.session.session_scope`,
+    so they must not commit on their own — the caller's work unit owns the
+    transaction (the #206 lesson). They return plain data (dataclasses,
+    strings, booleans) so nothing reads ORM attributes after the transaction
+    closed.
+
+    Where the surrounding logic is shared with synchronous callers it lives in
+    a ``_sync``-style helper invoked through ``AsyncSession.run_sync`` (the
+    ``agent_session_service`` pattern); where the unit is a bare UPDATE or a
+    simple select-modify it is written native async (the ``agent_command_service``
+    pattern).
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -5,11 +30,13 @@ import io
 import json
 import secrets
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.common import utcnow
@@ -35,6 +62,10 @@ from onestep_control_plane_api.api.security import (
     hash_worker_agent_token,
     validate_worker_agent_registration_token_value,
 )
+from onestep_control_plane_api.api.worker_agent_connection_registry import (
+    LiveWorkerAgentConnection,
+    worker_agent_connection_registry,
+)
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import (
     WorkerAgent,
@@ -44,6 +75,7 @@ from onestep_control_plane_api.db.models import (
     WorkerDeploymentEvent,
     WorkflowPackage,
 )
+from onestep_control_plane_api.db.session import session_scope
 
 SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION = "1"
 DEFAULT_WORKER_AGENT_HEARTBEAT_INTERVAL_S = 30
@@ -55,6 +87,7 @@ WORKER_AGENT_CAPABILITIES = frozenset(
         "deployment.stop",
         "deployment.restart",
         "agent.sync_state",
+        "agent.command_recovery",
     }
 )
 WORKER_AGENT_COMMAND_CAPABILITY_BY_KIND = {
@@ -66,8 +99,41 @@ WORKER_AGENT_COMMAND_CAPABILITY_BY_KIND = {
 WORKER_AGENT_REDELIVERABLE_COMMAND_STATUSES = frozenset({"pending", "dispatched"})
 
 
+@dataclass(frozen=True)
+class PendingWorkerCommandDelivery:
+    """Plain data for one redeliverable worker-agent command.
+
+    The WS path must not carry ORM instances across a transaction boundary:
+    reading an attribute after the session closes would trigger implicit IO or
+    raise. Every field the outbound ``command`` message and the capability
+    check need is captured here instead.
+    """
+
+    command_id: UUID
+    kind: str
+    deployment_id: UUID | None
+    worker_agent_id: UUID
+    args_json: dict[str, object]
+    timeout_s: int
+    created_at: object
+
+
 def _package_storage_dir() -> Path:
     return Path(settings.worker_package_storage_dir).expanduser()
+
+
+def _to_pending_delivery(command: WorkerAgentCommand) -> PendingWorkerCommandDelivery:
+    """Convert a command row to plain data inside the caller's transaction."""
+
+    return PendingWorkerCommandDelivery(
+        command_id=command.command_id,
+        kind=command.kind,
+        deployment_id=command.deployment_id,
+        worker_agent_id=command.worker_agent_id,
+        args_json=dict(command.args_json or {}),
+        timeout_s=command.timeout_s,
+        created_at=command.created_at,
+    )
 
 
 def _new_connection_token() -> str:
@@ -156,14 +222,36 @@ def handle_worker_agent_hello(
     message: WorkerAgentHelloMessage,
     connected_at,
 ) -> WorkerAgentHelloAckMessage:
+    ack = _handle_worker_agent_hello_work_unit(
+        db,
+        worker_agent=worker_agent,
+        message=message,
+        connected_at=connected_at,
+    )
+    # The synchronous caller owns the commit, as it always did.
+    db.commit()
+    return ack
+
+
+def _handle_worker_agent_hello_work_unit(
+    db: Session,
+    *,
+    worker_agent: WorkerAgent,
+    message: WorkerAgentHelloMessage,
+    connected_at,
+) -> WorkerAgentHelloAckMessage:
+    """The hello body without any commit.
+
+    Both the synchronous wrapper above (which commits itself) and the async
+    work unit (whose ``session_scope`` owns the transaction) run this, so the
+    semantics — validation, supersedes-disconnect, session insert — are written
+    exactly once.
+    """
+
     if message.payload.protocol_version != SUPPORTED_WORKER_AGENT_PROTOCOL_VERSION:
-        raise ValueError(
-            f"protocol_version={message.payload.protocol_version} is not supported"
-        )
+        raise ValueError(f"protocol_version={message.payload.protocol_version} is not supported")
     if message.payload.worker_agent_id != worker_agent.worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
 
     accepted_capabilities = _accepted_capabilities(message.payload.capabilities)
     session_id = _new_session_id()
@@ -198,8 +286,11 @@ def handle_worker_agent_hello(
             last_message_at=connected_at,
         )
     )
-    db.commit()
-
+    # No commit here: the caller's work unit owns the transaction. The WS hello
+    # path opens the session AND lists redeliverable commands in ONE
+    # ``session_scope``, so a failure in the listing must roll the new session
+    # back — an inner commit here would pin the row and leak an ``active``
+    # session no cleanup path can find.
     return WorkerAgentHelloAckMessage(
         type="hello_ack",
         message_id=_new_message_id(),
@@ -212,6 +303,153 @@ def handle_worker_agent_hello(
             server_time=connected_at,
         ),
     )
+
+
+async def handle_worker_agent_hello_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+    message: WorkerAgentHelloMessage,
+    connected_at,
+) -> WorkerAgentHelloAckMessage:
+    """Register a worker-agent hello on an async session.
+
+    The caller's work unit (``session_scope``) owns the transaction: an inner
+    commit would pin the new ``WorkerAgentSession`` row before the hello's
+    pending-command listing finished, so a later failure could no longer roll
+    the session back and an ``active`` session would leak past every cleanup
+    path — the exact failure PR #206 fixed for the agent WS.
+
+    The worker-agent row is loaded inside the work unit rather than carried
+    over from the authentication read: the dependency-injected instance belongs
+    to a session that is already closed, and mutating it here would write
+    through neither. Runs through ``run_sync`` because the synchronous body is
+    shared with the legacy sync caller; the underlying session is the same, so
+    both participate in the caller's transaction.
+    """
+
+    def _run(db: Session) -> WorkerAgentHelloAckMessage:
+        worker_agent = get_worker_agent_or_404(db, worker_agent_id)
+        return _handle_worker_agent_hello_work_unit(
+            db,
+            worker_agent=worker_agent,
+            message=message,
+            connected_at=connected_at,
+        )
+
+    return await session.run_sync(_run)
+
+
+async def mark_worker_agent_session_message_async(
+    session: AsyncSession,
+    *,
+    session_id: str,
+    occurred_at,
+) -> None:
+    """Record that a worker session delivered a message, as its own work unit."""
+
+    await session.execute(
+        update(WorkerAgentSession)
+        .where(WorkerAgentSession.session_id == session_id)
+        .values(last_message_at=occurred_at, updated_at=occurred_at)
+    )
+
+
+async def apply_worker_agent_heartbeat_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    message: WorkerAgentHeartbeatMessage,
+    received_at,
+) -> None:
+    """Apply a heartbeat as one work unit on an async session.
+
+    Semantics match the synchronous variant exactly: the worker is marked
+    online, and a heartbeat whose ``worker_agent_id`` does not match the
+    authenticated connection raises before anything is written.
+    """
+
+    if message.payload.worker_agent_id != worker_agent_id:
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
+    await session.execute(
+        update(WorkerAgent)
+        .where(WorkerAgent.worker_agent_id == worker_agent_id)
+        .values(
+            status="online",
+            used_slots=message.payload.used_slots,
+            last_seen_at=received_at,
+            updated_at=received_at,
+        )
+    )
+    await session.execute(
+        update(WorkerAgentSession)
+        .where(WorkerAgentSession.session_id == session_id)
+        .values(last_message_at=received_at, updated_at=received_at)
+    )
+
+
+async def apply_worker_deployment_event_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+    message: WorkerDeploymentEventMessage,
+    received_at,
+) -> bool:
+    """Record a worker deployment event as one work unit.
+
+    Returns ``False`` when the deployment does not belong to this worker agent;
+    nothing is written in that case, exactly like the synchronous variant.
+    """
+
+    deployment_id = await session.scalar(
+        select(WorkerDeployment.deployment_id).where(
+            WorkerDeployment.deployment_id == message.payload.deployment_id,
+            WorkerDeployment.worker_agent_id == worker_agent_id,
+        )
+    )
+    if deployment_id is None:
+        return False
+
+    event_id = None
+    raw_event_id = message.payload.payload.get("agent_event_id")
+    if isinstance(raw_event_id, str):
+        try:
+            event_id = UUID(raw_event_id)
+        except ValueError:
+            return False
+        if await session.get(WorkerDeploymentEvent, event_id) is not None:
+            return True
+    current_runtime = await session.scalar(
+        select(WorkerDeployment.runtime_instance_id).where(
+            WorkerDeployment.deployment_id == deployment_id
+        )
+    )
+    event_runtime = message.payload.payload.get("runtime_instance_id")
+    is_current = (
+        event_runtime is None or current_runtime is None or str(current_runtime) == event_runtime
+    )
+    if message.payload.observed_status is not None and is_current:
+        await session.execute(
+            update(WorkerDeployment)
+            .where(WorkerDeployment.deployment_id == deployment_id)
+            .values(
+                observed_status=message.payload.observed_status,
+                updated_at=received_at,
+            )
+        )
+    session.add(
+        WorkerDeploymentEvent(
+            **({"id": event_id} if event_id is not None else {}),
+            deployment_id=deployment_id,
+            worker_agent_id=worker_agent_id,
+            event_type=message.payload.event_type,
+            observed_status=message.payload.observed_status,
+            message=message.payload.message,
+            payload_json={"source": "worker_agent", **message.payload.payload},
+        )
+    )
+    return True
 
 
 def mark_worker_agent_session_message(
@@ -237,9 +475,7 @@ def apply_worker_agent_heartbeat(
     received_at,
 ) -> None:
     if message.payload.worker_agent_id != worker_agent.worker_agent_id:
-        raise ValueError(
-            "worker_agent_id does not match the authenticated connection token"
-        )
+        raise ValueError("worker_agent_id does not match the authenticated connection token")
     worker_agent.status = "online"
     worker_agent.used_slots = message.payload.used_slots
     worker_agent.last_seen_at = received_at
@@ -311,6 +547,32 @@ def build_worker_agent_command_message(
             timeout_s=command.timeout_s,
             args=command.args_json,
             created_at=command.created_at,
+        ),
+    )
+
+
+def build_worker_agent_command_message_from_delivery(
+    delivery: PendingWorkerCommandDelivery,
+) -> WorkerAgentCommandMessage:
+    """Build the outbound ``command`` frame from plain data.
+
+    Same output as :func:`build_worker_agent_command_message`, but it never
+    touches ORM state, so it can run after the work unit's transaction has
+    closed.
+    """
+
+    now = utcnow()
+    return WorkerAgentCommandMessage(
+        type="command",
+        message_id=_new_message_id(),
+        sent_at=now,
+        payload=WorkerAgentCommandPayload(
+            command_id=delivery.command_id,
+            kind=delivery.kind,
+            deployment_id=delivery.deployment_id,
+            timeout_s=delivery.timeout_s,
+            args=delivery.args_json,
+            created_at=delivery.created_at,
         ),
     )
 
@@ -514,6 +776,413 @@ async def dispatch_worker_agent_command(
     return command
 
 
+def _mark_worker_agent_command_dispatched(
+    db: Session,
+    *,
+    command: WorkerAgentCommand,
+    session_id: str,
+    dispatched_at,
+) -> WorkerAgentCommand:
+    if command.status != "accepted":
+        command.status = "dispatched"
+    command.session_id = session_id
+    command.dispatched_at = dispatched_at
+    command.updated_at = dispatched_at
+    if command.deployment_id is not None:
+        record_worker_deployment_event(
+            db,
+            deployment_id=command.deployment_id,
+            worker_agent_id=command.worker_agent_id,
+            event_type="command_dispatched",
+            message=f"{command.kind} command dispatched",
+            payload={
+                "command_id": str(command.command_id),
+                "kind": command.kind,
+                "session_id": session_id,
+            },
+        )
+    return command
+
+
+async def list_redeliverable_worker_agent_commands_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+) -> list[PendingWorkerCommandDelivery]:
+    """List redeliverable commands as plain data on an async session.
+
+    Returns dataclasses, so no attribute access after the transaction closed.
+    The caller's work unit owns the commit.
+    """
+
+    agent = await session.scalar(
+        select(WorkerAgent).where(WorkerAgent.worker_agent_id == worker_agent_id)
+    )
+    statuses = set(WORKER_AGENT_REDELIVERABLE_COMMAND_STATUSES)
+    if agent is not None and "agent.command_recovery" in (agent.capabilities_json or []):
+        statuses.add("accepted")
+    rows = await session.scalars(
+        select(WorkerAgentCommand)
+        .where(
+            WorkerAgentCommand.worker_agent_id == worker_agent_id,
+            WorkerAgentCommand.status.in_(statuses),
+        )
+        .order_by(WorkerAgentCommand.created_at.asc(), WorkerAgentCommand.command_id.asc())
+    )
+    return [_to_pending_delivery(command) for command in rows.all()]
+
+
+async def mark_worker_agent_command_dispatched_async(
+    session: AsyncSession,
+    *,
+    command_id: UUID,
+    session_id: str,
+    dispatched_at=None,
+) -> None:
+    """Mark one command dispatched as its own work unit.
+
+    The command was listed inside the hello's work unit, which has already
+    committed by the time this runs; the dispatch is deliberately its own short
+    transaction so a slow command never holds one across the ``send_queue.put``
+    that follows.
+    """
+
+    command = await session.scalar(
+        select(WorkerAgentCommand).where(WorkerAgentCommand.command_id == command_id)
+    )
+    if command is None:
+        return
+    _mark_worker_agent_command_dispatched(
+        db=session,
+        command=command,
+        session_id=session_id,
+        dispatched_at=dispatched_at or utcnow(),
+    )
+
+
+async def reject_worker_agent_command_without_delivery_async(
+    session: AsyncSession,
+    *,
+    command_id: UUID,
+    error_code: str,
+    error_message: str,
+) -> None:
+    """Reject a queued command without delivery, as its own work unit."""
+
+    command = await session.scalar(
+        select(WorkerAgentCommand).where(WorkerAgentCommand.command_id == command_id)
+    )
+    if command is None:
+        return
+    now = utcnow()
+    command.status = "rejected"
+    command.error_code = error_code
+    command.error_message = error_message
+    command.finished_at = now
+    command.updated_at = now
+    _apply_worker_command_failure_to_deployment(
+        session,
+        command=command,
+        error_code=error_code,
+        error_message=error_message,
+    )
+    if command.deployment_id is not None:
+        record_worker_deployment_event(
+            session,
+            deployment_id=command.deployment_id,
+            worker_agent_id=command.worker_agent_id,
+            event_type="command_rejected",
+            observed_status="failed",
+            message=error_message,
+            payload={"command_id": str(command.command_id), "error_code": error_code},
+        )
+
+
+async def dispatch_worker_agent_command_async(
+    session: AsyncSession,
+    *,
+    delivery: PendingWorkerCommandDelivery,
+    send_queue,
+    session_id: str,
+) -> None:
+    """Mark one listed command dispatched, then enqueue the outbound frame.
+
+    The database write commits before the frame is queued: the work unit ends
+    first, so no transaction is held across the network send and the worker
+    never sees a command whose dispatch row is not yet committed. The frame is
+    built from the plain delivery data, not from ORM state.
+    """
+
+    await mark_worker_agent_command_dispatched_async(
+        session,
+        command_id=delivery.command_id,
+        session_id=session_id,
+    )
+    await send_queue.put(
+        build_worker_agent_command_message_from_delivery(delivery).model_dump(mode="json")
+    )
+
+
+async def create_workflow_package_native(
+    *,
+    workflow_id: UUID,
+    version: str,
+    filename: str,
+    content_type: str,
+    content: bytes,
+    entrypoint: str | None,
+    created_by: str,
+) -> WorkflowPackageSummary:
+    """Persist a package without carrying a synchronous Session into an async route."""
+    package_id = uuid4()
+    checksum = hashlib.sha256(content).hexdigest()
+    manifest = _read_workflow_package_manifest(content)
+    resolved_entrypoint = _resolve_workflow_package_entrypoint(entrypoint, manifest)
+    storage_dir = _package_storage_dir()
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = storage_dir / f"{package_id}.zip"
+    storage_path.write_bytes(content)
+    package = WorkflowPackage(
+        package_id=package_id,
+        workflow_id=workflow_id,
+        version=version,
+        filename=filename,
+        content_type=content_type,
+        checksum_sha256=checksum,
+        size_bytes=len(content),
+        storage_path=str(storage_path),
+        entrypoint=resolved_entrypoint,
+        metadata_json=({"onestep_package_manifest": manifest} if manifest is not None else {}),
+        created_by=created_by,
+    )
+    async with session_scope() as session:
+        session.add(package)
+        await session.flush()
+        summary = build_workflow_package_summary(package)
+    return summary
+
+
+async def _dispatch_deployment_command_native(
+    *,
+    delivery: PendingWorkerCommandDelivery,
+    connection: LiveWorkerAgentConnection,
+) -> None:
+    """Commit dispatch state and its audit event before queueing the frame."""
+    async with session_scope() as session:
+        command = await session.scalar(
+            select(WorkerAgentCommand).where(WorkerAgentCommand.command_id == delivery.command_id)
+        )
+        if command is None:
+            return
+        now = utcnow()
+        command.status = "dispatched"
+        command.session_id = connection.session_id
+        command.dispatched_at = now
+        command.updated_at = now
+        if command.deployment_id is not None:
+            record_worker_deployment_event(
+                session,
+                deployment_id=command.deployment_id,
+                worker_agent_id=command.worker_agent_id,
+                event_type="command_dispatched",
+                message=f"{command.kind} command dispatched",
+                payload={
+                    "command_id": str(command.command_id),
+                    "kind": command.kind,
+                    "session_id": connection.session_id,
+                },
+            )
+    # The durable status and audit event are committed and the session is
+    # closed before the connection queue is touched.
+    current_connection = await worker_agent_connection_registry.get(connection.worker_agent_id)
+    if current_connection is not connection:
+        # The durable command remains redeliverable. A reconnecting worker will
+        # receive it from the normal pending-command listing.
+        return
+    await connection.send_queue.put(
+        build_worker_agent_command_message_from_delivery(delivery).model_dump(mode="json")
+    )
+
+
+async def _create_worker_deployment_command_native(
+    *,
+    deployment_id: UUID | None,
+    request: WorkerDeploymentCreateRequest | None = None,
+    created_by: str | None = None,
+    command_kind: str | None = None,
+    command_env: dict[str, str] | None = None,
+) -> WorkerDeploymentSummary:
+    """Create or control a deployment using short, transaction-owned work units."""
+    delivery: PendingWorkerCommandDelivery | None = None
+    async with session_scope() as session:
+        if request is not None:
+            worker_agent = await session.scalar(
+                select(WorkerAgent).where(WorkerAgent.worker_agent_id == request.worker_agent_id)
+            )
+            if worker_agent is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="worker agent not found"
+                )
+            package = await session.scalar(
+                select(WorkflowPackage).where(
+                    WorkflowPackage.package_id == request.workflow_package_id
+                )
+            )
+            if package is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"workflow package {request.workflow_package_id} was not found",
+                )
+            now = utcnow()
+            deployment = WorkerDeployment(
+                deployment_id=uuid4(),
+                workflow_package_id=package.package_id,
+                worker_agent_id=worker_agent.worker_agent_id,
+                desired_status=request.desired_status,
+                observed_status="assigned",
+                execution_mode=worker_agent.execution_mode,
+                params_json=request.params,
+                env_json=request.env,
+                credential_refs_json=request.credential_refs,
+                package_checksum=package.checksum_sha256,
+                assigned_at=now,
+                created_by=created_by or "system",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(deployment)
+            record_worker_deployment_event(
+                session,
+                deployment_id=deployment.deployment_id,
+                worker_agent_id=deployment.worker_agent_id,
+                event_type="deployment_created",
+                observed_status=deployment.observed_status,
+                message="deployment created",
+                payload={
+                    "workflow_package_id": str(package.package_id),
+                    "desired_status": deployment.desired_status,
+                },
+            )
+            if deployment.desired_status == "running":
+                command_kind = command_kind or "start_deployment"
+                args_json: dict[str, object] = {"deployment_id": str(deployment.deployment_id)}
+                if command_kind in {"start_deployment", "restart_deployment"}:
+                    args_json = _deployment_package_args(
+                        deployment=deployment, package=package, env=command_env
+                    )
+                command = WorkerAgentCommand(
+                    command_id=uuid4(),
+                    worker_agent_id=deployment.worker_agent_id,
+                    deployment_id=deployment.deployment_id,
+                    kind=command_kind,
+                    args_json=args_json,
+                    timeout_s=30,
+                    status="pending",
+                )
+                session.add(command)
+                await session.flush()
+                record_worker_deployment_event(
+                    session,
+                    deployment_id=deployment.deployment_id,
+                    worker_agent_id=deployment.worker_agent_id,
+                    event_type="command_created",
+                    observed_status=deployment.observed_status,
+                    message=f"{command_kind} command created",
+                    payload={"command_id": str(command.command_id), "kind": command_kind},
+                )
+                delivery = _to_pending_delivery(command)
+        else:
+            deployment = await session.scalar(
+                select(WorkerDeployment).where(WorkerDeployment.deployment_id == deployment_id)
+            )
+            if deployment is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"worker deployment {deployment_id} was not found",
+                )
+            package = None
+            if command_kind in {"start_deployment", "restart_deployment"}:
+                package = await session.scalar(
+                    select(WorkflowPackage).where(
+                        WorkflowPackage.package_id == deployment.workflow_package_id
+                    )
+                )
+                if package is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"workflow package {deployment.workflow_package_id} was not found",
+                    )
+            if command_kind == "stop_deployment":
+                deployment.desired_status = "stopped"
+                deployment.observed_status = "stopping"
+            elif command_kind == "restart_deployment":
+                deployment.desired_status = "running"
+                deployment.observed_status = "assigned"
+            deployment.updated_at = utcnow()
+            args_json = {"deployment_id": str(deployment.deployment_id)}
+            if command_kind in {"start_deployment", "restart_deployment"}:
+                assert package is not None
+                args_json = _deployment_package_args(
+                    deployment=deployment, package=package, env=command_env
+                )
+            command = WorkerAgentCommand(
+                command_id=uuid4(),
+                worker_agent_id=deployment.worker_agent_id,
+                deployment_id=deployment.deployment_id,
+                kind=command_kind or "stop_deployment",
+                args_json=args_json,
+                timeout_s=30,
+                status="pending",
+            )
+            session.add(command)
+            await session.flush()
+            record_worker_deployment_event(
+                session,
+                deployment_id=deployment.deployment_id,
+                worker_agent_id=deployment.worker_agent_id,
+                event_type="command_created",
+                observed_status=deployment.observed_status,
+                message=f"{command.kind} command created",
+                payload={"command_id": str(command.command_id), "kind": command.kind},
+            )
+            delivery = _to_pending_delivery(command)
+        summary = build_worker_deployment_summary(deployment)
+        dispatch_worker_agent_id = deployment.worker_agent_id
+
+    if delivery is not None:
+        connection = await worker_agent_connection_registry.get(dispatch_worker_agent_id)
+        if connection is not None:
+            # Update dispatch metadata in a separate work unit. The helper
+            # rechecks the live session before enqueueing after commit.
+            await _dispatch_deployment_command_native(
+                delivery=delivery,
+                connection=connection,
+            )
+    return summary
+
+
+async def create_worker_deployment_native(
+    request: WorkerDeploymentCreateRequest,
+    *,
+    created_by: str,
+    command_env: dict[str, str] | None = None,
+) -> WorkerDeploymentSummary:
+    return await _create_worker_deployment_command_native(
+        deployment_id=None,
+        request=request,
+        created_by=created_by,
+        command_env=command_env,
+    )
+
+
+async def control_worker_deployment_native(
+    deployment_id: UUID, *, command_kind: str
+) -> WorkerDeploymentSummary:
+    return await _create_worker_deployment_command_native(
+        deployment_id=deployment_id, command_kind=command_kind
+    )
+
+
 def handle_worker_agent_command_ack(
     db: Session,
     *,
@@ -583,9 +1252,7 @@ def _apply_worker_command_failure_to_deployment(
     if command.deployment_id is None:
         return
     deployment = db.scalar(
-        select(WorkerDeployment).where(
-            WorkerDeployment.deployment_id == command.deployment_id
-        )
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == command.deployment_id)
     )
     if deployment is None:
         return
@@ -605,9 +1272,7 @@ def _apply_worker_command_success_to_deployment(
     if command.deployment_id is None:
         return
     deployment = db.scalar(
-        select(WorkerDeployment).where(
-            WorkerDeployment.deployment_id == command.deployment_id
-        )
+        select(WorkerDeployment).where(WorkerDeployment.deployment_id == command.deployment_id)
     )
     if deployment is None:
         return
@@ -622,6 +1287,20 @@ def _apply_worker_command_success_to_deployment(
                     deployment.runtime_instance_id = UUID(runtime_instance_id)
                 except ValueError:
                     pass
+                # An exit can arrive before replay of the start result after a
+                # disconnect. The historical start succeeded, but its process
+                # must not be resurrected in the deployment snapshot.
+                exit_event = db.scalar(
+                    select(WorkerDeploymentEvent).where(
+                        WorkerDeploymentEvent.deployment_id == deployment.deployment_id,
+                        WorkerDeploymentEvent.event_type == "exited",
+                        WorkerDeploymentEvent.payload_json["runtime_instance_id"].as_string()
+                        == runtime_instance_id,
+                    ).order_by(WorkerDeploymentEvent.created_at.desc()).limit(1)
+                )
+                if exit_event is not None:
+                    deployment.observed_status = exit_event.observed_status
+                    deployment.finished_at = exit_event.created_at
     elif command.kind == "stop_deployment":
         deployment.observed_status = "stopped"
         deployment.finished_at = finished_at
@@ -749,6 +1428,254 @@ def close_worker_agent_session(
     db.commit()
 
 
+def _apply_worker_command_ack_work_unit(
+    db: Session,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    message: WorkerAgentCommandAckMessage,
+    received_at,
+) -> bool:
+    """The ack body without any commit — one whole work unit for the caller."""
+
+    command = db.scalar(
+        select(WorkerAgentCommand).where(
+            WorkerAgentCommand.command_id == message.payload.command_id,
+            WorkerAgentCommand.worker_agent_id == worker_agent_id,
+        )
+    )
+    if command is None:
+        return False
+    if command.finished_at is not None or command.ack_status is not None:
+        return True
+
+    command.session_id = session_id
+    command.ack_status = message.payload.status
+    command.acked_at = received_at
+    command.updated_at = received_at
+    if message.payload.status == "accepted":
+        command.status = "accepted"
+        event_type = "command_acknowledged"
+        event_status = None
+    else:
+        command.status = "rejected"
+        command.finished_at = received_at
+        command.error_code = message.payload.error_code
+        command.error_message = message.payload.error_message
+        event_type = "command_rejected"
+        event_status = "failed"
+        _apply_worker_command_failure_to_deployment(
+            db,
+            command=command,
+            error_code=message.payload.error_code,
+            error_message=message.payload.error_message,
+        )
+    if command.deployment_id is not None:
+        record_worker_deployment_event(
+            db,
+            deployment_id=command.deployment_id,
+            worker_agent_id=command.worker_agent_id,
+            event_type=event_type,
+            observed_status=event_status,
+            message=f"{command.kind} command {message.payload.status}",
+            payload={
+                "command_id": str(command.command_id),
+                "kind": command.kind,
+                "ack_status": message.payload.status,
+                "error_code": message.payload.error_code,
+            },
+        )
+    return True
+
+
+def _apply_worker_command_result_work_unit(
+    db: Session,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    message: WorkerAgentCommandResultMessage,
+    received_at,
+) -> str:
+    """The result body without any commit — one whole work unit for the caller."""
+
+    command = db.scalar(
+        select(WorkerAgentCommand).where(
+            WorkerAgentCommand.command_id == message.payload.command_id,
+            WorkerAgentCommand.worker_agent_id == worker_agent_id,
+        )
+    )
+    if command is None:
+        return "unknown"
+    if command.finished_at is not None:
+        return "duplicate"
+
+    command.session_id = session_id
+    command.status = message.payload.status
+    command.finished_at = message.payload.finished_at
+    command.result_json = message.payload.result
+    command.error_code = message.payload.error_code
+    command.error_message = message.payload.error_message
+    if command.ack_status is None:
+        command.ack_status = "accepted"
+        command.acked_at = received_at
+    command.updated_at = received_at
+    if message.payload.status == "succeeded":
+        _apply_worker_command_success_to_deployment(
+            db,
+            command=command,
+            result=message.payload.result,
+            finished_at=message.payload.finished_at,
+        )
+        if command.deployment_id is not None:
+            record_worker_deployment_event(
+                db,
+                deployment_id=command.deployment_id,
+                worker_agent_id=command.worker_agent_id,
+                event_type="command_succeeded",
+                observed_status=_observed_status_for_successful_command(command.kind),
+                message=f"{command.kind} command succeeded",
+                payload={
+                    "command_id": str(command.command_id),
+                    "kind": command.kind,
+                    "result": message.payload.result or {},
+                },
+            )
+    elif message.payload.status in {"failed", "timeout", "cancelled"}:
+        _apply_worker_command_failure_to_deployment(
+            db,
+            command=command,
+            error_code=message.payload.error_code or message.payload.status,
+            error_message=message.payload.error_message,
+        )
+        if command.deployment_id is not None:
+            record_worker_deployment_event(
+                db,
+                deployment_id=command.deployment_id,
+                worker_agent_id=command.worker_agent_id,
+                event_type="command_failed",
+                observed_status="failed",
+                message=message.payload.error_message or f"{command.kind} command failed",
+                payload={
+                    "command_id": str(command.command_id),
+                    "kind": command.kind,
+                    "status": message.payload.status,
+                    "error_code": message.payload.error_code,
+                },
+            )
+    return "ok"
+
+
+def _close_worker_agent_session_work_unit(
+    db: Session,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    disconnected_at,
+) -> None:
+    """The disconnect-cleanup body without any commit."""
+
+    db.execute(
+        update(WorkerAgentSession)
+        .where(
+            WorkerAgentSession.session_id == session_id,
+            WorkerAgentSession.status == "active",
+        )
+        .values(
+            status="disconnected",
+            disconnected_at=disconnected_at,
+            last_message_at=disconnected_at,
+            updated_at=disconnected_at,
+        )
+    )
+    active_session_count = db.scalar(
+        select(func.count())
+        .select_from(WorkerAgentSession)
+        .where(
+            WorkerAgentSession.worker_agent_id == worker_agent_id,
+            WorkerAgentSession.status == "active",
+        )
+    )
+    if not active_session_count:
+        worker_agent = get_worker_agent_or_404(db, worker_agent_id)
+        worker_agent.status = "offline"
+        worker_agent.updated_at = disconnected_at
+
+
+async def handle_worker_agent_command_ack_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    message: WorkerAgentCommandAckMessage,
+    received_at,
+) -> bool:
+    """Apply one ``command_ack`` as its own work unit on an async session.
+
+    Returns ``False`` when the command was not found for this worker agent and
+    ``True`` when it was applied or was already terminal — the same contract as
+    the synchronous variant.
+    """
+
+    return await session.run_sync(
+        lambda db: _apply_worker_command_ack_work_unit(
+            db,
+            worker_agent_id=worker_agent_id,
+            session_id=session_id,
+            message=message,
+            received_at=received_at,
+        )
+    )
+
+
+async def handle_worker_agent_command_result_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    message: WorkerAgentCommandResultMessage,
+    received_at,
+) -> str:
+    """Apply one ``command_result`` as its own work unit on an async session.
+
+    Returns ``"unknown"``, ``"duplicate"`` or ``"ok"`` exactly like the
+    synchronous variant.
+    """
+
+    return await session.run_sync(
+        lambda db: _apply_worker_command_result_work_unit(
+            db,
+            worker_agent_id=worker_agent_id,
+            session_id=session_id,
+            message=message,
+            received_at=received_at,
+        )
+    )
+
+
+async def close_worker_agent_session_async(
+    session: AsyncSession,
+    *,
+    worker_agent_id: UUID,
+    session_id: str,
+    disconnected_at,
+) -> None:
+    """Mark the session disconnected during disconnect cleanup.
+
+    Runs as its own shielded work unit in the handler so a cancelled task still
+    records the disconnect; the transaction is owned by the caller's
+    ``session_scope``.
+    """
+
+    await session.run_sync(
+        lambda db: _close_worker_agent_session_work_unit(
+            db,
+            worker_agent_id=worker_agent_id,
+            session_id=session_id,
+            disconnected_at=disconnected_at,
+        )
+    )
+
+
 def register_worker_agent(
     db: Session,
     request: WorkerAgentRegistrationRequest,
@@ -872,9 +1799,7 @@ def create_workflow_package(
         storage_path=str(storage_path),
         entrypoint=resolved_entrypoint,
         metadata_json=(
-            {"onestep_package_manifest": package_manifest}
-            if package_manifest is not None
-            else {}
+            {"onestep_package_manifest": package_manifest} if package_manifest is not None else {}
         ),
         created_by=created_by,
     )

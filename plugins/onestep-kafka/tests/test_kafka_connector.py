@@ -42,6 +42,13 @@ class FakeConsumer:
         self.getmany_started: asyncio.Event | None = None
         self.release_getmany: asyncio.Event | None = None
 
+    def subscribe(self, *, topics, listener):
+        self.topics = topics
+        self.listener = listener
+
+    def assignment(self):
+        return set(self.records)
+
     async def start(self) -> None:
         self.started = True
 
@@ -259,7 +266,7 @@ def test_ack_commits_only_after_contiguous_offsets_complete() -> None:
     asyncio.run(scenario())
 
 
-def test_retry_does_not_commit_and_seeks_to_offset() -> None:
+def test_retry_does_not_commit_and_retains_incremented_delivery() -> None:
     async def scenario() -> None:
         driver = FakeDriver()
         connector = KafkaConnector("localhost:9092", driver=driver)
@@ -273,7 +280,10 @@ def test_retry_does_not_commit_and_seeks_to_offset() -> None:
         await delivery.retry()
 
         assert consumer.commits == []
-        assert consumer.seeks == [(tp, 10)]
+        assert consumer.seeks == []
+        redelivered = (await topic.fetch(1))[0]
+        assert redelivered._record.offset == 10
+        assert redelivered.envelope.attempts == 1
 
     asyncio.run(scenario())
 
@@ -296,7 +306,7 @@ def test_fail_advances_commit_tracker() -> None:
     asyncio.run(scenario())
 
 
-def test_release_unstarted_does_not_commit_and_seeks_to_offset() -> None:
+def test_release_unstarted_does_not_commit_and_retains_delivery() -> None:
     async def scenario() -> None:
         driver = FakeDriver()
         connector = KafkaConnector("localhost:9092", driver=driver)
@@ -309,6 +319,9 @@ def test_release_unstarted_does_not_commit_and_seeks_to_offset() -> None:
         await delivery.release_unstarted()
 
         assert consumer.commits == []
-        assert consumer.seeks == [(tp, 10)]
+        assert consumer.seeks == []
+        redelivered = (await topic.fetch(1))[0]
+        assert redelivered._record.offset == 10
+        assert redelivered.envelope.attempts == 0
 
     asyncio.run(scenario())

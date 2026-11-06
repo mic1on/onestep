@@ -14,6 +14,12 @@ from onestep.resilience import ConnectorErrorKind, ConnectorOperation, Connector
 from onestep.state import CursorStore, InMemoryCursorStore
 
 from onestep_sql._shared.state_keys import _default_incremental_state_key
+from onestep_sql._shared.table_queue import (
+    TableQueueCompleteMixin,
+    complete_table_queue_row,
+    retry_table_queue_row,
+    fail_table_queue_row,
+)
 from onestep_sql._shared.table_sink_policy import (
     TableSinkUpdatePolicy,
     _normalize_update_columns,
@@ -153,6 +159,7 @@ class PostgresConnector:
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> "PostgresTableSink":
         return PostgresTableSink(
             connector=self,
@@ -162,6 +169,7 @@ class PostgresConnector:
             update_columns=tuple(update_columns) if update_columns is not None else None,
             update_expr=update_expr,
             serialize_json=serialize_json,
+            batch_size=batch_size,
         )
 
     def execution_backend(
@@ -216,7 +224,7 @@ class _TableRowRef:
     key_value: Any
 
 
-class PostgresTableQueueDelivery(Delivery):
+class PostgresTableQueueDelivery(TableQueueCompleteMixin, Delivery):
     def __init__(self, source: "PostgresTableQueueSource", envelope: Envelope, row_ref: _TableRowRef) -> None:
         super().__init__(envelope)
         self._source = source
@@ -229,6 +237,10 @@ class PostgresTableQueueDelivery(Delivery):
             self.envelope.body.update(payload)
 
     async def ack(self) -> None:
+        if self._complete_ack_applied:
+            # complete() already wrote the ack columns in its own transaction;
+            # re-issuing the UPDATE would be an idempotent but wasted write.
+            return
         await self._source.ack_row(self._row_ref)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
@@ -267,6 +279,7 @@ class PostgresTableQueueSource(Source):
         self.nack = nack
         self.batch_size = batch_size
         self.poll_interval_s = poll_interval_s
+        self._retry_attempts: dict[Any, int] = {}
 
     async def fetch(self, limit: int) -> list[Delivery]:
         try:
@@ -285,7 +298,7 @@ class PostgresTableQueueSource(Source):
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
-            envelope = Envelope(body=row, meta={"table": self.table_name})
+            envelope = Envelope(body=row, meta={"table": self.table_name}, attempts=self._retry_attempts.get(key_value, 0))
             row_ref = _TableRowRef(self.table_name, self.key, key_value)
             deliveries.append(PostgresTableQueueDelivery(self, envelope, row_ref))
         return deliveries
@@ -310,14 +323,22 @@ class PostgresTableQueueSource(Source):
 
     async def ack_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.ack)
+        self._retry_attempts.pop(row_ref.key_value, None)
+
+    async def complete_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
+        await complete_table_queue_row(
+            connector=self.connector,
+            row_ref=row_ref,
+            values=values,
+            ack=self.ack,
+        )
+        self._retry_attempts.pop(row_ref.key_value, None)
 
     async def retry_row(self, row_ref: _TableRowRef, *, delay_s: float | None = None) -> None:
-        if delay_s:
-            await asyncio.sleep(delay_s)
-        await self.update_row(row_ref, self.nack)
+        await retry_table_queue_row(self, row_ref, delay_s=delay_s)
 
     async def fail_row(self, row_ref: _TableRowRef, exc: Exception | None = None) -> None:
-        await self.update_row(row_ref, self.nack)
+        await fail_table_queue_row(self, row_ref)
 
     async def release_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.nack)
@@ -651,6 +672,8 @@ logger = logging.getLogger(__name__)
 
 
 class PostgresTableSink(TableSinkUpdatePolicy, Sink):
+    _backend = "postgres"
+
     def __init__(
         self,
         *,
@@ -661,6 +684,7 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> None:
         super().__init__(f"postgres.table_sink:{table}")
         if mode not in {"insert", "upsert", "update"}:
@@ -678,6 +702,8 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
         )
         if mode in {"upsert", "update"} and update_columns_tuple == () and not update_expr_dict:
             raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
         self.connector = connector
         self.table_name = table
         self.mode = mode
@@ -686,12 +712,29 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
         self.column_policies = column_policies
         self.update_expr = update_expr_dict
         self.serialize_json = serialize_json
+        self.batch_size = batch_size
 
     async def send(self, envelope: Envelope) -> None:
-        if not isinstance(envelope.body, Mapping):
-            raise TypeError("PostgresTableSink only accepts mapping payloads")
+        body = envelope.body
+        if not isinstance(body, Mapping):
+            if isinstance(body, (list, tuple)):
+                try:
+                    await self._send_batch(body)
+                except Exception as exc:
+                    connector_error = as_postgres_connector_operation_error(
+                        operation=ConnectorOperation.SEND,
+                        exc=exc,
+                        source_name=self.name,
+                        retry_delay_s=1.0,
+                        secrets=self.connector.secret_tokens(),
+                    )
+                    if connector_error is None:
+                        raise
+                    raise connector_error from None
+                return
+            raise TypeError("PostgresTableSink only accepts mapping or list-of-mapping payloads")
         try:
-            await self._send(dict(envelope.body))
+            await self._send(dict(body))
         except Exception as exc:
             connector_error = as_postgres_connector_operation_error(
                 operation=ConnectorOperation.SEND,
@@ -706,6 +749,7 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
 
     async def _send(self, payload: dict[str, Any]) -> None:
         table = await self.connector._table(self.table_name)
+        self._validate_upsert_keys(table)
         stmt = self._build_statement(payload, table)
         if stmt is None:
             logger.info(
@@ -765,3 +809,59 @@ class PostgresTableSink(TableSinkUpdatePolicy, Sink):
                 index_elements=list(self.keys), set_=update_payload
             )
         return sa.insert(table).values(**payload)
+
+    async def _batch_unique_ddl(self, conn, table, shadow, rules):
+        if conn.dialect.name == "sqlite":
+            return await super()._batch_unique_ddl(conn, table, shadow, rules)
+        from .batch_unique import unique_ddl
+
+        return unique_ddl(conn, table, shadow, rules)
+
+    def _build_batch_statements(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        table: sa.Table,
+        candidates: Sequence[str],
+    ) -> list[tuple[Any, list[dict[str, Any]] | None]]:
+        dialect = self.connector.engine.dialect.name
+        statements: list[tuple[Any, list[dict[str, Any]] | None]] = []
+        for chunk, columns, null_keys in self._batch_groups(rows, candidates):
+            if self.mode == "insert":
+                # Executemany insert: SQLAlchemy's insertmanyvalues renders
+                # multi-row VALUES (and splits at its own parameter budget),
+                # so no dialect row limit applies here.
+                statements.append((sa.insert(table), [dict(row) for row in chunk]))
+            elif self.mode == "update":
+                statement, parameter_template = self._update_batch_statement(table, columns, null_keys=null_keys)
+                statements.append(
+                    (
+                        statement,
+                        [
+                            {name: row[column] for name, column in parameter_template.items()}
+                            for row in chunk
+                        ],
+                    )
+                )
+            elif dialect == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert as postgres_insert
+
+                insert_stmt = postgres_insert(table)
+                set_ = self._upsert_batch_set(table, insert_stmt.excluded, columns)
+                statement = insert_stmt.on_conflict_do_update(
+                    index_elements=list(self.keys), set_=set_
+                )
+                # psycopg3 pipelines executemany in one round trip; per-row
+                # statements stay far below the 65535 bind parameter ceiling.
+                statements.append((statement, [dict(row) for row in chunk]))
+            else:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                stmt = sqlite_insert(table).values(chunk)
+                set_ = self._upsert_batch_set(table, stmt.excluded, columns)
+                statements.append(
+                    (
+                        stmt.on_conflict_do_update(index_elements=list(self.keys), set_=set_),
+                        None,
+                    )
+                )
+        return statements

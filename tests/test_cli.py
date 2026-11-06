@@ -2985,3 +2985,185 @@ def test_cli_check_prints_reporter_summary_for_yaml_target(monkeypatch, tmp_path
         "base_url=https://yaml-control-plane.example.com "
         "description='Synchronizes billing data.'"
     ) in captured.out
+
+
+def test_cli_check_json_declares_schema_and_version(capsys, tmp_path) -> None:
+    """`check --json` is a versioned contract, like the diagnostics schemas."""
+    from onestep.cli import SUMMARY_SCHEMA, SUMMARY_VERSION
+
+    config_path = tmp_path / "check-contract.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "demo"},
+                "resources": {
+                    "tick": {"type": "interval", "minutes": 5},
+                    "out": {"type": "memory", "maxsize": 10},
+                },
+                "tasks": [{"name": "x", "source": "tick", "emit": "out"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", "--json", str(config_path)])
+
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert exit_code == 0
+    assert summary["schema"] == SUMMARY_SCHEMA == "onestep/check-summary"
+    assert summary["version"] == SUMMARY_VERSION == 1
+    # Pre-existing keys must remain, so consumers do not break.
+    assert summary["target"] == str(config_path)
+    assert summary["name"] == "demo"
+
+
+def test_cli_check_json_failure_emits_error_envelope(capsys, tmp_path) -> None:
+    """A failed `--json` run must print parseable JSON, not nothing.
+
+    Previously stdout stayed empty and the only signal was a human sentence on
+    stderr, which forced callers to scrape prose.
+    """
+    from onestep.cli import ERROR_SCHEMA, ERROR_VERSION
+
+    config_path = tmp_path / "strict-error.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "demo"},
+                "bogus": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", "--json", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    document = json.loads(captured.out)
+    assert document["schema"] == ERROR_SCHEMA == "onestep/cli-error"
+    assert document["version"] == ERROR_VERSION == 1
+    assert document["ok"] is False
+    assert document["command"] == "check"
+    assert document["target"] == str(config_path)
+    assert document["error"]["type"]
+    # The human message is still on stderr for people reading a terminal.
+    assert "failed to load" in captured.err
+
+
+def test_cli_check_json_failure_reports_every_issue(capsys, tmp_path) -> None:
+    """`--json` collects all strict problems so one run fixes them all."""
+    config_path = tmp_path / "multi-error.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "demo"},
+                "bogus_top": 1,
+                "resources": {
+                    "tick": {"type": "interval", "minutes": 5, "bogus_res": 1},
+                    "queue": {"type": "memory"},
+                },
+                "tasks": [{"name": "x", "source": "tick", "concurrencyy": 3}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", "--json", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    document = json.loads(captured.out)
+    issues = document["error"]["issues"]
+    assert len(issues) >= 4
+    paths = {issue["path"] for issue in issues}
+    assert "config" in paths
+    assert "resources.tick" in paths
+    assert "tasks[0]" in paths
+    for issue in issues:
+        assert set(issue) == {"path", "message", "kind"}
+
+
+def test_cli_check_human_path_still_reports_one_error(capsys, tmp_path) -> None:
+    """Without --json the fail-fast message must stay exactly as it was."""
+    config_path = tmp_path / "single-error.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "demo"},
+                "bogus_top": 1,
+                "bogus_second": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "unsupported fields for config: bogus_second, bogus_top" in captured.err
+    assert "validation problem(s)" not in captured.err
+
+
+def test_cli_check_strict_accepts_dollar_schema(capsys, tmp_path) -> None:
+    """A `$schema` self-reference must not fail strict validation."""
+    config_path = tmp_path / "with-schema.yaml"
+    config_path.write_text(
+        json.dumps(
+            {
+                "$schema": "https://onestep.code05.com/schema/v1alpha1.json",
+                "apiVersion": "onestep/v1alpha1",
+                "kind": "App",
+                "app": {"name": "demo"},
+                "resources": {
+                    "tick": {"type": "interval", "minutes": 5},
+                    "out": {"type": "memory", "maxsize": 10},
+                },
+                "tasks": [{"name": "x", "source": "tick", "emit": "out"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with registered_yaml_module():
+        exit_code = main(["check", "--strict", "--json", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(captured.out)["name"] == "demo"
+
+
+def test_cli_schema_prints_valid_schema(capsys) -> None:
+    exit_code = main(["schema"])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    document = json.loads(captured.out)
+    assert document["$id"].endswith("v1alpha1.json")
+    assert document["properties"]["apiVersion"]["const"] == "onestep/v1alpha1"
+    assert "resource_memory" in document["$defs"]
+
+
+def test_cli_schema_writes_to_file(capsys, tmp_path) -> None:
+    out_path = tmp_path / "nested" / "v1alpha1.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    exit_code = main(["schema", "--out", str(out_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Wrote" in captured.out
+    document = json.loads(out_path.read_text(encoding="utf-8"))
+    assert document["$id"].endswith("v1alpha1.json")

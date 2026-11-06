@@ -21,7 +21,10 @@ from onestep_control_plane_api.api.schemas import (
     ConnectorSummary,
     ConnectorUpdateRequest,
 )
-from onestep_control_plane_api.api.security import require_console_auth
+from onestep_control_plane_api.api.security import (
+    require_console_auth,
+    require_console_management_write_access,
+)
 from onestep_control_plane_api.db.session import get_db_session
 
 router = APIRouter(prefix="/api/v1", tags=["connectors"])
@@ -43,7 +46,7 @@ def list_connectors_endpoint(
 @router.post(
     "/connectors",
     response_model=ConnectorSummary,
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_write_access)],
 )
 def create_connector_endpoint(
     request: ConnectorCreateRequest,
@@ -74,7 +77,7 @@ def get_connector_endpoint(
 @router.put(
     "/connectors/{connector_id}",
     response_model=ConnectorSummary,
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_write_access)],
 )
 def update_connector_endpoint(
     connector_id: UUID,
@@ -94,7 +97,7 @@ def update_connector_endpoint(
 @router.delete(
     "/connectors/{connector_id}",
     status_code=204,
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_write_access)],
 )
 def delete_connector_endpoint(
     connector_id: UUID,

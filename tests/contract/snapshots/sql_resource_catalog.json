@@ -588,6 +588,13 @@
         "required": false,
         "secret": false,
         "type": "string"
+      },
+      {
+        "default": 1000,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
       }
     ],
     "label": "MySQL Table Sink",
@@ -600,7 +607,8 @@
       "keys",
       "update_columns",
       "update_expr",
-      "serialize_json"
+      "serialize_json",
+      "batch_size"
     ],
     "type": "mysql_table_sink"
   },
@@ -1098,6 +1106,13 @@
         "required": false,
         "secret": false,
         "type": "string"
+      },
+      {
+        "default": 1000,
+        "name": "batch_size",
+        "required": false,
+        "secret": false,
+        "type": "integer"
       }
     ],
     "label": "Postgres Table Sink",
@@ -1110,7 +1125,8 @@
       "keys",
       "update_columns",
       "update_expr",
-      "serialize_json"
+      "serialize_json",
+      "batch_size"
     ],
     "type": "postgres_table_sink"
   }

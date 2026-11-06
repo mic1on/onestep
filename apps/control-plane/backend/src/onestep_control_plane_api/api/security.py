@@ -5,6 +5,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import (
     Depends,
@@ -18,12 +19,13 @@ from fastapi import (
 )
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.auth.service import LocalAuthService, LocalIdentity, utcnow
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import LocalUser, WorkerAgent
-from onestep_control_plane_api.db.session import get_db_session
+from onestep_control_plane_api.db.session import get_db_session, session_scope
 
 AGENT_WS_SUBPROTOCOL = "onestep-agent.v1"
 
@@ -51,6 +53,11 @@ CONSOLE_AUTHENTICATED_AT_STATE_KEY = "console_authenticated_at"
 class WebSocketIngestAuth:
     token: str
     accepted_subprotocol: str | None = None
+
+
+@dataclass(frozen=True)
+class WebSocketWorkerAgentAuth:
+    worker_agent_id: UUID
 
 
 def _validate_ingest_token_value(token: str) -> bool:
@@ -143,10 +150,9 @@ def require_worker_agent_connection(
     return worker_agent
 
 
-def require_websocket_worker_agent_connection(
+async def require_websocket_worker_agent_connection(
     websocket: WebSocket,
-    db: Session = Depends(get_db_session),
-) -> WorkerAgent:
+) -> WebSocketWorkerAgentAuth:
     token = _extract_bearer_token(websocket.headers.get("authorization"))
     if token is None:
         raise WebSocketException(
@@ -155,15 +161,18 @@ def require_websocket_worker_agent_connection(
         )
 
     token_hash = hash_worker_agent_token(token)
-    worker_agent = db.scalar(
-        select(WorkerAgent).where(WorkerAgent.connection_token_hash == token_hash)
-    )
-    if worker_agent is None:
+    async with session_scope() as session:
+        worker_agent_id = await session.scalar(
+            select(WorkerAgent.worker_agent_id).where(
+                WorkerAgent.connection_token_hash == token_hash
+            )
+        )
+    if worker_agent_id is None:
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="invalid worker agent bearer token",
         )
-    return worker_agent
+    return WebSocketWorkerAgentAuth(worker_agent_id=worker_agent_id)
 
 
 def require_websocket_ingest_token(
@@ -193,6 +202,81 @@ def require_websocket_ingest_token(
         )
 
     if _validate_ingest_token_value(token) or _validate_worker_agent_token_value(db, token):
+        return WebSocketIngestAuth(token=token, accepted_subprotocol=accepted_subprotocol)
+
+    raise WebSocketException(
+        code=status.WS_1008_POLICY_VIOLATION,
+        reason="invalid bearer token",
+    )
+
+
+async def _validate_worker_agent_token_async(session: AsyncSession, token: str) -> bool:
+    """Worker-agent token check on an async session."""
+
+    token_hash = hash_worker_agent_token(token)
+    worker_agent_id = await session.scalar(
+        select(WorkerAgent.worker_agent_id).where(
+            WorkerAgent.connection_token_hash == token_hash
+        )
+    )
+    return worker_agent_id is not None
+
+
+async def _match_worker_agent_token(token: str) -> bool:
+    """Run the worker-agent token lookup as one self-contained work unit.
+
+    The session is created, used and closed here rather than being injected as a
+    FastAPI dependency. That is deliberate: for a *WebSocket* route FastAPI
+    resolves dependencies once and keeps their generator open for the whole
+    connection, so a dependency-injected session would stay alive — and,
+    because it is never awaited again, never released — for as long as the
+    socket is open. That is the same class of leak this change is removing, just
+    relocated into authentication.
+
+    The configured static ingest token is still compared first and its path
+    never touches the database, so a static-token connection costs zero IO.
+    """
+
+    async with session_scope() as session:
+        return await _validate_worker_agent_token_async(session, token)
+
+
+async def require_async_websocket_ingest_token(
+    websocket: WebSocket,
+) -> WebSocketIngestAuth:
+    """Async form of :func:`require_websocket_ingest_token`.
+
+    Same rules, same result type, same failure codes. Authentication is a single
+    short read that completes before the socket is accepted, so no session or
+    transaction survives into the message loop.
+
+    No authentication caching is involved: a worker-agent token still costs
+    exactly one short read per connection.
+    """
+
+    subprotocols = [
+        value.strip()
+        for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if value.strip()
+    ]
+    accepted_subprotocol = (
+        AGENT_WS_SUBPROTOCOL if AGENT_WS_SUBPROTOCOL in subprotocols else None
+    )
+
+    token = _extract_bearer_token(websocket.headers.get("authorization"))
+    if token is None:
+        for value in subprotocols:
+            if value.startswith("bearer.") and len(value) > len("bearer."):
+                token = value[len("bearer.") :]
+                break
+
+    if token is None:
+        raise WebSocketException(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="missing bearer token",
+        )
+
+    if _validate_ingest_token_value(token) or await _match_worker_agent_token(token):
         return WebSocketIngestAuth(token=token, accepted_subprotocol=accepted_subprotocol)
 
     raise WebSocketException(
@@ -319,6 +403,26 @@ def require_console_admin(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="admin role required",
     )
+
+
+def require_console_management_write_access(
+    identity: LocalIdentity | None = Depends(require_console_auth),
+) -> LocalIdentity | None:
+    """Protect configuration changes while preserving the explicit dev bypass."""
+
+    if identity is None:
+        return None
+    return require_console_write_access(identity)
+
+
+def require_console_management_admin(
+    identity: LocalIdentity | None = Depends(require_console_auth),
+) -> LocalIdentity | None:
+    """Protect deployments and credential exports, including their dev workflow."""
+
+    if identity is None:
+        return None
+    return require_console_admin(identity)
 
 
 def require_command_role(

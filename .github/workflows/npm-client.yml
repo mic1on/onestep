@@ -193,6 +193,12 @@ jobs:
     # Only an explicit manual dispatch can publish. There is no automatic path:
     # neither a push nor a tag releases the package on its own.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_npm }}
+    # `--provenance` signs the tarball through the OIDC token, which requires
+    # id-token: write. Scoped to this job so the test jobs keep read-only
+    # credentials.
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Checkout

@@ -18,6 +18,12 @@ from onestep.resilience import (
 )
 from onestep.state import CursorStore, InMemoryCursorStore
 from onestep_sql._shared.state_keys import _default_incremental_state_key
+from onestep_sql._shared.table_queue import (
+    TableQueueCompleteMixin,
+    complete_table_queue_row,
+    retry_table_queue_row,
+    fail_table_queue_row,
+)
 from onestep_sql._shared.table_sink_policy import (
     TableSinkUpdatePolicy,
     _normalize_update_columns,
@@ -185,6 +191,7 @@ class SQLiteConnector:
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> TableSink:
         return TableSink(
             connector=self,
@@ -194,6 +201,7 @@ class SQLiteConnector:
             update_columns=tuple(update_columns) if update_columns is not None else None,
             update_expr=update_expr,
             serialize_json=serialize_json,
+            batch_size=batch_size,
         )
 
     async def _table(self, table_name: str):
@@ -224,7 +232,7 @@ class _TableRowRef:
     key_value: Any
 
 
-class TableQueueDelivery(Delivery):
+class TableQueueDelivery(TableQueueCompleteMixin, Delivery):
     def __init__(self, source: TableQueueSource, envelope: Envelope, row_ref: _TableRowRef) -> None:
         super().__init__(envelope)
         self._source = source
@@ -237,6 +245,10 @@ class TableQueueDelivery(Delivery):
             self.envelope.body.update(payload)
 
     async def ack(self) -> None:
+        if self._complete_ack_applied:
+            # complete() already wrote the ack columns in its own transaction;
+            # re-issuing the UPDATE would be an idempotent but wasted write.
+            return
         await self._source.ack_row(self._row_ref)
 
     async def retry(self, *, delay_s: float | None = None) -> None:
@@ -275,6 +287,7 @@ class TableQueueSource(Source):
         self.nack = nack
         self.batch_size = batch_size
         self.poll_interval_s = poll_interval_s
+        self._retry_attempts: dict[Any, int] = {}
 
     async def fetch(self, limit: int) -> list[Delivery]:
         try:
@@ -293,7 +306,7 @@ class TableQueueSource(Source):
         deliveries: list[Delivery] = []
         for row in rows:
             key_value = row[self.key]
-            envelope = Envelope(body=row, meta={"table": self.table_name})
+            envelope = Envelope(body=row, meta={"table": self.table_name}, attempts=self._retry_attempts.get(key_value, 0))
             row_ref = _TableRowRef(self.table_name, self.key, key_value)
             deliveries.append(TableQueueDelivery(self, envelope, row_ref))
         return deliveries
@@ -326,14 +339,22 @@ class TableQueueSource(Source):
 
     async def ack_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.ack)
+        self._retry_attempts.pop(row_ref.key_value, None)
+
+    async def complete_row(self, row_ref: _TableRowRef, values: Mapping[str, Any]) -> None:
+        await complete_table_queue_row(
+            connector=self.connector,
+            row_ref=row_ref,
+            values=values,
+            ack=self.ack,
+        )
+        self._retry_attempts.pop(row_ref.key_value, None)
 
     async def retry_row(self, row_ref: _TableRowRef, *, delay_s: float | None = None) -> None:
-        if delay_s:
-            await asyncio.sleep(delay_s)
-        await self.update_row(row_ref, self.nack)
+        await retry_table_queue_row(self, row_ref, delay_s=delay_s)
 
     async def fail_row(self, row_ref: _TableRowRef, exc: Exception | None = None) -> None:
-        await self.update_row(row_ref, self.nack)
+        await fail_table_queue_row(self, row_ref)
 
     async def release_row(self, row_ref: _TableRowRef) -> None:
         await self.update_row(row_ref, self.nack)
@@ -674,6 +695,8 @@ class IncrementalTableSource(Source):
 
 
 class TableSink(TableSinkUpdatePolicy, Sink):
+    _backend = "sqlite"
+
     def __init__(
         self,
         *,
@@ -684,6 +707,7 @@ class TableSink(TableSinkUpdatePolicy, Sink):
         update_columns: Sequence[str | Mapping[str, str]] | None = None,
         update_expr: Mapping[str, str] | None = None,
         serialize_json: str = "auto",
+        batch_size: int = 1000,
     ) -> None:
         super().__init__(f"sqlite.table_sink:{table}")
         if mode not in {"insert", "upsert", "update"}:
@@ -703,6 +727,8 @@ class TableSink(TableSinkUpdatePolicy, Sink):
             raise ValueError(f"{mode} mode requires update_expr when update_columns is empty")
         if serialize_json not in {"auto", "always", "never"}:
             raise ValueError("serialize_json must be 'auto', 'always' or 'never'")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
         self.connector = connector
         self.table_name = table
         self.mode = mode
@@ -711,12 +737,29 @@ class TableSink(TableSinkUpdatePolicy, Sink):
         self.column_policies = column_policies
         self.update_expr = update_expr_dict
         self.serialize_json = serialize_json
+        self.batch_size = batch_size
 
     async def send(self, envelope: Envelope) -> None:
-        if not isinstance(envelope.body, Mapping):
-            raise TypeError("TableSink only accepts mapping payloads")
+        body = envelope.body
+        if not isinstance(body, Mapping):
+            if isinstance(body, (list, tuple)):
+                try:
+                    await self._send_batch(body)
+                except Exception as exc:
+                    connector_error = as_sqlite_connector_operation_error(
+                        operation=ConnectorOperation.SEND,
+                        exc=exc,
+                        source_name=self.name,
+                        retry_delay_s=1.0,
+                        secrets=self.connector._secret_tokens(),
+                    )
+                    if connector_error is None:
+                        raise
+                    raise connector_error from exc
+                return
+            raise TypeError("TableSink only accepts mapping or list-of-mapping payloads")
         try:
-            await self._send(dict(envelope.body))
+            await self._send(dict(body))
         except Exception as exc:
             connector_error = as_sqlite_connector_operation_error(
                 operation=ConnectorOperation.SEND,
@@ -731,6 +774,7 @@ class TableSink(TableSinkUpdatePolicy, Sink):
 
     async def _send(self, payload: dict[str, Any]) -> None:
         table = await self.connector._table(self.table_name)
+        self._validate_upsert_keys(table)
         stmt = self._build_statement(payload, table)
         if stmt is None:
             logger.info(
@@ -778,3 +822,48 @@ class TableSink(TableSinkUpdatePolicy, Sink):
             stmt = mysql_insert(table).values(**payload)
             return stmt.on_duplicate_key_update(**update_payload)
         return sa.insert(table).values(**payload)
+
+    def _build_batch_statements(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        table: sa.Table,
+        candidates: Sequence[str],
+    ) -> list[tuple[Any, list[dict[str, Any]] | None]]:
+        sync_engine = getattr(self.connector.engine, "sync_engine", self.connector.engine)
+        dialect = sync_engine.dialect.name
+        statements: list[tuple[Any, list[dict[str, Any]] | None]] = []
+        for chunk, columns, null_keys in self._batch_groups(rows, candidates):
+            if self.mode == "insert":
+                if not chunk[0]:
+                    statements.append((sa.insert(table), [dict(row) for row in chunk]))
+                else:
+                    statements.append((sa.insert(table).values(chunk), None))
+            elif self.mode == "update":
+                statement, parameter_template = self._update_batch_statement(table, columns, null_keys=null_keys)
+                statements.append(
+                    (
+                        statement,
+                        [
+                            {name: row[column] for name, column in parameter_template.items()}
+                            for row in chunk
+                        ],
+                    )
+                )
+            elif dialect == "mysql":
+                from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+                stmt = mysql_insert(table).values(chunk)
+                set_ = self._upsert_batch_set(table, stmt.inserted, columns)
+                statements.append((stmt.on_duplicate_key_update(**set_), None))
+            else:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                stmt = sqlite_insert(table).values(chunk)
+                set_ = self._upsert_batch_set(table, stmt.excluded, columns)
+                statements.append(
+                    (
+                        stmt.on_conflict_do_update(index_elements=list(self.keys), set_=set_),
+                        None,
+                    )
+                )
+        return statements

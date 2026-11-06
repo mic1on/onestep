@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from onestep_control_plane_api.api.notification_service import (
-    build_notification_test_response,
     create_notification_channel,
     delete_notification_channel,
+    deliver_notification_test,
     list_notification_channels,
+    list_notification_deliveries,
     list_notification_services,
     update_notification_channel,
     update_notification_channel_enabled,
@@ -21,6 +22,7 @@ from onestep_control_plane_api.api.schemas import (
     NotificationChannelListResponse,
     NotificationChannelSummary,
     NotificationChannelUpdateRequest,
+    NotificationDeliveryListResponse,
     NotificationServiceListResponse,
     NotificationTestRequest,
     NotificationTestResponse,
@@ -107,7 +109,13 @@ def test_notification_channel(
     request: NotificationTestRequest,
     db: Session = Depends(get_db_session),
 ) -> NotificationTestResponse:
-    return build_notification_test_response(db, channel_id, request)
+    """Send one real notification through the channel and report what happened.
+
+    Runs in the threadpool (sync ``def``), so the blocking webhook call does not
+    stall the event loop.
+    """
+
+    return deliver_notification_test(db, channel_id, request)
 
 
 @router.get("/services", response_model=NotificationServiceListResponse)
@@ -115,3 +123,14 @@ def get_notification_services(
     db: Session = Depends(get_db_session),
 ) -> NotificationServiceListResponse:
     return list_notification_services(db)
+
+
+@router.get("/deliveries", response_model=NotificationDeliveryListResponse)
+def get_notification_deliveries(
+    channel_id: UUID | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db_session),
+) -> NotificationDeliveryListResponse:
+    """Recent delivery attempts, so an operator can see whether alerts went out."""
+
+    return list_notification_deliveries(db, channel_id=channel_id, limit=limit)

@@ -30,6 +30,10 @@ Files:
 - `control_plane_reporter_demo.py`: long-running reporter demo for local control plane smoke testing;
   cycles `ok -> retry_once -> fail -> slow` so you can observe success, retry, timeout, and
   dead-letter behavior from the control plane
+- `prometheus/`: Docker Compose monitoring stack (onestep + Prometheus + Grafana with a
+  provisioned dashboard) exercising `onestep run --metrics-addr`; run it with
+  `cd example/prometheus && docker compose up -d`, then open Grafana on
+  http://localhost:3300
 
 Control plane reporting is documented in the top-level `README.md`. For a quick local demo, install
 `onestep[control-plane]`, start `onestep-control-plane`, and then run

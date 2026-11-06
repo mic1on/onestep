@@ -13,13 +13,17 @@ from onestep_control_plane_api.api.schemas import (
     WorkerSummary,
     WorkerUpdateRequest,
 )
-from onestep_control_plane_api.api.security import require_console_auth
+from onestep_control_plane_api.api.security import (
+    require_console_auth,
+    require_console_management_admin,
+    require_console_management_write_access,
+)
 from onestep_control_plane_api.api.worker_service import (
     _serialize,
     compile_worker_package_for_download,
     create_worker,
     delete_worker,
-    deploy_worker,
+    deploy_worker_native,
     get_worker_or_404,
     list_workers,
     update_worker,
@@ -42,7 +46,7 @@ def list_workers_endpoint(db: Session = Depends(get_db_session)) -> WorkerListRe
 @router.post(
     "/workers",
     response_model=WorkerSummary,
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_write_access)],
 )
 def create_worker_endpoint(
     request: WorkerCreateRequest,
@@ -66,7 +70,7 @@ def get_worker_endpoint(
 @router.put(
     "/workers/{worker_id}",
     response_model=WorkerSummary,
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_write_access)],
 )
 def update_worker_endpoint(
     worker_id: UUID,
@@ -79,7 +83,7 @@ def update_worker_endpoint(
 @router.delete(
     "/workers/{worker_id}",
     status_code=204,
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_write_access)],
 )
 def delete_worker_endpoint(
     worker_id: UUID,
@@ -90,7 +94,7 @@ def delete_worker_endpoint(
 
 @router.get(
     "/workers/{worker_id}/package/download",
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_admin)],
 )
 def download_worker_package_endpoint(
     worker_id: UUID,
@@ -106,11 +110,10 @@ def download_worker_package_endpoint(
 
 @router.post(
     "/workers/{worker_id}/deploy",
-    dependencies=[Depends(require_console_auth)],
+    dependencies=[Depends(require_console_management_admin)],
 )
 async def deploy_worker_endpoint(
     worker_id: UUID,
     request: WorkerDeployRequest,
-    db: Session = Depends(get_db_session),
 ) -> dict:
-    return await deploy_worker(db, worker_id, request)
+    return await deploy_worker_native(worker_id, request)

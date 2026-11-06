@@ -1,0 +1,34 @@
+name: Identity lock
+
+on:
+  pull_request:
+    paths:
+      - src/onestep/identity_store.py
+      - tests/test_identity_store.py
+      - .github/workflows/identity-lock.yml
+  push:
+    branches: [main]
+    paths:
+      - src/onestep/identity_store.py
+      - tests/test_identity_store.py
+      - .github/workflows/identity-lock.yml
+
+permissions:
+  contents: read
+
+jobs:
+  identity-lock:
+    name: Identity lock (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --extra test --python 3.12
+      - run: uv run --no-sync pytest -q tests/test_identity_store.py

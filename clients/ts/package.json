@@ -1,6 +1,6 @@
 {
   "name": "@mic1on/onestep-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript ExecutionClient for onestep tracked execution (the worker stays Python).",
   "type": "module",
   "license": "MIT",
@@ -40,9 +40,10 @@
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
-    "test:unit": "node --test --experimental-strip-types tests/canonical.test.ts",
+    "pretest": "npm run build",
+    "test:unit": "npm run build && node --test --experimental-strip-types tests/canonical.test.ts tests/client.test.ts tests/schema.test.ts tests/timestamps.test.ts",
     "test:e2e": "node --test --experimental-strip-types tests/e2e.test.ts",
-    "golden": "python3 fixtures/generate_golden.py",
+    "golden": "\"${ONESTEP_PYTHON:-python3}\" fixtures/generate_golden.py",
     "prepublishOnly": "npm run build && npm run typecheck"
   },
   "peerDependencies": {

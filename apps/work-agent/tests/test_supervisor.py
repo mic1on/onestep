@@ -92,11 +92,14 @@ def test_supervisor_persists_state_after_start_and_removes_after_stop(
 ) -> None:
     class FakeProcess:
         pid = 321
+        terminated = False
 
         def terminate(self) -> None:
-            return None
+            self.terminated = True
 
         async def wait(self) -> int:
+            while not self.terminated:
+                await asyncio.sleep(0.01)
             return 0
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
@@ -135,11 +138,14 @@ def test_supervisor_drains_child_output_to_log_file(tmp_path, monkeypatch) -> No
 
     class FakeProcess:
         pid = 321
+        terminated = False
 
         def terminate(self) -> None:
-            return None
+            self.terminated = True
 
         async def wait(self) -> int:
+            while not self.terminated:
+                await asyncio.sleep(0.01)
             return 0
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
@@ -300,7 +306,9 @@ def test_install_creates_venv_and_writes_marker_on_success(tmp_path, monkeypatch
             return 0
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
-        calls.append(list(args))
+        calls.append(
+            list(args[3:] if len(args) > 2 and str(args[1]).endswith("_prepare.py") else args)
+        )
         return FakeProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -341,7 +349,9 @@ def test_install_runs_package_and_requirements_when_both_are_declared(
             return 0
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
-        calls.append(list(args))
+        calls.append(
+            list(args[3:] if len(args) > 2 and str(args[1]).endswith("_prepare.py") else args)
+        )
         return FakeProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
@@ -405,7 +415,9 @@ def test_install_reruns_when_marker_predates_default_runtime_requirements(
             return 0
 
     async def fake_create_subprocess_exec(*args, **kwargs) -> FakeProcess:
-        calls.append(list(args))
+        calls.append(
+            list(args[3:] if len(args) > 2 and str(args[1]).endswith("_prepare.py") else args)
+        )
         return FakeProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)

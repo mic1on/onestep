@@ -598,6 +598,28 @@ export interface NotificationTestResponse {
   channel_id: string;
   provider: NotificationProvider;
   preview_text: string;
+  /** Whether the webhook actually accepted the test. */
+  delivered: boolean;
+  response_status_code: number | null;
+  error_message: string | null;
+}
+
+export interface NotificationDelivery {
+  id: string;
+  channel_id: string | null;
+  event_type: string;
+  service_name: string | null;
+  service_environment: string | null;
+  task_name: string | null;
+  status: string;
+  response_status_code: number | null;
+  error_message: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+interface NotificationDeliveryListResponse {
+  items: NotificationDelivery[];
 }
 
 interface NotificationChannelListResponse {
@@ -930,6 +952,12 @@ export function testNotificationChannel(channelId: string, message?: string) {
   return request<NotificationTestResponse>(`/api/v1/settings/notifications/channels/${encodeURIComponent(channelId)}/test`, {
     method: 'POST',
     body: { message },
+  });
+}
+
+export function listNotificationDeliveries(channelId?: string, limit = 50) {
+  return request<NotificationDeliveryListResponse>('/api/v1/settings/notifications/deliveries', {
+    query: { channel_id: channelId, limit },
   });
 }
 

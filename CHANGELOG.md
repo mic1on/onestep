@@ -1,5 +1,209 @@
 # Changelog
 
+## onestep 1.16.0
+
+面向 AI Agent 与自动化脚本的机器接口：JSON Schema、一次报告全部校验错误、版本化的 `--json` 契约。
+
+- **新增 `onestep schema`**，输出 `onestep/v1alpha1` YAML 的 JSON Schema（`--out` 可写文件）。Schema 从运行时的严格校验契约（`_STRICT_*` 字段集）与已安装连接器目录**派生**，不是手写副本：连接器注册新资源类型或字段后自动包含。发布副本位于 `docs/public/schema/v1alpha1.json`，服务地址即其 `$id`。
+
+- **`$schema` 成为合法顶层键**（仅作文档用途，不影响运行时；严格校验要求它是非空字符串）。此前引用 Schema 会让 `check --strict` 直接失败，使 Schema 无法被采用。
+
+- **`check --strict --json` 一次报告全部校验错误。** 新增 `collect_app_config_issues()` 与 `AppConfigValidationError`，每个问题带 `path`/`message`/`kind`（`unknown_field`、`missing_field`、`invalid_type`、`invalid_value`、`unknown_resource`）。此前严格校验是 fail-fast，一个 YAML 有 N 处错误就要跑 N 轮；现在 Agent 或 CI 一次调用即可拿到完整清单。人类路径保持 fail-fast 且报错文本逐字不变。
+
+- **`--json` 输出补齐 `schema`/`version` 契约。** `check --json` 现在带 `schema: onestep/check-summary`、`version: 1`；失败时在 stdout 输出 `onestep/cli-error` 错误信封（同时保留 stderr 的人类可读行），`build --json`/`catalog --json` 同样适用。此前失败时 stdout 为空，调用方只能正则匹配 stderr 上的散文。
+
+- 明确并文档化退出码语义：`0` 成功、`1` 运行时失败（`run` 抛异常、`check --connect` 探测失败）、`2` 输入或配置无效（严格校验失败、目标加载失败、参数错误）。见 `docs/guide/ai-interfaces.md`。
+
+- 契约测试：`tests/contract/test_app_schema.py` 断言 Schema 与严格校验一致（资源属性取自 `handler.allowed_fields` 而非资源目录 `fields`——目录对 `mysql`/`postgres`/`rabbitmq`/`redis` 展示 `host`/`username`/`password`，但严格校验拒绝它们）、发布副本不漂移、以及在最小安装（未装连接器插件）下跳过而非误报。`tests/contract/test_config_validation_issues.py` 断言收集模式的**首个**问题与 fail-fast 报错逐字一致，防止两条路径漂移。
+
+- **收紧控制面管理接口权限。** `viewer` 不能再修改 Worker/Connector、上传工作包或操作部署；配置写入和上传允许 `operator`/`admin`，含连接凭据的编译包下载与部署操作限 `admin`，停止/重启部署复用近期登录要求。保留未配置认证的开发环境旁路，并增加权限矩阵回归测试。
+
+- **修复 Worker Agent 默认令牌的 presence 兼容。** HTTP presence 与运行时 WebSocket 一样接受已注册 Worker Agent 的连接令牌，包含未配置静态 ingest token 的情况；令牌校验的异步数据库会话在写入 presence 前释放，避免有效运行实例的补充心跳被 401 拒绝。
+
+- **控制台同步操作使用真实语义。** 原“部署更新”实际下发 `sync_now`，现改为同步命令的下发/接受提示，移除伪造的百分比和硬编码版本的滚动部署进度。
+
+- **runtime：停止抓取时归还未启动的 delivery（#252、#253，经 #268）。** fetch 与 stop/drain 同时完成、或被取消的 fetch 返回了整批结果时，取回的 delivery 不再被丢弃，而是按原顺序归还队列；Memory 队列新增幂等的 `return_unstarted()`，归还不等待队列容量（停止期所有消费者都在退出，已占有的工作不得被容量阻塞），并覆盖 Python 3.12 `get()` 取消竞态。`Envelope.attempts` 语义写入文档：0 为首次投递，计数是否跨进程/所有权变更保留由各 source 说明。
+
+- **控制面告警体系落地并接入通知（#232、#233、#234、#235、#237、#238）。** 控制面导出告警规则引用的全部指标（#232），并把规则接到真实触发路径（#234）；通知面可验证化并阻断失败风暴（#233）；丢失的通知成为显式信号，任务计数不再虚报（#237）；监控 notifier 队列，暴露“调度存在但任务从未启动”的漏跑盲区，并在恢复时同样告警（#238）；告警语义升级为对告警失明分页，而不只对故障分页（#235）。
+
+- **outbox 读数可判定（#239）。** 导出 outbox 采样时刻，对冻结的读数（不再更新但无错误）告警，而不只对从未采样告警；修复漏跑告警在 immediate/cron 场景被静默吞掉的问题；修正 MetricsMissing 抑制队列盲区告警的守卫。
+
+- **presence beacon（#240）。** 实例卡在同步 handler 中时不再被上报为离线：控制面把“卡住但活着”与“真离线”区分开。
+
+- **镜像构建对 registry 限流韧性（#241）。** 构建镜像遇到 registry 429 时退避重试，不再让整个部署失败。
+
+- **Worker WebSocket 认证会话在 accept 前释放（#259）。** 高并发连接时，认证用的数据库会话不再占用连接池直到握手完成。
+
+- **命令与部署路由迁移到异步数据库会话（#266）。** 与 1.12.0 的异步化系列一致，消除同步引擎在事件循环上的阻塞点。
+
+- **移除 macOS 桌面应用（#236）；`examples/` 并入 `example/`（#231）。**
+
+## onestep-sql 0.7.2
+
+MySQL binlog CDC 的确认与恢复契约（#264），以及 TableQueue 重试预算跨失败保留（#263）。
+
+- **`mysql_binlog` 按完整连续前缀确认并恢复。** 游标 `{file, pos}` 只在 event 的全部行完成后推进；游标存储写入失败或被取消时，内存中的未完成屏障保留、可再次结算。`retry()` 将原记录放入本地重投队列、保留游标屏障并递增 `Envelope.attempts`（`MaxAttempts` 因此可达终态）；`release_unstarted()` 重投未启动记录不计次；终态 `fail()` 完成该行结算，配置死信输出时先成功写入死信再推进游标。进程重启后从持久化游标重放未完整确认的 event，尝试次数从零开始（已成功的行可能重复执行，handler 与 sink 需幂等）。`blocking=True` 由非阻塞读取加 `poll_interval_s` 轮询实现，暂停或关闭不必等待下一条数据库变更。
+
+- **TableQueue 重试预算按行保留。** `retry()` 在应用配置的 `nack` 更新前递增该行计数，`release_unstarted()` 应用 `nack` 但不递增；`ack()`/`complete()` 清除计数。终态 `fail()` 仍应用用户配置的 `nack`：行仍匹配 `where` 时保留已耗尽的计数并继续走失败/DLQ 路径，而不是重置重试预算。claim/ack/nack SQL 与增量/tracked-execution 协议不变。
+
+## onestep-redis 0.2.3
+
+Stream 交付语义、租约 fencing 与停止路径修复（#263）。
+
+- **交付与租约语义。** 抓取的条目本地预留，后续 fetch 不会执行同一活跃 delivery；重试在延迟期间保留 PEL 条目；ACK、重试与续租原子校验 PEL 消费者与投递计数，过期 handler 无法确认已被其他 worker 回收的消息；`Envelope.attempts` 暴露 `encoded_attempts + times_delivered - 1`，计数存于 PEL、跨 worker 重启保留。
+
+- **过期条目回收。** 每次 fetch 执行一次有界 `XAUTOCLAIM` 扫描（游标跨调用延续，受 `batch_size` 与 fetch 上限约束），回收任意消费者（含已死亡进程）的过期条目；`reclaim_idle_ms` 可配（默认 60000），活跃与排队 delivery 每 1/3 间隔续租。
+
+- **停止路径修复。** 队列锁改在运行中的事件循环初始化；每次 broker 读取有界（≤1 秒，`block_ms: 0` 也不例外），drain/pause/shutdown 不再被阻塞读卡住、可正常排空 fetch。
+
+## onestep-kafka 0.1.4
+
+提交跟踪与分区边界 fencing（#263）。
+
+- **完成前缀提交。** 提交跟踪跟随实际抓取记录的完成前缀，compacted offset 与事务标记空隙不再阻塞进度；未完成记录保持屏障，即使后续记录成功。
+
+- **分区撤销/分配 fencing。** 分区边界清除该分区的跟踪并 fence 旧 delivery：旧 handler 无法在新分配下提交或排队重试。重试保留原始记录本地重投并递增 `attempts`，不回绕其他活跃记录、不发布替换消息；原 offset 在成功或终态失败前保持未提交。
+
+- **重试预算语义。** Kafka 不存储投递计数：本地重试计数在进程重启或分区重分配后按 envelope 的 attempts 重置，是每次连续分配期内的预算，不是持久生命周期上限；跨断连边界需要 broker 死信策略。
+
+## onestep-mongodb 0.1.3
+
+重试预算按 cursor/resume token 保留（#263）。polling 与 change-stream 源在源实例内保留 0 基重试计数；generation 失效与重放保留计数，释放未启动 delivery 不计次；只有对应连续前缀被持久确认或终态跳过才移除计数。新实例/进程从零开始并从持久游标恢复，`MaxAttempts` 约束源生命周期内的重试；未解析游标之后的行可能重放，handler 需幂等。
+
+## onestep-sqs 0.2.5
+
+重试预算使用 broker 投递历史（#263）。`Envelope.attempts` 在 publisher 编码的计数之上叠加 `max(0, ApproximateReceiveCount - 1)`：SQS 的 1 基接收计数跨消费者重启保留，且包含可见性过期与未启动消息的释放，不只是框架重试。`MaxAttempts` 与指数退避因此使用真实 broker 交付历史；终态动作仍遵循 `on_fail`（消息必须离开源时用 `delete` 或 broker redrive）。
+
+## onestep-cf-queues 0.2.1
+
+重试预算使用 broker 投递历史（#263）。`Envelope.attempts` 在 publisher 编码的计数之上叠加 `max(0, message.attempts - 1)`（Pull API 计数，1 基、跨消费者重启保留，可见性过期与显式释放同样消耗 broker 交付）。`MaxAttempts` 与退避因此使用真实交付历史；终态动作仍遵循 `on_fail`。
+
+## onestep-feishu-bitable 0.6.2
+
+游标 fence 与重试保留（#263）。增量 delivery 保留游标位置直到确认或永久失败；重试复用已抓取 payload 并递增 `Envelope.attempts`，暂停期间释放未启动 delivery 不消耗尝试次数；失败或已释放的行阻止持久游标越过它，即使后续行成功。停止批次不再丢弃 token（改为 requeue），重试真正重读并回绕读游标，前缀提交不再被卡死；永久失败是终态跳过并推进已解析前缀。重试 payload 与计数在源实例内，进程重启后从持久游标重读、计数归零，`max_attempts` 约束源生命周期内的重试，handler 需幂等。
+
+## onestep-control-plane 0.2.1
+
+- **上报 `telemetry.custom_metrics` 能力（#267）。** WS sender 的默认遥测能力列表加入 `telemetry.custom_metrics`，与控制面自定义指标上报协商兼容。
+
+## onestep-worker-agent 0.1.5
+
+命令结果恢复与进程生命周期监督（#261）。
+
+- **命令结果恢复。** 每条命令在执行前落盘 `work_dir/commands/`，终态结果先持久化再上报；重复命令 ID 直接返回已有结果，同一部署的不同命令串行执行。Agent 上报 `agent.command_recovery` 能力，控制面只向具备该能力的 agent 重投已接受命令。被中断的准备以 `cancelled` 结束；匹配 runtime 仍在运行的 start 恢复为 `succeeded`。启动门打开前先持久化 worker PID，之前的崩溃不会产生未跟踪的业务 worker；断连取消会 kill 并等待安装/检查进程，POSIX 上 agent 自身异常退出时终止准备进程组。
+
+- **进程组回收与僵尸识别。** leader 退出后回收托管进程组并保留 stop 结果；准备子进程被回收，识别 Linux 僵尸状态。
+
+- **退出事件可靠送达。** 退出事件保留在 `work_dir/exit-events.json` 直到控制面确认回执（跨重连与 agent 重启）；心跳时核查恢复的 PID；延迟到达的 start 结果不能覆盖同一 runtime 已记录的退出。
+
+## @mic1on/onestep-client 0.1.1
+
+TS 客户端与 Python 端的行为对齐（#259、#260、#268），npm 单独发布。
+
+- **JSON 持久化与过期摘要对齐 Python（#255、#256、#257，经 #268）。** 保留解码后的 JSON 标量字符串、写入规范 PyFloat JSON、保留过期时间的微秒与时区偏移；提交路径与双向 Python 回放用真实 PostgreSQL worker 覆盖测试，并文档化 JSONB 规范化与遗留键限制。
+
+- **文本结果无损（#260）。** 强制文本结果格式（即使配置 `poolOptions.binary`），Node 22 包输出纳入测试。
+
+- **执行游标保留 PostgreSQL 微秒（#260）。** `timestamptz` 以文本解析，在任何驱动 Date/二进制转换前保留原始微秒。
+
+## onestep-sql 0.7.1
+
+批内唯一校验改为按块调用驱动，减少逐行等待，并遵守真实包大小限制（#228）。
+
+- **临时校验表改为每块一次 executemany 调用。** 避免 0.7.0 对每行分别等待数据库响应；所有块仍写入同一张带唯一索引的临时表，由数据库判定冲突。驱动可以继续拆分一个逻辑块，API 调用次数不等同于 SQL 命令数或网络往返次数。
+
+- **约束 MySQL 驱动合并后的实际大小。** 除逐行检查编码及转义后的数据外，还将 asyncmy 的合并语句上限限制到当前连接的 `max_allowed_packet` 以下，并计入 COM_QUERY 字节。单行合法、整块超限时由驱动继续拆分；单行达到或超过上限时在发送前报 `PERMANENT`。避免低包上限配置下原本可成功的批次变成断线失败。连接失效后不再尝试删除该会话的临时表，以免清理错误掩盖连接错误。
+
+- 整数快速通道不变，字符串业务键仍走数据库校验。扩展同块与跨块的排序规则、普通 NULL、部分索引和前缀索引用例；新增真实 MySQL 32KiB 包上限、编码转义、精确边界与断线恢复用例，并接入 MySQL 8.0/8.4 CI。
+
+## onestep 1.15.0
+
+tracked execution 结果预检：自动 emit 之前先校验 handler 返回值，避免把确定性失败放大成重复写入。
+
+- 修复确定性结果失败发生在自动 emit 之后的问题（#225）。SQL tracked execution 现在在 handler、成功 hook 与 emit transform 完成后、第一次自动 emit 之前，使用与完成确认完全相同的编码器和 `max_result_bytes` 上限预检 handler 返回值；返回值无法编码或超限时失败阶段为 `result_validation`，本次不会调用任何自动 emit sink，是否重试仍由任务的 retry policy 决定。此前这类失败要到完成确认才暴露，于是每一次重试尝试都会先把 sink 写一遍——把本可避免的重复写入放大到最大重试次数。缩小 transform 输出不会降低持久化 handler result 的大小，因此预检针对的是落库结果本身。
+
+- `ManagedExecutionDelivery` 新增可选的异步 `validate_execution_result(result)` 预检能力（刻意不作为 Protocol 成员，保持结构兼容）：未实现该方法的既有第三方 managed delivery 契约与行为完全不变。完成确认仍会独立重新校验，以覆盖直接调用 backend 的客户端以及预检之后发生的值变更。
+
+- 边界说明：该预检不提供跨 sink 与 execution 状态表的原子事务，也不能撤回 handler 或 hook 内主动调用 `ctx.emit()` 等已经发生的副作用。成功写入后发生网络、取消或确认错误仍可能重放，下游仍需幂等。
+
+## onestep-sql 0.7.0
+
+Hardens the batch table-sink path added in 0.6.0: batch-local uniqueness is now
+checked with the database's own index semantics, and MySQL packet limits are
+measured on the encoded query instead of estimated.
+
+- **Batch-local uniqueness validation uses real index semantics**
+  (`_shared/batch_unique.py`). The 0.6.0 check compared payload values in Python,
+  which cannot see collation, MySQL prefix indexes, partial-index predicates or
+  PostgreSQL `NULLS NOT DISTINCT`. A connection-scoped temporary table now
+  reproduces the reflected column unique indexes so the database itself decides
+  conflicts; exact duplicate keys are still rejected cheaply in memory first.
+  The check spans the whole `send` and cannot be bypassed by lowering
+  `batch_size`. Creating the temporary table needs `CREATE TEMPORARY TABLES`
+  (MySQL) or `TEMP` (PostgreSQL) on the run account, and fails before the target
+  table is written rather than falling back to an incomplete Python comparison.
+  The guarantee covers reflected column unique indexes, index columns present in
+  the payload, and partial indexes whose predicate inputs are available; a
+  partial index missing a required predicate field refuses the batch instead of
+  guessing column defaults. Expression/functional indexes, non-reflected
+  indexes, server-generated values and unique columns omitted from the payload
+  remain the database's responsibility.
+
+- **MySQL packet limits are measured, not estimated** (`mysql/batch_packet.py`).
+  The fixed 4 MiB chunking target from 0.6.0 is now only a starting point: the
+  connection's `@@SESSION.max_allowed_packet` is read and the actual encoded
+  query — after SQLAlchemy type processing (including JSON) and this
+  connection's driver encoding and escaping, plus the `COM_QUERY` byte — is
+  measured before sending. An over-limit multi-row statement is split further; a
+  single row that still exceeds the limit raises a `PERMANENT` connector error
+  and rolls back the preceding chunks. Exceeding the packet limit kills the
+  connection (error 2013), which the resilience table classifies as retryable
+  even though replaying the same payload can never succeed, so failing
+  permanently is the correct classification.
+
+- **Batch grouping keeps per-row policies single-row-equivalent.** Only
+  adjacent rows with the same update-column and null sets merge into one
+  statement, so duplicate update keys keep their input order and columns absent
+  from the update set no longer fire `UPDATE OF column` triggers. `skip_null`
+  decides from the input Python `None` rather than from how the driver encodes
+  the value, and `mode: update` uses `IS NULL` for NULL keys with bind
+  parameters carrying the target column type.
+
+- **SQLite default-value rows keep their row count.** An all-defaults payload
+  such as `[{}, {}, {}]` now executes three `DEFAULT VALUES` statements through
+  executemany instead of collapsing the input.
+
+- **Tracked-execution results are validated before automatic emit** (#225). The
+  SQL execution state machine exposes an optional, side-effect-free
+  `validate_result()` that reuses the completion encoder and `max_result_bytes`
+  limit, and the delivery exposes it to the executor as
+  `validate_execution_result()`. A result that cannot be encoded or exceeds the
+  limit now fails at the `result_validation` stage without calling any automatic
+  emit sink; completion still re-validates independently.
+
+- Documents the resulting semantics and permission requirements in
+  `docs/guide/sql-batch-correctness.md`.
+
+## onestep 1.14.0
+
+控制平面可靠性版本：WebSocket 路径的数据库访问原生异步化、实例连通性通知稳定化，以及事件循环与连接池可观测性基线。
+
+- 修复进程终止与容器 PID 复用后的运行时身份锁（#187）：改用 OS 文件锁替代 PID 存活检查；保留锁文件与既有 identity/序列。升级共享状态目录前先停旧 worker。升级与回滚说明见 `docs/stable-instance-identity.md`。
+
+- Agent 与 worker-agent WebSocket 的数据库访问原生异步化（#192、#206、#212、#214）：每条消息作为异步引擎上的一个短事务工作单元运行，慢查询让出事件循环而不是冻结所有已连接 agent；`hello` 握手原子提交会话（异常路径不再泄漏 active session）。
+
+- 实例连通性通知稳定化（#196、#209）：状态变化须在稳定窗口内保持不变才确认通知；抖动抑制压掉此前会造成通知风暴的快速上下线振荡。摘要按最终状态发送——整个窗口都离线的实例不会再报告一次它从未发生过的「恢复」。默认抖动窗口调整为 `max(配置值, 2 × (检测 + 确认间隔))`——依赖旧默认值的部署会看到更少、更晚的通知。
+
+- 可观测性基线接入应用本体（#197、#213）：事件循环延迟采样随应用 lifespan 启停（未运行时由 `/metrics` 兜底），同步引擎上报连接池 checkout 等待。
+
+- 加固 work-agent 连接生命周期（#194、#195、#201、#202、#205）：心跳任务受监督（心跳失败不再静默地杀死存活判定）；重连退避采用 Full Jitter 避免重连踩踏；重连成功后 agent 主动请求补发拓扑，不再被动等待控制平面发现。
+
+- reporter 插件新增只读属性 `session_generation`（#211）。
+
+- 升级提示：本版本包含一个新的 Alembic 迁移（202607250001，新增可空的连通性抑制列）。重启前先执行 `alembic upgrade head`；滚动部署期间旧容器保持兼容。
+
+- 重构内部导入图，无用户可见行为变化。
+
 ## onestep-feishu-bitable 0.6.1
 
 - **Table sink: `cache: eager` relations keyed on a text field silently dropped
@@ -114,6 +318,96 @@ carries a regression test.
 - Caches are in-process and not persisted; deletion is not observed — a stale
   `record_id` surfaces as a write error and is resolved by restarting the task.
 
+## onestep-sql 0.6.0
+
+Batch writes for every table sink (issue #189).
+
+- **`*_table_sink` now accepts a list/tuple of row mappings** in addition to a
+  single mapping, so one `emit` writes a whole batch in one transaction.
+  A handler that returns a list of rows (for example `http_fetcher.fetch_rows()`
+  or a paged API read) produces one envelope and one round trip per chunk
+  instead of one statement and one transaction per row. The single-mapping path
+  is untouched.
+- **New `batch_size` field (default 1000)** caps the rows per statement.
+  Rows are split into chunks that all execute inside the *same* transaction, so
+  a failure rolls the whole batch back and an at-least-once retry can never
+  leave a partial write. SQLite additionally clamps chunks to its portable
+  parameter ceiling, and MySQL chunks are capped by an estimated 4MB statement
+  budget: exceeding `max_allowed_packet` does not return a clean error, it
+  **kills the connection** (error 2013), which the resilience table classifies
+  as `DISCONNECTED` — i.e. retryable, even though replaying the same batch can
+  never succeed. Operators with large payloads raise the server limit instead.
+- **Dialect-specific batch paths:** MySQL renders multi-row
+  `INSERT ... VALUES (...),(...) AS new ON DUPLICATE KEY UPDATE` (the
+  `new.col` alias form on 8.0.20+), PostgreSQL and SQLite use per-row
+  `ON CONFLICT ... DO UPDATE` executemany, and `mode: update` uses bindparam
+  executemany everywhere (SQLAlchemy cannot render multi-row `UPDATE`).
+- **Payload-shape violations are rejected before any write** with
+  `ConnectorOperationError(kind=PERMANENT)`: a non-mapping element, rows whose
+  column sets differ, an unhashable key value, a column not present on the
+  target table, and — for `upsert` — two rows that collide on the declared
+  `keys` **or on any other unique index the payload carries**.
+  - The `keys` case matters because MySQL/SQLite would silently apply
+    last-wins while PostgreSQL fails with `cannot affect row a second time`.
+  - The secondary-unique-index case is the same divergence reached through a
+    different index: with `PRIMARY KEY(id)` + `UNIQUE(email)` and
+    `keys=("id",)`, two rows sharing an email overwrote each other on
+    MySQL/SQLite while PostgreSQL raised `UniqueViolation`. Both are now
+    refused deterministically with the offending row index. Note this makes
+    the batch path *stricter* than the single-mapping path, which still leaves
+    secondary-index collisions to the database.
+  - An unknown column previously produced three different outcomes for one
+    mistake — a bare `CompileError` (MySQL/SQLite), a **silently dropped key
+    with a successful write** (PostgreSQL executemany), or a bare `KeyError`
+    from the batch `SET` derivation that bypassed connector error
+    classification. All now raise `PERMANENT`. A payload column excluded by
+    the `update_columns` whitelist stays tolerated in `mode: update`, exactly
+    as the single-mapping path tolerates it.
+- **Per-row policies keep their single-row semantics in batch mode:**
+  `skip_null` becomes a shared `CASE WHEN <new value> IS NULL THEN <column>
+  ELSE <new value> END` so a NULL never overwrites an existing value, and rows
+  whose update columns are *all* filtered by `skip_null` are dropped from the
+  batch instead of being inserted. `backfill` keeps its `coalesce(column, new)`
+  form, `update_expr` renders unchanged, and `update_columns` is intersected
+  with the payload columns so a column absent from the payload is never written
+  as NULL.
+- **`mode: update` batch parameters are projected explicitly** onto prefixed
+  bind names, so a same-named table column present in the payload can no longer
+  leak into the `SET` clause past the `update_columns` whitelist.
+- Empty lists are a no-op (no `INSERT ... VALUES ()` ghost row).
+
+## onestep-sql 0.5.0
+
+Reliability fixes for silent data loss, plus single-transaction table-queue
+completion.
+
+- **`mode: upsert` silently degraded into plain inserts when the declared
+  `keys` had no equivalent unique index (issue #188).** MySQL renders
+  `INSERT ... ON DUPLICATE KEY UPDATE`, which declares no conflict target and
+  only takes the update branch when *some* unique key is hit; with a plain
+  (non-unique) index on `keys` every run inserted fresh duplicates and
+  `check` / `run` / startup logs said nothing. `sqlite`/`postgres` declare the
+  conflict target and so failed loudly, but only per row and with a
+  dialect-specific message. All three backends now run a preflight on the
+  first `_send`, once the table metadata has been reflected: a unique
+  constraint or primary key whose column set **exactly** matches `keys`
+  (order-insensitive, composite included) must exist, otherwise the write is
+  refused with `ConnectorOperationError(kind=MISCONFIGURED)` naming the table,
+  the declared keys and the existing indexes. A subset is deliberately not
+  accepted — `UNIQUE(a, b)` does not constrain `a` alone. The result is cached
+  per sink, so per-row writes pay no extra reflection. Note that a unique index
+  over a nullable column still permits multiple NULLs, so the preflight is not
+  a guarantee of idempotency for nullable keys.
+- **Adds `TableQueueDelivery.complete(values)` (#181):** merges the row
+  write-back and the queue ack into a single transaction, so a crash between
+  sink commit and ack can no longer double-write rows or lose the completion.
+  Implemented once in `onestep_sql._shared.table_queue` for the
+  MySQL/PostgreSQL/SQLite deliveries; core support lands in `onestep` 1.13.0.
+- **`onestep check` warns when a table_queue task configures a non-empty
+  `claim` with an empty `nack` (#180)** — a misconfiguration whose every
+  failure path no-ops, leaving failed rows silently stuck in the claimed
+  state. The lint lives in `onestep_sql._shared.table_queue_lint`.
+
 ## onestep-sql 0.4.0
 
 - Adds MySQL tracked execution: `MySQLConnector.execution_backend()`,
@@ -152,6 +446,52 @@ carries a regression test.
 - Fixes MySQL incremental composite cursor scans (issue #163) by expanding
   lexicographic inequalities into bound prefix ranges. Keeps cursor ordering,
   serialization, ACK/retry fencing, and PostgreSQL behaviour unchanged.
+
+## onestep 1.13.0
+
+New `http_fetcher` connector resource, emit partial-failure observability, and
+single-transaction table-queue completion; plus the TypeScript execution
+client.
+
+- Adds a stateless `http_fetcher` resource (#186): a YAML-declarable HTTP
+  client that task handlers call on demand through `ctx.resources`. It is a
+  connector, not a source — the runtime never polls it; a delivery from a cron
+  (or any other) source is the trigger, and the handler calls
+  `fetch(params_override)` / `fetch_rows()` when it needs data. It reuses the
+  `http_sink` transport stack (URL/header/param/timeout/status normalization
+  and error classification), supports a static or per-call JSON request body,
+  validates `success_statuses`, and parses the JSON response;
+  `fetch_rows()` projects the response into row mappings through an optional
+  `rows` callable (sync or async) so emit-to-sink flows can fan out fetched
+  rows without a hand-written HTTP client. Failures raise
+  `ConnectorOperationError`, so the task retry policy owns handling, and the
+  control-plane descriptor inherits the sink's secret redaction.
+
+- Records `sinks_succeeded` when an emit partially fails (#182): when a fan-out
+  emit commits only some of its sinks, the execution failure now names exactly
+  which sinks succeeded, making the retry replay window (which sinks will see
+  the row again) explicit instead of implicit.
+
+- Fixes an execution-error build crash when the first sink of a fan-out fails
+  (#182): with zero sinks succeeded, the empty `sinks_succeeded` marker hit
+  `ExecutionErrorDetail`'s non-empty text validation, the resulting
+  `ValueError` bubbled out of failure handling, and the RETRY/FAIL delivery
+  action was never applied — the task ended in a lost-retry limbo and
+  diagnostics degraded to the `child_failed` fallback. The error detail now
+  normalizes the empty marker to absent; event semantics (empty list) are
+  unchanged.
+
+- Adds `TableQueueDelivery.complete(values)` (#181): merges the row write-back
+  and the queue ack into a single transaction, so a crash between sink commit
+  and ack can no longer double-write rows or lose the completion. Core support
+  lands in `context.py`; the MySQL/PostgreSQL/SQLite delivery implementations
+  ship in `onestep-sql` 0.5.0. `onestep check` also warns when a table_queue
+  task configures a non-empty claim with an empty nack (#180) — a
+  misconfiguration that silently drops the retry path.
+
+- Adds `@mic1on/onestep-client` (#178, #179): a TypeScript `ExecutionClient`
+  for onestep's tracked execution state (`clients/ts`), published to npm
+  separately from the Python package.
 
 ## onestep 1.12.0
 
@@ -223,7 +563,7 @@ project scaffolding.
   serves `/metrics` and a `/healthz` probe (runtime + per-source liveness,
   usable as a K8s liveness/readiness endpoint) from a tiny asyncio HTTP
   server coexisting with webhook sources. A ready-made monitoring stack
-  lives in `examples/prometheus/` (onestep + Prometheus + Grafana with a
+  lives in `example/prometheus/` (onestep + Prometheus + Grafana with a
   provisioned dashboard).
 
 - Adds the `onestep-cf-queues` plugin: a Cloudflare Queues connector that
@@ -257,6 +597,47 @@ project scaffolding.
   retired and replaced by dual-backend contract tests
   (`tests/contract/test_onestep_sql_shared.py`) that pin the shared behaviour
   for both backends.
+
+## onestep-control-plane 0.2.0
+
+**Presence beacon: an instance blocked in a synchronous handler is no longer
+reported offline.**
+
+The heartbeat loop and every task handler share one asyncio event loop, so a
+handler that blocks (`requests`, `boto3`, `pandas`, `time.sleep`) starves the
+heartbeat: `last_seen_at` goes stale, the instance is reported `offline`, and it
+comes back `online` when the block ends -- a flap on every slow call. A blocked
+loop cannot answer WebSocket ping/pong either, so the socket dies before the
+offline window elapses and no in-band fix is possible.
+
+- The reporter now starts a **daemon thread** that watches a monotonic timestamp
+  the heartbeat loop updates each tick, and POSTs
+  `POST /api/v1/agents/presence` **only** once the loop has been silent for
+  longer than its grace window. While the loop is healthy the thread sends
+  nothing, so existing deployments and their traffic are unchanged.
+- The control plane advances `instances.last_seen_at` and nothing else. The
+  frame carries no sequence and no health, so it cannot reorder the heartbeat
+  stream or overwrite the last `status` / `app_snapshot_json` the agent sent.
+  `connectivity` keeps its three values and the console is unchanged.
+- A genuine reporting outage is not hidden: an agent whose socket is broken
+  while its loop is healthy keeps touching the timestamp, stays silent, and is
+  still reported `offline`.
+- Older control planes without the route answer `404`; the beacon logs once and
+  disables itself, so the plugin can ship before the plane.
+- Enabled by default. `ONESTEP_CONTROL_PLANE_PRESENCE_ENABLED` turns it off;
+  `_INTERVAL_S` (default `heartbeat_interval_s`) and `_GRACE_S` (default
+  `2 x heartbeat_interval_s`) tune it.
+- Blocking handlers are still worth converting to `asyncio.to_thread()`: the
+  beacon keeps the instance shown as online, but a blocked loop still delays
+  task throughput and command responses.
+
+## onestep-control-plane 0.1.3
+
+- **Table-sink topology now reports `batch_size`.** `batch_size` was added to
+  the SQL table sinks' `topology_fields` (onestep-sql 0.6.0), but the reporter's
+  `TableSink` branch never emitted it, so the control-plane detail view showed
+  "not reported" for every table sink. The branch also now matches
+  `PostgresTableSink`, which previously fell through to an empty config.
 
 ## onestep-control-plane 0.1.2
 

@@ -42,7 +42,9 @@ def test_stop_controls_release_fetched_unstarted_kafka_delivery(control: StopCon
 
         def assert_released() -> None:
             assert consumer.commits == []
-            assert consumer.seeks == [(tp, 10)]
+            assert consumer.seeks == []
+            # The harness closes the source; Kafka still owns the uncommitted record.
+            assert consumer.stopped
 
         await run_claimed_source_stop_contract(
             ClaimedSourceHarness(

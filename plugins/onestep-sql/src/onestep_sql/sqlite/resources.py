@@ -10,6 +10,7 @@ from onestep.resource_registry import (
     ResourceRegistry,
     ResourceSpecHandler,
 )
+from onestep_sql._shared.table_queue_lint import warn_empty_nack_with_claim
 
 from .connector import SQLiteConnector
 
@@ -27,7 +28,7 @@ _SQLITE_INCREMENTAL_FIELDS = frozenset(
     {"type", "connector", "table", "key", "cursor", "where", "batch_size", "poll_interval_s", "state", "state_key"}
 )
 _SQLITE_TABLE_SINK_FIELDS = frozenset(
-    {"type", "connector", "table", "mode", "keys", "update_columns", "update_expr", "serialize_json"}
+    {"type", "connector", "table", "mode", "keys", "update_columns", "update_expr", "serialize_json", "batch_size"}
 )
 _SQLITE_CATALOG = ResourceCatalogEntry(
     type="sqlite",
@@ -117,8 +118,9 @@ _SQLITE_TABLE_SINK_CATALOG = ResourceCatalogEntry(
         ResourceCatalogField("update_columns", "json"),
         ResourceCatalogField("update_expr", "mapping"),
         ResourceCatalogField("serialize_json", "string", default="auto", options=("auto", "always", "never")),
+        ResourceCatalogField("batch_size", "integer", default=1000),
     ),
-    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json"),
+    topology_fields=("table", "mode", "keys", "update_columns", "update_expr", "serialize_json", "batch_size"),
 )
 
 
@@ -210,13 +212,16 @@ def _build_sqlite_table_queue(ctx: ResourceBuildContext, spec: Mapping[str, Any]
     connector = ctx.resolve_dependency(spec, "connector")
     if not hasattr(connector, "table_queue"):
         raise TypeError(f"resource {spec['connector']!r} cannot build sqlite_table_queue")
+    claim = ctx.require_mapping(spec, "claim")
+    nack = ctx.optional_mapping(spec.get("nack"), field=f"{ctx.field}.nack")
+    warn_empty_nack_with_claim(field=ctx.field, claim=claim, nack=nack)
     return connector.table_queue(
         table=ctx.require_string(spec, "table"),
         key=ctx.require_string(spec, "key"),
         where=ctx.require_string(spec, "where"),
-        claim=ctx.require_mapping(spec, "claim"),
+        claim=claim,
         ack=ctx.require_mapping(spec, "ack"),
-        nack=ctx.optional_mapping(spec.get("nack"), field=f"{ctx.field}.nack") or None,
+        nack=nack or None,
         batch_size=spec.get("batch_size", 100),
         poll_interval_s=spec.get("poll_interval_s", 1.0),
     )
@@ -272,4 +277,5 @@ def _build_sqlite_table_sink(ctx: ResourceBuildContext, spec: Mapping[str, Any])
         if update_expr is not None
         else None,
         serialize_json=spec.get("serialize_json", "auto"),
+        batch_size=spec.get("batch_size", 1000),
     )

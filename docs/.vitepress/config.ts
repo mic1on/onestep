@@ -225,6 +225,7 @@ export default withMermaid(defineConfig({
           { text: '环境变量', link: '/guide/environment-variables' },
           { text: 'Worker Runtime Image', link: '/guide/worker-runtime-image' },
           { text: '迁移到 onestep-sql', link: '/guide/migrate-to-onestep-sql' },
+          { text: 'AI 与自动化接口', link: '/guide/ai-interfaces' },
         ],
       },
       {

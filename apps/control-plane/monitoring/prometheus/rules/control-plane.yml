@@ -70,9 +70,352 @@ groups:
         expr: sum(increase(onestep_control_plane_notification_deliveries_total{status="failed"}[15m])) > 0
         for: 15m
         labels:
-          severity: warning
+          # critical, not warning. When delivery fails, nobody receives the task
+          # failure, missed start or instance offline notifications -- the operator
+          # loses their alerting channel and has no way to notice from inside the
+          # console. Same blindness class as ScanFailing, and the same `for: 15m`
+          # over a 15m window keeps a single failed webhook from paging.
+          severity: critical
           service: onestep-control-plane
         annotations:
           summary: Notification delivery failures detected
-          description: Notification webhook deliveries have failed in the last 15 minutes.
+          description: >-
+            Notification webhook deliveries have failed in the last 15 minutes. Task
+            failure, missed start and instance offline notifications are not reaching
+            their destination while this fires, so the operator may be blind to
+            incidents without knowing it. This counts ATTEMPTS, including ones the
+            outbox will retry -- see OneStepControlPlaneNotificationLost for the
+            subset that will never be sent again.
           runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationdeliveryfailures
+
+      - alert: OneStepControlPlaneNotificationLost
+        expr: sum(increase(onestep_control_plane_notification_deliveries_total{status="permanently_failed"}[15m])) > 0
+        for: 5m
+        labels:
+          # `for: 5m` rather than 15m: a lost notification is already final, so there
+          # is nothing to wait out. This is the subset of delivery failures that will
+          # NEVER be retried -- the retry budget is exhausted, so the operator was
+          # simply never told. Kept separate from the attempt-level alert above so
+          # this one can be strict without its noisy sibling firing on every blip.
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: A notification was permanently abandoned
+          description: >-
+            The retry budget for a notification was exhausted and the delivery was
+            abandoned, so that task failure, missed start or instance offline event
+            was never reported to anyone. Unlike a transient delivery failure this
+            will not retry. Check the outbox rows with status permanently_failed and
+            the destination webhook.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationlost
+
+      # --- the notifier's own queue -------------------------------------------
+      # Plane B alerts on task and instance events, but nothing watched Plane B. If
+      # its outbox backs up or its drainer stops keeping up, the operator silently
+      # stops receiving alerts and the absence of alerts reads as health.
+      #
+      # These read gauges sampled by the outbox worker on each tick, so they only
+      # exist once a worker has run -- an absent family means "never sampled", and
+      # OneStepControlPlaneNotificationQueueUnsampled covers exactly that case. A
+      # family that EXISTS but has stopped advancing is the other half of the same
+      # problem and needs a different test, because the values are replayed from
+      # process memory on every scrape: OneStepControlPlaneNotificationQueueSamplingStale
+      # reads the age of the sample itself.
+      - alert: OneStepControlPlaneNotificationQueueStuck
+        expr: onestep_control_plane_notification_outbox_oldest_pending_seconds > 900
+        for: 10m
+        labels:
+          # `warning`, not critical: the queue is stalled but recoverable, and the
+          # lost-notification alert already covers the case where anything was
+          # actually dropped. The age threshold matters more than the depth -- a
+          # deep queue that is draining is healthy, one stuck row is not.
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Notification outbox is not draining
+          description: >-
+            The oldest due outbox row has been waiting more than 15 minutes. Rows are
+            due (next_attempt_at is in the past) but not being delivered, so the
+            drainer is stalled, erroring, or has lost leadership. Notifications are
+            piling up rather than being lost, so nothing is unrecoverable yet.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueuestuck
+
+      - alert: OneStepControlPlaneNotificationQueueUnsampled
+        expr: up{job="onestep-control-plane"} == 1 and on() absent(onestep_control_plane_notification_outbox_pending)
+        for: 15m
+        labels:
+          # critical: the outbox worker has never reported, so the entire
+          # notification plane may be dead and nothing would say so.
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: Notification outbox has never been sampled
+          description: >-
+            No outbox backlog gauge has been exported, so the notification drainer has
+            not completed a single tick since this process started. The notification
+            plane is very likely dead while appearing configured. Check outbox worker
+            leadership and its logs.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueueunsampled
+
+      # Not an absence guard, so it must NOT use absent(): the frozen family is
+      # present, only its value is old -- `absent()` would be false forever here.
+      #
+      # Threshold: 120s, the same staleness bound the readiness check applies to a
+      # background task (`readiness_task_stale_after_s`), so "stale" means one thing
+      # in this deployment. It is far above the healthy sample cadence -- the worker
+      # samples once per drain (drain_interval 2s + drain time), so an empty queue
+      # stamps a fresh value every ~2s and even a full 50-row batch against a fast
+      # webhook takes ~10s. It is also 8x the 15s scrape interval, so scrape jitter
+      # cannot reach it. A single pathological batch CAN (50 rows x 5s delivery
+      # timeout = 250s), which is why the 10m `for` is load-bearing rather than
+      # decorative: only a sustained condition alerts. That case is not a false
+      # positive either -- the drain's per-row progress callback keeps /readyz green
+      # while the readings age, so this rule is the only thing that can report it.
+      #
+      # `up == 1` gate: deliberate, and it does the same job it does for the guards
+      # above. While the target is down its last scraped sample also ages past the
+      # threshold, and that incident is already named by OneStepControlPlaneApiDown.
+      # The gate makes the two mutually exclusive by construction, so this rule needs
+      # no inhibit entry in alertmanager.yml -- exactly like the absence guards.
+      #
+      # The `and` matches on the full label set on purpose: Prometheus attaches the
+      # scraped target's job/instance labels to the gauge, so each replica is judged
+      # against its OWN last sample. A standby replica never drains and therefore
+      # emits no timestamp at all (no series, so no alert here), and a multi-replica
+      # deployment cannot cross-pair one replica's `up` with another's freshness.
+      - alert: OneStepControlPlaneNotificationQueueSamplingStale
+        expr: |
+          up{job="onestep-control-plane"} == 1
+            and (time() - onestep_control_plane_notification_outbox_sampled_at_timestamp_seconds) > 120
+        for: 10m
+        labels:
+          # `warning`, not critical: the common shape of this incident (the worker
+          # stops ticking) also stalls the readiness check, and
+          # OneStepControlPlaneReadyzFailing already pages for that root cause as
+          # critical. What is left for this rule is the residue /readyz cannot see --
+          # a worker that keeps ticking while its samples stop -- plus the metric-level
+          # statement of the fact. Same tier and `for` as NotificationQueueStuck: a
+          # ticket, not a second page for one root cause.
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Notification outbox readings have gone stale
+          description: >-
+            The last successful outbox sample is more than 2 minutes old while the API
+            target is up, so every outbox gauge is a value replayed from process memory
+            rather than a current reading. NotificationQueueStuck reads the age of the
+            QUEUE and cannot see this (a frozen oldest_pending_seconds stays plausible
+            forever), and NotificationQueueUnsampled needs the family to be ABSENT,
+            which it is not. Treat the outbox gauges as unproven until this clears: the
+            notification plane may be dead while its backlog reads healthy.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanenotificationqueuesamplingstale
+
+  - name: onestep-control-plane-latency
+    rules:
+      # NOTE: there is deliberately no alert on `onestep_task_*` (task throughput or
+      # task failure rate).
+      #
+      # Those families look like counters and keep a `_total` suffix, but their value
+      # is SUM(TaskMetricWindow.*) over every window still inside retention, and the
+      # retention worker deletes windows older than 90 days. The sum therefore
+      # DECREASES on each retention pass, so they are exported as gauges and no
+      # `increase()`/`rate()` rule may use them -- Prometheus would read the drop as
+      # a counter reset and fold the whole retained total into one bogus spike.
+      #
+      # `test_no_alert_rule_uses_increase_or_rate_on_task_totals` enforces this. To
+      # get a real task failure-rate alert the emitter needs a monotonic counter that
+      # only ever increases per process (for example an in-process counter incremented
+      # on ingest, with its own bounded labels) rather than a retention-window sum.
+      #
+      # These read the series emitted directly by the control plane's own /metrics
+      # endpoint (the #197 baseline plus the scrape-time pool occupancy sampling),
+      # so they need no external exporter. Thresholds are the ones the latency
+      # diagnostics runbook already documents as the "sustained" signal, kept in
+      # sync with docs/runbooks/control-plane-latency-diagnostics.md section 6.
+      - alert: OneStepControlPlaneEventLoopBlocked
+        expr: onestep_control_plane_event_loop_lag_p95_seconds > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane event loop is blocked
+          description: >-
+            p95 event-loop lag has exceeded 200 ms for 10 minutes. Synchronous work
+            is running on the loop. Follow the latency diagnostics runbook to tell
+            this apart from pool wait and a slow database.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplaneeventloopblocked
+
+      - alert: OneStepControlPlaneEventLoopLagSamplerDead
+        expr: onestep_control_plane_event_loop_lag_sampler_running == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane event-loop lag sampler is not running
+          description: >-
+            The lag sampler task is not alive, so every lag gauge is stale. This means
+            "no data", NOT "no lag" -- treat a quiet lag graph as unproven until this
+            clears.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplaneeventlooplagsamplerdead
+
+      - alert: OneStepControlPlaneDbPoolSaturated
+        expr: |
+          onestep_control_plane_db_pool_checked_out
+            / clamp_min(onestep_control_plane_db_pool_size, 1) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane database pool is saturated
+          description: >-
+            More than 90% of the database connection pool has been checked out for 10
+            minutes. Check for leaked sessions (a checkout with no matching checkin)
+            before raising pool_size.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanedbpoolsaturated
+
+      - alert: OneStepControlPlaneDbPoolWaitSlow
+        expr: |
+          sum(increase(onestep_control_plane_db_pool_wait_slow_total[15m]))
+            / clamp_min(sum(increase(onestep_control_plane_db_pool_checkouts_total[15m])), 1)
+            > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Control-plane database checkout waits are slow
+          description: >-
+            More than 10% of pool checkouts waited at least 100 ms over the last 15
+            minutes. Use the occupancy gauges to separate slot contention from slow
+            connection setup.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanedbpoolwaitslow
+
+      - alert: OneStepControlPlaneScanFailing
+        expr: increase(onestep_control_plane_scan_failures_total[15m]) > 0
+        for: 15m
+        labels:
+          # critical, not warning. A failing scan does not just degrade a metric --
+          # it stops the detection of missed starts and instance connectivity, so
+          # the notification plane goes quiet and quiet reads as healthy. That is a
+          # BLINDNESS failure, which is more dangerous than the API being down (that
+          # at least announces itself). The `for: 15m` over a 15m window means the
+          # condition must hold continuously, i.e. roughly 30 minutes of sustained
+          # failures, so this is not a page on a single blip.
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: A control-plane background scan is failing
+          description: >-
+            A background scan has raised within the last 15 minutes. Missed starts and
+            instance connectivity are detected by these scans, so a failing scan means
+            those alerts are not being evaluated at all.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanescanfailing
+
+      - alert: OneStepControlPlaneScanSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, scan) (rate(onestep_control_plane_scan_duration_seconds_bucket[15m]))
+          ) > 5
+        for: 15m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: A control-plane background scan is running slowly
+          description: >-
+            p95 duration of a background scan has exceeded 5 seconds for 15 minutes.
+            The scan holds a database transaction, so a slow scan delays detection.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanescanslow
+
+  # ------------------------------------------------------------------------------------
+  # Absence guards.
+  #
+  # Every alert above is an expression over a time series, and a missing series makes
+  # such an expression evaluate to NO DATA -- which is indistinguishable from "healthy"
+  # on a graph and fires nothing. Several of these families are absent until their
+  # first observation, so their alerts are silent exactly when the subsystem that
+  # produces them has never run:
+  #
+  #   * the lag gauges (p95/max) only appear after the sampler records a sample;
+  #   * the scan families only appear after a scan has actually run -- and a scanner
+  #     that never won leadership has never run, so `increase(...) > 0` sees nothing
+  #     and OneStepControlPlaneScanFailing stays quiet;
+  #   * the occupancy gauges only appear after a scrape refreshed them.
+  #
+  # The guards below turn that silence into a signal. They are the "who watches the
+  # watcher" layer: they fire when the target is UP but the family is MISSING, which is
+  # precisely the state where the dependent alerts cannot be trusted.
+  #
+  # `and on()` is load-bearing, not decoration. `absent()` returns a series with an
+  # EMPTY label set, and a bare `and` matches on all labels -- so
+  # `up{job="x"} and absent(...)` matches nothing and the guard would never fire. That
+  # exact trap was verified against Prometheus 2.53 before this rule was written.
+  # ------------------------------------------------------------------------------------
+  - name: onestep-control-plane-absence
+    rules:
+      - alert: OneStepControlPlaneMetricsMissing
+        expr: up{job="onestep-control-plane"} == 1 and on() absent(onestep_control_plane_event_loop_lag_sampler_running)
+        for: 10m
+        labels:
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: Control plane is up but exporting no observability metrics
+          description: >-
+            The scrape target is up, yet the control plane's own metric families are
+            absent. Every alert that reads them is therefore silent, which reads as
+            healthy. Note this is NOT the bearer-token case: a wrong token makes
+            /metrics answer 401, which marks the target DOWN and raises
+            OneStepControlPlaneApiDown instead (verified against Prometheus 2.53).
+            This fires when the scrape succeeds but the process exports nothing.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanemetricsmissing
+
+      - alert: OneStepControlPlaneScanNeverRan
+        expr: up{job="onestep-control-plane"} == 1 and on() absent(onestep_control_plane_scan_runs_total)
+        for: 30m
+        labels:
+          severity: critical
+          service: onestep-control-plane
+        annotations:
+          summary: No control-plane background scan has ever run
+          description: >-
+            The scan metric family has never appeared, so no scan has completed since
+            this process started. Missed-start and instance-connectivity notifications
+            are produced by these scans: while this fires, those alerts are not merely
+            quiet, they are not being evaluated at all. Usual cause is the scanner never
+            winning its leader lease.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanescanneverran
+
+      - alert: OneStepControlPlaneLagWindowEmpty
+        expr: up{job="onestep-control-plane"} == 1 and on() absent(onestep_control_plane_event_loop_lag_p95_seconds)
+        for: 10m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Event-loop lag window has no samples
+          description: >-
+            The p95/max lag gauges are absent because the rolling window holds no
+            samples, so OneStepControlPlaneEventLoopBlocked cannot fire. The sampler is
+            running but recording nothing.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanelagwindowempty
+
+      - alert: OneStepControlPlaneDbPoolOccupancyMissing
+        expr: up{job="onestep-control-plane"} == 1 and on() absent(onestep_control_plane_db_pool_checked_out)
+        for: 15m
+        labels:
+          severity: warning
+          service: onestep-control-plane
+        annotations:
+          summary: Database pool occupancy gauges are missing
+          description: >-
+            The occupancy gauges are sampled on the scrape path, so their absence means
+            the sampling step is failing -- check the control plane logs for "could not
+            sample pool occupancy". OneStepControlPlaneDbPoolSaturated reads these, so
+            pool saturation is currently unmonitored.
+          runbook: docs/runbooks/alerts.md#onestepcontrolplanedbpooloccupancymissing
+

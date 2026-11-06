@@ -1657,6 +1657,7 @@ def test_instance_command_queue_until_reconnect_uses_latest_compatible_session(
     assert command is not None
     assert command.status == "pending"
     assert command.kind == "sync_now"
+    assert command.session_id is None
 
     detail_response = client.get(
         f"/api/v1/services/billing-sync/instances/{instance.instance_id}",
@@ -1666,6 +1667,50 @@ def test_instance_command_queue_until_reconnect_uses_latest_compatible_session(
     detail_payload = detail_response.json()
     assert detail_payload["latest_session"]["session_id"] == "sess_last_known"
     assert detail_payload["latest_session"]["status"] == "disconnected"
+
+
+def test_instance_command_queue_until_reconnect_rejects_incompatible_last_session(
+    client,
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    service = seed_service(db_session, name="billing-sync", environment="prod")
+    instance = seed_instance(
+        db_session,
+        service,
+        node_name="vm-incompatible-queue",
+        status="ok",
+        last_seen_at=now - timedelta(minutes=6),
+    )
+    seed_agent_session(
+        db_session,
+        service,
+        instance,
+        status="disconnected",
+        connected_at=now - timedelta(minutes=15),
+        session_id="sess_last_incompatible",
+        accepted_capabilities_json=["telemetry.sync", "command.flush_metrics"],
+    )
+    db_session.commit()
+
+    response = client.post(
+        f"/api/v1/instances/{instance.instance_id}/commands",
+        json={
+            "kind": "sync_now",
+            "args": {},
+            "timeout_s": 20,
+            "delivery_mode": "queue_until_reconnect",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "last known session does not advertise capability command.sync_now" in response.text
+    assert (
+        db_session.scalar(
+            select(AgentCommand).where(AgentCommand.instance_id == instance.instance_id)
+        )
+        is None
+    )
 
 
 def test_instance_command_dispatch_now_only_requires_live_connection(client, db_session) -> None:
@@ -1867,6 +1912,7 @@ def test_service_command_fanout_queues_supported_offline_targets_and_rejects_cap
     assert commands[0].instance_id == queueable_instance.instance_id
     assert commands[0].status == "pending"
     assert commands[0].kind == "sync_now"
+    assert commands[0].session_id is None
     assert commands[0].reason == "Reconcile queue consumers after incident review"
     assert commands[0].source_surface == "service_detail_fanout"
 

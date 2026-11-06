@@ -1,17 +1,35 @@
 import asyncio
 import os
 import uuid
+from unittest import mock
 
 import pytest
 import sqlalchemy as sa
+from onestep.envelope import Envelope
+from onestep.resilience import ConnectorErrorKind, ConnectorOperationError
 from onestep_mysql import MySQLConnector
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 if not os.getenv("ONESTEP_MYSQL_DSN"):
     pytest.skip("set ONESTEP_MYSQL_DSN to run MySQL integration tests", allow_module_level=True)
 
 
 def _engine():
-    return sa.create_engine(os.environ["ONESTEP_MYSQL_DSN"], future=True)
+    """A *synchronous* engine for the DDL/verification probes in this file.
+
+    The connector under test always uses the exact ``ONESTEP_MYSQL_DSN`` it was
+    pointed at, but these probes run outside ``asyncio`` and SQLAlchemy's sync
+    engine cannot drive an asyncio driver: ``mysql+asyncmy://`` raises
+    ``MissingGreenlet`` on the first statement. The live CI matrix points the
+    DSN at both drivers, so the probes normalise an async DSN onto ``pymysql``
+    (also a hard dependency of onestep-sql's ``mysql`` extra) — the same
+    driver-immunity trick ``test_mysql_execution_live.py`` uses in the other
+    direction.
+    """
+    dsn = os.environ["ONESTEP_MYSQL_DSN"]
+    if "+asyncmy" in dsn:
+        dsn = dsn.replace("+asyncmy", "+pymysql")
+    return sa.create_engine(dsn, future=True)
 
 
 @pytest.mark.integration
@@ -343,5 +361,463 @@ def test_mysql_incremental_prefetch_preserves_datetime_restart_and_updates_live(
             with engine.begin() as conn:
                 conn.execute(sa.text(f"DROP TABLE IF EXISTS `{cursor_name}`"))
             engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_queue_complete_atomic_live():
+    """complete() lands the business column and the ack column together on a
+    real server, and the follow-up ack() is a delivery-local no-op (issue #181)."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"orders_{suffix}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        orders = sa.Table(
+            table_name,
+            metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("payload", sa.String(255), nullable=False),
+            sa.Column("status", sa.Integer, nullable=False),
+            sa.Column("score", sa.Integer),
+        )
+        metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.insert(orders),
+                [{"id": 1, "payload": "alpha", "status": 0, "score": None}],
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        source = db.table_queue(
+            table=table_name,
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.1,
+        )
+
+        ack_row_calls: list[object] = []
+        original_ack_row = source.ack_row
+
+        async def recording_ack_row(row_ref: object) -> None:
+            ack_row_calls.append(row_ref)
+            await original_ack_row(row_ref)
+
+        source.ack_row = recording_ack_row  # type: ignore[method-assign]
+
+        batch = await source.fetch(10)
+        assert [item.payload["id"] for item in batch] == [1]
+        delivery = batch[0]
+
+        await delivery.complete({"score": 42})
+        assert delivery.payload["score"] == 42
+        assert delivery.payload["status"] == 9
+
+        await delivery.ack()
+        assert ack_row_calls == []
+
+        with engine.begin() as conn:
+            row = conn.execute(
+                sa.select(orders.c.status, orders.c.score).order_by(orders.c.id)
+            ).first()
+        assert row == (1, 42)
+
+        await db.close()
+        metadata.drop_all(engine)
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_queue_complete_midtransaction_failure_rolls_back_live():
+    """A failure between the two UPDATE statements inside complete() leaves the
+    row in its claim state on a real server (issue #181)."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"orders_{suffix}"
+        engine = _engine()
+        metadata = sa.MetaData()
+        orders = sa.Table(
+            table_name,
+            metadata,
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("payload", sa.String(255), nullable=False),
+            sa.Column("status", sa.Integer, nullable=False),
+            sa.Column("score", sa.Integer),
+        )
+        metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.insert(orders),
+                [{"id": 1, "payload": "alpha", "status": 0, "score": None}],
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        source = db.table_queue(
+            table=table_name,
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.1,
+        )
+
+        batch = await source.fetch(10)
+        delivery = batch[0]
+
+        original_execute = AsyncConnection.execute
+        execute_calls = {"count": 0}
+
+        async def failing_execute(self: AsyncConnection, *args: object, **kwargs: object):
+            execute_calls["count"] += 1
+            if execute_calls["count"] == 2:
+                raise RuntimeError("injected mid-transaction failure")
+            return await original_execute(self, *args, **kwargs)
+
+        with (
+            mock.patch.object(AsyncConnection, "execute", failing_execute),
+            pytest.raises(RuntimeError, match="injected mid-transaction failure"),
+        ):
+            await delivery.complete({"score": 42})
+
+        assert execute_calls["count"] == 2  # values UPDATE ran, ack UPDATE raised
+        assert delivery._complete_ack_applied is False
+
+        with engine.begin() as conn:
+            row = conn.execute(
+                sa.select(orders.c.status, orders.c.score).order_by(orders.c.id)
+            ).first()
+        # Neither the business value nor the ack survived the rollback.
+        assert row == (9, None)
+
+        # The delivery stays usable: retrying complete() after the injected
+        # failure succeeds and applies both writes atomically.
+        await delivery.complete({"score": 42})
+        assert delivery._complete_ack_applied is True
+        with engine.begin() as conn:
+            row = conn.execute(
+                sa.select(orders.c.status, orders.c.score).order_by(orders.c.id)
+            ).first()
+        assert row == (1, 42)
+
+        await db.close()
+        metadata.drop_all(engine)
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_upsert_without_unique_index_fails_live():
+    """The issue #188 silent-degradation guard, on a real server.
+
+    ``ON DUPLICATE KEY UPDATE`` declares no conflict target: with only a plain
+    index on the declared keys, every run inserted fresh duplicates and nothing
+    reported an error. The preflight must now refuse the write outright, and a
+    correctly-configured table must stay idempotent.
+    """
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        plain_table = f"sale_device_{suffix}"
+        unique_table = f"sale_device_uq_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            # ceegic-sync shape: a *plain* index on device_key.
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {plain_table} "
+                    "(device_key VARCHAR(64), payload VARCHAR(64), "
+                    "INDEX idx_device_key (device_key))"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {unique_table} "
+                    "(device_key VARCHAR(64), payload VARCHAR(64), "
+                    "UNIQUE KEY uq_device_key (device_key))"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+
+        bad_sink = db.table_sink(
+            table=plain_table, mode="upsert", keys=("device_key",), update_columns=("payload",)
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await bad_sink.send(Envelope(body={"device_key": "k1", "payload": "p1"}))
+        assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+        assert plain_table in str(excinfo.value)
+        assert "idx_device_key" in str(excinfo.value)
+
+        # The refusal happens before any write: no duplicate row was created.
+        with engine.connect() as conn:
+            assert conn.execute(sa.text(f"SELECT COUNT(*) FROM {plain_table}")).scalar() == 0
+
+        good_sink = db.table_sink(
+            table=unique_table, mode="upsert", keys=("device_key",), update_columns=("payload",)
+        )
+        for _ in range(3):
+            await good_sink.send(Envelope(body={"device_key": "k1", "payload": "p1"}))
+
+        with engine.connect() as conn:
+            rows = conn.execute(sa.text(f"SELECT COUNT(*) FROM {unique_table}")).scalar()
+            distinct = conn.execute(
+                sa.text(f"SELECT COUNT(DISTINCT device_key) FROM {unique_table}")
+            ).scalar()
+        assert (rows, distinct) == (1, 1)
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {plain_table}"))
+            conn.execute(sa.text(f"DROP TABLE {unique_table}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_batch_writes_live():
+    """Batch payloads on a real server: multi-row upsert (the 8.0.20+ alias
+    form the driver only renders against a live connection), chunked
+    statements in one transaction, replay idempotence, per-row policies and
+    executemany update (issue #189)."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_sink_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "device_key VARCHAR(64) NOT NULL, "
+                    "payload VARCHAR(255), "
+                    "status VARCHAR(32), "
+                    "attempts INT NOT NULL DEFAULT 0, "
+                    "updated_at DATETIME(6) NULL, "
+                    "UNIQUE KEY uq_device_key (device_key))"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        upsert = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("device_key",),
+            update_columns=(
+                {"name": "payload", "policy": "backfill"},
+                {"name": "status", "policy": "skip_null"},
+            ),
+            update_expr={"updated_at": "CURRENT_TIMESTAMP(6)"},
+            batch_size=40,
+        )
+
+        rows = [
+            {"device_key": f"dev-{i:03d}", "payload": f"p{i}", "status": None}
+            for i in range(300)
+        ]
+        # 300 rows / batch_size 40 -> 8 chunked multi-row statements.
+        await upsert.send(Envelope(body=rows))
+        # Replay the same batch: upsert must stay idempotent.
+        await upsert.send(Envelope(body=rows))
+
+        with engine.connect() as conn:
+            total, distinct = conn.execute(
+                sa.text(
+                    f"SELECT COUNT(*), COUNT(DISTINCT device_key) FROM {table_name}"
+                )
+            ).one()
+
+        assert (total, distinct) == (300, 300)
+
+        # Second batch: backfill keeps existing payloads, skip_null keeps
+        # NULL statuses untouched, fresh keys insert.
+        mixed = [
+            {"device_key": "dev-000", "payload": None, "status": "active"},
+            {"device_key": "dev-001", "payload": None, "status": None},
+            {"device_key": "dev-999", "payload": "fresh", "status": "new"},
+        ]
+        await upsert.send(Envelope(body=mixed))
+        with engine.connect() as conn:
+            rows_by_key = {
+                key: (payload, status)
+                for key, payload, status in conn.execute(
+                    sa.text(
+                        f"SELECT device_key, payload, status FROM {table_name} "
+                        "WHERE device_key IN ('dev-000', 'dev-001', 'dev-999')"
+                    )
+                ).all()
+            }
+        assert rows_by_key["dev-000"] == ("p0", "active")  # backfill kept, skip_null overwrote
+        assert rows_by_key["dev-001"] == ("p1", None)  # backfill kept, skip_null kept NULL
+        assert rows_by_key["dev-999"] == ("fresh", "new")
+
+        update = db.table_sink(
+            table=table_name,
+            mode="update",
+            keys=("device_key",),
+            update_columns=("status",),
+            batch_size=50,
+        )
+        await update.send(
+            Envelope(
+                body=[
+                    {"device_key": f"dev-{i:03d}", "status": "synced"} for i in range(100)
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            synced = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE status = 'synced'")
+            ).scalar()
+        assert synced == 100
+
+        # A rejected batch (duplicate keys) writes nothing.
+        with pytest.raises(ConnectorOperationError):
+            await upsert.send(
+                Envelope(
+                    body=[
+                        {"device_key": "dup", "payload": "a", "status": None},
+                        {"device_key": "dup", "payload": "b", "status": None},
+                    ]
+                )
+            )
+        with engine.connect() as conn:
+            dups = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE device_key = 'dup'")
+            ).scalar()
+        assert dups == 0
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_batch_chunks_oversized_statements_live():
+    """Review P1: a batch whose multi-row statement would exceed
+    ``max_allowed_packet`` must be chunked, not sent whole.
+
+    Exceeding the packet limit does not return a clean error — MySQL kills the
+    connection (2013), which is classified as ``DISCONNECTED`` and therefore
+    *retryable*, so the sink would retry a batch that can never succeed while
+    re-serializing tens of megabytes each time. Measured before the fix: a
+    1000×70KB batch failed on every attempt against the default 64MB limit.
+    """
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_packet_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "id INT PRIMARY KEY, payload LONGTEXT)"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        sink = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("id",),
+            update_columns=("payload",),
+        )
+        # ~68MB of payload: above the default 64MB max_allowed_packet if sent
+        # as one statement, comfortably fine once the byte budget splits it.
+        blob = "x" * (70 * 1024)
+        rows = [{"id": i, "payload": blob} for i in range(1000)]
+        await sink.send(Envelope(body=rows))
+
+        with engine.connect() as conn:
+            written = conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar()
+        assert written == 1000
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.integration
+def test_mysql_table_sink_batch_rejects_secondary_unique_conflict_live():
+    """Review P2: with ``PRIMARY KEY(id)`` + ``UNIQUE(email)`` and
+    ``keys=("id",)``, two rows sharing an email used to overwrite each other
+    silently on MySQL while PostgreSQL raised ``UniqueViolation``."""
+
+    async def scenario():
+        suffix = uuid.uuid4().hex[:8]
+        table_name = f"batch_uq2_{suffix}"
+        engine = _engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    f"CREATE TABLE {table_name} ("
+                    "id INT PRIMARY KEY, "
+                    "email VARCHAR(64), "
+                    "note VARCHAR(64), "
+                    "UNIQUE KEY uq_email (email))"
+                )
+            )
+
+        db = MySQLConnector(os.environ["ONESTEP_MYSQL_DSN"])
+        sink = db.table_sink(
+            table=table_name,
+            mode="upsert",
+            keys=("id",),
+            update_columns=("email", "note"),
+        )
+        with pytest.raises(ConnectorOperationError) as excinfo:
+            await sink.send(
+                Envelope(
+                    body=[
+                        {"id": 1, "email": "same@x.com", "note": "first"},
+                        {"id": 2, "email": "same@x.com", "note": "second"},
+                    ]
+                )
+            )
+        assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 0
+
+        # Distinct values still write normally.
+        await sink.send(
+            Envelope(
+                body=[
+                    {"id": 1, "email": "a@x.com", "note": "first"},
+                    {"id": 2, "email": "b@x.com", "note": "second"},
+                ]
+            )
+        )
+        with engine.connect() as conn:
+            assert conn.execute(
+                sa.text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar() == 2
+
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"DROP TABLE {table_name}"))
+        await db.close()
+        engine.dispose()
 
     asyncio.run(scenario())

@@ -301,6 +301,13 @@ def test_worker_agent_ws_updates_deployment_state_for_start_stop_restart(
             status="succeeded",
             result={"runtime_instance_id": runtime_instance_id},
         )
+        # Barrier: the handler now runs its command-result work unit on its own
+        # async session. The ack below is only answered after every prior frame
+        # finished its writes, so the HTTP call that follows cannot race a
+        # still-open write transaction on the shared SQLite test database
+        # ("database table is locked").
+        websocket.send_json(_ack_barrier())
+        websocket.receive_json()
 
         stop_response = client.post(
             f"/api/v1/worker-deployments/{deployment['deployment_id']}/stop"
@@ -313,6 +320,10 @@ def test_worker_agent_ws_updates_deployment_state_for_start_stop_restart(
             command_id=stop_command["payload"]["command_id"],
             status="succeeded",
         )
+        # Same barrier before the restart POST: the stop result's work unit
+        # must be fully committed before the HTTP handler writes.
+        websocket.send_json(_ack_barrier())
+        websocket.receive_json()
 
         restart_response = client.post(
             f"/api/v1/worker-deployments/{deployment['deployment_id']}/restart"
@@ -442,6 +453,23 @@ def _send_command_result(
             },
         }
     )
+
+
+def _ack_barrier() -> dict[str, object]:
+    """An ack for a command id that never exists.
+
+    Unknown-command acks are answered with an ``unknown_command`` error only
+    AFTER every earlier frame has finished its database work, so the matching
+    ``receive_json()`` doubles as a "handler is quiescent" barrier in tests
+    that mix WS frames with HTTP calls.
+    """
+
+    return {
+        "type": "command_ack",
+        "message_id": "msg_ack_barrier",
+        "sent_at": "2026-06-16T09:00:30Z",
+        "payload": {"command_id": "unused"},
+    }
 
 
 def test_worker_agent_ws_requires_hello_first(

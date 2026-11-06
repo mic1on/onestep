@@ -35,8 +35,14 @@ SMOKE_CLEANUP ?= 0
 
 docker-build: docker-build-plane
 
+# Base-image pulls can fail on registry rate limits (ECR Public answers
+# anonymous pulls with "toomanyrequests / Data limit exceeded"), which says
+# nothing about the code being built. Route builds through the retry wrapper so
+# a transient pull failure does not require a manual re-run.
+RETRY_DOCKER := bash scripts/retry-docker-build.sh
+
 docker-build-plane:
-	docker build --target plane -t $(PLANE_IMAGE) .
+	$(RETRY_DOCKER) docker build --target plane -t $(PLANE_IMAGE) .
 
 docker-build-api docker-build-frontend: docker-build-plane
 
@@ -59,7 +65,7 @@ docker-buildx-ensure-builder:
 	@docker buildx inspect --bootstrap $(BUILDX_BUILDER) >/dev/null
 
 docker-build-plane-multi-arch: docker-buildx-ensure-builder
-	docker buildx build --builder $(BUILDX_BUILDER) --platform $(BUILDX_PLATFORMS) \
+	$(RETRY_DOCKER) docker buildx build --builder $(BUILDX_BUILDER) --platform $(BUILDX_PLATFORMS) \
 		$(BUILDX_BUILD_ARGS) \
 		--target plane \
 		-t $(PLANE_IMAGE) \

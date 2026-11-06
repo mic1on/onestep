@@ -1,9 +1,8 @@
 """Generate golden vectors for the TypeScript ExecutionClient.
 
-This script is the single source of truth for cross-language compatibility.
-It imports the *real* production digest/cursor algorithms from the installed
-onestep-sql package and emits fixture JSON that the TS test suite asserts
-against byte-for-byte.
+This script uses Python's JSON and datetime formatting with the production
+digest/cursor formulas to emit byte-for-byte expectations. The live TS tests
+also replay these vectors through the production Python client.
 
 Why this exists: the TS client must reproduce `submission_digest` and the
 keyset pagination cursor exactly. Python's `json.dumps` and JavaScript's
@@ -11,7 +10,7 @@ keyset pagination cursor exactly. Python's `json.dumps` and JavaScript's
 so a naive TS implementation silently produces a different digest and breaks
 idempotency in production.
 
-Run from the repo root:
+Run with Python 3.11+ from the repo root:
     python clients/ts/fixtures/generate_golden.py
 """
 
@@ -100,6 +99,7 @@ DIGEST_CASES = [
     ("float_1_0", {"v": 1.0}, {}, None, None),
     ("float_3_0", {"v": 3.0}, {}, None, None),
     ("float_neg_0_0", {"v": -0.0}, {}, None, None),
+    ("nested_floats", {"i": 1, "xs": [1.0, -0.0, {"f": 3.0}]}, {"n": 2.0}, None, None),
     ("float_frac", {"v": 0.1 + 0.2}, {}, None, None),
     ("float_exp_large", {"v": 1e30}, {}, None, None),
     ("float_exp_small", {"v": 1e-7}, {}, None, None),
@@ -160,6 +160,8 @@ def tag_types(value):
 
 
 def main() -> int:
+    if sys.version_info < (3, 11):
+        raise SystemExit("Golden generation requires Python 3.11+; set ONESTEP_PYTHON to that interpreter when running npm run golden.")
     digest_vectors = []
     for label, payload, metadata, delay_s, expires_at in DIGEST_CASES:
         di = python_digest_input(
@@ -181,6 +183,8 @@ def main() -> int:
                 "delayS": None if delay_s is None else repr(float(delay_s)),
                 "expiresAt": expires_at.isoformat() if expires_at else None,
                 "expectedDigest": python_digest(di),
+                "payloadJson": json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+                "metadataJson": json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
             }
         )
 
@@ -200,11 +204,31 @@ def main() -> int:
             }
         )
 
+    expiry_vectors = []
+    for value in [
+        "2026-10-24T10:00:00Z",
+        "2026-10-24T10:00:00.000000+00:00",
+        "2026-10-24T10:00:00.123Z",
+        "2026-10-24T10:00:00.123000+00:00",
+        "2026-10-24T10:00:00.123456+00:00",
+        "2026-10-24T10:00:00.123457+00:00",
+        "2026-10-24T10:00:00.000001+08:00",
+        "2026-10-24T10:00:00.123456-03:30",
+        "2026-10-24T10:00:00+05:45",
+        "2026-10-24T10:00:00-00:00",
+        "2028-02-29T10:00:00.1+08:00",
+        "2026-10-24 10:00+08:00",
+    ]:
+        expiry = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        di = python_digest_input(namespace="demo", task_name="orders.sync", payload=1, metadata={}, delay_s=None, expires_at=expiry)
+        expiry_vectors.append({"input": value, "normalized": expiry.isoformat(), "expectedDigest": python_digest(di)})
+
     fixture = {
         "_generator": "clients/ts/fixtures/generate_golden.py",
         "_algorithm": "sha256(json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=True))",
         "digest": digest_vectors,
         "cursor": cursor_vectors,
+        "expiry": expiry_vectors,
         # The E2E payload the live interop test submits, with the digest Python
         # computes for it. Asserting TS against THIS value is what catches a
         # float regression, because a TS-only round trip would agree with itself.

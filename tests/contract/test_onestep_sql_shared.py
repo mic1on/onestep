@@ -44,6 +44,7 @@ import hashlib
 import importlib
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import sqlalchemy as sa
@@ -53,6 +54,7 @@ from onestep_sql import sqlite as sqlite_pkg
 from onestep_sql._shared import resilience as shared_resilience
 from onestep_sql._shared import state_keys as shared_state_keys
 from onestep_sql._shared import state_sqlalchemy as shared_state
+from onestep_sql._shared import table_queue as shared_table_queue
 from onestep_sql._shared import table_sink_policy as shared_policy
 from onestep_sql._shared.resilience import redact_message
 from onestep_sql.mysql import connector as mysql_connector
@@ -64,9 +66,16 @@ from onestep_sql.postgres import state_sqlalchemy as postgres_state
 from onestep_sql.sqlite import connector as sqlite_connector
 from onestep_sql.sqlite import resilience as sqlite_resilience
 from onestep_sql.sqlite import state_sqlalchemy as sqlite_state
+from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.ext.asyncio import create_async_engine as _create_async_engine
 
-from onestep.resilience import ConnectorErrorKind, ConnectorOperation
+from onestep.resilience import (
+    ConnectorErrorKind,
+    ConnectorOperation,
+    ConnectorOperationError,
+)
+from onestep.envelope import Envelope
+from onestep import OneStepApp
 
 BACKENDS = ("mysql", "postgres", "sqlite")
 
@@ -158,6 +167,38 @@ def test_table_sink_policy_lives_once_in_shared() -> None:
     assert issubclass(sqlite_pkg.TableSink, shared_policy.TableSinkUpdatePolicy)
 
 
+def test_table_queue_complete_lives_once_in_shared() -> None:
+    """The issue #181 single-transaction complete(values) exists once, in _shared."""
+    delivery_classes = (
+        mysql_pkg.TableQueueDelivery,
+        postgres_pkg.PostgresTableQueueDelivery,
+        sqlite_pkg.TableQueueDelivery,
+    )
+    for delivery_cls in delivery_classes:
+        assert issubclass(delivery_cls, shared_table_queue.TableQueueCompleteMixin)
+        # The behavioural method is implemented on the shared mixin only.
+        assert delivery_cls.complete is shared_table_queue.TableQueueCompleteMixin.complete
+        assert "_complete_ack_applied" not in delivery_cls.__dict__
+    assert shared_table_queue.TableQueueCompleteMixin._complete_ack_applied is False
+    # The SQL helper is imported by identity into every backend module, and each
+    # backend's complete_row is a thin delegate onto it (no local SQL copy).
+    for connector_module in (mysql_connector, postgres_connector, sqlite_connector):
+        assert (
+            connector_module.complete_table_queue_row
+            is shared_table_queue.complete_table_queue_row
+        )
+    for source_cls in (
+        mysql_connector.TableQueueSource,
+        postgres_connector.PostgresTableQueueSource,
+        sqlite_connector.TableQueueSource,
+    ):
+        assert "complete_table_queue_row" in source_cls.complete_row.__code__.co_names
+    assert (
+        shared_table_queue.complete_table_queue_row.__module__
+        == "onestep_sql._shared.table_queue"
+    )
+
+
 def test_incremental_state_key_lives_once_in_shared() -> None:
     assert (
         mysql_connector._default_incremental_state_key
@@ -217,6 +258,272 @@ def test_shared_state_store_persists_across_instances(backend: str, tmp_path: Pa
         await reloaded.close()
 
     asyncio.run(scenario())
+
+
+def _seed_orders_table(tmp_path: Path, name: str, rows: list[dict]) -> tuple[str, sa.Table]:
+    """Create a sqlite-backed orders table the way the plugin suites do."""
+    db_url = f"sqlite:///{tmp_path / name}"
+    engine = sa.create_engine(db_url, future=True)
+    metadata = sa.MetaData()
+    orders = sa.Table(
+        "orders",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("payload", sa.String, nullable=False),
+        sa.Column("status", sa.Integer, nullable=False),
+        sa.Column("score", sa.Integer),
+    )
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.insert(orders),
+            [{"payload": "A", "status": 0, "score": None, **row} for row in rows],
+        )
+    engine.dispose()
+    return db_url, orders
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_writes_values_and_ack_atomically(
+    backend: str, tmp_path: Path
+) -> None:
+    """complete() lands business values and ack columns together (issue #181)."""
+    db_url, _orders = _seed_orders_table(tmp_path, f"complete-{backend}.db", [{"id": 1}])
+
+    async def scenario() -> None:
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        deliveries = await source.fetch(10)
+        assert len(deliveries) == 1
+        delivery = deliveries[0]
+        assert delivery.payload["status"] == 9  # post-claim body, unchanged by fetch
+
+        ack_row_calls: list[object] = []
+        original_ack_row = source.ack_row
+
+        async def recording_ack_row(row_ref: object) -> None:
+            ack_row_calls.append(row_ref)
+            await original_ack_row(row_ref)
+
+        source.ack_row = recording_ack_row  # type: ignore[method-assign]
+
+        await delivery.complete({"score": 42})
+
+        assert delivery._complete_ack_applied is True
+        assert delivery.payload["score"] == 42  # envelope mirrors the business payload
+        assert delivery.payload["status"] == 9  # ack columns never leak into the body
+
+        # The executor-style follow-up ack must be a delivery-local no-op.
+        await delivery.ack()
+        assert ack_row_calls == []
+
+        async with connector.engine.connect() as conn:
+            row = (
+                await conn.execute(sa.text("SELECT status, score FROM orders WHERE id = 1"))
+            ).first()
+        assert row == (1, 42)
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_midtransaction_failure_rolls_back_both_updates(
+    backend: str, tmp_path: Path
+) -> None:
+    """A failure between the two UPDATE statements leaves the row untouched."""
+    db_url, _orders = _seed_orders_table(tmp_path, f"rollback-{backend}.db", [{"id": 1}])
+
+    async def scenario() -> None:
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        deliveries = await source.fetch(10)
+        delivery = deliveries[0]
+
+        original_execute = AsyncConnection.execute
+        execute_calls = {"count": 0}
+
+        async def failing_execute(self: AsyncConnection, *args: object, **kwargs: object):
+            execute_calls["count"] += 1
+            if execute_calls["count"] == 2:
+                raise RuntimeError("injected mid-transaction failure")
+            return await original_execute(self, *args, **kwargs)
+
+        with (
+            mock.patch.object(AsyncConnection, "execute", failing_execute),
+            pytest.raises(RuntimeError, match="injected mid-transaction failure"),
+        ):
+            await delivery.complete({"score": 42})
+
+        assert execute_calls["count"] == 2  # values UPDATE ran, ack UPDATE raised
+        assert delivery._complete_ack_applied is False
+        assert delivery.payload["score"] is None  # envelope untouched on failure
+
+        async with connector.engine.connect() as conn:
+            row = (
+                await conn.execute(sa.text("SELECT status, score FROM orders WHERE id = 1"))
+            ).first()
+        # Neither the business value nor the ack survived the rollback: the row
+        # is still exactly in its claim state.
+        assert row == (9, None)
+
+        # Recovery: the plain ack path still works after the failed complete().
+        await delivery.ack()
+        async with connector.engine.connect() as conn:
+            status = (
+                await conn.execute(sa.text("SELECT status FROM orders WHERE id = 1"))
+            ).scalar()
+        assert status == 1
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_empty_ack_degenerates_to_update_current_row(
+    backend: str, tmp_path: Path
+) -> None:
+    """ack={} makes complete() equivalent to update_current_row (issue #181)."""
+    db_url, _orders = _seed_orders_table(
+        tmp_path,
+        f"degenerate-{backend}.db",
+        [{"id": 1}, {"id": 2, "payload": "B"}, {"id": 3, "payload": "C"}],
+    )
+
+    async def scenario() -> None:
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        deliveries = await source.fetch(10)
+        assert [delivery.payload["id"] for delivery in deliveries] == [1, 2, 3]
+
+        # Row 1: complete() with an empty ack mapping.
+        await deliveries[0].complete({"score": 42})
+        assert deliveries[0].payload["score"] == 42
+        assert deliveries[0]._complete_ack_applied is True
+        # Row 2: the legacy two-phase API on the same shape of source.
+        await deliveries[1].update_current_row({"score": 7})
+        await deliveries[1].ack()
+        # Row 3: complete({}) with an empty ack mapping is a documented no-op.
+        await deliveries[2].complete({})
+        assert deliveries[2]._complete_ack_applied is True
+
+        async with connector.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    sa.text("SELECT id, status, score FROM orders ORDER BY id")
+                )
+            ).all()
+        assert rows == [(1, 9, 42), (2, 9, 7), (3, 9, None)]
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shared_table_queue_complete_full_app_flow(backend: str, tmp_path: Path) -> None:
+    """End-to-end: a handler calling ctx.complete() lands the business value and
+    the ack status together, the executor's follow-up ack() never reaches the
+    source, and the emit sink still receives the handler result (issue #181)."""
+    db_url, _orders = _seed_orders_table(
+        tmp_path,
+        f"app-flow-{backend}.db",
+        [{"id": 1}, {"id": 2, "payload": "B"}],
+    )
+    setup_engine = sa.create_engine(db_url, future=True)
+    with setup_engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE processed_orders ("
+                "id INTEGER PRIMARY KEY, payload VARCHAR NOT NULL, status VARCHAR NOT NULL)"
+            )
+        )
+    setup_engine.dispose()
+
+    seen_scores: list[tuple[int, int]] = []
+    ack_row_calls: list[object] = []
+
+    async def scenario() -> None:
+        app = OneStepApp(f"table-queue-complete-{backend}")
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(
+            table="orders",
+            key="id",
+            where="status = 0",
+            claim={"status": 9},
+            ack={"status": 1},
+            nack={"status": 0},
+            batch_size=10,
+            poll_interval_s=0.01,
+        )
+        sink = connector.table_sink(table="processed_orders", mode="upsert", keys=("id",))
+        seen: list[int] = []
+
+        original_ack_row = source.ack_row
+
+        async def recording_ack_row(row_ref: object) -> None:
+            ack_row_calls.append(row_ref)
+            await original_ack_row(row_ref)
+
+        source.ack_row = recording_ack_row  # type: ignore[method-assign]
+
+        @app.task(source=source, emit=sink, concurrency=2)
+        async def process(ctx, row):
+            await ctx.complete({"score": row["id"] * 10})
+            seen.append(row["id"])
+            seen_scores.append((row["id"], row["score"]))
+            if len(seen) == 2:
+                ctx.app.request_shutdown()
+            return {"id": row["id"], "payload": row["payload"], "status": "done"}
+
+        await app.serve()
+        await connector.close()
+
+    asyncio.run(scenario())
+
+    verify_engine = sa.create_engine(db_url, future=True)
+    with verify_engine.begin() as conn:
+        order_rows = conn.execute(
+            sa.text("SELECT id, status, score FROM orders ORDER BY id")
+        ).all()
+        processed_rows = conn.execute(
+            sa.text("SELECT id, payload, status FROM processed_orders ORDER BY id")
+        ).all()
+    verify_engine.dispose()
+
+    assert sorted(seen_scores) == [(1, 10), (2, 20)]
+    # Both rows carry the business value AND the ack status written by complete().
+    assert order_rows == [(1, 1, 10), (2, 1, 20)]
+    assert processed_rows == [(1, "A", "done"), (2, "B", "done")]
+    # The executor's post-success ack() never reached ack_row: complete() had
+    # already applied the ack columns atomically.
+    assert ack_row_calls == []
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -501,6 +808,652 @@ def test_coerce_json_values_always_and_never(backend: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 3b. Upsert key preflight (issue #188) — shared rule, identical on 3 backends.
+# ---------------------------------------------------------------------------
+
+
+def _unique_candidate_table() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        "device",
+        metadata,
+        sa.Column("device_key", sa.Text, unique=True),
+        sa.Column("tenant", sa.Text),
+        sa.Column("payload", sa.Text),
+    )
+
+
+def _plain_index_table() -> sa.Table:
+    """The ceegic-sync shape: a *plain* index on the declared key."""
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "sale_device",
+        metadata,
+        sa.Column("device_key", sa.Text),
+        sa.Column("payload", sa.Text),
+    )
+    sa.Index("idx_device_key", table.c.device_key)
+    return table
+
+
+def _composite_unique_table() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        "composite",
+        metadata,
+        sa.Column("a", sa.Text),
+        sa.Column("b", sa.Text),
+        sa.Column("payload", sa.Text),
+        sa.UniqueConstraint("a", "b", name="uq_ab"),
+    )
+
+
+def test_upsert_preflight_lives_once_in_shared() -> None:
+    """The issue #188 rule is one shared implementation, not three copies."""
+    assert (
+        mysql_pkg.TableSink._validate_upsert_keys
+        is postgres_pkg.PostgresTableSink._validate_upsert_keys
+        is sqlite_pkg.TableSink._validate_upsert_keys
+        is shared_policy.TableSinkUpdatePolicy._validate_upsert_keys
+    )
+    assert not hasattr(mysql_connector, "validate_upsert_key_uniqueness")
+    assert not hasattr(postgres_connector, "validate_upsert_key_uniqueness")
+    assert not hasattr(sqlite_connector, "validate_upsert_key_uniqueness")
+    assert mysql_pkg.TableSink._backend == "mysql"
+    assert postgres_pkg.PostgresTableSink._backend == "postgres"
+    assert sqlite_pkg.TableSink._backend == "sqlite"
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_rejects_keys_without_matching_unique_index(backend: str) -> None:
+    """Acceptance 1: no equivalent unique index -> MISCONFIGURED on first send."""
+    sink = _make_sink(backend, table="sale_device", keys=("device_key",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._validate_upsert_keys(_plain_index_table())
+    assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+    assert excinfo.value.operation is ConnectorOperation.SEND
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_error_names_table_keys_and_existing_indexes(backend: str) -> None:
+    """Acceptance 1: the message carries table, declared keys, existing indexes."""
+    sink = _make_sink(backend, table="sale_device", keys=("device_key",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._validate_upsert_keys(_plain_index_table())
+    message = str(excinfo.value)
+    assert "sale_device" in message
+    assert "device_key" in message
+    # The near-miss plain index must be visible, not just reported as absent.
+    assert "idx_device_key" in message
+    assert "upsert" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_accepts_equivalent_unique_constraint(backend: str) -> None:
+    """Acceptance 2: a matching unique constraint (or PK) keeps working."""
+    sink = _make_sink(backend, table="device", keys=("device_key",))
+    sink._validate_upsert_keys(_unique_candidate_table())  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_accepts_composite_unique_index_order_insensitively(
+    backend: str,
+) -> None:
+    """Acceptance 2: composite unique index matches regardless of key order."""
+    for keys in (("a", "b"), ("b", "a")):
+        sink = _make_sink(backend, table="composite", keys=keys)
+        sink._validate_upsert_keys(_composite_unique_table())  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_accepts_primary_key_match(backend: str) -> None:
+    """Acceptance 2: a matching primary key is an equally valid conflict target."""
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "pk_table",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("payload", sa.Text),
+    )
+    sink = _make_sink(backend, table="pk_table", keys=("id",))
+    sink._validate_upsert_keys(table)  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_rejects_subset_of_composite_unique(backend: str) -> None:
+    """Exact-set rule: UNIQUE(a, b) does not constrain a alone."""
+    sink = _make_sink(backend, table="composite", keys=("a",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._validate_upsert_keys(_composite_unique_table())
+    assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_ignores_insert_and_update_modes(backend: str) -> None:
+    """Acceptance 3: insert/update modes are untouched by the preflight."""
+    insert_sink = _make_sink(backend, table="sale_device", mode="insert", keys=("device_key",))
+    insert_sink._validate_upsert_keys(_plain_index_table())  # must not raise
+    assert getattr(insert_sink, "_upsert_keys_validated", False) is False
+
+    update_sink = _make_sink(
+        backend,
+        table="sale_device",
+        mode="update",
+        keys=("device_key",),
+        update_columns=("payload",),
+    )
+    update_sink._validate_upsert_keys(_plain_index_table())  # must not raise
+    assert getattr(update_sink, "_upsert_keys_validated", False) is False
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_result_is_cached_per_sink(backend: str) -> None:
+    """Acceptance 4: the check is cached, so the per-row path pays no rework."""
+    sink = _make_sink(backend, table="device", keys=("device_key",))
+    calls: list[object] = []
+    original = shared_policy.validate_upsert_key_uniqueness
+
+    def counting(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    with mock.patch.object(shared_policy, "validate_upsert_key_uniqueness", counting):
+        for _ in range(5):
+            sink._validate_upsert_keys(_unique_candidate_table())
+
+    assert len(calls) == 1
+    assert sink._upsert_keys_validated is True
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_failure_is_not_cached(backend: str) -> None:
+    """A failed preflight must re-raise on every send, never latch as valid."""
+    sink = _make_sink(backend, table="sale_device", keys=("device_key",))
+    for _ in range(3):
+        with pytest.raises(ConnectorOperationError):
+            sink._validate_upsert_keys(_plain_index_table())
+    assert getattr(sink, "_upsert_keys_validated", False) is False
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_runs_before_the_first_write(backend: str) -> None:
+    """The guard sits on the send path, ahead of statement construction."""
+    table = _plain_index_table()
+
+    class _Engine:
+        def begin(self):
+            raise AssertionError("engine must not be touched when keys are not unique")
+
+    class _Connector:
+        engine = _Engine()
+
+        async def _table(self, table_name):
+            return table
+
+    sink_cls = _backend_sink_cls(backend)
+    sink = sink_cls(
+        connector=_Connector(),
+        table="sale_device",
+        mode="upsert",
+        keys=("device_key",),
+        update_columns=("payload",),
+    )
+    sink._build_statement = mock.Mock(  # type: ignore[method-assign]
+        side_effect=AssertionError("statement must not be built when keys are not unique")
+    )
+    with pytest.raises(ConnectorOperationError):
+        asyncio.run(sink._send({"device_key": "k", "payload": "p"}))
+    sink._build_statement.assert_not_called()
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_sqlite_unique_constraint_is_detected(backend: str) -> None:
+    """SQLite/PG reflect inline UNIQUE as a constraint, not an index.
+
+    Reading only ``table.indexes`` (as issue #188 originally proposed) would
+    miss this and let a correctly-configured sink fail.
+    """
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "inline_unique",
+        metadata,
+        sa.Column("device_key", sa.Text, unique=True),
+        sa.Column("payload", sa.Text),
+    )
+    sink = _make_sink(backend, table="inline_unique", keys=("device_key",))
+    sink._validate_upsert_keys(table)  # must not raise
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_upsert_preflight_end_to_end_send_raises_misconfigured(backend: str) -> None:
+    """Acceptance 1+5: a real _send against reflected metadata fails loudly."""
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE sale_device (device_key TEXT, payload TEXT)"))
+        conn.execute(sa.text("CREATE INDEX idx_device_key ON sale_device(device_key)"))
+    reflected = sa.Table("sale_device", sa.MetaData(), autoload_with=engine)
+    engine.dispose()
+
+    class _Engine:
+        def begin(self):
+            raise AssertionError("engine must not be used: preflight fails first")
+
+    class _Connector:
+        engine = _Engine()
+
+        async def _table(self, table_name):
+            return reflected
+
+        def _secret_tokens(self):
+            return []
+
+        def secret_tokens(self):
+            return []
+
+    sink_cls = _backend_sink_cls(backend)
+    sink = sink_cls(
+        connector=_Connector(),
+        table="sale_device",
+        mode="upsert",
+        keys=("device_key",),
+        update_columns=("payload",),
+    )
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        asyncio.run(sink.send(Envelope(body={"device_key": "k", "payload": "p"})))
+    assert excinfo.value.kind is ConnectorErrorKind.MISCONFIGURED
+    assert "idx_device_key" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# 3c. Batch payloads (issue #189) — shared validation, SET derivation,
+#     chunking and executemany projection, identical on all backends.
+#
+# Semantics are pinned by the adversarial feasibility review
+# (docs/superpowers/specs/2026-09-20-issue-189-*): payload-shape violations
+# raise PERMANENT before any write, rows must share one column set,
+# same-batch duplicate upsert keys are rejected, skip_null becomes a shared
+# CASE expression, fully-filtered rows are removed from the batch, and
+# update-mode executemany uses collision-proof bindparam names with explicit
+# parameter projection.
+# ---------------------------------------------------------------------------
+
+
+def test_batch_machinery_lives_once_in_shared() -> None:
+    for name in (
+        "_prepare_batch_rows",
+        "_send_batch",
+        "_upsert_batch_set",
+        "_update_batch_statement",
+        "_batch_chunks",
+        "_batch_row_limit",
+        "_batch_bind_names",
+        "_batch_candidate_columns",
+        "_batch_payload_error",
+    ):
+        resolved = {
+            getattr(_backend_sink_cls(backend), name) for backend in BACKENDS
+        }
+        assert len(resolved) == 1, name
+        assert resolved.pop() is getattr(shared_policy.TableSinkUpdatePolicy, name)
+
+
+def _batch_permutation_error(sink, rows):
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._prepare_batch_rows(rows, _policy_table())
+    assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+    assert excinfo.value.operation is ConnectorOperation.SEND
+    return str(excinfo.value)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_non_mapping_item_with_index(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(sink, [{"id": 1, "title": "t"}, "oops"])
+    assert "batch item 1 must be a mapping, got str" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_heterogeneous_column_sets(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink,
+        [{"id": 1, "title": "t"}, {"id": 2, "title": "t", "note": "n"}],
+    )
+    assert "row 1 differs from row 0" in message
+    assert "'note'" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_duplicate_upsert_keys(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink,
+        [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}, {"id": 1, "title": "c"}],
+    )
+    assert "batch item 2 duplicates earlier keys (1,)" in message
+    assert "last-wins" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_unhashable_key_values(backend: str) -> None:
+    # serialize_json="never" keeps the dict value intact, so the duplicate-key
+    # scan hits a genuinely unhashable key tuple.
+    sink = _make_sink(backend, update_columns=("title",), serialize_json="never")
+    message = _batch_permutation_error(
+        sink, [{"id": 1, "title": "t"}, {"id": {"bad": "dict"}, "title": "t"}]
+    )
+    assert "unhashable key value" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_requires_keys_present(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink, [{"title": "t"}, {"title": "t"}]
+    )
+    assert "requires keys present in payload: id" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_requires_update_candidate(backend: str) -> None:
+    # update_columns naming only columns the payload does not carry: the
+    # §2.2.1 intersection leaves no candidates.
+    sink = _make_sink(backend, update_columns=("note",), update_expr={})
+    message = _batch_permutation_error(sink, [{"id": 1, "title": "t"}, {"id": 2, "title": "t"}])
+    assert "requires at least one update column or update_expr" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_coerces_json_per_row(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title", "note"))
+    prepared, skipped, candidates = sink._prepare_batch_rows(
+        [{"id": 1, "title": "t", "note": ["a"]}, {"id": 2, "title": "t", "note": ["b"]}],
+        _policy_table(),
+    )
+    assert skipped == 0
+    assert [row["note"] for row in prepared] == ['["a"]', '["b"]']
+    assert set(candidates) == {"title", "note"}
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_drops_fully_skip_null_filtered_rows(backend: str) -> None:
+    sink = _make_sink(
+        backend, update_columns=({"name": "title", "policy": "skip_null"},)
+    )
+    prepared, skipped, _ = sink._prepare_batch_rows(
+        [
+            {"id": 1, "title": None},  # fully filtered: not written at all
+            {"id": 2, "title": "keep"},
+            {"id": 3, "title": None},  # fully filtered
+        ],
+        _policy_table(),
+    )
+    assert skipped == 2
+    assert [row["id"] for row in prepared] == [2]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_keeps_partially_skipped_rows(backend: str) -> None:
+    # Only one candidate column is null under skip_null; the other survives,
+    # so the row stays in the batch (the SET mask omits the null column).
+    sink = _make_sink(
+        backend,
+        update_columns=(
+            {"name": "title", "policy": "skip_null"},
+            {"name": "note", "policy": "skip_null"},
+        ),
+    )
+    prepared, skipped, _ = sink._prepare_batch_rows(
+        [{"id": 1, "title": None, "note": "n"}], _policy_table()
+    )
+    assert skipped == 0
+    assert prepared == [{"id": 1, "title": None, "note": "n"}]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_update_batch_statement_uses_collision_proof_bind_names(backend: str) -> None:
+    from sqlalchemy.dialects import sqlite as sqlite_dialect
+
+    sink = _make_sink(backend, update_columns=("title", "note"))
+    statement, template = sink._update_batch_statement(_policy_table(), ("title", "note"))
+    compiled = str(statement.compile(dialect=sqlite_dialect.dialect()))
+    # Keys and values bind onto prefixed names that never equal column names,
+    # so executemany parameter dictionaries cannot leak into SET (B2).
+    assert set(template) == {"_onestep_key_0", "_onestep_value_0", "_onestep_value_1"}
+    assert compiled.count("=") >= 3
+    row = {"id": 7, "title": "t", "note": None}
+    projected = {name: row[column] for name, column in template.items()}
+    assert projected == {"_onestep_key_0": 7, "_onestep_value_0": "t", "_onestep_value_1": None}
+    # A stray same-named key in the source row cannot enter the projection.
+    assert "title" not in projected and "id" not in projected
+
+
+def test_batch_bind_names_rotate_prefix_on_collision() -> None:
+    columns = ["id", "title", "_onestep_value_0"]
+    names = shared_policy.TableSinkUpdatePolicy._batch_bind_names(columns, "_onestep_value")
+    assert set(names.values()).isdisjoint(columns)
+    assert len(set(names.values())) == len(columns)
+
+
+def test_update_batch_statement_renders_identical_sql_on_all_backends() -> None:
+    from sqlalchemy.dialects import sqlite as sqlite_dialect
+
+    table = _policy_table()
+    rendered = {}
+    for backend in BACKENDS:
+        sink = _make_sink(
+            backend,
+            update_columns=(
+                "title",
+                {"name": "note", "policy": "skip_null"},
+                {"name": "meta", "policy": "backfill"},
+            ),
+        )
+        statement, _ = sink._update_batch_statement(table, ("title", "note", "meta"))
+        rendered[backend] = str(statement.compile(dialect=sqlite_dialect.dialect()))
+    assert rendered["mysql"] == rendered["postgres"] == rendered["sqlite"]
+    compiled = rendered["mysql"]
+    assert "CASE" not in compiled  # skip_null masks are decided before binding
+    assert "coalesce" in compiled.lower()  # backfill
+
+
+class _EngineDialectDouble:
+    def __init__(self, name: str) -> None:
+        self.dialect = type("Dialect", (), {"name": name})()
+
+
+def _chunking_sink(backend: str, *, batch_size: int, engine_dialect: str | None):
+    kwargs = {"batch_size": batch_size}
+    if engine_dialect is None:
+        kwargs["connector"] = _SinkHarness()
+    else:
+        kwargs["connector"] = type("C", (), {"engine": _EngineDialectDouble(engine_dialect)})()
+    return _make_sink(backend, **kwargs)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_split_by_configured_batch_size(backend: str) -> None:
+    sink = _chunking_sink(backend, batch_size=2, engine_dialect=None)
+    rows = [{"id": i, "title": "t"} for i in range(5)]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_clamp_sqlite_parameter_ceiling(backend: str) -> None:
+    # 999 portable SQLITE_MAX_VARIABLE_NUMBER / 4 columns -> 249 rows max.
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="sqlite")
+    rows = [{"id": i, "title": "t", "note": "n", "meta": None} for i in range(600)]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [249, 249, 102]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_do_not_clamp_non_sqlite_engines(backend: str) -> None:
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")
+    rows = [{"id": i, "title": "t", "note": "n", "meta": None} for i in range(600)]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [600]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_size_must_be_a_positive_integer(backend: str) -> None:
+    sink_cls = _backend_sink_cls(backend)
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        sink_cls(
+            connector=_SinkHarness(),
+            table="records",
+            mode="insert",
+            keys=(),
+            batch_size=0,
+        )
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        sink_cls(
+            connector=_SinkHarness(),
+            table="records",
+            mode="insert",
+            keys=(),
+            batch_size=True,
+        )
+
+
+# -- review follow-ups: unknown columns, secondary unique keys, byte budget --
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_unknown_payload_columns(backend: str) -> None:
+    """A mistyped payload column must fail as PERMANENT on every backend.
+
+    MySQL/SQLite raised a bare CompileError, PostgreSQL's executemany silently
+    dropped the key and wrote the row, and the batch SET derivation raised a
+    bare KeyError — three different outcomes for one mistake.
+    """
+    sink = _make_sink(backend, update_columns=("title",))
+    message = _batch_permutation_error(
+        sink, [{"id": 1, "title": "t", "zzz": "x"}, {"id": 2, "title": "t", "zzz": "x"}]
+    )
+    assert "not present on table" in message
+    assert "zzz" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_unknown_update_columns_entry(backend: str) -> None:
+    """A whitelist entry naming a non-existent column is a config typo."""
+    sink = _make_sink(backend, update_columns=("typo",))
+    message = _batch_permutation_error(
+        sink, [{"id": 1, "typo": "v"}, {"id": 2, "typo": "v"}]
+    )
+    assert "update_columns names column(s) not present" in message
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_tolerates_whitelist_excluded_column_in_update_mode(
+    backend: str,
+) -> None:
+    """``mode: update`` renders no INSERT, so an excluded payload column never
+    reaches the statement — the single-row path tolerates it and so must the
+    batch."""
+    sink = _make_sink(backend, mode="update", update_columns=("title",))
+    prepared, skipped, candidates = sink._prepare_batch_rows(
+        [{"id": 1, "title": "t", "zzz": "x"}, {"id": 2, "title": "t", "zzz": "x"}],
+        _policy_table(),
+    )
+    assert len(prepared) == 2
+    assert candidates == ("title",)
+
+
+def _secondary_unique_table() -> sa.Table:
+    metadata = sa.MetaData()
+    return sa.Table(
+        "records",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("email", sa.String(64), unique=True),
+        sa.Column("title", sa.Text),
+    )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_rejects_secondary_unique_conflict(backend: str) -> None:
+    """Rows colliding on a unique column other than ``keys`` diverge across
+    dialects (MySQL/SQLite last-wins, PostgreSQL errors), so the batch is
+    refused before the write."""
+    sink = _make_sink(backend, update_columns=("title",))
+    with pytest.raises(ConnectorOperationError) as excinfo:
+        sink._prepare_batch_rows(
+            [
+                {"id": 1, "email": "same@x.com", "title": "first"},
+                {"id": 2, "email": "same@x.com", "title": "second"},
+            ],
+            _secondary_unique_table(),
+        )
+    assert excinfo.value.kind is ConnectorErrorKind.PERMANENT
+    assert "collides with an earlier row" in str(excinfo.value)
+    assert "email" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_allows_distinct_secondary_unique_values(backend: str) -> None:
+    sink = _make_sink(backend, update_columns=("title",))
+    prepared, _, _ = sink._prepare_batch_rows(
+        [
+            {"id": 1, "email": "a@x.com", "title": "first"},
+            {"id": 2, "email": "b@x.com", "title": "second"},
+        ],
+        _secondary_unique_table(),
+    )
+    assert len(prepared) == 2
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_prepare_batch_rows_skips_secondary_check_when_column_absent(backend: str) -> None:
+    """A unique column the payload does not carry cannot collide in-batch."""
+    sink = _make_sink(backend, update_columns=("title",))
+    prepared, _, _ = sink._prepare_batch_rows(
+        [{"id": 1, "title": "a"}, {"id": 2, "title": "b"}], _secondary_unique_table()
+    )
+    assert len(prepared) == 2
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_respect_mysql_byte_budget(backend: str) -> None:
+    """MySQL kills the connection on an oversized statement (error 2013),
+    which the resilience table classifies as retryable — so chunks are capped
+    by an estimated byte budget instead of only by row count."""
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")
+    rows = [{"id": i, "payload": "x" * (300 * 1024)} for i in range(20)]
+    chunks = list(sink._batch_chunks(rows))
+    assert len(chunks) > 1, "byte budget must split the batch"
+    assert sum(len(chunk) for chunk in chunks) == 20
+    for chunk in chunks:
+        estimated = sum(sink._estimate_row_bytes(row) for row in chunk)
+        assert estimated <= shared_policy._MYSQL_BATCH_BYTE_BUDGET
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_chunks_keep_oversized_single_row_as_its_own_chunk(backend: str) -> None:
+    """A row larger than the budget cannot be split further; it is what the
+    single-mapping path already sends, so it forms its own chunk."""
+    sink = _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")
+    rows = [
+        {"id": 1, "payload": "x" * (8 * 1024 * 1024)},
+        {"id": 2, "payload": "small"},
+    ]
+    chunks = list(sink._batch_chunks(rows))
+    assert [len(chunk) for chunk in chunks] == [1, 1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_batch_byte_budget_only_applies_to_mysql(backend: str) -> None:
+    assert _chunking_sink(backend, batch_size=1000, engine_dialect="postgresql")._batch_byte_budget() is None
+    assert _chunking_sink(backend, batch_size=1000, engine_dialect="sqlite")._batch_byte_budget() is None
+    assert (
+        _chunking_sink(backend, batch_size=1000, engine_dialect="mysql")._batch_byte_budget()
+        == shared_policy._MYSQL_BATCH_BYTE_BUDGET
+    )
+
+
+# ---------------------------------------------------------------------------
 # 4. Shared default incremental state-key.
 # ---------------------------------------------------------------------------
 
@@ -695,12 +1648,16 @@ def test_shared_package_exports_only_the_shared_modules() -> None:
     names = {module.name for module in pkgutil.iter_modules(shared_pkg.__path__)}
     # ``execution`` is the Phase 1 extraction of the tracked-execution state
     # machine; it is internal and non-public, exactly like the other four.
+    # ``table_queue_lint`` is the shared claim/nack YAML lint (issue #180).
     assert names == {
         "state_sqlalchemy",
         "table_sink_policy",
+        "batch_unique",
+        "table_queue_lint",
         "state_keys",
         "resilience",
         "execution",
+        "table_queue",
     }
     # The execution subpackage shares a machine, its seam and the source layer,
     # never a schema builder (design §7.2: the schema layer is where the
@@ -1258,3 +2215,110 @@ def test_legacy_forwarders_still_alias_the_shared_backend_objects() -> None:
     assert mysql_legacy_state.SQLAlchemyCursorStore is mysql_state.SQLAlchemyCursorStore
     assert postgres_legacy_state.SQLAlchemyStateStore is postgres_state.SQLAlchemyStateStore
     assert postgres_legacy_state.SQLAlchemyCursorStore is postgres_state.SQLAlchemyCursorStore
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_table_queue_retry_attempts_reach_terminal_and_preserve_eligible_history(backend, tmp_path):
+    from onestep import MaxAttempts, ExponentialBackoff
+    from onestep.runtime.runner import TaskRunner
+
+    db_url, _ = _seed_orders_table(tmp_path, f"attempts-{backend}.db", [{"id": 1}])
+
+    async def scenario():
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(table="orders", key="id", where="status = 0", claim={"status": 9}, ack={"status": 1}, nack={"status": 0})
+        assert _backend_connector_module(backend).retry_table_queue_row is shared_table_queue.retry_table_queue_row
+        assert _backend_connector_module(backend).fail_table_queue_row is shared_table_queue.fail_table_queue_row
+        app = OneStepApp("table-queue-attempts")
+
+        @app.task(source=source, retry=MaxAttempts(3))
+        async def poison(ctx, payload):
+            raise ValueError("poison")
+
+        actions = []
+        retry_row, fail_row = source.retry_row, source.fail_row
+
+        async def retry(row_ref, **kwargs):
+            actions.append("retry")
+            await retry_row(row_ref, **kwargs)
+
+        async def fail(row_ref, **kwargs):
+            actions.append("fail")
+            await fail_row(row_ref, **kwargs)
+
+        source.retry_row, source.fail_row = retry, fail
+        runner = TaskRunner(app, app.tasks[0])
+        for attempt in (0, 1, 2, 2):
+            delivery, = await source.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            await delivery.release_unstarted()
+            delivery, = await source.fetch(1)
+            assert delivery.envelope.attempts == attempt
+            assert ExponentialBackoff(max_attempts=10).on_error(delivery.envelope, ValueError(), None).delay_s == 2 ** attempt
+            await runner._handle_delivery(delivery)
+        assert actions == ["retry", "retry", "fail", "fail"]
+        # Explicit nack keeps the row eligible; exhausted attempts must not reset.
+        assert source._retry_attempts == {1: 2}
+        delivery, = await source.fetch(1)
+        await delivery.ack()
+        assert source._retry_attempts == {}
+        assert await source.fetch(1) == []
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("terminal", ["complete", "fail", "deleted"])
+def test_table_queue_retry_count_cleanup_and_new_source_boundary(backend, terminal, tmp_path):
+    db_url, _ = _seed_orders_table(tmp_path, f"cleanup-{backend}-{terminal}.db", [{"id": 1}])
+
+    async def scenario():
+        connector = _backend_connector_cls(backend)(db_url)
+        options = dict(table="orders", key="id", where="status = 0", claim={"status": 9}, ack={"status": 1}, nack={"status": 0})
+        source = connector.table_queue(**options)
+        delivery, = await source.fetch(1)
+        await delivery.retry()
+        restarted = connector.table_queue(**options)
+        fresh, = await restarted.fetch(1)
+        assert fresh.envelope.attempts == 0
+        await fresh.release_unstarted()
+        delivery, = await source.fetch(1)
+        assert delivery.envelope.attempts == 1
+        if terminal == "complete":
+            await delivery.complete({"score": 5})
+        else:
+            source.nack = {"status": -1}
+            if terminal == "deleted":
+                async with connector.engine.begin() as conn:
+                    await conn.execute(sa.text("DELETE FROM orders WHERE id = 1"))
+            await delivery.fail()
+        assert source._retry_attempts == {}
+        await connector.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_table_queue_retry_update_failure_does_not_consume_attempt(backend, tmp_path):
+    db_url, _ = _seed_orders_table(tmp_path, f"retry-failure-{backend}.db", [{"id": 1}])
+
+    async def scenario():
+        connector = _backend_connector_cls(backend)(db_url)
+        source = connector.table_queue(table="orders", key="id", where="status = 0", claim={"status": 9}, ack={"status": 1}, nack={"status": 0})
+        delivery, = await source.fetch(1)
+        update = source.update_row
+
+        async def broken(*args):
+            raise OSError("database unavailable")
+
+        source.update_row = broken
+        with pytest.raises(OSError):
+            await delivery.retry()
+        assert source._retry_attempts == {}
+        source.update_row = update
+        await delivery.retry()
+        assert (await source.fetch(1))[0].envelope.attempts == 1
+        await connector.close()
+
+    asyncio.run(scenario())

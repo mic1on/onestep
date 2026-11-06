@@ -898,6 +898,22 @@ class NotificationInstanceState(Base):
     )
     last_connectivity: Mapped[str] = mapped_column(sa.String(32), nullable=False)
     last_transition_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # --- issue #196: stable confirmation + flapping damping -------------------
+    # A flip is notified only after the new connectivity has been observed for
+    # `instance_connectivity_confirm_after_s`, measured from the flip's own
+    # transition_at. Until then the candidate is parked here; a flip that heals
+    # inside the window is cancelled and never notified -- that is what removes
+    # transient-drop noise.
+    pending_connectivity: Mapped[str | None] = mapped_column(sa.String(32))
+    pending_since: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Flap episode bookkeeping. A run of confirmed flips closer together than
+    # `instance_connectivity_flap_window_s` is one episode; flips beyond
+    # `instance_connectivity_flap_max_notifications` are suppressed but counted,
+    # and one summary is emitted when the episode goes quiet.
+    flap_episode_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    flap_episode_last_flip_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    flap_episode_flips: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0)
+    flap_suppressed_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(),
@@ -907,6 +923,61 @@ class NotificationInstanceState(Base):
     )
 
     channel: Mapped[NotificationChannel] = relationship(back_populates="instance_states")
+
+
+class NotificationTaskFailureBurst(Base):
+    """Burst-damping state for task-failure notifications, per (channel, service).
+
+    Connectivity flips are damped by :class:`NotificationInstanceState`, but task
+    lifecycle events had no damping at all: one root cause (a database outage, a bad
+    deploy) fails every task on every instance of a service simultaneously, so a
+    large service produced one webhook per failure. This bounds that burst.
+
+    Persisted rather than in-memory for the same reason as the connectivity state:
+    it must survive a process restart and a leader switch, otherwise a restart
+    mid-incident resets the counter and the storm resumes.
+
+    Keyed by service, not by task or instance: a single root cause fails many
+    different tasks across many instances, so damping per task would still emit one
+    notification per task name.
+    """
+
+    __tablename__ = "notification_task_failure_bursts"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "channel_id",
+            "service_id",
+            name="uq_notification_task_failure_bursts_channel_id_service_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    channel_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("notification_channels.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    service_id: Mapped[UUID] = mapped_column(
+        sa.ForeignKey("services.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Start and last-seen bounds of the open burst. A failure arriving more than
+    # `task_failure_burst_window_s` after `last_failure_at` starts a new burst.
+    burst_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_failure_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Failures counted in this burst, and how many of them were withheld. The
+    # summary reports `suppressed_count`, so quiet never reads as healthy.
+    failure_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0)
+    suppressed_count: Mapped[int] = mapped_column(sa.Integer(), nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    channel: Mapped[NotificationChannel] = relationship()
+    service: Mapped[Service] = relationship()
 
 
 class Connector(Base):

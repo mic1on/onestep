@@ -206,3 +206,11 @@ Version 1 does not provide database- or cluster-wide streams, transactions, sink
 deletes, replacement or update pipelines, schema validation or DDL, GridFS,
 aggregation or partitioned polling, pre-images, expanded events, custom codecs,
 or an automatically created MongoDB-backed cursor store.
+
+Polling and change-stream sources keep zero-based retry counts by cursor/resume token
+inside the source instance. Generation invalidation and replay retain these counts;
+releasing an unstarted delivery does not increment them. Counts are removed only
+when the corresponding contiguous prefix is durably acknowledged or terminally
+skipped. A new source instance/process starts at zero and resumes from durable cursor
+state, so `MaxAttempts` bounds retries within that source lifetime. Use idempotent
+handlers because rows after an unresolved cursor position can be replayed.

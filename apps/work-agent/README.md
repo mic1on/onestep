@@ -103,3 +103,27 @@ The root `Worker Agent` workflow tests and builds changes under
 package version after the PyPI Trusted Publisher is configured for
 `mic1on/onestep` and `.github/workflows/work-agent.yml`. The workflow can also
 be run manually without publishing.
+
+### Command and process recovery
+
+The agent records each command under `work_dir/commands/` before performing it and
+persists its terminal result before sending it. Repeated command IDs return that
+result; different commands for one deployment execute serially. Starting an
+already running deployment returns its existing runtime ID. Only restart replaces
+the process. Keep this directory together with deployment state: deleting command
+history permits old commands to execute again. Records are loaded individually,
+so retained history does not grow the agent's in-memory working set.
+
+Agents advertise `agent.command_recovery`. The control plane redelivers accepted
+commands only to agents with that capability. An interrupted preparation ends as
+`cancelled`; a start whose matching runtime survived is recovered as `succeeded`.
+The agent persists a worker PID before opening its launch gate, so a crash before
+that write cannot start an untracked business worker. Disconnect cancellation kills
+and waits for installation/check processes; on POSIX, preparation process groups
+also terminate if the agent itself exits abruptly.
+
+Exited workers release their slot and log handle. Exit events remain in
+`work_dir/exit-events.json` until the control plane acknowledges their committed
+receipt, including across reconnects and agent restarts. Recovered PIDs are checked
+on heartbeat. A delayed start result cannot override an already recorded exit for
+the same runtime.

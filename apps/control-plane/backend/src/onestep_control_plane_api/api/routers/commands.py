@@ -8,14 +8,11 @@ from sqlalchemy.orm import Session
 from onestep_control_plane_api.api.agent_command_service import (
     CommandAuditMetadata,
     build_command_summary,
-    create_service_command_fanout,
+    create_instance_command_native,
+    create_service_command_fanout_native,
     get_instance_or_404,
     list_commands_for_instance,
 )
-from onestep_control_plane_api.api.agent_command_service import (
-    create_instance_command as dispatch_instance_command,
-)
-from onestep_control_plane_api.api.query_support import get_service_or_404
 from onestep_control_plane_api.api.schemas import (
     AgentCommandCreateRequest,
     AgentCommandListResponse,
@@ -58,7 +55,7 @@ def list_instance_commands(
         total=total,
         limit=limit,
         offset=offset,
-)
+    )
 
 
 @router.post("/instances/{instance_id}/commands", response_model=AgentCommandSummary)
@@ -67,13 +64,10 @@ async def create_instance_command(
     request: AgentCommandCreateRequest,
     http_request: Request,
     identity=Depends(require_console_auth),
-    db: Session = Depends(get_db_session),
 ) -> AgentCommandSummary:
     require_command_role(request.kind, identity, http_request)
-    instance = get_instance_or_404(db, instance_id)
-    command = await dispatch_instance_command(
-        db,
-        instance=instance,
+    command = await create_instance_command_native(
+        instance_id=instance_id,
         request=request,
         audit=CommandAuditMetadata(
             created_by=identity.username if identity is not None else None,
@@ -82,7 +76,7 @@ async def create_instance_command(
         ),
     )
     publish_ui_stream_event("commands")
-    return build_command_summary(command)
+    return command
 
 
 @router.post(
@@ -95,13 +89,11 @@ async def create_service_command(
     http_request: Request,
     environment: Environment = Query(...),
     identity=Depends(require_console_auth),
-    db: Session = Depends(get_db_session),
 ) -> ServiceCommandFanoutResponse:
     require_command_role(request.kind, identity, http_request)
-    service = get_service_or_404(db, service_name=service_name, environment=environment)
-    response = await create_service_command_fanout(
-        db,
-        service=service,
+    response = await create_service_command_fanout_native(
+        service_name=service_name,
+        environment=environment,
         request=request,
         created_by=identity.username if identity is not None else None,
         source_surface="service_detail_fanout",
@@ -122,13 +114,11 @@ async def create_task_command(
     http_request: Request,
     environment: Environment = Query(...),
     identity=Depends(require_console_auth),
-    db: Session = Depends(get_db_session),
 ) -> ServiceCommandFanoutResponse:
     require_command_role(request.kind, identity, http_request)
-    service = get_service_or_404(db, service_name=service_name, environment=environment)
-    response = await create_service_command_fanout(
-        db,
-        service=service,
+    response = await create_service_command_fanout_native(
+        service_name=service_name,
+        environment=environment,
         request=ServiceCommandFanoutRequest(
             kind=request.kind,
             args={"task_name": task_name, **request.args},

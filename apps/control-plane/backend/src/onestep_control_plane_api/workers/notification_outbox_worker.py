@@ -11,7 +11,10 @@ from fastapi import FastAPI
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from onestep_control_plane_api.api.notification_service import drain_notification_outbox
+from onestep_control_plane_api.api.notification_service import (
+    drain_notification_outbox,
+    notification_outbox_backlog,
+)
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.workers.leader import (
     WorkerLease,
@@ -174,6 +177,16 @@ async def run_notification_outbox_worker(
 
 
 def _drain_in_session(session_factory: SessionFactory, drain_fn: DrainFn) -> int:
-    """Open a fresh session and drain one batch; intended for ``to_thread``."""
+    """Open a fresh session, sample the backlog, then drain one batch.
+
+    The backlog is sampled BEFORE the drain so the reading describes the queue this
+    tick inherited, not the one it left behind -- otherwise a worker that keeps up
+    perfectly would always report zero and the metric could never show a buildup.
+
+    Sampling lives here rather than in the loop because this is the one place with a
+    session, and the sample must cover the same transaction scope as the drain.
+    """
+
     with session_factory() as session:
+        notification_outbox_backlog(session)
         return drain_fn(session)

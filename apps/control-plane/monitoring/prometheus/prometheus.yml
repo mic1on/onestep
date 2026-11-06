@@ -1,0 +1,65 @@
+# Prometheus configuration for the OneStep control plane.
+#
+# This file exists because the alert rules in `rules/control-plane.yml` reference
+# three scrape jobs BY NAME. Without a scrape config that defines those names the
+# rules load but never evaluate to anything, which is how the rules previously sat
+# unloaded and unvalidated: there was no `rule_files` entry anywhere in the repo.
+#
+# The job names below are load-bearing -- the rules select on them:
+#   * `onestep-control-plane`          -- the API's own /metrics endpoint
+#   * `onestep-control-plane-readyz`   -- blackbox probe of /readyz
+#   * `onestep-control-plane-postgres` -- postgres_exporter
+# `backend/tests/test_monitoring_config.py` asserts they stay in sync.
+#
+# The /metrics endpoint requires a bearer token (`require_ingest_token`), so the
+# token is read from a file written at container start rather than embedded here.
+# Prometheus has no environment-variable expansion for arbitrary config values, so
+# the compose stack writes it from ONESTEP_CP_INGEST_TOKEN before exec'ing
+# Prometheus; see docker-compose.monitoring.yml.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    stack: onestep-control-plane
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # The control plane's own metrics. Authenticated: the endpoint returns 401
+  # without a bearer token, and a 401 would silently look like "target up, no
+  # series" rather than a configuration error.
+  - job_name: onestep-control-plane
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ingest_token
+    static_configs:
+      - targets: ["plane:8000"]
+
+  # Liveness/readiness via blackbox. /readyz returns 503 when a deep dependency
+  # check fails, which `probe_success` turns into a scrape-able 0/1.
+  - job_name: onestep-control-plane-readyz
+    metrics_path: /probe
+    params:
+      module: [http_readyz]
+    static_configs:
+      - targets: ["http://plane:8000/readyz"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Database reachability. `pg_up` is what OneStepControlPlanePostgresDown reads.
+  - job_name: onestep-control-plane-postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]

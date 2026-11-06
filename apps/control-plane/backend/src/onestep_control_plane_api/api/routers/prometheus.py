@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from threading import Lock
@@ -14,11 +16,43 @@ from sqlalchemy.orm import Session
 from onestep_control_plane_api.api.security import require_ingest_token
 from onestep_control_plane_api.core.settings import settings
 from onestep_control_plane_api.db.models import Service, TaskCustomMetricWindow, TaskMetricWindow
-from onestep_control_plane_api.db.session import get_db_session
+from onestep_control_plane_api.db.session import (
+    SYNC_POOL_METRIC_NAME,
+    ensure_sync_engine_instrumented,
+    get_db_session,
+)
+from onestep_control_plane_api.ops.observability import (
+    CounterSample,
+    GaugeSample,
+    HistogramSample,
+    ObservabilitySnapshot,
+    collect_prometheus_snapshot,
+    ensure_event_loop_lag_sampler_started,
+    refresh_pool_occupancy,
+)
 
 PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
+logger = logging.getLogger("onestep_control_plane_api.api.routers.prometheus")
+
 router = APIRouter(tags=["prometheus"], dependencies=[Depends(require_ingest_token)])
+
+
+async def ensure_observability_samplers_started() -> None:
+    """Lazily start the process-local observability samplers on the event loop.
+
+    Declared as an ``async`` dependency so FastAPI runs it on the loop thread,
+    where ``asyncio.Task`` creation is legal (the endpoint body itself runs in a
+    threadpool because it performs blocking SQLAlchemy work). Idempotent, so it is
+    safe on every scrape. Since #213 the application lifespan starts the sampler
+    at startup; this dependency remains as a fallback for processes that serve
+    ``/metrics`` without ever running the lifespan, and it also (redundantly,
+    since #216) instruments the module-level synchronous engine through the same
+    idempotent seam as the lifespan.
+    """
+
+    ensure_event_loop_lag_sampler_started()
+    ensure_sync_engine_instrumented()
 
 
 @dataclass(frozen=True)
@@ -67,7 +101,10 @@ _prometheus_cache: _PrometheusCacheEntry | None = None
 
 
 @router.get("/metrics", include_in_schema=False)
-def prometheus_metrics(db: Session = Depends(get_db_session)) -> Response:
+def prometheus_metrics(
+    db: Session = Depends(get_db_session),
+    _: None = Depends(ensure_observability_samplers_started),
+) -> Response:
     body = build_prometheus_metrics(db)
     return Response(content=body, media_type=PROMETHEUS_CONTENT_TYPE)
 
@@ -81,7 +118,7 @@ def reset_prometheus_metrics_cache() -> None:
 def build_prometheus_metrics(db: Session) -> str:
     ttl = settings.prometheus_cache_ttl_s
     if ttl <= 0:
-        return _build_prometheus_metrics(db)
+        return _compose_prometheus_metrics(_build_prometheus_metrics(db))
 
     global _prometheus_cache
     bind = db.get_bind()
@@ -92,25 +129,79 @@ def build_prometheus_metrics(db: Session) -> str:
             and _prometheus_cache.bind is bind
             and _prometheus_cache.expires_at > now
         ):
-            return _prometheus_cache.body
+            return _compose_prometheus_metrics(_prometheus_cache.body)
         body = _build_prometheus_metrics(db)
         _prometheus_cache = _PrometheusCacheEntry(
             bind=bind,
             body=body,
             expires_at=now + ttl,
         )
-        return body
+        return _compose_prometheus_metrics(body)
+
+
+def _compose_prometheus_metrics(db_body: str) -> str:
+    """Append the process-local observability section to the cached database body.
+
+    Only the database-derived body is cached (``settings.prometheus_cache_ttl_s``,
+    15 s by default) because it runs aggregation queries. Event-loop, pool and
+    scan samples are free to read and would go stale behind that cache, so they
+    are rendered fresh on every scrape.
+    """
+
+    _sample_pool_occupancy()
+    return db_body + build_observability_metrics()
+
+
+def _sample_pool_occupancy() -> None:
+    """Refresh the pool occupancy gauges at scrape time.
+
+    The occupancy gauges (``db_pool_checked_out`` / ``checked_in`` / ``overflow`` /
+    ``size``) are documented as sampled on demand "so the gauge agrees with the pool
+    at read time", but nothing in production ever called
+    :func:`refresh_pool_occupancy`, so those series were never emitted and
+    ``onestep_control_plane_db_pool_checked_out / db_pool_size`` -- the saturation
+    signal in the latency runbook -- had no data to alert on.
+
+    Sampling on the scrape path is what the module docstring specifies and keeps the
+    value honest: it reflects the pool at read time rather than at some earlier
+    background tick. It costs four attribute reads per pool and is observation only,
+    so a failure here must never fail the scrape.
+    """
+
+    try:
+        from onestep_control_plane_api.db import session as db_session_module
+
+        refresh_pool_occupancy(db_session_module.engine, name=SYNC_POOL_METRIC_NAME)
+    except Exception:  # pragma: no cover - defensive, see docstring
+        logger.warning("could not sample pool occupancy", exc_info=True)
 
 
 def _build_prometheus_metrics(db: Session) -> str:
     runtime_metrics = _collect_task_runtime_metrics(db)
     custom_metrics = _collect_custom_metrics(db)
     lines: list[str] = []
+    # GAUGE, not counter, and the name keeps its historical `_total` suffix for
+    # wire compatibility. These values are SUM(TaskMetricWindow.*) over every window
+    # still inside retention, and the retention worker deletes windows older than
+    # `retention_task_metric_windows_days` (90 by default). The sum therefore
+    # DECREASES on every retention pass -- proven in
+    # `test_task_metric_windows_are_not_monotonic_counters`.
+    #
+    # Declaring them `counter` would be a lie with consequences: Prometheus treats a
+    # counter decrease as a reset and folds the drop into the next increase(), so any
+    # `increase()`/`rate()` expression over these families would spike by roughly the
+    # whole retained total after each retention run. That is also why there is no
+    # alert rule on task throughput or failure rate -- see the note in
+    # monitoring/prometheus/rules/control-plane.yml.
     _append_metric_family(
         lines,
         name="onestep_task_succeeded_total",
-        help_text="OneStep task deliveries that completed successfully.",
-        metric_type="counter",
+        help_text=(
+            "Task deliveries that succeeded, summed over the retained metric windows. "
+            "A rolling sum, NOT a monotonic counter: it decreases when retention "
+            "removes old windows, so do not use increase() or rate() on it."
+        ),
+        metric_type="gauge",
         samples=[
             (_runtime_labels(series), aggregate.succeeded)
             for series, aggregate in runtime_metrics.items()
@@ -119,8 +210,13 @@ def _build_prometheus_metrics(db: Session) -> str:
     _append_metric_family(
         lines,
         name="onestep_task_failed_total",
-        help_text="OneStep task deliveries that failed after retry policy handling.",
-        metric_type="counter",
+        help_text=(
+            "Task deliveries that failed after retry policy handling, summed over the "
+            "retained metric windows. A rolling sum, NOT a monotonic counter: it "
+            "decreases when retention removes old windows, so do not use increase() "
+            "or rate() on it."
+        ),
+        metric_type="gauge",
         samples=[
             (_runtime_labels(series), aggregate.failed)
             for series, aggregate in runtime_metrics.items()
@@ -150,8 +246,13 @@ def _build_prometheus_metrics(db: Session) -> str:
     _append_metric_family(
         lines,
         name="onestep_task_custom_counter_total",
-        help_text="Custom OneStep counter metrics reported by task handlers.",
-        metric_type="counter",
+        help_text=(
+            "Custom counter metrics reported by task handlers, summed over the "
+            "retained metric windows. A rolling sum, NOT a monotonic counter: it "
+            "decreases when retention removes old windows, so do not use increase() "
+            "or rate() on it."
+        ),
+        metric_type="gauge",
         samples=[
             (_custom_labels(series), aggregate.total)
             for series, aggregate in custom_metrics.items()
@@ -170,6 +271,78 @@ def _build_prometheus_metrics(db: Session) -> str:
         ],
     )
     return "\n".join(lines) + "\n"
+
+
+def build_observability_metrics() -> str:
+    """Render only the process-local observability metrics, with no database access.
+
+    This is the reusable entry point for a diagnostics session: it returns the
+    same text/plain 0.0.4 section that :func:`build_prometheus_metrics` embeds,
+    so an operator can diff the two without scraping the authenticated endpoint.
+    """
+
+    lines: list[str] = []
+    _append_observability_metrics(lines, collect_prometheus_snapshot())
+    if not lines:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
+def _append_observability_metrics(lines: list[str], snapshot: ObservabilitySnapshot) -> None:
+    """Append event-loop, pool and scan metric families from ``snapshot``.
+
+    Samples are grouped per metric name so each family carries exactly one HELP
+    and one TYPE line, matching the Prometheus 0.0.4 text format.
+    """
+
+    _append_grouped_families(lines, metric_type="gauge", samples=snapshot.gauges)
+    _append_grouped_families(lines, metric_type="counter", samples=snapshot.counters)
+    _append_histogram_families(lines, histograms=snapshot.histograms)
+
+
+def _append_grouped_families(
+    lines: list[str],
+    *,
+    metric_type: str,
+    samples: Iterable[GaugeSample | CounterSample],
+) -> None:
+    grouped: dict[str, list[tuple[dict[str, str], float | int | None]]] = {}
+    help_texts: dict[str, str] = {}
+    for sample in samples:
+        grouped.setdefault(sample.name, []).append((dict(sample.labels), sample.value))
+        help_texts.setdefault(sample.name, sample.help_text)
+    for name in sorted(grouped):
+        _append_metric_family(
+            lines,
+            name=name,
+            help_text=help_texts[name],
+            metric_type=metric_type,
+            samples=grouped[name],
+        )
+
+
+def _append_histogram_families(lines: list[str], *, histograms: Iterable[HistogramSample]) -> None:
+    grouped: dict[str, list[HistogramSample]] = {}
+    for histogram in histograms:
+        grouped.setdefault(histogram.name, []).append(histogram)
+    for name in sorted(grouped):
+        family = sorted(grouped[name], key=lambda sample: sorted(sample.labels))
+        lines.append(f"# HELP {name} {family[0].help_text}")
+        lines.append(f"# TYPE {name} histogram")
+        for histogram in family:
+            for bucket, cumulative in histogram.buckets:
+                labels = dict(histogram.labels)
+                labels["le"] = "+Inf" if math.isinf(bucket) else _format_number(bucket)
+                lines.append(
+                    f"{name}_bucket{_format_labels(labels)} {cumulative}"
+                )
+            lines.append(
+                f"{name}_sum{_format_labels(dict(histogram.labels))} "
+                f"{_format_number(histogram.total)}"
+            )
+            lines.append(
+                f"{name}_count{_format_labels(dict(histogram.labels))} {histogram.count}"
+            )
 
 
 def _collect_task_runtime_metrics(db: Session) -> dict[_TaskSeries, _TaskRuntimeAggregate]:

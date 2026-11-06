@@ -130,12 +130,7 @@ class TaskRunner:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if stop_fetching_task in done:
-                if self.task.source.fetch_is_cancel_safe:
-                    fetch_task.cancel()
-                    await asyncio.gather(fetch_task, return_exceptions=True)
-                else:
-                    deliveries = await self._resolve_fetch_task(fetch_task)
-                    await self._release_unstarted_deliveries(deliveries)
+                await self._cancel_or_release_fetch(fetch_task)
                 return []
             if fetch_task in done:
                 deliveries = await self._resolve_fetch_task(fetch_task)
@@ -143,8 +138,7 @@ class TaskRunner:
                     await self._release_unstarted_deliveries(deliveries)
                     return []
                 return deliveries
-            fetch_task.cancel()
-            await asyncio.gather(fetch_task, return_exceptions=True)
+            await self._cancel_or_release_fetch(fetch_task)
             return []
         except asyncio.CancelledError:
             await self._cancel_or_release_fetch(fetch_task)
@@ -168,7 +162,10 @@ class TaskRunner:
         assert self.task.source is not None
         if not fetch_task.done() and self.task.source.fetch_is_cancel_safe:
             fetch_task.cancel()
-            await asyncio.gather(fetch_task, return_exceptions=True)
+        # Cancellation may lose the race with completion, or fetch may catch
+        # CancelledError and return deliveries. In either case we own the result.
+        await asyncio.gather(fetch_task, return_exceptions=True)
+        if fetch_task.cancelled():
             return
         deliveries = await self._resolve_fetch_task(fetch_task)
         await self._release_unstarted_deliveries(deliveries)

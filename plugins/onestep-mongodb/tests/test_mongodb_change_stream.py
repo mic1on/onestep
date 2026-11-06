@@ -285,3 +285,31 @@ async def test_resumable_stream_failure_reopens_from_committed_token() -> None:
     assert await source.fetch(1) == []
     assert len(collection.watch_calls) == 2
     assert collection.watch_calls[1]["resume_after"] == token
+
+
+@pytest.mark.asyncio
+async def test_change_stream_retry_budget_survives_resume_and_reaches_terminal():
+    from onestep import MaxAttempts, OneStepApp, ExponentialBackoff
+    from onestep.runtime.runner import TaskRunner
+
+    event = _event("64b64c1234567890abcdef12", "insert")
+    collection = FakeWatchCollection([FakeChangeStream([event]) for _ in range(3)])
+    connector = MongoDBConnector("mongodb://local", database="app", client=FakeWatchClient(collection))
+    store = RecordingStore()
+    source = connector.watch_collection("events", state=store)
+    app = OneStepApp("mongodb-change-stream-attempts")
+
+    @app.task(source=source, retry=MaxAttempts(3))
+    async def poison(ctx, payload):
+        raise ValueError("poison")
+
+    runner = TaskRunner(app, app.tasks[0])
+    for attempt in range(3):
+        delivery, = await source.fetch(1)
+        assert delivery.envelope.attempts == attempt
+        assert ExponentialBackoff(max_attempts=10).on_error(delivery.envelope, ValueError(), None).delay_s == 2 ** attempt
+        await runner._handle_delivery(delivery)
+    assert decode_state(store.loaded) == event["_id"]
+    assert source._tracker._retry_attempts == {}
+    assert await source.fetch(1) == []
+    await source.close()

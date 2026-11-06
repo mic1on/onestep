@@ -239,14 +239,34 @@ cat ~/.onestep/control-plane-state/prod/billing-sync/identity.json
 
 ### 6.2 为什么启动时报 identity lock 错误
 
-原因：
+身份锁保护 `identity.json` 中的实例 ID 和心跳/同步序号，不是业务消费锁或分布式锁。
 
-- 两个活着的进程在抢同一个状态目录
+新版使用操作系统文件锁：POSIX（Linux/macOS）使用 `flock`，Windows 使用
+`msvcrt.locking` 的非阻塞字节锁。锁文件描述符保持到 `IdentityStore.close()`；
+正常退出、进程被强杀时由操作系统释放。锁文件永久保留，里面的 PID、hostname
+和时间仅用于诊断；文件存在不代表正在被占用。不要在运行期间删除或替换锁文件，
+否则不同进程可能锁住不同 inode，破坏互斥。
 
-处理方式：
+报锁冲突表示另一个使用新版协议的进程持有同一路径的文件锁。为独立副本配置不同的
+`ONESTEP_STATE_DIR` 或 `ONESTEP_REPLICA_KEY`。仅支持具有可靠本地文件锁语义的
+文件系统；不要将此机制当作跨主机的分布式协调。不要把打开的 IdentityStore 继承给
+fork 子进程；继承的文件描述符会延长锁的寿命，子进程应在独立启动后创建自己的 store。
 
-- 每个进程使用不同的 `ONESTEP_STATE_DIR`
-- 或者每个进程使用不同的 `ONESTEP_REPLICA_KEY`
+#### 从 PID 文件锁升级
+
+旧版（包括 1.13.0）通过 PID 是否存在识别锁持有者。异常退出留下的 PID 文件在容器
+重启、PID 复用时可能阻止启动，即使原持有者已经退出。
+
+1. 停止所有使用该状态目录的旧版进程，确认已退出；新旧协议不能混用。
+2. 保留 `identity.json` 和现有 `identity.lock`，启动新版。新版可直接接管无人持有
+   系统锁的旧文件，即使其中 PID 被复用、内容为空或损坏。
+3. 核对实例 ID 保持不变、消息序号继续递增，再恢复运行。
+4. 回滚前先停止所有新版进程；确认无人使用后才能删除 `identity.lock`，保留
+   `identity.json`，再启动旧版。
+
+验证覆盖：同目录互斥、正常退出/强杀后重开、PID 复用与损坏的遗留文件、状态加载失败
+释放锁、重复 close 不影响新持有者。实现与回归测试分别位于
+`src/onestep/identity_store.py` 和 `tests/test_identity_store.py`。
 
 ### 6.3 为什么控制面里出现了多个逻辑实例
 
