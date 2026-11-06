@@ -82,7 +82,31 @@ matters.
 
 Multi-sink fan-out is not transactional. If an earlier sink succeeds and a
 later sink fails, the earlier send is not rolled back. A retry may send to the
-earlier sink again.
+earlier sink again. When a fan-out emit partially fails, the execution failure
+names exactly which sinks succeeded (`sinks_succeeded`), making the retry
+replay window — which sinks will see the row again — explicit.
+
+## Attempt Counting And Retry Budgets
+
+`Envelope.attempts` is 0-based: `0` is the first delivery. `MaxAttempts` and
+exponential backoff read this counter. Whether the counter survives process
+restarts or ownership changes is a per-source property:
+
+| Source | Counter persistence |
+| --- | --- |
+| Memory queue | Process-local. Returned unstarted deliveries keep their count and are redelivered first, in return order; `size()` may temporarily exceed `maxsize` while stopping. |
+| SQL table queue (`onestep-sql` ≥ 0.7.2) | Per row, in the database. `retry()` increments before applying `nack`; `release_unstarted()` applies `nack` without incrementing; `ack()` / `complete()` clear it. Terminal `fail()` keeps the exhausted count while the row still matches `where`, so the row continues down the failure/DLQ path instead of getting a fresh retry budget. |
+| MySQL binlog CDC (`onestep-sql` ≥ 0.7.2) | Local redelivery queue guarded by the cursor barrier; counts reset on restart, which replays unacknowledged events from the persisted cursor. See [SQL](/en/broker/sql#acknowledgement-and-recovery). |
+| Redis Streams (`onestep-redis` ≥ 0.2.3) | Stored in the PEL, preserved across worker restarts: `attempts = encoded_attempts + times_delivered - 1`. Expired entries from any consumer (including dead processes) are reclaimed by a bounded `XAUTOCLAIM` scan (`reclaim_idle_ms`, default 60000); active deliveries renew every 1/3 of the interval. ACK, retry, and lease renewal atomically fence on the PEL consumer and delivery count. |
+| Kafka (`onestep-kafka` ≥ 0.1.4) | Not persisted by the broker. The local retry budget applies per continuous partition assignment and resets on restart or rebalance; cross-disconnect bounds need a broker-side dead-letter policy. Commits follow the completion prefix of actually fetched records. |
+| MongoDB (`onestep-mongodb` ≥ 0.1.3) | Per source instance, keyed by cursor / resume token. Generation invalidation and replay preserve counts; releasing unstarted deliveries does not consume attempts. A new process starts from zero at the persisted cursor. |
+| AWS SQS (`onestep-sqs` ≥ 0.2.5) | Uses real broker delivery history: `attempts = max(0, ApproximateReceiveCount - 1)` on top of the publisher-encoded count. SQS's 1-based receive count survives consumer restarts and includes visibility expiries and unstarted releases. Terminal actions still follow `on_fail` (`delete` or broker redrive when the message must leave the source). |
+| Cloudflare Queues (`onestep-cf-queues` ≥ 0.2.1) | Same pattern via the Pull API's 1-based `message.attempts`: `attempts = max(0, message.attempts - 1)`, preserved across consumer restarts; visibility expiry and explicit releases also consume broker deliveries. |
+| Feishu Bitable (`onestep-feishu-bitable` ≥ 0.6.2) | Per source instance. Retries reuse the already-fetched payload and increment `attempts`; released unstarted deliveries do not consume attempts; a failed or released row blocks the durable cursor from advancing past it even when later rows succeed. A restart rereads from the persisted cursor with counts reset. |
+
+In every case, a restart can re-deliver rows that already succeeded, so
+handlers and sinks must be idempotent; `MaxAttempts` bounds retries within the
+documented lifetime of the counter.
 
 ## Failure Semantics
 

@@ -49,6 +49,7 @@ onestep 1.x uses `Source` for input and `Sink` for output. Many connectors imple
 |-----------|--------|------|-------------|
 | [Webhook](/en/broker/webhook) | Yes | No | HTTP request reception |
 | [HTTP Sink](/en/broker/http) | No | Yes | HTTP JSON request output |
+| [HTTP Fetcher](/en/broker/http#http-fetcher) | No | No | On-demand HTTP client resource (connector) called from handlers |
 
 ### Custom
 

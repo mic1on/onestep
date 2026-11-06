@@ -63,6 +63,16 @@ pending → dispatched → accepted/rejected → succeeded/failed/timeout/cancel
 ```
 All commands are persisted to the database; unacknowledged commands can be re-dispatched after reconnection.
 
+Since Worker Agent 0.1.5 there is also **command result recovery**: once an
+agent advertises the `agent.command_recovery` capability, every command is
+persisted to `work_dir/commands/` before execution and terminal results are
+durably recorded before being reported; a repeated command ID returns the
+existing result directly, and commands for the same deployment execute
+serially. The control plane re-dispatches accepted commands only to agents
+with that capability; after an agent restart, an interrupted preparation ends
+as `cancelled`, and exit events are retained until the control plane
+acknowledges receipt.
+
 ### Online / Offline Detection
 - Instance `last_seen_at` within `INSTANCE_OFFLINE_AFTER_S` (default 90s) → online
 - Within health participation window `INSTANCE_HEALTH_PARTICIPATION_WINDOW_S` (default 1h) → counted in service health denominator
@@ -171,8 +181,48 @@ The Control Plane supports pushing task events to instant messaging tools:
 
 - **Feishu** group bot
 - **WeChat Work** group bot
+- **Custom** webhooks
 
 Supported event types: task started, succeeded, failed, retried, dead-lettered, missed scheduled start.
+
+Channels are classified along three independent axes: event types, service
+scope (an empty list = **all** services, including future ones), and the
+missed-start grace period. Damping is deliberately asymmetric per event kind:
+connectivity flips use a stable confirmation window plus flap suppression
+(rapid up/down oscillations no longer trigger notification storms);
+`task_failed` uses burst damping per (channel, service);
+`task_started` / `task_succeeded` / `task_missed_start` are not damped.
+Damping state is persisted, so a restart mid-incident cannot reset a counter;
+a suppressed burst still reports `suppressed_failure_count` in the summary —
+silence must never read as health.
+
+`POST /channels/{id}/test` performs a **real** webhook request and returns
+`delivered` / status code / error message; delivery outcomes are queryable at
+`GET /deliveries` — the only feedback loop for "did my alert actually go out?".
+
+## Monitoring & Alerting
+
+The control plane ships two complementary alert planes:
+
+- **Prometheus rules (Plane A)**: alert rules live in
+  `apps/control-plane/monitoring/prometheus/rules/control-plane.yml` with
+  runbooks beside them in `apps/control-plane/docs/runbooks/alerts.md` (each
+  rule links its `runbook:` anchor). `docker-compose.monitoring.yml` runs
+  Prometheus + Alertmanager + blackbox + postgres_exporter in one command; the
+  `/metrics` endpoint requires a bearer token. A `critical` alert means the
+  control plane is down, **or** it has lost the ability to report problems
+  (scan failing, notification delivery failures, metrics missing, scan never
+  ran) — the second class is the more dangerous one: a silent alerting system
+  hides incidents better than a loud outage.
+- **Notification subsystem (Plane B)**: the control plane itself scans and
+  derives events → notification outbox → webhook. Plane B is driven by the
+  control plane, so it is necessarily silent when the control plane is down —
+  which is exactly why Plane A exists.
+
+After touching monitoring configuration, run
+`bash scripts/check-monitoring.sh` (also a CI check); it verifies that every
+metric referenced by a rule is emittable, runbook anchors resolve, and scrape
+job names line up.
 
 ## More Resources
 

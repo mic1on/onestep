@@ -207,7 +207,36 @@ onestep build worker.yaml --strict --out dist/worker.zip
 
 `onestep build` collects the YAML entry point, Python handler/hook/conditional route references, dependency declaration files, and metadata such as README/license, producing a deployable zip with a `onestep-package.json` manifest.
 
+### AI & Automation Interfaces
+
+```bash
+onestep check --strict --json worker.yaml   # report all validation problems at once
+onestep schema                              # print the onestep/v1alpha1 JSON Schema
+```
+
+CLI output is a stable contract for programs: exit codes (`0` success / `1`
+runtime failure / `2` invalid input), `--json` output with `schema`/`version`
+fields (an error envelope even on failure), and a JSON Schema **derived** from
+the runtime's strict-validation contract and the installed connector catalog —
+usable for editor completion or letting an AI self-validate generated configs.
+See [AI & Automation Interfaces](/en/guide/ai-interfaces).
+
 ## Advanced Features
+
+### Multi-Language Clients and On-Demand Fetching
+
+- Besides Python, tracked execution has an official TypeScript client,
+  **`@mic1on/onestep-client`** (npm, PostgreSQL backend): a Next.js API route
+  or any Node ≥ 22.6 service can submit, poll, and cancel long-running tasks
+  while the worker stays an unmodified Python onestep. The package replicates
+  Python's submission digest and JSON encoding byte for byte, preventing
+  cross-language idempotency-key drift. See
+  [How Tracked Execution Works](/en/broker/execution-overview).
+- **`HttpFetcher`** (since 1.13.0) is a declarative on-demand HTTP resource:
+  the runtime never polls it — handlers call `fetch()` / `fetch_rows()` through
+  `ctx.resources`, reusing the `http_sink` transport stack and error
+  classification, with failures handed to the task retry policy. See
+  [HTTP Sink / Fetcher](/en/broker/http#http-fetcher).
 
 ### Task Orchestration
 
@@ -295,6 +324,16 @@ reporter.attach(app)
 You can also use `reporter: true` and inject the service description via `ONESTEP_SERVICE_DESCRIPTION`.
 The reporter pushes topology sync, heartbeats, metrics, and events, and can receive remote task control commands such as `pause_task`, `resume_task`, and `restart_task`. Task handlers can report low-cardinality custom metrics via `ctx.metrics.counter(...).inc()` and `ctx.metrics.gauge(...).set()`.
 
+Since `onestep-control-plane` 0.2.0, the reporter also sends an independent
+backup heartbeat (presence beacon) when the **main-loop heartbeat is late**,
+so an instance is no longer misjudged as offline (and flapping up/down) when a
+handler blocks the event loop synchronously. The thread sends no requests
+while the loop is healthy, so existing deployments behave unchanged; during a
+stall the instance stays "online", but the blocking still hurts task
+throughput and `ping`/`drain` command latency — move blocking work to
+`asyncio.to_thread()`. Disable with `ONESTEP_CONTROL_PLANE_PRESENCE_ENABLED`
+and tune the cadence with `_INTERVAL_S` / `_GRACE_S`.
+
 ## Comparison with 0.5.x
 
 | Feature | 0.5.x | 1.x |
@@ -315,5 +354,6 @@ The reporter pushes topology sync, heartbeats, metrics, and events, and can rece
 - [Tutorial](/en/guide/tutorial) - quick start
 - [CLI Deploy](/en/guide/deploy) - production deployment
 - [Worker Runtime Image](/en/guide/worker-runtime-image) - containerized YAML workers
+- [AI & Automation Interfaces](/en/guide/ai-interfaces) - exit codes, --json, JSON Schema contracts
 - [RabbitMQ](/en/broker/rabbitmq) - distributed queue
 - [Core Reliability](/en/core-reliability) - runtime and plugin compatibility contracts

@@ -22,7 +22,7 @@ The full set of variables read by the image entrypoint is in [Environment Variab
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.12.0
+  ghcr.io/mic1on/onestep-worker:1.16.0
 ```
 
 Startup sequence:
@@ -59,7 +59,7 @@ Fix it in either way:
 ## Custom Image
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.12.0
+FROM ghcr.io/mic1on/onestep-worker:1.16.0
 
 WORKDIR /workspace
 COPY . /workspace

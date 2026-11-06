@@ -1,5 +1,22 @@
 # 文档更新日志
 
+## 2026-11-06 - 同步 main 1.13→1.16：机器接口、HTTP Fetcher、TS 客户端与交付可靠性
+
+### 变更概述
+
+合入 main 自 `fdc9cfc` 以来的 152 个提交（onestep 1.13.0–1.16.0、onestep-sql 0.7.0–0.7.2、Redis/Kafka/MongoDB/SQS/CF-Queues/Feishu #263 交付可靠性系列、worker-agent 0.1.5、`@mic1on/onestep-client` 0.1.1）。版本号口径从 1.12.0 更新到 1.16.0。main 在 docs 分支已删除的 `docs/broker/mysql.md` / `postgres.md` 上新增的 `complete()` 与 Binlog CDC 恢复内容，按整合决策移植进统一的 [SQL](/broker/sql) 页面。
+
+### 更新内容
+
+- 合并冲突（modify/delete）按 docs 分支的整合决策解决：保持删除 `mysql.md` / `postgres.md`，把 main 新增的 **`complete()` 单事务完成**（#181，含 #180 claim/nack lint 提示与三后端一致说明）与 **MySQL Binlog CDC 确认与恢复**（#264）两节移植进 [SQL](/broker/sql)「表队列」「Binlog CDC」章节（中英镜像）。
+- main 新增的 [AI 与自动化接口](/guide/ai-interfaces)（退出码、`--json` 契约、JSON Schema、严格校验全量报告）与 [SQL 批量写入正确性](/guide/sql-batch-correctness)两页入站：补英文翻译（`/en/guide/ai-interfaces`、`/en/guide/sql-batch-correctness`），侧边栏「指南」中英各补两项；`docs/public/schema/v1alpha1.json` 发布副本随合并入站。
+- [HTTP Sink / Fetcher](/broker/http)（中英镜像，侧边栏改名）新增 **HTTP Fetcher** 章节：connector 而非 source 的定位、`fetch()` / `fetch_rows()` Python 与 YAML 用法、`rows` 提取函数契约、错误分类与 Control Plane 脱敏说明（#186，1.13.0）；[连接器概览](/broker/) Web 表、[YAML 任务定义](/yaml-task-definition)内置资源类型清单、首页 features 卡片同步。
+- [长程任务如何工作](/broker/execution-overview)（中英镜像）新增「客户端：Python 与 TypeScript」章节：`@mic1on/onestep-client`（npm，PostgreSQL，Node ≥ 22.6）的能力边界（只实现客户端一半）、示例、错误→HTTP 映射与跨语言 `submission_digest` 一致性说明（#178–#180、#259、#260、#268）。
+- [核心可靠性](/core-reliability)（中英镜像）新增「Attempt Counting And Retry Budgets」章节：`Envelope.attempts` 0 基语义与各 source（Memory、SQL 表队列、Binlog、Redis、Kafka、MongoDB、SQS、CF-Queues、Feishu）计数持久化边界一览表（#252、#253、#263）；投递语义补 `sinks_succeeded` 部分失败可观测（#182）。
+- [功能特性](/guide/features)（中英镜像）新增「AI 与自动化接口」与「多语言客户端与按需拉取」小节；英文页补 presence beacon 段落（0.2.0，与中文页对齐）。
+- [Control Plane](/control-plane/)（中英镜像）：命令生命周期补 worker-agent 0.1.5 命令结果恢复（`agent.command_recovery`）；「通知与 Webhook」扩展通道分类、不对称抑制与投递反馈回路；新增「监控与告警」章节（Plane A Prometheus 规则 + Plane B 通知子系统、`check-monitoring.sh`）。
+- 版本号口径 1.12.0 → 1.16.0：快速开始、Worker 镜像标签（`ghcr.io/mic1on/onestep-worker`）、/healthz 示例（中英镜像）。
+
 ## 2026-09-16 - 补充 Worker 镜像 flat-layout 排障说明
 
 ### 变更概述

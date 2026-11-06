@@ -207,7 +207,21 @@ onestep build worker.yaml --strict --out dist/worker.zip
 
 `onestep build` 会收集 YAML 入口、Python handler/hook/条件路由引用、依赖声明文件和 README/license 等元数据，生成带 `onestep-package.json` manifest 的可部署 zip。
 
+### AI 与自动化接口
+
+```bash
+onestep check --strict --json worker.yaml   # 一次报告全部校验问题
+onestep schema                              # 输出 onestep/v1alpha1 JSON Schema
+```
+
+CLI 输出是给程序消费的稳定契约：退出码（`0` 成功 / `1` 运行失败 / `2` 输入无效）、带 `schema`/`version` 的 `--json` 输出（失败时也输出错误信封）、以及从运行时严格校验契约与已安装连接器目录**派生**的 JSON Schema，可供编辑器补全或 AI 自校验生成的配置。详见 [AI 与自动化接口](/guide/ai-interfaces)。
+
 ## 高级特性
+
+### 多语言客户端与按需拉取
+
+- 长程任务的 `ExecutionClient` 除 Python 外还有官方 TypeScript 实现 **`@mic1on/onestep-client`**（npm，PostgreSQL 后端）：Next.js API route 或任意 Node ≥ 22.6 服务可以直接提交、轮询、取消长任务，worker 保持未改动的 Python onestep；包内逐字节复刻 Python 的提交摘要与 JSON 编码规则，避免跨语言幂等键漂移。详见[长程任务如何工作](/broker/execution-overview)。
+- **`HttpFetcher`**（1.13.0 起）是声明式的按需 HTTP 拉取资源：运行时不轮询它，handler 在执行中通过 `ctx.resources` 调用 `fetch()` / `fetch_rows()`，复用 `http_sink` 的传输栈与错误分类，失败交给任务 retry policy。详见 [HTTP Sink / Fetcher](/broker/http#http-fetcher)。
 
 ### 任务编排
 
@@ -317,5 +331,6 @@ Reporter 会推送拓扑同步、心跳、指标和事件，也可以接收 `pau
 - [入门教程](/guide/tutorial) - 快速上手
 - [CLI 部署](/guide/deploy) - 生产环境部署
 - [Worker Runtime Image](/guide/worker-runtime-image) - 容器化 YAML worker
+- [AI 与自动化接口](/guide/ai-interfaces) - 退出码、--json、JSON Schema 契约
 - [RabbitMQ](/broker/rabbitmq) - 分布式队列
 - [核心可靠性](/core-reliability) - 运行时和插件兼容契约

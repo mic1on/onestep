@@ -50,6 +50,7 @@ onestep 1.x 使用 `Source` 表示输入，使用 `Sink` 表示输出。很多�
 |--------|--------|------|------|
 | [Webhook](/broker/webhook) | 支持 | 不支持 | HTTP 请求接收 |
 | [HTTP Sink](/broker/http) | 不支持 | 支持 | HTTP JSON 请求输出 |
+| [HTTP Fetcher](/broker/http#http-fetcher) | 不支持 | 不支持 | 按需拉取的 HTTP 客户端资源（connector），handler 内调用 |
 
 ### 自定义
 

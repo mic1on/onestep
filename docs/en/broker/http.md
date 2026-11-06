@@ -1,5 +1,5 @@
 ---
-title: HTTP Sink | Broker
+title: HTTP Sink / Fetcher | Broker
 outline: deep
 ---
 
@@ -122,12 +122,121 @@ tasks:
 
 Direct forwarding is only suitable when the payload already matches the target API's expected structure. For field transformations, signing, idempotency checks, or error normalization, use a Python handler to process and return the result.
 
+## HTTP Fetcher
+
+`HttpFetcher` (since 1.13.0) is a stateless HTTP client resource that task
+handlers use to **pull** from external HTTP endpoints on demand. It is a
+connector, not a source — the runtime never polls it. The trigger is always a
+delivery from a cron (or any other) source, and the handler calls
+`fetch()` / `fetch_rows()` through `ctx.resources` while executing.
+
+It reuses the `http_sink` transport stack (URL/header/param/timeout/status
+normalization and error classification), supports a static or per-call JSON
+request body, validates `success_statuses`, and parses the JSON response.
+Failures raise `ConnectorOperationError`, so the task's retry policy owns
+failure handling; the fetcher itself keeps no state between calls.
+
+```python
+import os
+
+from onestep import CronSource, HttpFetcher, MemoryQueue, OneStepApp
+
+app = OneStepApp("fetch-demo")
+
+api = HttpFetcher(
+    "orders-api",
+    url="https://api.example.com/orders",
+    headers={"Authorization": f"Bearer {os.environ['API_TOKEN']}"},
+    params={"status": "paid"},
+    timeout_s=10.0,
+    success_statuses=[200],
+)
+app.register_resource("api", api)
+
+@app.task(source=CronSource("*/5 * * * *"), emit=MemoryQueue("results"))
+async def sync_paid_orders(ctx, _):
+    payload = await ctx.resources["api"].fetch(params_override={"status": "paid"})
+    return {"count": len(payload["orders"])}
+```
+
+`fetch(params_override=None, body_override=None)` returns the parsed JSON;
+`params_override` merges over the static `params`, and `body_override`
+replaces the static `body` (only POST/PUT/PATCH carry a body; GET/DELETE never
+send one). An empty response body (e.g. HTTP 204) returns `None`.
+
+`fetch_rows()` builds on `fetch()` and projects the response into a list of
+row mappings, so emit-to-sink flows can fan out fetched rows without a
+hand-written HTTP client. `rows` is an optional extractor callable (sync or
+async) that receives the parsed payload and returns a list of mappings;
+contract violations (a non-list result or non-mapping items) raise a
+`PERMANENT` error, while exceptions raised inside the extractor propagate
+unchanged:
+
+```python
+rows_fn = lambda payload: payload["orders"]  # or async def rows_fn(payload): ...
+
+api = HttpFetcher(
+    "orders-api",
+    url="https://api.example.com/orders",
+    rows=rows_fn,
+)
+app.register_resource("api", api)
+
+@app.task(source=CronSource("*/5 * * * *"), emit=out)
+async def fan_out_rows(ctx, _):
+    return await ctx.resources["api"].fetch_rows()  # list[dict], emitted row by row
+```
+
+Like `HttpSink`: `429` is classified as rate limiting, `408`/`425`/`5xx` as
+transient errors, and other non-success statuses as permanent errors;
+transport-layer failures (timeouts, `URLError`, `OSError`) are classified as
+retryable or permanent the same way.
+
+## HTTP Fetcher YAML Configuration
+
+```yaml
+resources:
+  tick:
+    type: cron
+    expr: "*/5 * * * *"
+
+  orders_api:
+    type: http_fetcher
+    url: "https://api.example.com/orders"
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+    params:
+      status: paid
+    timeout_s: 10
+    success_statuses: [200]
+
+  out:
+    type: memory
+
+tasks:
+  - name: sync_paid_orders
+    source: tick
+    emit: out
+    handler:
+      ref: myapp.handlers:sync_orders
+```
+
+`http_fetcher` supports `url`, `method` (default `GET`), `headers`, `params`,
+`body`, `timeout_s`, `success_statuses`, and `rows` (a callable ref string
+pointing at the extractor function). Strict validation rejects unknown fields.
+Handlers access the fetcher instance through its resource name
+(`orders_api` in the example).
+
 ## Control Plane
 
-When the Control Plane reporter is enabled, `HttpSink` appears as `http_sink` in the task topology. Account information in URLs is redacted, URL query and fragment are removed, and header/param values are marked as `<redacted>` to prevent tokens from appearing in topology payloads.
+When the Control Plane reporter is enabled, `HttpSink` and `HttpFetcher`
+appear as `http_sink` / `http_fetcher` in the task topology. Account
+information in URLs is redacted, URL query and fragment are removed, and
+header/param values are marked as `<redacted>` to prevent tokens from
+appearing in topology payloads.
 
 ## Next Steps
 
 - [Webhook](/en/broker/webhook) - Receive external HTTP requests
-- [YAML Task Definition](/en/yaml-task-definition) - Using `http_sink` and direct forwarding tasks
-- [Custom Source/Sink](/en/broker/custom) - Implement your own output target
+- [YAML Task Definition](/en/yaml-task-definition) - Using `http_sink`, `http_fetcher`, and direct forwarding tasks
+- [Custom Source/Sink](/en/broker/custom) - Implement your own input/output targets

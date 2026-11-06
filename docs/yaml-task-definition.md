@@ -674,10 +674,13 @@ Hook `params` 会在运行时参数之后作为关键字参数传入。
 - `cron`
 - `webhook`
 - `http_sink`
+- `http_fetcher`
 
 strict 模式下，`memory` 资源必须设置正数 `maxsize`；这可以避免长期运行的 YAML worker 意外创建无界的进程内队列。定时 `interval` 和 `cron` 资源支持为 `overlap: queue` 设置 `max_queued_runs`，默认 `1000`。
 
 `http_sink` 默认把任务结果以 JSON 发送。只有需要重塑出站 payload 时才配置 `body`。`url`、`headers`、`params` 以及配置的 `body` 取值可以通过 `&#123;&#123; ... &#125;&#125;` 变量引用 `body`、`payload`、`meta` 和 `attempts`。
+
+`http_fetcher` 是按需拉取的 HTTP 客户端 connector（1.13.0 起）：运行时不会轮询它，handler 在执行中通过 `ctx.resources` 调用 `fetch()` / `fetch_rows()`。字段为 `url`、`method`（默认 `GET`）、`headers`、`params`、`body`、`timeout_s`、`success_statuses` 和 `rows`（callable ref）。用法详见 [HTTP Sink / Fetcher](/broker/http#http-fetcher)。
 
 插件资源类型：
 

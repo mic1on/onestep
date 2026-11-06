@@ -81,6 +81,35 @@ sequenceDiagram
 - **终态只有四个**：`succeeded` / `failed` / `cancelled` / `expired`；`queued` / `running` / `retrying` / `cancel_requested` 都是非终态，客户端继续等待。
 - **取消是协作式的**：`cancel_requested` 只是请求，worker 在 handler 的下一个检查点收敛为 `cancelled`，不保证立即停止。
 
+## 客户端：Python 与 TypeScript
+
+API 进程侧的 `ExecutionClient` 有两个官方实现，worker 始终是未改动的 Python onestep：
+
+| 客户端 | 包 | 后端 | 适用场景 |
+| --- | --- | --- | --- |
+| Python `ExecutionClient` | `onestep`（core） | MySQL / PostgreSQL | FastAPI 等 Python 服务 |
+| TypeScript `ExecutionClient` | `@mic1on/onestep-client`（npm） | PostgreSQL | Next.js API route、任意 Node ≥ 22.6 服务 |
+
+TypeScript 端只实现协议的**客户端一半**：`submit` / `get` / `list` / `cancel` / `wait` / `result`。`claim` / `heartbeat` / `complete` / `reclaim` 是 worker 侧租约操作，TS 中调用会直接抛错——由第二个写入方破坏租约语义比缺失 API 更危险。
+
+```ts
+import { ExecutionClient, PostgresBackend } from '@mic1on/onestep-client';
+
+const backend = await PostgresBackend.create({ connectionString: process.env.DATABASE_URL! });
+const client = new ExecutionClient({ backend, namespace: 'orders' });
+
+const execution = await client.submit(
+  'orders.sync',
+  { orderId: 'A-1001' },
+  { idempotencyKey: 'order-A-1001' },   // 重复提交安全
+);
+const done = await client.wait(execution.id, { timeoutMs: 300_000 });
+```
+
+错误类型与 HTTP 状态的映射沿用上表：`ExecutionNotFound` → 404、`ExecutionNotReady` → 202/409、`ExecutionFailed` → 422、`ExecutionCancelled` → 409、`ExecutionExpired` → 410。
+
+这个包存在的核心理由是**跨语言一致性**：`submission_digest` 在 Python 侧用 `json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=True)` 计算，JavaScript 的 `JSON.stringify` 并不等价（浮点 `.0`、Unicode 转义等差异会让同一 payload 算出不同摘要、触发 `ExecutionConflict`）。TS 客户端在内部逐字节复刻 Python 的编码规则（含 JSON 持久化、`timestamptz` 微秒精度），并与真实 PostgreSQL worker 做双向回放测试。详见包内的 [`clients/ts/README.md`](https://github.com/mic1on/onestep/blob/main/clients/ts/README.md)。
+
 ## 接入前要准备什么
 
 ```mermaid

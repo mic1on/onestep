@@ -22,7 +22,7 @@ onestep 提供官方 worker runtime image，适合以 YAML 为入口运行 worke
 docker run --rm \
   -e ONESTEP_TARGET=/workspace/worker.yaml \
   -v "$PWD:/workspace" \
-  ghcr.io/mic1on/onestep-worker:1.12.0
+  ghcr.io/mic1on/onestep-worker:1.16.0
 ```
 
 启动流程：
@@ -59,7 +59,7 @@ error: Multiple top-level modules discovered in a flat-layout: ['handler', 'clie
 ## 派生镜像
 
 ```dockerfile
-FROM ghcr.io/mic1on/onestep-worker:1.12.0
+FROM ghcr.io/mic1on/onestep-worker:1.16.0
 
 WORKDIR /workspace
 COPY . /workspace

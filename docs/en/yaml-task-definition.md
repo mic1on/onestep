@@ -711,6 +711,7 @@ Built-in resource types:
 - `cron`
 - `webhook`
 - `http_sink`
+- `http_fetcher`
 
 In strict mode, `memory` resources must set a positive `maxsize`; this keeps
 long-lived YAML workers from creating unbounded in-process queues by accident.
@@ -721,6 +722,13 @@ Scheduled `interval` and `cron` resources accept `max_queued_runs` for
 the outbound payload should be reshaped. `url`, `headers`, `params`, and
 configured `body` values can reference `body`, `payload`, `meta`, and
 `attempts` with `&#123;&#123; ... &#125;&#125;` variables.
+
+`http_fetcher` (since 1.13.0) is an on-demand HTTP client connector: the
+runtime never polls it, and handlers call `fetch()` / `fetch_rows()` through
+`ctx.resources` while executing. Fields are `url`, `method` (default `GET`),
+`headers`, `params`, `body`, `timeout_s`, `success_statuses`, and `rows`
+(a callable ref). See [HTTP Sink / Fetcher](/en/broker/http#http-fetcher) for
+usage.
 
 Plugin resource types:
 

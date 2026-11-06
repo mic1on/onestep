@@ -81,6 +81,51 @@ Key points:
 - **Only four terminal states**: `succeeded` / `failed` / `cancelled` / `expired`; `queued` / `running` / `retrying` / `cancel_requested` are non-terminal and the client keeps waiting.
 - **Cancellation is cooperative**: `cancel_requested` is only a request; the worker converges to `cancelled` at the handler's next checkpoint and does not guarantee an immediate stop.
 
+## Clients: Python and TypeScript
+
+There are two official `ExecutionClient` implementations for the API process;
+the worker is always an unmodified Python onestep:
+
+| Client | Package | Backend | Use case |
+| --- | --- | --- | --- |
+| Python `ExecutionClient` | `onestep` (core) | MySQL / PostgreSQL | FastAPI and other Python services |
+| TypeScript `ExecutionClient` | `@mic1on/onestep-client` (npm) | PostgreSQL | Next.js API routes, any Node ≥ 22.6 service |
+
+The TypeScript package deliberately implements **only the client half** of the
+protocol: `submit` / `get` / `list` / `cancel` / `wait` / `result`.
+`claim` / `heartbeat` / `complete` / `reclaim` are worker-side lease
+operations; calling them from TS raises a clear error — a second writer
+violating the lease semantics is worse than a missing API.
+
+```ts
+import { ExecutionClient, PostgresBackend } from '@mic1on/onestep-client';
+
+const backend = await PostgresBackend.create({ connectionString: process.env.DATABASE_URL! });
+const client = new ExecutionClient({ backend, namespace: 'orders' });
+
+const execution = await client.submit(
+  'orders.sync',
+  { orderId: 'A-1001' },
+  { idempotencyKey: 'order-A-1001' },   // safe to retry
+);
+const done = await client.wait(execution.id, { timeoutMs: 300_000 });
+```
+
+Error-to-HTTP mapping follows the table above: `ExecutionNotFound` → 404,
+`ExecutionNotReady` → 202/409, `ExecutionFailed` → 422,
+`ExecutionCancelled` → 409, `ExecutionExpired` → 410.
+
+The reason this package exists is **cross-language consistency**: Python
+computes the `submission_digest` with
+`json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=True)`,
+and JavaScript's `JSON.stringify` is not equivalent (float `.0`, Unicode
+escaping, and other differences make the same payload produce a different
+digest and trigger `ExecutionConflict`). The TS client replicates Python's
+encoding rules byte for byte (including JSON persistence and `timestamptz`
+microsecond precision) and is tested with bidirectional replay against a real
+PostgreSQL worker. See the in-repo
+[`clients/ts/README.md`](https://github.com/mic1on/onestep/blob/main/clients/ts/README.md).
+
 ## What to Prepare Before Integrating
 
 ```mermaid
