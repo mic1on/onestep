@@ -540,7 +540,9 @@ class BinlogSource(Source):
                 return []
             await self.open()
             limit = max(1, min(limit, self.batch_size))
-            while not self._retries and not self._ready:
+            # A future retry keeps its checkpoint barrier, but does not prevent
+            # reading later events. Only a retry that is due takes priority.
+            while not self._ready and not any(ready_at <= time.monotonic() for _, _, ready_at in self._retries):
                 if self._closing:
                     return []
                 if self._read_task is None:
@@ -553,7 +555,15 @@ class BinlogSource(Source):
                 try:
                     # wait() leaves the thread task alive when this fetch is
                     # cancelled, and a retry wakes a blocking binlog read.
-                    await asyncio.wait({self._read_task, retry_ready}, return_when=asyncio.FIRST_COMPLETED)
+                    retry_timeout = (
+                        max(0, min(ready_at for _, _, ready_at in self._retries) - time.monotonic())
+                        if self._retries else None
+                    )
+                    await asyncio.wait(
+                        {self._read_task, retry_ready},
+                        timeout=retry_timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
                 finally:
                     retry_ready.cancel()
                 if self._closing:
@@ -576,7 +586,7 @@ class BinlogSource(Source):
                     raise connector_error from exc
                 self._ready.extend(rows)
                 if not rows:
-                    if not self.blocking:
+                    if not self.blocking or self._retries:
                         break
                     try:
                         await asyncio.wait_for(wake_fetch.wait(), timeout=max(0.01, self.poll_interval_s))
@@ -592,7 +602,8 @@ class BinlogSource(Source):
                         deliveries.append(BinlogDelivery(self, envelope, token))
                     else:
                         self._retries.append((envelope, token, ready_at))
-                return deliveries
+                if deliveries:
+                    return deliveries
 
             deliveries = []
             while self._ready and len(deliveries) < limit:
