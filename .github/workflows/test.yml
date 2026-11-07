@@ -34,11 +34,17 @@ concurrency:
 jobs:
   unit:
     name: Unit and Contract (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
+        include:
+          # Python 3.9 has no builds for the Ubuntu 26.04 runner image
+          # (ubuntu-latest since 2026-10-19); keep the 3.9 leg on
+          # ubuntu-24.04 while the project still supports Python 3.9.
+          - python-version: "3.9"
+            os: ubuntu-24.04
 
     steps:
       - name: Checkout
