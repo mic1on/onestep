@@ -102,3 +102,8 @@ When updating this file, preserve this bar for all agents and keep entries conci
 
 - The MongoDB 8.0 live/stepdown jobs and the main CI integration job use `ubuntu-22.04` (currently kernel 6.8): MongoDB aborts on kernels >= 6.19 due to SERVER-121912. Containers share the host kernel, so changing the image's base OS cannot fix it. `scripts/start-mongodb-replica-set.sh` waits for ping and primary with explicit exit codes and prints container state/logs on startup failure. Revisit the runner pin when upstream supports the newer kernel.
 - `scripts/run-integration-tests.sh` must capture setup exports in a separate assignment before `eval`: `eval "$(...)"` masks setup failure and runs tests without service variables. It prints Compose state/logs before cleanup on failure; `tests/test_integration_runner_script.py` exercises failure propagation and cleanup without starting Docker.
+
+## Runner images and Python 3.9
+
+- `ubuntu-latest` became Ubuntu 26.04 on 2026-10-19, and that image ships no Python 3.9 builds (3.9 is EOL), so every matrix leg testing 3.9 failed at `setup-python` until PR #269. All 13 workflows (`test.yml` + 12 plugin workflows; kafka already starts at 3.10) pin only the 3.9 leg to `ubuntu-24.04` via a matrix `include` with `runs-on: ${{ matrix.os || 'ubuntu-latest' }}` — 3.10–3.12 stay on `ubuntu-latest`.
+- When GitHub retires the 24.04 image, the choice is dropping 3.9 (raise `requires-python`, matching kafka's floor) or finding another host; the pin is a stopgap, not a policy.
